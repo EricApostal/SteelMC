@@ -200,19 +200,7 @@ fn can_wall_hanging_sign_survive(
 //   - Get the SignText for the side player is facing
 //   - If color differs from dye color, update it and consume the dye
 //   - Play DYE_USE sound
-// - Glow Ink Sac: Make sign text glow
-//   - Check if sign is not waxed
-//   - If text is not already glowing, set has_glowing_text = true
-//   - Consume the ink sac
-//   - Play GLOW_INK_SAC_USE sound
-// - Ink Sac: Remove glow from sign text
-//   - Check if sign is not waxed
-//   - If text is glowing, set has_glowing_text = false
-//   - Consume the ink sac
-//   - Play INK_SAC_USE sound
 // - Honeycomb: Wax the sign (prevents future edits)
-//   - If sign is not already waxed, set is_waxed = true
-//   - Consume the honeycomb
 //   - Play HONEYCOMB_WAX_ON sound
 //   - Spawn WAX_ON particles
 
