@@ -59,9 +59,9 @@ fn can_attach_to(
         && block.has_tag(&BlockTag::WALL_HANGING_SIGNS)
         && let Some(neighbor_facing) =
             attach_state.try_get_value(&BlockStateProperties::HORIZONTAL_FACING)
-        {
-            return neighbor_facing.axis() == sign_facing.axis();
-        }
+    {
+        return neighbor_facing.axis() == sign_facing.axis();
+    }
     world.is_face_sturdy_for(attach_state, attach_pos, attach_face, SupportType::Full)
 }
 
