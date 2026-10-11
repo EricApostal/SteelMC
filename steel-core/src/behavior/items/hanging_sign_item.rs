@@ -58,15 +58,12 @@ fn can_attach_to(
     if let Some(block) = attach_block
         && block.has_tag(&BlockTag::WALL_HANGING_SIGNS)
     {
-        // Wall hanging signs can chain if they're on the same axis
         if let Some(neighbor_facing) =
             attach_state.try_get_value(&BlockStateProperties::HORIZONTAL_FACING)
         {
             return neighbor_facing.axis() == sign_facing.axis();
         }
     }
-
-    // Otherwise, check for sturdy face with FULL support
     world.is_face_sturdy_for(attach_state, attach_pos, attach_face, SupportType::Full)
 }
 
