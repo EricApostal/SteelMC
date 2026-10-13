@@ -33,6 +33,7 @@ use crate::physics::{
     is_colliding_with_new_shapes, movement_error_delta,
 };
 use crate::player::Player;
+use crate::server::tick_rate_manager::DEFAULT_TICK_RATE;
 use crate::world::World;
 
 /// Default gravity for players (blocks/tick²). Vanilla uses 0.08.
@@ -50,10 +51,6 @@ pub const CLAMP_VERTICAL: f64 = 2.0E7;
 
 /// The threshold of the client delta of a player in order to reset their action time.
 pub const RESET_ACTION_TIME_DELTA_THRESHOLD: f64 = 1E-5;
-
-/// Server ticks per second (one second). Used as the minimum tick interval between
-/// repeated "not controlling vehicle" position resets sent to the client.
-const TICK_RATE: i32 = 20;
 
 /// Clamps a horizontal coordinate to vanilla limits.
 #[must_use]
@@ -518,7 +515,7 @@ impl Player {
             let current_tick = self.tick_count();
             let last_reset = self.movement.lock().vehicle_position_last_reset_at;
 
-            if current_tick.wrapping_sub(last_reset) > TICK_RATE
+            if current_tick.wrapping_sub(last_reset) > DEFAULT_TICK_RATE
                 || vehicle.position().distance_squared(packet.pos) > 1.0
             {
                 log::warn!(
