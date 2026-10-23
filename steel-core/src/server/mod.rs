@@ -773,6 +773,19 @@ impl Server {
                 .initialize_spawn_if_needed()
                 .await
                 .map_err(|e| format!("failed to initialize spawn for {}: {e}", world_entry.key))?;
+            // Vanilla `MinecraftServer` registers one `WanderingTraderSpawner` per level.
+            let wandering_trader_spawner =
+                crate::entity::entities::mobs::npc::wandering_trader::WanderingTraderSpawner::load(
+                    &world,
+                )
+                .await
+                .map_err(|e| {
+                    format!(
+                        "failed to load wandering trader data for {}: {e}",
+                        world_entry.key
+                    )
+                })?;
+            world.register_custom_spawner(Box::new(wandering_trader_spawner));
             Ok(world)
         };
         for domain in &resolved_worlds.domains {

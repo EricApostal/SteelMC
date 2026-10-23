@@ -19,6 +19,7 @@ use steel_utils::{
 use crate::block_entity::{BlockEntity, BlockEntityBase};
 use crate::entity::{MobEffectInstance, SharedEntity};
 use crate::world::World;
+use crate::world::village;
 
 const RING_EVENT_ID: i32 = 1;
 const RING_DURATION: i32 = 50;
@@ -99,27 +100,34 @@ impl BellBlockEntity {
                 || game_time > state.last_ring_timestamp + ENTITY_SEARCH_INTERVAL
         };
 
-        if should_search {
-            let pos = self.get_block_pos();
-            let bounds = WorldAabb::new(
-                f64::from(pos.x()),
-                f64::from(pos.y()),
-                f64::from(pos.z()),
-                f64::from(pos.x() + 1),
-                f64::from(pos.y() + 1),
-                f64::from(pos.z() + 1),
-            )
-            .inflate(SEARCH_RADIUS);
-            let entities = world
-                .get_entities_in_aabb(&bounds)
-                .into_iter()
-                .filter(|entity| entity.as_living_entity().is_some())
-                .collect();
-
-            let mut state = self.state.lock();
-            state.nearby_entities = Some(entities);
-            state.last_ring_timestamp = game_time;
+        if !should_search {
+            return;
         }
+
+        let pos = self.get_block_pos();
+        let bounds = WorldAabb::new(
+            f64::from(pos.x()),
+            f64::from(pos.y()),
+            f64::from(pos.z()),
+            f64::from(pos.x() + 1),
+            f64::from(pos.y() + 1),
+            f64::from(pos.z() + 1),
+        )
+        .inflate(SEARCH_RADIUS);
+        let entities = world
+            .get_entities_in_aabb(&bounds)
+            .into_iter()
+            .filter(|entity| entity.as_living_entity().is_some())
+            .collect::<Vec<_>>();
+
+        // Vanilla `BellBlockEntity.updateEntities` records `HEARD_BELL_TIME` on every
+        // living entity within 32 blocks, which is what makes villagers react (and wake
+        // up) through their brain.
+        village::bell::notify_heard_bell(world, pos, &entities);
+
+        let mut state = self.state.lock();
+        state.nearby_entities = Some(entities);
+        state.last_ring_timestamp = game_time;
     }
 
     fn is_raider_near(entity: &SharedEntity, pos: BlockPos, radius: f64) -> bool {

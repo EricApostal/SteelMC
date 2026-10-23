@@ -1,8 +1,12 @@
-use crate::behavior::{BlockBehavior, BlockPlaceContext, BlockRef};
+use std::sync::Arc;
+
 use steel_macros::block_behavior;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::{BlockStateProperties, Direction, EnumProperty};
-use steel_utils::BlockStateId;
+use steel_utils::{BlockPos, BlockStateId};
+
+use crate::behavior::{BlockBehavior, BlockPlaceContext, BlockRef};
+use crate::world::{World, village};
 
 const HORIZONTAL_FACING: &EnumProperty<Direction> = &BlockStateProperties::HORIZONTAL_FACING;
 
@@ -29,5 +33,16 @@ impl BlockBehavior for CarvedPumpkinBlock {
         )
     }
 
-    // TODO: Add golem spawning behavior (iron, copper, snow) including dropper checks
+    fn on_place(
+        &self,
+        state: BlockStateId,
+        world: &Arc<World>,
+        pos: BlockPos,
+        old_state: BlockStateId,
+        _moved_by_piston: bool,
+    ) {
+        if old_state.get_block() != state.get_block() {
+            village::try_spawn_golem(world, pos);
+        }
+    }
 }

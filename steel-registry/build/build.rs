@@ -99,7 +99,10 @@ mod enchantments;
 mod advancements;
 mod generator_functions;
 mod shared_structs;
+mod tag_walk;
 mod tags;
+mod trade_sets;
+mod villager_trades;
 
 const ADVANCEMENTS: &str = "advancements";
 const ATTRIBUTES: &str = "attributes";
@@ -131,6 +134,8 @@ const PARTICLE_TYPES: &str = "particle_types";
 const POSITION_SOURCE_TYPES: &str = "position_source_types";
 const VILLAGER_TYPES: &str = "villager_types";
 const VILLAGER_PROFESSIONS: &str = "villager_professions";
+const VILLAGER_TRADES: &str = "villager_trades";
+const TRADE_SETS: &str = "trade_sets";
 const DIMENSIONS: &str = "dimension_types";
 const DAMAGE_TYPES: &str = "damage_types";
 const BLOCK_TRANSFORMERS: &str = "block_transformers";
@@ -225,6 +230,8 @@ pub fn main() {
         (position_source_types::build(), POSITION_SOURCE_TYPES),
         (villager_types::build(), VILLAGER_TYPES),
         (villager_professions::build(), VILLAGER_PROFESSIONS),
+        (villager_trades::build(), VILLAGER_TRADES),
+        (trade_sets::build(), TRADE_SETS),
         (dimension_types::build(), DIMENSIONS),
         (damage_types::build(), DAMAGE_TYPES),
         (block_transformers::build(), BLOCK_TRANSFORMERS),

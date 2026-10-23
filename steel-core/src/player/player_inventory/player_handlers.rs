@@ -8,17 +8,20 @@ use crate::{
         lock::{ContainerId, ContainerLockGuard},
         menu::{
             Menu,
-            kinds::{INVENTORY_MENU_CONTAINER_ID, InventoryKind},
+            kinds::{INVENTORY_MENU_CONTAINER_ID, InventoryKind, MerchantMenuKind, merchant_menu},
         },
         slots::CraftingHandler,
     },
     player::{Player, connection::NetworkConnection as _},
 };
 use glam::DVec3;
+
+use crate::entity::npc::trading::{ItemCost, Merchant, MerchantOffers};
 use steel_protocol::packets::game::SSeenAdvancement::Opened;
 use steel_protocol::packets::game::{
-    CContainerClose, COpenScreen, CSetPlayerInventory, ClickType, SContainerButtonClick,
-    SContainerClick, SContainerClose, SContainerSlotStateChanged, SRenameItem, SSeenAdvancement,
+    CContainerClose, CMerchantOffers, COpenScreen, CSetPlayerInventory, ClickType,
+    MerchantItemCost, MerchantOffer as WireMerchantOffer, SContainerButtonClick, SContainerClick,
+    SContainerClose, SContainerSlotStateChanged, SRenameItem, SSeenAdvancement, SSelectTrade,
     SSetBeacon, SSetCarriedItem, SSetCreativeModeSlot, SoundSource,
 };
 use steel_registry::data_components::vanilla_components::SwingAnimation;
@@ -253,6 +256,93 @@ impl Player {
         // - Stonecutter recipe selection
         // - Loom pattern selection
         // - Lectern page turning
+    }
+
+    /// Handles a trade selection from a merchant screen.
+    ///
+    /// Based on Java's `ServerGamePacketListenerImpl::handleSelectTrade`.
+    pub fn handle_select_trade(&self, packet: SSelectTrade) {
+        let Ok(mut menu) = self.take_open_menu_for_callback(None) else {
+            return;
+        };
+        if !menu.still_valid(self) {
+            log::debug!(
+                "Player {} interacted with invalid menu",
+                self.gameprofile.name()
+            );
+            self.finish_open_menu_callback(menu);
+            return;
+        }
+
+        {
+            let Some(kind) = menu.kind().downcast_ref::<MerchantMenuKind>() else {
+                self.finish_open_menu_callback(menu);
+                return;
+            };
+            let mut guard = menu.behavior().lock_all_containers();
+            kind.set_selection_hint(&mut guard, packet.item);
+            kind.try_move_items(menu.behavior(), &mut guard, packet.item);
+        }
+
+        menu.behavior_mut().broadcast_changes(&self.connection);
+        self.finish_open_menu_callback(menu);
+    }
+
+    /// Sends the offers of a trader to this player.
+    ///
+    /// Based on Java's `ServerPlayer::sendMerchantOffers`.
+    pub fn send_merchant_offers(
+        &self,
+        container_id: i32,
+        offers: &MerchantOffers,
+        villager_level: i32,
+        villager_xp: i32,
+        show_progress: bool,
+        can_restock: bool,
+    ) {
+        let offers = offers
+            .iter()
+            .map(|offer| WireMerchantOffer {
+                cost_a: wire_item_cost(offer.item_cost_a()),
+                result: offer.result().clone(),
+                cost_b: offer.item_cost_b().map(wire_item_cost),
+                out_of_stock: offer.is_out_of_stock(),
+                uses: offer.uses(),
+                max_uses: offer.max_uses(),
+                xp: offer.xp(),
+                special_price_diff: offer.special_price_diff(),
+                price_multiplier: offer.price_multiplier(),
+                demand: offer.demand(),
+            })
+            .collect();
+        self.send_packet(CMerchantOffers::new(
+            container_id,
+            offers,
+            villager_level,
+            villager_xp,
+            show_progress,
+            can_restock,
+        ));
+    }
+
+    /// Opens the trading screen of `merchant` for this player.
+    ///
+    /// Based on Java's `Merchant::openTradingScreen`. The offers packet is sent
+    /// from the menu's `on_open` hook once the container id is allocated.
+    pub fn open_trading_screen(
+        &self,
+        merchant: Arc<dyn Merchant>,
+        title: impl Into<TextComponent>,
+        level: i32,
+    ) {
+        self.open_menu(title, move |context| {
+            merchant_menu(
+                Arc::clone(&context.player.inventory),
+                context.container_id,
+                Arc::clone(&merchant),
+                level,
+            )
+        });
     }
 
     /// Handles a container click packet (slot interaction).
@@ -851,6 +941,19 @@ impl Player {
         open_menu.menu.is_some() || open_menu.dispatch.is_some()
     }
 
+    /// Returns the container id of the open merchant menu, if one is open.
+    ///
+    /// Vanilla `ServerPlayer.containerMenu instanceof MerchantMenu` check used by
+    /// `Villager.updateSpecialPrices` to refresh the open trade screen.
+    #[must_use]
+    pub fn trading_container_id(&self) -> Option<u8> {
+        let open_menu = self.open_menu.lock();
+        let menu = open_menu.menu.as_ref()?;
+        menu.kind()
+            .downcast_ref::<MerchantMenuKind>()
+            .map(|_| menu.container_id())
+    }
+
     /// Runs the open menu's per-tick hook, if an external menu is open.
     ///
     /// Scoped to the opened menu; the base inventory menu is not ticked. Called
@@ -1201,5 +1304,14 @@ impl Player {
         if should_drop {
             let _ = guard.run_unlocked(|| self.drop_item(item, false, prediction));
         }
+    }
+}
+
+/// Converts a trading `ItemCost` into its wire representation.
+fn wire_item_cost(cost: &ItemCost) -> MerchantItemCost {
+    MerchantItemCost {
+        item: cost.item(),
+        count: cost.count(),
+        components: cost.components().clone(),
     }
 }

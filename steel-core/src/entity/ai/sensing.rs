@@ -1,5 +1,7 @@
 //! Per-mob sensing caches.
 
+pub(crate) mod villager;
+
 use rustc_hash::FxHashSet;
 
 /// Vanilla `Sensing` line-of-sight cache.

@@ -55,6 +55,14 @@ impl PotionContents {
         self.potion
     }
 
+    /// Vanilla `PotionContents.withPotion`: keeps the custom color, effects, and
+    /// name while replacing the base potion.
+    #[must_use]
+    pub fn with_potion(mut self, potion: RegistryReference<Potion>) -> Self {
+        self.potion = Some(potion);
+        self
+    }
+
     #[must_use]
     pub const fn custom_color(&self) -> Option<i32> {
         self.custom_color

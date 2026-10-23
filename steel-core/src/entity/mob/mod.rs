@@ -40,6 +40,7 @@ use steel_utils::{
 use crate::behavior::items::SpawnEggItem;
 use crate::behavior::{BLOCK_BEHAVIORS, BlockCollisionContext, ITEM_BEHAVIORS, InteractionResult};
 use crate::enchantment_helper::{self, EnchantmentDamageContext, EnchantmentPostAttackContext};
+use crate::entity::ai::brain::Brain;
 use crate::entity::ai::control::{
     BodyRotationInput, MobControls, MoveControlOperation, rotate_if_necessary, rotate_towards,
 };
@@ -52,6 +53,7 @@ use crate::entity::attribute::{AttributeModifier, AttributeModifierOperation};
 use crate::entity::conversion::{AfterConversion, convert_to as convert_mob};
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::objects::items::ItemEntity;
+use crate::entity::npc::gossip::ReputationEventHandler;
 use crate::entity::{
     ConversionParams, Entity, EntitySpawnReason, LivingEntity, LivingTravelInput, RemovalReason,
     SharedEntity, SpawnGroupData, WeakEntity, aabb_contains_any_liquid,
@@ -363,6 +365,24 @@ pub trait Mob: LivingEntity + Leashable {
     }
 
     fn custom_server_ai_step(&self) {}
+
+    /// Runs this mob's vanilla `Brain` tick, if it has one.
+    ///
+    /// Vanilla `Mob.customServerAiStep` is overridden by brain mobs (villagers,
+    /// iron golems, …) to tick their brain. Steel keeps the orchestration in
+    /// `mob_server_ai_step`; mobs owning a brain override this hook.
+    fn brain_tick(&self, _entity: &SharedEntity) {}
+
+    /// Returns the vanilla brain this mob owns, equivalent to
+    /// `LivingEntity.getBrain()`.
+    fn brain(&self) -> Option<&SyncMutex<Brain>> {
+        None
+    }
+
+    /// Returns this mob as a vanilla `ReputationEventHandler` when it has one.
+    fn as_reputation_event_handler(&self) -> Option<&dyn ReputationEventHandler> {
+        None
+    }
 
     /// Runs vanilla `Mob.ate`, invoked after an eating goal resolves a block.
     fn ate(&self) {}
@@ -1380,8 +1400,15 @@ pub trait Mob: LivingEntity + Leashable {
         if let Some(user) = self.as_entity_event_source().as_living_entity() {
             enchantment_helper::do_post_piercing_attack_effects(world, user);
         }
+        self.after_hurt_target(world, target, was_hurt);
         was_hurt
     }
+
+    /// Vanilla `Zombie.doHurtTarget`-style post-attack side effects.
+    ///
+    /// Called after a melee attack resolves, with `was_hurt` reporting whether the
+    /// target actually took damage.
+    fn after_hurt_target(&self, _world: &World, _target: &SharedEntity, _was_hurt: bool) {}
 
     /// Builds the damage source for this mob's melee attack: the weapon's
     /// custom damage type if set, else its behavior's item damage source,
@@ -1554,6 +1581,7 @@ pub trait Mob: LivingEntity + Leashable {
         self.tick_goal_selectors(entity);
         self.tick_path_navigation();
         self.custom_server_ai_step();
+        self.brain_tick(entity);
         self.tick_move_control();
         self.tick_look_control();
         self.tick_jump_control();

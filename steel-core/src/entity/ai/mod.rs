@@ -4,6 +4,8 @@
     reason = "pathfinding controls are foundation code consumed by upcoming goals and navigation"
 )]
 
+pub mod behavior;
+pub mod brain;
 pub mod control;
 pub mod goal;
 pub mod navigation;

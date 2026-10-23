@@ -1,14 +1,31 @@
 use steel_math::DEGREE_90;
-use steel_registry::data_components::vanilla_components::{DEATH_PROTECTION, USE_EFFECTS};
+use steel_registry::data_components::vanilla_components::{
+    CONSUMABLE, DEATH_PROTECTION, USE_EFFECTS,
+};
 use steel_registry::stat::vanilla_stat_types;
 use steel_registry::{DyeColor, vanilla_custom_stats};
 
 use super::*;
-use crate::behavior::{BLOCK_BEHAVIORS, InventoryTickContext, MOB_EFFECT_BEHAVIORS};
+use crate::behavior::{
+    BLOCK_BEHAVIORS, ITEM_BEHAVIORS, InventoryTickContext, MOB_EFFECT_BEHAVIORS,
+    apply_use_remainder,
+};
 use crate::entity::consume_effect::apply_consume_effect;
 use crate::entity::damage::RecentDamageSource;
 
 const BED_SLEEP_POSITION_OFFSET: f64 = 0.125;
+/// Vanilla `DATA_LIVING_ENTITY_FLAGS` bit 0: the entity is using an item.
+const LIVING_ENTITY_USING_ITEM_FLAG: i8 = 1;
+/// Vanilla `DATA_LIVING_ENTITY_FLAGS` bit 1: the item being used is in the off hand.
+const LIVING_ENTITY_OFF_HAND_ACTIVE_FLAG: i8 = 1 << 1;
+
+/// Maps an interaction hand to the vanilla equipment slot it reads from.
+const fn hand_slot(hand: InteractionHand) -> EquipmentSlot {
+    match hand {
+        InteractionHand::MainHand => EquipmentSlot::MainHand,
+        InteractionHand::OffHand => EquipmentSlot::OffHand,
+    }
+}
 
 /// A trait for living entities that can take damage, heal, and die.
 ///
@@ -96,10 +113,7 @@ pub trait LivingEntity: Entity {
         hand: InteractionHand,
         component: DataComponentType<SwingAnimation>,
     ) -> SwingAnimation {
-        let slot = match hand {
-            InteractionHand::MainHand => EquipmentSlot::MainHand,
-            InteractionHand::OffHand => EquipmentSlot::OffHand,
-        };
+        let slot = hand_slot(hand);
         let mut animation = SwingAnimation::DEFAULT;
         self.with_equipment_slot(slot, &mut |item_stack| {
             animation = item_stack
@@ -1024,8 +1038,13 @@ pub trait LivingEntity: Entity {
         true
     }
 
+    /// Vanilla subclass death side effects (`Raider.die`, `WitherBoss.die`, …) that must run
+    /// before the shared death processing in [`LivingEntity::die`].
+    fn on_death(&self, _source: &DamageSource) {}
+
     /// Processes vanilla living death side effects.
     fn die(&self, source: &DamageSource) {
+        self.on_death(source);
         if self.is_removed() {
             return;
         }
@@ -1621,7 +1640,233 @@ pub trait LivingEntity: Entity {
 
     /// Checks if the entity is currently using an item.
     fn is_using_item(&self) -> bool {
-        false
+        self.living_base().is_using_item()
+    }
+
+    /// Returns a copy of the stack in `hand`, or an empty stack.
+    fn get_item_in_hand(&self, hand: InteractionHand) -> ItemStack {
+        let mut stack = ItemStack::empty();
+        self.with_equipment_slot(hand_slot(hand), &mut |item| stack = item.clone());
+        stack
+    }
+
+    /// Replaces the stack in `hand` and refreshes its transient attribute modifiers.
+    fn set_item_in_hand(&self, hand: InteractionHand, stack: ItemStack) {
+        let slot = hand_slot(hand);
+        self.living_base().equipment().lock().set(slot, stack);
+        self.refresh_equipment_attribute_modifiers(slot);
+    }
+
+    /// Returns vanilla `LivingEntity.getUseItem`: the stack being used, or empty.
+    ///
+    /// Vanilla keeps a snapshot taken when use started; Steel reads the hand,
+    /// which vanilla refreshes from that same hand every tick.
+    fn get_use_item(&self) -> ItemStack {
+        self.living_base()
+            .active_item_use()
+            .map_or_else(ItemStack::empty, |active| {
+                self.get_item_in_hand(active.hand())
+            })
+    }
+
+    /// Returns vanilla `LivingEntity.getUseItemRemainingTicks`; 0 when idle.
+    fn get_use_item_remaining_ticks(&self) -> i32 {
+        self.living_base()
+            .active_item_use()
+            .map_or(0, |active| active.remaining_ticks())
+    }
+
+    /// Returns vanilla `LivingEntity.getTicksUsingItem`; 0 when idle.
+    fn get_tick_count_using_item(&self) -> i32 {
+        self.living_base()
+            .active_item_use()
+            .map_or(0, |active| active.duration() - active.remaining_ticks())
+    }
+
+    /// Vanilla `LivingEntity.startUsingItem`: begins using the item in `hand`.
+    ///
+    /// Vanilla also sends the new equipment to tracking players here; Steel's
+    /// per-tick equipment detection covers that.
+    fn start_using_item(&self, hand: InteractionHand) {
+        let stack = self.get_item_in_hand(hand);
+        if stack.is_empty() || self.living_base().is_using_item() {
+            return;
+        }
+
+        let dyn_self = self
+            .as_living_entity()
+            .expect("Self implements LivingEntity");
+        let duration = ITEM_BEHAVIORS
+            .get_behavior(stack.item())
+            .get_use_duration(&stack, dyn_self);
+        if self.living_base().start_using_item(hand, &stack, duration) {
+            self.set_living_entity_using_item_flag(hand, true);
+            self.cause_use_vibration(&stack, &vanilla_game_events::ITEM_INTERACT_START);
+        }
+    }
+
+    /// Vanilla `LivingEntity.stopUsingItem`: clears active use and its synced flags.
+    fn stop_using_item(&self) {
+        let was_using_item = self.living_base().is_using_item();
+        let used_stack = self.get_use_item();
+        self.living_base().stop_using_item();
+        self.set_living_entity_using_item_flag(InteractionHand::MainHand, false);
+        if was_using_item {
+            self.cause_use_vibration(&used_stack, &vanilla_game_events::ITEM_INTERACT_FINISH);
+        }
+    }
+
+    /// Vanilla `LivingEntity.updatingUsingItem`, run once per living tick.
+    fn updating_using_item(&self, entity: &SharedEntity) {
+        let Some(active) = self.living_base().active_item_use() else {
+            return;
+        };
+        let stack = self.get_item_in_hand(active.hand());
+        if !stack.is(active.item()) {
+            self.stop_using_item();
+            return;
+        }
+        self.update_using_item(entity, active.hand(), stack);
+    }
+
+    /// Vanilla `LivingEntity.updateUsingItem`: ticks the item's use hook, then
+    /// decrements the remaining ticks and completes the use at zero.
+    fn update_using_item(
+        &self,
+        entity: &SharedEntity,
+        hand: InteractionHand,
+        mut stack: ItemStack,
+    ) {
+        let Some(active) = self.living_base().active_item_use() else {
+            return;
+        };
+        let (Some(world), Some(user)) = (self.level(), LivingEntityRef::new(entity)) else {
+            self.stop_using_item();
+            return;
+        };
+
+        let behavior = ITEM_BEHAVIORS.get_behavior(stack.item());
+        behavior.on_use_tick(&world, user, &mut stack, active.remaining_ticks());
+        // `on_use_tick` may end the use itself (e.g. a brush losing its target).
+        if self.living_base().active_item_use().is_none() {
+            self.set_item_in_hand(hand, stack);
+            return;
+        }
+        let Some(active) = self.living_base().decrement_active_item_use() else {
+            self.set_item_in_hand(hand, stack);
+            return;
+        };
+        let use_on_release = behavior.use_on_release(&stack);
+        self.set_item_in_hand(hand, stack);
+        if active.remaining_ticks() == 0 && !use_on_release {
+            self.complete_using_item(entity, hand);
+        }
+    }
+
+    /// Vanilla `LivingEntity.completeUsingItem`: finishes the used item when the
+    /// hand still holds it, releasing it instead when it was swapped out.
+    fn complete_using_item(&self, entity: &SharedEntity, hand: InteractionHand) {
+        let Some(active) = self.living_base().active_item_use() else {
+            return;
+        };
+        let mut stack = self.get_item_in_hand(hand);
+        if !stack.is(active.item()) {
+            self.release_using_item(entity);
+            return;
+        }
+
+        // Vanilla stops the use while the consumed stack is still in hand, so
+        // the interaction-finish vibration matches `this.useItem`, then equips
+        // the finish result (`setItemInHand` before `stopUsingItem` in vanilla
+        // ends in the same state).
+        self.stop_using_item();
+        let result = self.finish_using_item(entity, &mut stack);
+        self.set_item_in_hand(hand, result);
+    }
+
+    /// Vanilla `ItemStack.finishUsingItem`: runs the item's finish hook, which
+    /// applies a consumable's effects and after-use side effects.
+    fn finish_using_item(&self, entity: &SharedEntity, stack: &mut ItemStack) -> ItemStack {
+        let (Some(world), Some(user)) = (self.level(), LivingEntityRef::new(entity)) else {
+            return stack.copy_with_count(stack.count());
+        };
+        ITEM_BEHAVIORS
+            .get_behavior(stack.item())
+            .finish_using(stack, &world, user)
+    }
+
+    /// Vanilla `LivingEntity.releaseUsingItem`: runs the item's release hook when
+    /// the hand still holds it, then stops the use.
+    fn release_using_item(&self, entity: &SharedEntity) {
+        let Some(active) = self.living_base().active_item_use() else {
+            return;
+        };
+        let hand = active.hand();
+        let mut stack = self.get_item_in_hand(hand);
+        if !stack.is(active.item()) {
+            self.stop_using_item();
+            return;
+        }
+
+        let stack_before_using = stack.copy_with_count(stack.count());
+        let behavior = ITEM_BEHAVIORS.get_behavior(stack.item());
+        let mut use_on_release = false;
+        if let Some(world) = self.level() {
+            let dyn_self = self
+                .as_living_entity()
+                .expect("Self implements LivingEntity");
+            if behavior.release_using(&mut stack, &world, dyn_self, active.remaining_ticks()) {
+                stack = apply_use_remainder(&stack_before_using, stack, dyn_self);
+            }
+            use_on_release = behavior.use_on_release(&stack);
+        }
+        self.set_item_in_hand(hand, stack);
+
+        if use_on_release && self.living_base().is_using_item() {
+            self.updating_using_item(entity);
+        }
+        self.stop_using_item();
+    }
+
+    /// Vanilla `LivingEntity.setLivingEntityFlag` for the using-item bits.
+    fn set_living_entity_using_item_flag(&self, hand: InteractionHand, using: bool) {
+        let Some(entity_data) = self.living_synced_data() else {
+            return;
+        };
+        let mut flags = entity_data.living_entity_flags();
+        if using {
+            flags |= LIVING_ENTITY_USING_ITEM_FLAG;
+            if hand == InteractionHand::OffHand {
+                flags |= LIVING_ENTITY_OFF_HAND_ACTIVE_FLAG;
+            } else {
+                flags &= !LIVING_ENTITY_OFF_HAND_ACTIVE_FLAG;
+            }
+        } else {
+            flags &= !LIVING_ENTITY_USING_ITEM_FLAG;
+        }
+        entity_data.set_living_entity_flags(flags);
+    }
+
+    /// Vanilla `ItemStack.causeUseVibration`: emits `event` when the stack's
+    /// `use_effects` component allows interaction vibrations.
+    fn cause_use_vibration(&self, stack: &ItemStack, event: GameEventRef) {
+        if stack
+            .get(USE_EFFECTS)
+            .is_some_and(|effects| effects.interact_vibrations)
+        {
+            self.game_event(event);
+        }
+    }
+
+    /// Vanilla `Consumable.OverrideConsumeSound.getConsumeSound`: the sound
+    /// played when this entity consumes `stack`.
+    ///
+    /// Defaults to the stack's `Consumable.sound`; mobs such as the wandering
+    /// trader override it with their own drink sounds.
+    fn get_consume_sound(&self, stack: &ItemStack) -> Option<SoundEventRef> {
+        stack
+            .get(CONSUMABLE)
+            .and_then(|consumable| consumable.sound().registry_ref())
     }
 
     /// Checks if the entity is blocking with a shield or similar item.
@@ -1971,6 +2216,9 @@ pub trait LivingEntity: Entity {
     /// The default `Entity::tick` dispatches living entities here.
     fn tick_living_entity(&self, entity: &SharedEntity) {
         self.default_tick();
+        // Vanilla `LivingEntity.tick` runs `updatingUsingItem` right after
+        // `super.tick()`, before `aiStep`.
+        self.updating_using_item(entity);
         self.living_base().decrement_invulnerable_time();
         self.tick_mob_effects();
         self.detect_equipment_updates();
@@ -2419,8 +2667,14 @@ pub trait LivingEntity: Entity {
         self.apply_entity_cramming_damage(&world, &pushable_entities);
 
         for entity in pushable_entities {
-            entity.push_entity(pusher);
+            self.do_push(&entity);
         }
+    }
+
+    /// Vanilla `LivingEntity.doPush`: applies this entity's push side effects to
+    /// `entity` (the default is vanilla's `entity.push(this)`).
+    fn do_push(&self, entity: &SharedEntity) {
+        entity.push_entity(self.as_entity_event_source());
     }
 
     /// Applies vanilla max entity cramming damage from `LivingEntity.pushEntities()`.

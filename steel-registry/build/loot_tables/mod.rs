@@ -16,17 +16,19 @@ mod values;
 
 use conditions::generate_condition;
 use entries::generate_pool;
-use functions::generate_function;
 use values::{
     generate_damage_source_predicate, generate_enchantment_options, generate_entity_predicate,
     generate_instrument_options, generate_location_predicate, generate_loot_context_entity,
-    generate_loot_type, generate_number_provider, generate_tool_predicate,
+    generate_loot_type, generate_tool_predicate,
 };
+
+pub(crate) use functions::generate_function;
+pub(crate) use values::{generate_number_provider, generate_potion_options};
 
 /// A number provider can be a constant number or an object with type.
 #[derive(Deserialize, Debug, Clone)]
 #[serde(untagged)]
-enum NumberProviderJson {
+pub(crate) enum NumberProviderJson {
     Constant(f32),
     Object {
         #[serde(rename = "type")]
@@ -41,6 +43,9 @@ enum NumberProviderJson {
         n: Option<f32>, // Can be float in JSON, convert to i32 later
         #[serde(default)]
         p: Option<f32>,
+        /// `minecraft:add` provider inputs.
+        #[serde(default)]
+        inputs: Option<Vec<NumberProviderJson>>,
     },
 }
 
@@ -53,7 +58,7 @@ impl Default for NumberProviderJson {
 /// Enchantment options can be a tag string or list of enchantment IDs.
 #[derive(Deserialize, Debug, Clone)]
 #[serde(untagged)]
-enum EnchantmentOptionsJson {
+pub(crate) enum EnchantmentOptionsJson {
     Tag(String),
     List(Vec<String>),
 }
@@ -70,13 +75,13 @@ enum LootTableValueJson {
 /// `SequenceFunction.INLINE_CODEC`) a bare array of function objects applied in order.
 #[derive(Deserialize, Debug, Clone)]
 #[serde(untagged)]
-enum ModifierJson {
+pub(crate) enum ModifierJson {
     Single(Box<LootFunctionJson>),
     Sequence(Vec<LootFunctionJson>),
 }
 
 impl ModifierJson {
-    fn functions(&self) -> Vec<&LootFunctionJson> {
+    pub(crate) fn functions(&self) -> Vec<&LootFunctionJson> {
         match self {
             Self::Single(function) => vec![function.as_ref()],
             Self::Sequence(functions) => functions.iter().collect(),
@@ -120,7 +125,7 @@ enum EnchantedChanceJson {
 /// Limit count can be an integer or object with min/max.
 #[derive(Deserialize, Debug, Clone)]
 #[serde(untagged)]
-enum LimitJson {
+pub(crate) enum LimitJson {
     Integer(i32),
     Object {
         #[serde(default)]
@@ -402,48 +407,84 @@ struct ToolPredicatesJson {
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-struct EnchantmentPredicateJson {
+pub(crate) struct EnchantmentPredicateJson {
     #[serde(default)]
     enchantments: Option<String>,
     #[serde(default)]
     levels: Option<LevelRangeJson>,
 }
 
+impl EnchantmentPredicateJson {
+    /// Vanilla `EnchantmentPredicate.levels` (`MinMaxBounds.Ints`).
+    fn level_bounds(&self) -> (Option<i32>, Option<i32>) {
+        self.levels
+            .as_ref()
+            .map_or((None, None), LevelRangeJson::bounds)
+    }
+}
+
+/// Vanilla `MinMaxBounds.Ints`: a bare integer or a `{min, max}` bounds object.
 #[derive(Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
-struct LevelRangeJson {
-    #[serde(default)]
-    min: Option<i32>,
+#[serde(untagged)]
+pub(crate) enum LevelRangeJson {
+    Exact(i32),
+    Bounds {
+        #[serde(default)]
+        min: Option<i32>,
+        #[serde(default)]
+        max: Option<i32>,
+    },
+}
+
+impl LevelRangeJson {
+    fn bounds(&self) -> (Option<i32>, Option<i32>) {
+        match self {
+            Self::Exact(level) => (Some(*level), Some(*level)),
+            Self::Bounds { min, max } => (*min, *max),
+        }
+    }
+
+    pub(crate) fn min_level(&self) -> Option<i32> {
+        self.bounds().0
+    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-struct LootFunctionJson {
+pub(crate) struct LootFunctionJson {
     #[serde(rename = "type")]
-    function: String,
+    pub(crate) function: String,
     #[serde(default)]
-    count: Option<NumberProviderJson>,
+    pub(crate) count: Option<NumberProviderJson>,
     #[serde(default)]
-    add: bool,
+    pub(crate) add: bool,
     // apply_bonus
     #[serde(default)]
-    enchantment: Option<String>,
+    pub(crate) enchantment: Option<String>,
     #[serde(default)]
-    formula: Option<String>,
+    pub(crate) formula: Option<String>,
     #[serde(default)]
-    parameters: Option<BonusParametersJson>,
+    pub(crate) parameters: Option<BonusParametersJson>,
     // limit_count / enchanted_count_increase limit
     #[serde(default)]
-    limit: Option<LimitJson>,
+    pub(crate) limit: Option<LimitJson>,
     // set_damage
     #[serde(default)]
-    damage: Option<NumberProviderJson>,
+    pub(crate) damage: Option<NumberProviderJson>,
     // enchant_randomly / enchant_with_levels / set_instrument
     #[serde(default)]
-    options: Option<EnchantmentOptionsJson>,
+    pub(crate) options: Option<EnchantmentOptionsJson>,
+    // enchant_randomly
+    #[serde(default)]
+    pub(crate) only_compatible: Option<bool>,
+    #[serde(default)]
+    pub(crate) include_additional_cost_component: Option<bool>,
+    // set_random_dyes
+    #[serde(default)]
+    pub(crate) number_of_dyes: Option<NumberProviderJson>,
     // enchant_with_levels
     #[serde(default)]
-    levels: Option<NumberProviderJson>,
+    pub(crate) levels: Option<NumberProviderJson>,
     // copy_components
     #[serde(default)]
     source: Option<String>,
@@ -470,6 +511,8 @@ struct LootFunctionJson {
     zoom: Option<i32>,
     #[serde(default)]
     skip_existing_chunks: Option<bool>,
+    #[serde(default)]
+    search_radius: Option<i32>,
     // set_name (keep as raw value for text component)
     #[serde(default)]
     name: Option<serde_json::Value>,
@@ -501,27 +544,43 @@ struct LootFunctionJson {
 
 /// `ItemPredicate`'s JSON shape (`net.minecraft.advancements.predicates.ItemPredicate`).
 ///
-/// `items` and `count` never appear in the extracted data, so they are parsed
-/// (via `deny_unknown_fields`, to fail loudly if that ever changes) but not
+/// `count` never appears in the extracted data, so it is parsed (via
+/// `deny_unknown_fields`, to fail loudly if that ever changes) but not
 /// otherwise handled beyond `count`'s trivial min/max range.
 #[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-struct ItemFilterJson {
+pub(crate) struct ItemFilterJson {
     #[serde(default)]
-    items: Option<serde_json::Value>,
+    items: Option<ItemSetJson>,
     #[serde(default)]
     count: Option<LimitJson>,
     /// Data-component-predicate map (`DataComponentMatchers.predicates`), keyed by
     /// predicate/component type identifier. Only the `AnyValueType` fallback shape
-    /// (an empty object, meaning "component is present") is currently used by any
-    /// extracted loot table, so any other shape panics instead of being dropped.
+    /// (an empty object or a list of empty objects, both meaning "component is
+    /// present") is currently used by any extracted loot table, so any other shape
+    /// panics instead of being dropped.
     #[serde(default)]
     predicates: FxHashMap<String, serde_json::Value>,
 }
 
+/// A registry holder set in JSON: a single key, a list of keys, or a `#tag` string.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub(crate) enum ItemSetJson {
+    One(String),
+    Many(Vec<String>),
+}
+
+/// Which enchantment component predicate an `item_filter` entry codes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EnchantmentSourceJson {
+    Enchantments,
+    StoredEnchantments,
+}
+
 #[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-struct BonusParametersJson {
+pub(crate) struct BonusParametersJson {
     #[serde(rename = "bonusMultiplier", default)]
     bonus_multiplier: Option<i32>,
     #[serde(default)]
@@ -628,11 +687,12 @@ pub(crate) fn build() -> TokenStream {
     stream.extend(quote! {
         use crate::loot_table::{
             BlockPredicate, BonusFormula, ConditionalLootFunction, CopySource, DamageSourcePredicate,
-            DamageTagPredicate, DyeColor, EnchantedChance, EnchantmentOptions, EntityEquipment,
-            EntityFlags, EntityPredicate, EquipmentSlotGroup, InstrumentOptions, ItemPredicate,
-            LocationPredicate, LootCondition, LootContextEntity, LootEntry, LootFunction, LootPool,
-            LootTable, LootTableRef, LootTableRegistry, LootType, NameTarget, NumberProvider,
-            PropertyCheck, StewEffect, ToolPredicate,
+            DamageTagPredicate, DyeColor, EnchantedChance, EnchantmentMatch, EnchantmentOptions,
+            EnchantmentSource, EntityEquipment, EntityFlags, EntityPredicate, EquipmentSlotGroup,
+            InstrumentOptions, ItemPredicate, ItemSetPredicate, LocationPredicate, LootCondition,
+            LootContextEntity, LootEntry, LootFunction, LootPool, LootTable, LootTableRef,
+            LootTableRegistry, LootType, NameTarget, NumberProvider, PotionOptions, PropertyCheck,
+            StewEffect, ToolPredicate,
         };
         use steel_utils::Identifier;
     });

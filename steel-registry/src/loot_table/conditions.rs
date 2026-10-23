@@ -3,6 +3,7 @@ use super::{
     Identifier, ItemStack, LootContext, LootContextEntity, NumberProvider, NumberProviderRange,
     REGISTRY, RegistryExt, RngExt, TaggedRegistryExt,
 };
+use crate::data_components::vanilla_components::{ENCHANTMENTS, STORED_ENCHANTMENTS};
 use crate::equipment::EquipmentSlot;
 
 /// A property check for block state conditions.
@@ -125,14 +126,64 @@ pub enum ToolPredicate {
 /// used by the `minecraft:filtered` loot function's `item_filter`.
 #[derive(Debug, Clone)]
 pub struct ItemPredicate {
+    pub items: Option<ItemSetPredicate>,
     pub count_min: Option<i32>,
     pub count_max: Option<i32>,
+    /// Component presence checks (vanilla's `AnyValueType` predicate shape).
     pub has_components: &'static [Identifier],
+    /// Vanilla `EnchantmentsPredicate` component predicates.
+    pub enchantment_matches: &'static [EnchantmentMatch],
+}
+
+/// The `items` holder set of an `ItemPredicate`.
+///
+/// Item statics are lazily initialised, so a `RegistryHolderSet<Item>` cannot be
+/// built in the constant initialisers of the generated loot functions. This
+/// mirrors the same two shapes with keys that are resolved at test time.
+#[derive(Debug, Clone)]
+pub enum ItemSetPredicate {
+    /// A `#tag` reference.
+    Tag(Identifier),
+    /// Direct item keys.
+    Items(&'static [&'static str]),
+}
+
+impl ItemSetPredicate {
+    #[must_use]
+    pub fn test(&self, item: &ItemStack) -> bool {
+        match self {
+            Self::Tag(tag) => REGISTRY.items.is_in_tag(item.item, tag),
+            Self::Items(items) => items.iter().any(|key| item.item.key.path.as_ref() == *key),
+        }
+    }
+}
+
+/// One vanilla `EnchantmentPredicate` of an `EnchantmentsPredicate` component
+/// predicate: the referenced component must exist and hold an enchantment whose
+/// level lies within the bounds.
+#[derive(Debug, Clone)]
+pub struct EnchantmentMatch {
+    pub component: EnchantmentSource,
+    /// Vanilla `EnchantmentPredicate.levels` (`MinMaxBounds.Ints`).
+    pub min_level: Option<i32>,
+    pub max_level: Option<i32>,
+}
+
+/// The enchantment component an [`EnchantmentMatch`] inspects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnchantmentSource {
+    Enchantments,
+    StoredEnchantments,
 }
 
 impl ItemPredicate {
     #[must_use]
     pub fn test(&self, item: &ItemStack) -> bool {
+        if let Some(items) = &self.items
+            && !items.test(item)
+        {
+            return false;
+        }
         if let Some(min) = self.count_min
             && item.count < min
         {
@@ -142,6 +193,29 @@ impl ItemPredicate {
             && item.count > max
         {
             return false;
+        }
+        for r#match in self.enchantment_matches {
+            let values = match r#match.component {
+                EnchantmentSource::Enchantments => item.get(ENCHANTMENTS),
+                EnchantmentSource::StoredEnchantments => item.get(STORED_ENCHANTMENTS),
+            };
+            let Some(values) = values else {
+                return false;
+            };
+            let matched = if r#match.min_level.is_none() && r#match.max_level.is_none() {
+                // Vanilla `EnchantmentPredicate.containedIn` with `MinMaxBounds.Ints.ANY`
+                // requires the enchantment component to be non-empty.
+                !values.is_empty()
+            } else {
+                values.iter().any(|(_, level)| {
+                    let level = *level as i32;
+                    r#match.min_level.is_none_or(|min| level >= min)
+                        && r#match.max_level.is_none_or(|max| level <= max)
+                })
+            };
+            if !matched {
+                return false;
+            }
         }
         self.has_components
             .iter()

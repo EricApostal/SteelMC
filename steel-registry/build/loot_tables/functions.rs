@@ -1,11 +1,12 @@
 use super::{
-    ItemFilterJson, LimitJson, LootFunctionJson, TokenStream, generate_condition,
-    generate_enchantment_options, generate_instrument_options, generate_number_provider, quote,
+    EnchantmentPredicateJson, EnchantmentSourceJson, ItemFilterJson, ItemSetJson, LimitJson,
+    LootFunctionJson, TokenStream, generate_condition, generate_enchantment_options,
+    generate_instrument_options, generate_number_provider, generate_potion_options, quote,
 };
 use std::str::FromStr;
 use steel_utils::Identifier;
 
-pub(super) fn generate_function(function: &LootFunctionJson) -> TokenStream {
+pub(crate) fn generate_function(function: &LootFunctionJson) -> TokenStream {
     let func_body = match function.function.as_str() {
         "minecraft:set_count" => {
             let count = function.count.as_ref().map_or_else(
@@ -124,7 +125,16 @@ pub(super) fn generate_function(function: &LootFunctionJson) -> TokenStream {
         }
         "minecraft:enchant_randomly" => {
             let options = generate_enchantment_options(&function.options);
-            quote! { LootFunction::EnchantRandomly { options: #options } }
+            let only_compatible = function.only_compatible.unwrap_or(true);
+            let include_additional_cost_component =
+                function.include_additional_cost_component.unwrap_or(false);
+            quote! {
+                LootFunction::EnchantRandomly {
+                    options: #options,
+                    only_compatible: #only_compatible,
+                    include_additional_cost_component: #include_additional_cost_component,
+                }
+            }
         }
         "minecraft:enchant_with_levels" => {
             let levels = function.levels.as_ref().map_or_else(
@@ -205,6 +215,7 @@ pub(super) fn generate_function(function: &LootFunctionJson) -> TokenStream {
 
             let zoom = function.zoom.unwrap_or(2);
             let skip_existing_chunks = function.skip_existing_chunks.unwrap_or(true);
+            let search_radius = function.search_radius.unwrap_or(50);
 
             quote! {
                 LootFunction::ExplorationMap {
@@ -212,6 +223,7 @@ pub(super) fn generate_function(function: &LootFunctionJson) -> TokenStream {
                     decoration: Identifier::vanilla_static(#decoration),
                     zoom: #zoom,
                     skip_existing_chunks: #skip_existing_chunks,
+                    search_radius: #search_radius,
                 }
             }
         }
@@ -245,6 +257,17 @@ pub(super) fn generate_function(function: &LootFunctionJson) -> TokenStream {
             let id = function.id.as_deref().unwrap_or("minecraft:water");
             let id = id.strip_prefix("minecraft:").unwrap_or(id);
             quote! { LootFunction::SetPotion { id: Identifier::vanilla_static(#id) } }
+        }
+        "minecraft:set_random_potion" => {
+            let options = generate_potion_options(&function.options);
+            quote! { LootFunction::SetRandomPotion { options: #options } }
+        }
+        "minecraft:set_random_dyes" => {
+            let number_of_dyes = function.number_of_dyes.as_ref().map_or_else(
+                || panic!("minecraft:set_random_dyes is missing number_of_dyes"),
+                generate_number_provider,
+            );
+            quote! { LootFunction::SetRandomDyes { number_of_dyes: #number_of_dyes } }
         }
         "minecraft:set_stew_effect" => {
             let effects: Vec<TokenStream> = function.effects.as_ref().map_or_default(|effs| {
@@ -329,10 +352,11 @@ pub(super) fn generate_function(function: &LootFunctionJson) -> TokenStream {
 /// Generates an `ItemPredicate` (vanilla `net.minecraft.advancements.predicates.ItemPredicate`)
 /// for `minecraft:filtered`'s `item_filter`.
 fn generate_item_predicate(filter: &ItemFilterJson) -> TokenStream {
-    assert!(
-        filter.items.is_none(),
-        "item_filter.items is not yet supported by any extracted loot table"
-    );
+    let items = match &filter.items {
+        Some(ItemSetJson::One(value)) => generate_item_holder_set(std::slice::from_ref(value)),
+        Some(ItemSetJson::Many(values)) => generate_item_holder_set(values),
+        None => quote! { None },
+    };
 
     let (count_min, count_max) = match &filter.count {
         Some(LimitJson::Integer(v)) => (Some(*v), Some(*v)),
@@ -345,11 +369,12 @@ fn generate_item_predicate(filter: &ItemFilterJson) -> TokenStream {
     let has_components: Vec<TokenStream> = filter
         .predicates
         .iter()
+        .filter(|(key, _)| enchantment_source(key).is_none())
         .map(|(key, value)| {
             assert!(
-                value.as_object().is_some_and(serde_json::Map::is_empty),
+                is_presence_check(value),
                 "unsupported item_filter predicate shape for {key}: {value} \
-                 (only the presence-check `{{}}` shape is modeled)"
+                 (only the presence-check `{{}}`/`[{{}}]` shapes are modeled)"
             );
             let id = Identifier::from_str(key).unwrap_or_else(|error| {
                 panic!("invalid item_filter predicate key {key:?}: {error}")
@@ -364,13 +389,114 @@ fn generate_item_predicate(filter: &ItemFilterJson) -> TokenStream {
         })
         .collect();
 
+    let enchantment_matches: Vec<TokenStream> = filter
+        .predicates
+        .iter()
+        .filter(|(key, _)| enchantment_source(key).is_some())
+        .flat_map(|(key, value)| {
+            let source = match enchantment_source(key) {
+                Some(EnchantmentSourceJson::Enchantments) => {
+                    quote! { EnchantmentSource::Enchantments }
+                }
+                Some(EnchantmentSourceJson::StoredEnchantments) => {
+                    quote! { EnchantmentSource::StoredEnchantments }
+                }
+                None => unreachable!("filtered by enchantment_source"),
+            };
+            let entries: Vec<EnchantmentPredicateJson> = serde_json::from_value(value.clone())
+                .unwrap_or_else(|error| {
+                    panic!("invalid item_filter enchantment predicate {key}: {error}")
+                });
+            assert!(
+                !entries.is_empty(),
+                "item_filter enchantment predicate {key} must list at least one entry"
+            );
+            entries.into_iter().map(move |entry| {
+                assert!(
+                    entry.enchantments.is_none(),
+                    "item_filter enchantment holder-set restrictions are not modeled ({key})"
+                );
+                let (min_level, max_level) = entry.level_bounds();
+                let min_level = min_level.map_or_else(|| quote! { None }, |v| quote! { Some(#v) });
+                let max_level = max_level.map_or_else(|| quote! { None }, |v| quote! { Some(#v) });
+                let source = source.clone();
+                quote! {
+                    EnchantmentMatch {
+                        component: #source,
+                        min_level: #min_level,
+                        max_level: #max_level,
+                    }
+                }
+            })
+        })
+        .collect();
+
     quote! {
         ItemPredicate {
+            items: #items,
             count_min: #count_min,
             count_max: #count_max,
             has_components: &[#(#has_components),*],
+            enchantment_matches: &[#(#enchantment_matches),*],
         }
     }
+}
+
+/// Vanilla enchantment component predicates, keyed by their predicate id.
+fn enchantment_source(key: &str) -> Option<EnchantmentSourceJson> {
+    match key {
+        "minecraft:enchantments" => Some(EnchantmentSourceJson::Enchantments),
+        "minecraft:stored_enchantments" => Some(EnchantmentSourceJson::StoredEnchantments),
+        _ => None,
+    }
+}
+
+/// Vanilla's `AnyValueType` predicate shape: an empty object, or a list of empty
+/// objects (e.g. `stored_enchantments: [{}]`), both meaning "component present".
+fn is_presence_check(value: &serde_json::Value) -> bool {
+    if let Some(object) = value.as_object() {
+        return object.is_empty();
+    }
+    value.as_array().is_some_and(|entries| {
+        !entries.is_empty()
+            && entries
+                .iter()
+                .all(|entry| entry.as_object().is_some_and(serde_json::Map::is_empty))
+    })
+}
+
+/// Generates an `Option<ItemSetPredicate>` for `item_filter.items`.
+fn generate_item_holder_set(values: &[String]) -> TokenStream {
+    if let [single] = values
+        && let Some(tag) = single.strip_prefix('#')
+    {
+        let tag = tag.strip_prefix("minecraft:").unwrap_or(tag);
+        let tag = Identifier::from_str(tag)
+            .unwrap_or_else(|error| panic!("invalid item tag {single:?}: {error}"));
+        let path = tag.path.as_ref();
+        assert_eq!(
+            tag.namespace.as_ref(),
+            "minecraft",
+            "item_filter tags must use the minecraft namespace: {tag}"
+        );
+        return quote! { Some(ItemSetPredicate::Tag(Identifier::vanilla_static(#path))) };
+    }
+
+    let items: Vec<TokenStream> = values
+        .iter()
+        .map(|value| {
+            let id = Identifier::from_str(value)
+                .unwrap_or_else(|error| panic!("invalid item id {value:?}: {error}"));
+            assert_eq!(
+                id.namespace.as_ref(),
+                "minecraft",
+                "item_filter items must use the minecraft namespace: {id}"
+            );
+            let path = id.path.as_ref();
+            quote! { #path }
+        })
+        .collect();
+    quote! { Some(ItemSetPredicate::Items(&[#(#items),*])) }
 }
 
 /// Generates an `Option<&'static ConditionalLootFunction>` for `on_pass`/`on_fail`.

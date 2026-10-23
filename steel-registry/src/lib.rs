@@ -88,6 +88,7 @@ pub use structure::template_pool;
 pub mod advancement;
 pub mod ticket_type;
 pub mod timeline;
+pub mod trade;
 pub mod trim_material;
 pub mod trim_pattern;
 pub mod vanilla_ticket_types;
@@ -251,6 +252,16 @@ pub mod vanilla_villager_types;
 #[rustfmt::skip]
 #[path = "generated/vanilla_villager_professions.rs"]
 pub mod vanilla_villager_professions;
+
+#[expect(warnings)]
+#[rustfmt::skip]
+#[path = "generated/vanilla_villager_trades.rs"]
+pub mod vanilla_villager_trades;
+
+#[expect(warnings)]
+#[rustfmt::skip]
+#[path = "generated/vanilla_trade_sets.rs"]
+pub mod vanilla_trade_sets;
 
 #[expect(warnings)]
 #[rustfmt::skip]

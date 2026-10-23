@@ -72,6 +72,7 @@ use crate::{
     structure_processor::StructureProcessorListRegistry,
     template_pool,
     timeline::TimelineRegistry,
+    trade::{TradeSetRegistry, VillagerTradeRegistry},
     trim_material::TrimMaterialRegistry,
     trim_pattern::TrimPatternRegistry,
     vanilla_advancements, vanilla_attributes, vanilla_banner_pattern_tags, vanilla_banner_patterns,
@@ -92,9 +93,10 @@ use crate::{
     vanilla_position_source_types, vanilla_potion_tags, vanilla_potions, vanilla_recipes,
     vanilla_structure_processors, vanilla_structure_tags, vanilla_structures,
     vanilla_template_pools, vanilla_ticket_types, vanilla_timeline_tags, vanilla_timelines,
-    vanilla_trim_materials, vanilla_trim_patterns, vanilla_villager_professions,
-    vanilla_villager_types, vanilla_wolf_sound_variants, vanilla_wolf_variants,
-    vanilla_world_clocks, vanilla_zombie_nautilus_variants,
+    vanilla_trade_sets, vanilla_trim_materials, vanilla_trim_patterns,
+    vanilla_villager_professions, vanilla_villager_trades, vanilla_villager_types,
+    vanilla_wolf_sound_variants, vanilla_wolf_variants, vanilla_world_clocks,
+    vanilla_zombie_nautilus_variants,
     villager_profession::VillagerProfessionRegistry,
     villager_type::VillagerTypeRegistry,
     wolf_sound_variant::WolfSoundVariantRegistry,
@@ -206,6 +208,8 @@ pub const POSITION_SOURCE_TYPE_REGISTRY: Identifier =
 pub const VILLAGER_TYPE_REGISTRY: Identifier = Identifier::vanilla_static("villager_type");
 pub const VILLAGER_PROFESSION_REGISTRY: Identifier =
     Identifier::vanilla_static("villager_profession");
+pub const VILLAGER_TRADE_REGISTRY: Identifier = Identifier::vanilla_static("villager_trade");
+pub const TRADE_SET_REGISTRY: Identifier = Identifier::vanilla_static("trade_set");
 pub const DIMENSION_TYPE_REGISTRY: Identifier = Identifier::vanilla_static("dimension_type");
 pub const DAMAGE_TYPE_REGISTRY: Identifier = Identifier::vanilla_static("damage_type");
 pub const BANNER_PATTERN_REGISTRY: Identifier = Identifier::vanilla_static("banner_pattern");
@@ -272,6 +276,8 @@ pub struct Registry {
     pub position_source_types: PositionSourceTypeRegistry,
     pub villager_types: VillagerTypeRegistry,
     pub villager_professions: VillagerProfessionRegistry,
+    pub villager_trades: VillagerTradeRegistry,
+    pub trade_sets: TradeSetRegistry,
     pub dimension_types: DimensionTypeRegistry,
     pub damage_types: DamageTypeRegistry,
     pub block_transformers: BlockTransformerRegistry,
@@ -372,6 +378,9 @@ impl Registry {
             &mut registry.position_source_types,
         );
         vanilla_villager_types::register_villager_types(&mut registry.villager_types);
+        vanilla_villager_trades::register_villager_trades(&mut registry.villager_trades);
+        vanilla_trade_sets::register_villager_trade_tags(&mut registry.villager_trades);
+        vanilla_trade_sets::register_trade_sets(&mut registry.trade_sets);
         vanilla_villager_professions::register_villager_professions(
             &mut registry.villager_professions,
         );
@@ -487,6 +496,8 @@ impl Registry {
         self.position_source_types.freeze();
         self.villager_types.freeze();
         self.villager_professions.freeze();
+        self.villager_trades.freeze();
+        self.trade_sets.freeze();
         self.dimension_types.freeze();
         self.damage_types.freeze();
         self.block_transformers.freeze();
@@ -752,6 +763,8 @@ impl Registry {
             position_source_types: PositionSourceTypeRegistry::new(),
             villager_types: VillagerTypeRegistry::new(),
             villager_professions: VillagerProfessionRegistry::new(),
+            villager_trades: VillagerTradeRegistry::new(),
+            trade_sets: TradeSetRegistry::new(),
             dimension_types: DimensionTypeRegistry::new(),
             damage_types: DamageTypeRegistry::new(),
             block_transformers: BlockTransformerRegistry::new(),

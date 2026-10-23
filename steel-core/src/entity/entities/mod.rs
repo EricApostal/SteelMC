@@ -4,8 +4,15 @@ pub mod mobs;
 pub mod objects;
 
 pub use mobs::ambient::BatEntity;
+pub use mobs::golem::IronGolemEntity;
 pub use mobs::hostile::EndermiteEntity;
-pub use mobs::passive::{ChickenEntity, CowEntity, MushroomCowEntity, PigEntity, SheepEntity};
+pub use mobs::illager::{PillagerEntity, VindicatorEntity};
+pub use mobs::npc::{VillagerEntity, WanderingTraderEntity};
+pub use mobs::passive::{
+    ChickenEntity, CowEntity, LlamaEntity, MushroomCowEntity, PigEntity, SheepEntity,
+    TraderLlamaEntity,
+};
+pub use mobs::zombie::{ZombieEntity, ZombieVillagerEntity};
 pub use objects::display_ui::{BlockDisplayEntity, ItemFrameEntity, LeashFenceKnotEntity};
 pub use objects::explosives::EndCrystalEntity;
 pub use objects::items::{ExperienceOrbEntity, FallingBlockEntity, ItemEntity};

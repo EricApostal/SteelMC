@@ -12,7 +12,7 @@ use crate::fluid::FluidStateExt as _;
 
 const RANDOM_POS_ATTEMPTS: usize = 10;
 
-pub(super) fn default_random_pos(
+pub(crate) fn default_random_pos(
     mob: &dyn PathfinderMob,
     horizontal_dist: i32,
     vertical_dist: i32,
@@ -24,7 +24,7 @@ pub(super) fn default_random_pos(
     })
 }
 
-pub(super) fn default_random_pos_towards(
+pub(crate) fn default_random_pos_towards(
     mob: &dyn PathfinderMob,
     horizontal_dist: i32,
     vertical_dist: i32,
@@ -51,7 +51,7 @@ pub(super) fn default_random_pos_towards(
     })
 }
 
-pub(super) fn default_random_pos_away(
+pub(crate) fn default_random_pos_away(
     mob: &dyn PathfinderMob,
     horizontal_dist: i32,
     vertical_dist: i32,
@@ -77,7 +77,7 @@ pub(super) fn default_random_pos_away(
     })
 }
 
-pub(super) fn land_random_pos(
+pub(crate) fn land_random_pos(
     mob: &dyn PathfinderMob,
     horizontal_dist: i32,
     vertical_dist: i32,
@@ -93,7 +93,38 @@ pub(super) fn land_random_pos(
 
 fn generate_random_pos(
     mob: &dyn PathfinderMob,
+    pos_supplier: impl FnMut() -> Option<BlockPos>,
+) -> Option<DVec3> {
+    generate_random_pos_with_weight(pos_supplier, |pos| mob.get_walk_target_value(pos))
+}
+
+/// Vanilla `LandRandomPos.getPos(mob, xz, y, weight)`: the same 10-attempt
+/// search as [`generate_random_pos`], scored by a caller-supplied weight.
+pub(crate) fn land_random_pos_with_weight(
+    mob: &dyn PathfinderMob,
+    horizontal_dist: i32,
+    vertical_dist: i32,
+    weight: impl Fn(BlockPos) -> f32,
+) -> Option<DVec3> {
+    let restrict = mob_restricted(mob, f64::from(horizontal_dist));
+    generate_random_pos_with_weight(
+        || {
+            let direction = generate_random_direction(mob, horizontal_dist, vertical_dist);
+            let pos = land_random_pos_toward_direction(
+                mob,
+                f64::from(horizontal_dist),
+                restrict,
+                direction,
+            )?;
+            land_move_pos_up_out_of_solid(mob, pos)
+        },
+        weight,
+    )
+}
+
+fn generate_random_pos_with_weight(
     mut pos_supplier: impl FnMut() -> Option<BlockPos>,
+    weight: impl Fn(BlockPos) -> f32,
 ) -> Option<DVec3> {
     let mut best_weight = f32::NEG_INFINITY;
     let mut best_pos = None;
@@ -102,7 +133,7 @@ fn generate_random_pos(
         let Some(pos) = pos_supplier() else {
             continue;
         };
-        let value = mob.get_walk_target_value(pos);
+        let value = weight(pos);
         if value > best_weight {
             best_weight = value;
             best_pos = Some(pos);

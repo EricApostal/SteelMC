@@ -1,16 +1,25 @@
+use std::sync::Arc;
+
 use glam::DVec3;
+use steel_registry::data_components::PotionContents;
+use steel_registry::data_components::vanilla_components::{
+    POTION_CONTENTS, SwingAnimation, SwingAnimationType,
+};
+use steel_registry::entity_type::EntityTypeRef;
+use steel_registry::sound_event::SoundEventRef;
 use steel_registry::{
-    data_components::vanilla_components::{SwingAnimation, SwingAnimationType},
-    init_vanilla_registry,
-    item_stack::ItemStack,
-    vanilla_attributes, vanilla_entities,
-    vanilla_entity_data::PlayerEntityData,
+    MobEffectInstance as RegistryMobEffectInstance, init_vanilla_registry, item_stack::ItemStack,
+    sound_events, vanilla_attributes, vanilla_entities, vanilla_entity_data::PlayerEntityData,
     vanilla_items, vanilla_mob_effects,
 };
+use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, types::InteractionHand};
 
 use crate::behavior::init_behaviors;
+use crate::entity::{Entity, EntityBase, LivingEntity, Mob, MobBase, PathfinderMob, SharedEntity};
 use crate::inventory::equipment::EquipmentSlot;
+use crate::test_support::fresh_test_world;
+use crate::world::World;
 
 use super::{
     ActiveMobEffect, LivingEntityBase, LivingTravelInput, MobEffectInstance, MobEffectSyncChange,
@@ -620,4 +629,350 @@ fn poison_and_regeneration_tick_schedules_match_vanilla_interval_formulas() {
     // An effect with no vanilla tick schedule (e.g. Speed) never ticks.
     let speed = MobEffectInstance::with_duration(vanilla_mob_effects::SPEED, 100, 0);
     assert!(!speed.should_apply_effect_tick_this_tick(0));
+}
+
+// ---------------------------------------------------------------------------
+// Mob item-use pipeline: `LivingEntity::{start_using_item, updating_using_item}`.
+// ---------------------------------------------------------------------------
+
+/// Test mob that records every sound it plays instead of emitting it through
+/// the world, so consume sounds can be asserted directly.
+struct ItemUseTestMob {
+    base: EntityBase,
+    living_base: LivingEntityBase,
+    mob_base: MobBase,
+    mob_flags: SyncMutex<i8>,
+    health: SyncMutex<f32>,
+    played_sounds: SyncMutex<Vec<(SoundEventRef, f32, f32)>>,
+}
+
+impl ItemUseTestMob {
+    fn new(world: &Arc<World>) -> Self {
+        init_vanilla_registry();
+        init_behaviors();
+        Self {
+            base: EntityBase::new(
+                1,
+                DVec3::ZERO,
+                vanilla_entities::PIG.dimensions,
+                Arc::downgrade(world),
+            ),
+            living_base: LivingEntityBase::new(&vanilla_entities::PIG),
+            mob_base: MobBase::new(),
+            mob_flags: SyncMutex::new(0),
+            health: SyncMutex::new(10.0),
+            played_sounds: SyncMutex::new(Vec::new()),
+        }
+    }
+
+    fn last_played_sound(&self) -> Option<SoundEventRef> {
+        self.played_sounds.lock().last().map(|(sound, _, _)| *sound)
+    }
+}
+
+crate::entity::impl_test_downcast_type!(ItemUseTestMob);
+
+impl Entity for ItemUseTestMob {
+    fn base(&self) -> &EntityBase {
+        &self.base
+    }
+
+    fn entity_type(&self) -> EntityTypeRef {
+        &vanilla_entities::PIG
+    }
+
+    fn play_sound(&self, sound: SoundEventRef, volume: f32, pitch: f32) {
+        self.played_sounds.lock().push((sound, volume, pitch));
+    }
+}
+
+impl LivingEntity for ItemUseTestMob {
+    fn living_base(&self) -> &LivingEntityBase {
+        &self.living_base
+    }
+
+    fn get_health(&self) -> f32 {
+        *self.health.lock()
+    }
+
+    fn set_health(&self, health: f32) {
+        *self.health.lock() = health;
+    }
+}
+
+impl Mob for ItemUseTestMob {
+    fn mob_base(&self) -> &MobBase {
+        &self.mob_base
+    }
+
+    fn mob_flags(&self) -> i8 {
+        *self.mob_flags.lock()
+    }
+
+    fn set_mob_flags(&self, flags: i8) {
+        *self.mob_flags.lock() = flags;
+    }
+}
+
+impl PathfinderMob for ItemUseTestMob {}
+
+/// The same mob with vanilla `WanderingTrader.getConsumeSound`'s override
+/// (`Consumable.OverrideConsumeSound`), reusing the harness above.
+struct TraderDrinkSoundMob {
+    inner: ItemUseTestMob,
+}
+
+impl TraderDrinkSoundMob {
+    fn last_played_sound(&self) -> Option<SoundEventRef> {
+        self.inner.last_played_sound()
+    }
+}
+
+crate::entity::impl_test_downcast_type!(TraderDrinkSoundMob);
+
+impl Entity for TraderDrinkSoundMob {
+    fn base(&self) -> &EntityBase {
+        self.inner.base()
+    }
+
+    fn entity_type(&self) -> EntityTypeRef {
+        self.inner.entity_type()
+    }
+
+    fn play_sound(&self, sound: SoundEventRef, volume: f32, pitch: f32) {
+        self.inner.play_sound(sound, volume, pitch);
+    }
+}
+
+impl LivingEntity for TraderDrinkSoundMob {
+    fn living_base(&self) -> &LivingEntityBase {
+        self.inner.living_base()
+    }
+
+    fn get_health(&self) -> f32 {
+        self.inner.get_health()
+    }
+
+    fn set_health(&self, health: f32) {
+        self.inner.set_health(health);
+    }
+
+    fn get_consume_sound(&self, stack: &ItemStack) -> Option<SoundEventRef> {
+        Some(if stack.is(&vanilla_items::MILK_BUCKET) {
+            &sound_events::ENTITY_WANDERING_TRADER_DRINK_MILK
+        } else {
+            &sound_events::ENTITY_WANDERING_TRADER_DRINK_POTION
+        })
+    }
+}
+
+impl Mob for TraderDrinkSoundMob {
+    fn mob_base(&self) -> &MobBase {
+        self.inner.mob_base()
+    }
+
+    fn mob_flags(&self) -> i8 {
+        self.inner.mob_flags()
+    }
+
+    fn set_mob_flags(&self, flags: i8) {
+        self.inner.set_mob_flags(flags);
+    }
+}
+
+impl PathfinderMob for TraderDrinkSoundMob {}
+
+/// A potion carrying vanilla `PotionContents` custom effects.
+fn invisibility_potion() -> ItemStack {
+    let mut stack = ItemStack::new(&vanilla_items::POTION);
+    stack.set(
+        POTION_CONTENTS,
+        PotionContents::new(
+            None,
+            None,
+            vec![RegistryMobEffectInstance::simple(
+                vanilla_mob_effects::INVISIBILITY,
+                200,
+                0,
+            )],
+            None,
+        ),
+    );
+    stack
+}
+
+/// Vanilla `LivingEntity.startUsingItem` uses `Consumable.consumeTicks`
+/// (1.6s -> 32 ticks) and `updateUsingItem` completes the use on the last tick,
+/// applying the potion's effects and leaving the glass-bottle remainder.
+#[test]
+fn potion_use_completes_after_the_consumable_duration_and_applies_effects() {
+    let world = fresh_test_world("living_item_use_potion_completion");
+    let mob = Arc::new(ItemUseTestMob::new(&world.world));
+    let entity: SharedEntity = Arc::<ItemUseTestMob>::clone(&mob);
+
+    mob.set_item_in_hand(InteractionHand::MainHand, invisibility_potion());
+    mob.start_using_item(InteractionHand::MainHand);
+
+    let duration = mob.get_use_item_remaining_ticks();
+    assert_eq!(duration, 32, "vanilla default `consume_seconds` is 1.6s");
+    assert_eq!(mob.get_tick_count_using_item(), 0);
+    assert!(mob.get_use_item().is(&vanilla_items::POTION));
+
+    for _ in 0..duration - 1 {
+        mob.updating_using_item(&entity);
+    }
+    assert!(mob.is_using_item());
+    assert_eq!(mob.get_use_item_remaining_ticks(), 1);
+    assert_eq!(mob.get_tick_count_using_item(), duration - 1);
+
+    mob.updating_using_item(&entity);
+
+    assert!(!mob.is_using_item());
+    assert_eq!(mob.get_use_item_remaining_ticks(), 0);
+    assert_eq!(mob.get_tick_count_using_item(), 0);
+    assert!(
+        mob.mob_effect(vanilla_mob_effects::INVISIBILITY).is_some(),
+        "finishing the potion applies its `PotionContents` effects"
+    );
+    assert!(
+        mob.get_item_in_hand(InteractionHand::MainHand)
+            .is(&vanilla_items::GLASS_BOTTLE),
+        "vanilla consumes the potion and leaves its use remainder"
+    );
+    assert_eq!(
+        mob.last_played_sound(),
+        Some(&sound_events::ENTITY_GENERIC_DRINK),
+        "with no override the potion's own `Consumable.sound` is played"
+    );
+}
+
+/// Vanilla `Consumable.onConsumeEffects` runs through the finish path: the milk
+/// bucket's `clear_all_effects` effect fires, and `getConsumeSound` is
+/// overridable per mob (`Consumable.OverrideConsumeSound`).
+#[test]
+fn milk_bucket_clears_effects_and_plays_the_overridable_consume_sound() {
+    let world = fresh_test_world("living_item_use_milk_consume_sound");
+    let mob = Arc::new(TraderDrinkSoundMob {
+        inner: ItemUseTestMob::new(&world.world),
+    });
+    let entity: SharedEntity = Arc::<TraderDrinkSoundMob>::clone(&mob);
+
+    mob.add_mob_effect(MobEffectInstance::with_duration(
+        vanilla_mob_effects::INVISIBILITY,
+        200,
+        0,
+    ));
+    assert!(mob.has_mob_effect(vanilla_mob_effects::INVISIBILITY));
+
+    mob.set_item_in_hand(
+        InteractionHand::MainHand,
+        ItemStack::new(&vanilla_items::MILK_BUCKET),
+    );
+    mob.start_using_item(InteractionHand::MainHand);
+    let duration = mob.get_use_item_remaining_ticks();
+    for _ in 0..duration {
+        mob.updating_using_item(&entity);
+    }
+
+    assert!(!mob.is_using_item());
+    assert!(
+        !mob.has_mob_effect(vanilla_mob_effects::INVISIBILITY),
+        "milk's `clear_all_effects` consume effect fires"
+    );
+    assert!(
+        mob.get_item_in_hand(InteractionHand::MainHand)
+            .is(&vanilla_items::BUCKET),
+        "vanilla consumes the milk and leaves its use remainder"
+    );
+    assert_eq!(
+        mob.last_played_sound(),
+        Some(&sound_events::ENTITY_WANDERING_TRADER_DRINK_MILK),
+        "the overridden consume sound is what the consume path plays"
+    );
+    assert_eq!(
+        mob.get_consume_sound(&ItemStack::new(&vanilla_items::POTION)),
+        Some(&sound_events::ENTITY_WANDERING_TRADER_DRINK_POTION)
+    );
+    assert_eq!(
+        mob.inner
+            .get_consume_sound(&ItemStack::new(&vanilla_items::MILK_BUCKET)),
+        Some(&sound_events::ENTITY_GENERIC_DRINK),
+        "without an override the hook falls back to `Consumable.sound`"
+    );
+}
+
+/// Vanilla `updatingUsingItem` stops the use when the used hand no longer holds
+/// the item that started it — swapped or dropped.
+#[test]
+fn updating_using_item_stops_when_the_used_item_is_swapped_or_dropped() {
+    let world = fresh_test_world("living_item_use_interruption");
+    let swapped = Arc::new(ItemUseTestMob::new(&world.world));
+    let swapped_entity: SharedEntity = Arc::<ItemUseTestMob>::clone(&swapped);
+
+    swapped.set_item_in_hand(InteractionHand::MainHand, invisibility_potion());
+    swapped.start_using_item(InteractionHand::MainHand);
+    assert!(swapped.is_using_item());
+
+    swapped.set_item_in_hand(
+        InteractionHand::MainHand,
+        ItemStack::new(&vanilla_items::MILK_BUCKET),
+    );
+    swapped.updating_using_item(&swapped_entity);
+
+    assert!(!swapped.is_using_item());
+    assert!(
+        swapped
+            .get_item_in_hand(InteractionHand::MainHand)
+            .is(&vanilla_items::MILK_BUCKET),
+        "the swapped-in item is left alone"
+    );
+    assert!(
+        swapped
+            .mob_effect(vanilla_mob_effects::INVISIBILITY)
+            .is_none(),
+        "an interrupted use applies no effects"
+    );
+
+    let dropped = Arc::new(ItemUseTestMob::new(&world.world));
+    let dropped_entity: SharedEntity = Arc::<ItemUseTestMob>::clone(&dropped);
+
+    dropped.set_item_in_hand(InteractionHand::MainHand, invisibility_potion());
+    dropped.start_using_item(InteractionHand::MainHand);
+    dropped.set_item_in_hand(InteractionHand::MainHand, ItemStack::empty());
+    dropped.updating_using_item(&dropped_entity);
+
+    assert!(!dropped.is_using_item());
+    assert!(
+        dropped
+            .get_item_in_hand(InteractionHand::MainHand)
+            .is_empty()
+    );
+    assert!(
+        dropped
+            .mob_effect(vanilla_mob_effects::INVISIBILITY)
+            .is_none()
+    );
+}
+
+/// Vanilla `LivingEntity.startUsingItem` requires a non-empty stack and refuses
+/// to restart while an item is already in use.
+#[test]
+fn start_using_item_requires_an_item_and_is_not_reentrant() {
+    let world = fresh_test_world("living_item_use_start_guards");
+    let mob = ItemUseTestMob::new(&world.world);
+
+    mob.start_using_item(InteractionHand::MainHand);
+    assert!(!mob.is_using_item(), "an empty hand cannot start a use");
+
+    mob.set_item_in_hand(InteractionHand::MainHand, invisibility_potion());
+    mob.start_using_item(InteractionHand::MainHand);
+    let remaining = mob.get_use_item_remaining_ticks();
+    assert!(remaining > 0);
+
+    mob.start_using_item(InteractionHand::MainHand);
+    assert_eq!(
+        mob.get_use_item_remaining_ticks(),
+        remaining,
+        "a second `startUsingItem` is ignored while using"
+    );
 }

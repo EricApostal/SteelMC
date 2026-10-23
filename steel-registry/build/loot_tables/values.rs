@@ -1,11 +1,11 @@
 use super::{
     BlockPredicateJson, DamageSourcePredicateJson, EnchantmentOptionsJson, EntityEquipmentJson,
     EntityFlagsJson, EntityPredicateJson, EquipmentSlotJson, FromStr, Ident, Identifier,
-    LocationPredicateJson, NumberProviderJson, PredicateJson, Span, ToShoutySnakeCase, TokenStream,
-    quote,
+    LevelRangeJson, LocationPredicateJson, NumberProviderJson, PredicateJson, Span,
+    ToShoutySnakeCase, TokenStream, quote,
 };
 
-pub(super) fn generate_number_provider(value: &NumberProviderJson) -> TokenStream {
+pub(crate) fn generate_number_provider(value: &NumberProviderJson) -> TokenStream {
     match value {
         NumberProviderJson::Constant(v) => {
             quote! { NumberProvider::Constant(#v) }
@@ -17,6 +17,7 @@ pub(super) fn generate_number_provider(value: &NumberProviderJson) -> TokenStrea
             max,
             n,
             p,
+            inputs,
         } => match provider_type.as_str() {
             "minecraft:uniform" => {
                 let min = min.unwrap_or(0.0);
@@ -27,6 +28,19 @@ pub(super) fn generate_number_provider(value: &NumberProviderJson) -> TokenStrea
                 let n = n.unwrap_or(1.0) as i32;
                 let p = p.unwrap_or(0.5);
                 quote! { NumberProvider::Binomial { n: #n, p: #p } }
+            }
+            "minecraft:add" => {
+                let inputs = inputs
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("minecraft:add number provider is missing inputs"))
+                    .iter()
+                    .map(generate_number_provider)
+                    .collect::<Vec<_>>();
+                assert!(
+                    !inputs.is_empty(),
+                    "minecraft:add number provider requires at least one input"
+                );
+                quote! { NumberProvider::Add { inputs: &[#(#inputs),*] } }
             }
             _ => {
                 let v = value.unwrap_or(1.0);
@@ -150,7 +164,11 @@ pub(super) fn generate_tool_predicate(predicate: &Option<PredicateJson>) -> Toke
                 .strip_prefix("minecraft:")
                 .unwrap_or(enchant_name),
         );
-        let min_level = first.levels.as_ref().and_then(|l| l.min).unwrap_or(1);
+        let min_level = first
+            .levels
+            .as_ref()
+            .and_then(LevelRangeJson::min_level)
+            .unwrap_or(1);
 
         return quote! {
             ToolPredicate::HasEnchantment {
@@ -225,6 +243,46 @@ pub(super) fn generate_instrument_options(options: &Option<EnchantmentOptionsJso
     }
 }
 
+/// Generates an `Option<PotionOptions>` for `minecraft:set_random_potion`.
+pub(crate) fn generate_potion_options(options: &Option<EnchantmentOptionsJson>) -> TokenStream {
+    match options {
+        Some(EnchantmentOptionsJson::Tag(value)) if value.starts_with('#') => {
+            let tag = Identifier::from_str(value.trim_start_matches('#'))
+                .unwrap_or_else(|error| panic!("invalid potion tag {value:?}: {error}"));
+            assert_eq!(
+                tag.namespace.as_ref(),
+                "minecraft",
+                "set_random_potion tags must use the minecraft namespace: {tag}"
+            );
+            let path = tag.path.as_ref();
+            quote! { Some(PotionOptions::Tag(Identifier::vanilla_static(#path))) }
+        }
+        Some(EnchantmentOptionsJson::Tag(value)) => {
+            let potion = generate_potion_ref(value);
+            quote! { Some(PotionOptions::Direct(&[#potion])) }
+        }
+        Some(EnchantmentOptionsJson::List(values)) => {
+            let potions = values.iter().map(|value| generate_potion_ref(value));
+            quote! { Some(PotionOptions::Direct(&[#(#potions),*])) }
+        }
+        // Vanilla falls back to a random potion from the whole registry.
+        None => quote! { None },
+    }
+}
+
+/// Generates a `&'static PotionRef` for a vanilla potion id.
+fn generate_potion_ref(value: &str) -> TokenStream {
+    let id = Identifier::from_str(value)
+        .unwrap_or_else(|error| panic!("invalid potion id {value:?}: {error}"));
+    assert_eq!(
+        id.namespace.as_ref(),
+        "minecraft",
+        "vanilla loot table references a non-vanilla potion: {id}"
+    );
+    let ident = Ident::new(&id.path.to_shouty_snake_case(), Span::call_site());
+    quote! { &crate::vanilla_potions::#ident }
+}
+
 pub(super) fn generate_entity_flags(flags: &Option<EntityFlagsJson>) -> TokenStream {
     if let Some(f) = flags {
         let is_on_fire = if let Some(v) = f.is_on_fire {
@@ -290,7 +348,11 @@ pub(super) fn generate_equipment_slot_predicate(slot: &Option<EquipmentSlotJson>
                     .strip_prefix("minecraft:")
                     .unwrap_or(enchant_name),
             );
-            let min_level = first.levels.as_ref().and_then(|l| l.min).unwrap_or(1);
+            let min_level = first
+                .levels
+                .as_ref()
+                .and_then(LevelRangeJson::min_level)
+                .unwrap_or(1);
             return quote! {
                 Some(ToolPredicate::HasEnchantment {
                     enchantment: Identifier::vanilla_static(#enchant_name),

@@ -27,6 +27,10 @@ pub mod names {
     pub const SCOREBOARD: SavedDataName = SavedDataName::trusted("scoreboard");
     /// Domain command storage, persisted through the domain default world.
     pub const COMMAND_STORAGE: SavedDataName = SavedDataName::trusted("command_storage");
+    /// Vanilla `Raids.TYPE`, persisted as `data/raids.toml`.
+    pub const RAIDS: SavedDataName = SavedDataName::trusted("raids");
+    /// Vanilla `WanderingTraderData.TYPE`, persisted as `data/wandering_trader.toml`.
+    pub const WANDERING_TRADER: SavedDataName = SavedDataName::trusted("wandering_trader");
 }
 
 /// Name of a per-world saved data entry.

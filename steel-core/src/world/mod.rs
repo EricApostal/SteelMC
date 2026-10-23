@@ -18,8 +18,10 @@ use crate::chunk::light::{
 };
 use crate::chunk::status::ChunkStatus;
 use crate::entity::damage::DamageHistory;
+use crate::entity::raid::Raids;
 use crate::poi::OccupationStatus;
 use crate::portal::WorldChangeRequest;
+use crate::world::custom_spawner::CustomSpawner;
 use crate::world::game_event::{
     GameEventContext, GameEventDispatcher, GameEventListenerCount, GameEventListenerStorage,
     SharedGameEventListener,
@@ -113,6 +115,7 @@ mod block_updates;
 mod border;
 mod broadcasts;
 pub(crate) mod clock;
+pub mod custom_spawner;
 mod domain_entity_directory;
 mod entity_management;
 mod environment;
@@ -132,6 +135,7 @@ mod sleep;
 mod sleep_status;
 mod spawn;
 pub mod tick_scheduler;
+pub mod village;
 mod weather;
 mod world_entities;
 
@@ -310,6 +314,12 @@ pub struct World {
         SyncMutex<Option<Arc<tick_scheduler::ScheduledTickRunBatch<FluidRef>>>>,
     /// Point of interest storage for efficient spatial queries of special blocks.
     pub poi_storage: SyncMutex<PointOfInterestStorage>,
+    /// Vanilla `Raids` saved data: the raids currently running in this level.
+    raids: SyncMutex<Raids>,
+    /// Vanilla `SavedData.setDirty` for [`Self::raids`].
+    raids_dirty: AtomicBool,
+    /// Vanilla `ServerLevel.customSpawners`: per-level spawners ticked every tick.
+    custom_spawners: SyncMutex<Vec<Box<dyn CustomSpawner>>>,
     /// World-change requests queued by world-local ticks for server safe-point processing.
     pending_world_changes: SyncMutex<Vec<(SharedEntity, WorldChangeRequest)>>,
 }
@@ -389,6 +399,7 @@ impl World {
             level_data.save().await?;
         }
         let ticket_storage = ChunkTicketStorage::load(&saved_data, &key).await;
+        let raids = Raids::load(&saved_data, saved_data_names::RAIDS).await;
         let world_border = WorldBorder::new(level_data.data().world_border)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         // let generator = Arc::new(ChunkGeneratorType::Flat(FlatChunkGenerator::new(
@@ -461,6 +472,9 @@ impl World {
                 scheduled_block_ticks_this_tick: SyncMutex::new(None),
                 scheduled_fluid_ticks_this_tick: SyncMutex::new(None),
                 poi_storage: SyncMutex::new(PointOfInterestStorage::new()),
+                raids: SyncMutex::new(raids),
+                raids_dirty: AtomicBool::new(false),
+                custom_spawners: SyncMutex::new(Vec::new()),
                 pending_world_changes: SyncMutex::new(Vec::new()),
             }
         }))
@@ -488,9 +502,45 @@ impl World {
             Err(e) => log::error!("Failed to save world chunk ticket data: {e}"),
         }
 
+        self.raids
+            .lock()
+            .save(&self.saved_data, saved_data_names::RAIDS)
+            .await;
+
+        self.save_custom_spawners().await;
+
         match self.save_all_chunks().await {
             Ok(count) => *total_saved += count,
             Err(e) => log::error!("Failed to save world chunks: {e}"),
+        }
+    }
+
+    /// Registers a vanilla `CustomSpawner` for this level.
+    pub fn register_custom_spawner(&self, spawner: Box<dyn CustomSpawner>) {
+        self.custom_spawners.lock().push(spawner);
+    }
+
+    /// Vanilla `ServerLevel.tickCustomSpawners`.
+    fn tick_custom_spawners(self: &Arc<Self>) {
+        for spawner in self.custom_spawners.lock().iter_mut() {
+            spawner.tick(self);
+        }
+    }
+
+    /// Persists every custom spawner's counters.
+    async fn save_custom_spawners(&self) {
+        let spawners = self.custom_spawners.lock();
+        for spawner in spawners.iter() {
+            if spawner.saved_data_name().is_none() {
+                continue;
+            }
+            if let Err(error) = spawner.save(self).await {
+                log::error!(
+                    "Failed to save custom spawner {:?} in world {}: {error}",
+                    spawner.saved_data_name(),
+                    self.key
+                );
+            }
         }
     }
 
@@ -540,8 +590,10 @@ impl World {
             self.tick_weather();
         }
         self.tick_sleeping_players();
+        self.tick_raids();
         if runs_normally {
             self.tick_time();
+            self.tick_custom_spawners();
         }
 
         let random_tick_speed = self.get_game_rule(&RANDOM_TICK_SPEED) as u32;

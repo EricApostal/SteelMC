@@ -7,7 +7,7 @@ use crate::{
     },
     entity::{Entity, ai::path::PathComputationType, dismount_helper},
     player::Player,
-    world::{LevelReader, ScheduledTickAccess, World},
+    world::{LevelReader, ScheduledTickAccess, World, village},
 };
 use glam::DVec3;
 use steel_macros::block_behavior;
@@ -25,11 +25,10 @@ const FACING: &EnumProperty<Direction> = &BlockStateProperties::HORIZONTAL_FACIN
 const OCCUPIED: &BoolProperty = &BlockStateProperties::OCCUPIED;
 /// Behavior for beds
 ///
-/// TODO: Mirror vanilla `BedBlock.useWithoutItem` invalid-dimension explosion
-/// once Steel has a strict `World::explode` foundation: show the bed-rule error
-/// message, remove both bed halves, and use bad-respawn-point explosion damage.
-/// TODO: Mirror vanilla `BedBlock.kickVillagerOutOfBed` once villager sleeping
-/// entities exist.
+/// TODO: Mirror the final step of vanilla `BedBlock.destroyOnUse`: once Steel has a
+/// strict `World::explode` foundation, the bad-respawn-point explosion (and its damage)
+/// must be created after the bed-rule error message and the removal of both halves,
+/// which are implemented in `use_without_item`.
 #[block_behavior]
 pub struct BedBlock {
     pub(super) block: BlockRef,
@@ -326,17 +325,42 @@ impl BlockBehavior for BedBlock {
         };
 
         if world.dimension_type.bed_rule.destroy_on_use {
-            // TODO: When WOrld::explode foundation exists display the bedrule error remove both halves and create the bad respawn point explosion
+            // Vanilla shows the bed rule's error message, then `destroyOnUse` removes both
+            // halves and explodes. Explosions are not implemented yet (`World::explode`
+            // does not exist), so the explosion of the bad respawn point is the remaining
+            // gap here.
+            if let Some(message) = world.dimension_type.bed_rule.error_message {
+                player.send_overlay_message(&message());
+            }
+
+            let facing = head_state.get_value(FACING);
+            world.set_block(
+                head_pos,
+                vanilla_blocks::AIR.default_state(),
+                UpdateFlags::UPDATE_ALL | UpdateFlags::UPDATE_SUPPRESS_DROPS,
+            );
+            world.destroy_block_effect(head_pos, u32::from(head_state.0), None);
+
+            let other_pos = head_pos.relative(facing.opposite());
+            let other_state = world.get_block_state(other_pos);
+            if other_state.get_block() == self.block {
+                world.set_block(
+                    other_pos,
+                    vanilla_blocks::AIR.default_state(),
+                    UpdateFlags::UPDATE_ALL | UpdateFlags::UPDATE_SUPPRESS_DROPS,
+                );
+                world.destroy_block_effect(other_pos, u32::from(other_state.0), None);
+            }
+
             return InteractionResult::SuccessServer;
         }
 
         if head_state.get_value(OCCUPIED) {
-            // TODO: Mirror vanilla `kickVillagerOutOfBed`: find a sleeping
-            // villager in this bed AABB and call `stopSleeping` once villager
-            // sleeping exists.
-            player.send_overlay_message(
-                &translations::BLOCK_MINECRAFT_BED_OCCUPIED.msg().component(),
-            );
+            if !village::kick_villager_out_of_bed(world, head_pos) {
+                player.send_overlay_message(
+                    &translations::BLOCK_MINECRAFT_BED_OCCUPIED.msg().component(),
+                );
+            }
             return InteractionResult::SuccessServer;
         }
 

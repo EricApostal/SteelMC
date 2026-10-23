@@ -1,8 +1,11 @@
 use super::{
     DyeColor, EquipmentSlotGroup, Identifier, InstrumentRef, ItemPredicate, ItemStack,
-    LootCondition, LootContext, LootContextEntity, LootEntry, NumberProvider, REGISTRY, RngExt,
-    TaggedRegistryExt, context::math_round,
+    LootCondition, LootContext, LootContextEntity, LootEntry, NumberProvider, REGISTRY,
+    RegistryExt, RngExt, TaggedRegistryExt, context::math_round,
 };
+use crate::data_components::vanilla_components::{DYED_COLOR, POTION_CONTENTS};
+use crate::data_components::{DyedItemColor, PotionContents};
+use crate::potion::PotionRef;
 
 /// Options for selecting enchantments - either a tag reference or explicit list.
 #[derive(Debug, Clone)]
@@ -18,6 +21,27 @@ pub enum EnchantmentOptions {
 pub enum InstrumentOptions {
     Tag(Identifier),
     Direct(&'static [InstrumentRef]),
+}
+
+/// Options for selecting a potion from a registry tag or explicit list.
+#[derive(Debug, Clone)]
+pub enum PotionOptions {
+    Tag(Identifier),
+    Direct(&'static [PotionRef]),
+}
+
+impl PotionOptions {
+    /// Vanilla `HolderSet.getRandomElement`.
+    fn get_random<R: rand::Rng>(&self, rng: &mut R) -> Option<PotionRef> {
+        let potions = match self {
+            Self::Tag(tag) => REGISTRY.potions.get_tag(tag)?,
+            Self::Direct(potions) => potions.to_vec(),
+        };
+        (!potions.is_empty()).then(|| {
+            let index = rng.random_range(0..potions.len());
+            potions[index]
+        })
+    }
 }
 
 impl InstrumentOptions {
@@ -45,6 +69,16 @@ pub struct ConditionalLootFunction {
     pub conditions: &'static [LootCondition],
 }
 
+impl ConditionalLootFunction {
+    /// Applies the function when every condition passes (vanilla
+    /// `LootItemFunction.conditional`/`ConditionUserBuilder` semantics).
+    pub fn apply<R: rand::Rng>(&self, item: &mut ItemStack, ctx: &mut LootContext<'_, R>) {
+        if self.conditions.iter().all(|condition| condition.test(ctx)) {
+            self.function.apply(item, ctx);
+        }
+    }
+}
+
 /// A function that modifies loot items.
 #[derive(Debug, Clone)]
 pub enum LootFunction {
@@ -68,7 +102,13 @@ pub enum LootFunction {
     /// Set the damage of the item (0.0 = broken, 1.0 = full durability).
     SetDamage { damage: NumberProvider, add: bool },
     /// Enchant the item randomly with enchantments from options.
-    EnchantRandomly { options: EnchantmentOptions },
+    EnchantRandomly {
+        options: EnchantmentOptions,
+        /// Vanilla `EnchantRandomlyFunction.onlyCompatible`.
+        only_compatible: bool,
+        /// Vanilla `EnchantRandomlyFunction.includeAdditionalCostComponent`.
+        include_additional_cost_component: bool,
+    },
     /// Enchant the item as if using an enchanting table at the specified level.
     EnchantWithLevels {
         levels: NumberProvider,
@@ -98,6 +138,8 @@ pub enum LootFunction {
         decoration: Identifier,
         zoom: i32,
         skip_existing_chunks: bool,
+        /// Vanilla `ExplorationMapFunction.searchRadius`.
+        search_radius: i32,
     },
     /// Set the custom name of the item.
     SetName {
@@ -108,6 +150,10 @@ pub enum LootFunction {
     SetOminousBottleAmplifier { amplifier: NumberProvider },
     /// Set the potion type.
     SetPotion { id: Identifier },
+    /// Vanilla `SetRandomPotionFunction`: apply a random potion from the options.
+    SetRandomPotion { options: Option<PotionOptions> },
+    /// Vanilla `SetRandomDyesFunction`: blend random dyes into `dyed_color`.
+    SetRandomDyes { number_of_dyes: NumberProvider },
     /// Set the suspicious stew effects.
     SetStewEffect { effects: &'static [StewEffect] },
     /// Set the instrument for goat horns.
@@ -379,8 +425,15 @@ impl LootFunction {
             LootFunction::SetDamage { damage, add } => {
                 item.set_damage_fraction(damage.get_simple(ctx.rng), *add);
             }
-            LootFunction::EnchantRandomly { options } => {
-                // TODO: Implement when enchantment system is ready
+            LootFunction::EnchantRandomly {
+                options,
+                only_compatible: _,
+                include_additional_cost_component: _,
+            } => {
+                // TODO: Implement when enchantment system is ready (TradeRebalance
+                // support: `only_compatible: false` permits enchanting books with any
+                // compatible-table enchantment; `include_additional_cost_component`
+                // writes the additional cost used for double pricing)
                 item.enchant_randomly(options, ctx.rng);
             }
             LootFunction::EnchantWithLevels { levels, options } => {
@@ -411,8 +464,9 @@ impl LootFunction {
                 decoration,
                 zoom,
                 skip_existing_chunks,
+                search_radius: _,
             } => {
-                // TODO: Implement exploration map creation
+                // TODO: Implement radius handling (vanilla `ExplorationMapFunction.searchRadius`)
                 item.create_exploration_map(destination, decoration, *zoom, *skip_existing_chunks);
             }
             LootFunction::SetName { name, target } => {
@@ -428,6 +482,47 @@ impl LootFunction {
             }
             LootFunction::SetPotion { id } => {
                 item.set_potion(id);
+            }
+            LootFunction::SetRandomPotion { options } => {
+                let potion = match options {
+                    Some(options) => options.get_random(ctx.rng),
+                    // Vanilla picks from the whole potion registry when no options are given.
+                    None => {
+                        let count = REGISTRY.potions.len();
+                        if count == 0 {
+                            None
+                        } else {
+                            let index = ctx.rng.random_range(0..count);
+                            REGISTRY.potions.by_id(index)
+                        }
+                    }
+                };
+                if let Some(potion) = potion {
+                    let current = item
+                        .get(POTION_CONTENTS)
+                        .cloned()
+                        .unwrap_or_else(PotionContents::empty);
+                    item.set(
+                        POTION_CONTENTS,
+                        current.with_potion(crate::RegistryReference::new(potion)),
+                    );
+                }
+            }
+            LootFunction::SetRandomDyes { number_of_dyes } => {
+                let rolls = number_of_dyes.get_int(ctx.rng);
+                if rolls > 0 {
+                    let dyes: Vec<DyeColor> = (0..rolls)
+                        .map(|_| {
+                            let index = ctx.rng.random_range(0..DyeColor::VALUES.len());
+                            DyeColor::VALUES[index]
+                        })
+                        .collect();
+                    let current = item.get(DYED_COLOR).copied();
+                    // Vanilla `DyedItemColor.applyDyes(ItemStack, dyes)` returns
+                    // `itemStack.copyWithCount(1)` with the new color applied.
+                    item.count = 1;
+                    item.set(DYED_COLOR, DyedItemColor::apply_dyes(current, &dyes));
+                }
             }
             LootFunction::SetStewEffect { effects } => {
                 item.set_stew_effects(effects, ctx.rng);

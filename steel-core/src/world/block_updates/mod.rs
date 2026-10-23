@@ -1,5 +1,6 @@
 use super::*;
 use crate::chunk::Chunk;
+use crate::entity::raid::RaidSnapshot;
 
 mod neighbor_updater;
 
@@ -58,6 +59,67 @@ impl World {
         self.chunk_map
             .with_full_chunk(Self::chunk_pos_for_block(pos), |_| ())
             .is_some()
+    }
+
+    /// Vanilla `ServerLevel.isPositionEntityTicking`.
+    #[must_use]
+    pub fn is_position_entity_ticking(&self, pos: BlockPos) -> bool {
+        self.is_entity_ticking_chunk_loaded(pos)
+    }
+
+    /// Vanilla `Level.hasChunksAt(x0, z0, x1, z1)`: every chunk touched by the block
+    /// rectangle is loaded.
+    #[must_use]
+    pub fn has_chunks_at(&self, x0: i32, z0: i32, x1: i32, z1: i32) -> bool {
+        let min_x = SectionPos::block_to_section_coord(x0);
+        let min_z = SectionPos::block_to_section_coord(z0);
+        let max_x = SectionPos::block_to_section_coord(x1);
+        let max_z = SectionPos::block_to_section_coord(z1);
+
+        for x in min_x..=max_x {
+            for z in min_z..=max_z {
+                if self
+                    .chunk_map
+                    .with_full_chunk(ChunkPos::new(x, z), |_| ())
+                    .is_none()
+                {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Vanilla `ServerLevel.getRaidAt`.
+    #[must_use]
+    pub fn get_raid_at(&self, pos: BlockPos) -> Option<RaidSnapshot> {
+        self.raids.lock().get_raid_at(pos)
+    }
+
+    /// Vanilla `ServerLevel.isRaided`.
+    #[must_use]
+    pub fn is_raided(&self, pos: BlockPos) -> bool {
+        self.raids.lock().is_raided(pos)
+    }
+
+    /// The level's raid manager (vanilla `ServerLevel.getRaids`).
+    pub fn raids(&self) -> &SyncMutex<Raids> {
+        &self.raids
+    }
+
+    /// Vanilla `SavedData.setDirty` for the raid saved data.
+    pub fn mark_raids_dirty(&self) {
+        self.raids_dirty.store(true, Ordering::Relaxed);
+    }
+
+    /// Takes the raid saved-data dirty flag, returning whether a write is needed.
+    pub fn take_raids_dirty(&self) -> bool {
+        self.raids_dirty.swap(false, Ordering::Relaxed)
+    }
+
+    /// Vanilla `ServerLevel.tick` calls `this.raids.tick(this)`.
+    pub(crate) fn tick_raids(self: &Arc<Self>) {
+        self.raids.lock().tick(self);
     }
 
     pub(crate) fn queue_light_change_after_block_set(

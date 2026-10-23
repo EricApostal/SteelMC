@@ -237,6 +237,10 @@ pub struct Player {
     sleep_state: SyncMutex<PlayerSleepState>,
     /// Persisted personal bed or respawn-anchor target.
     respawn_config: SyncMutex<Option<PlayerRespawnConfig>>,
+    /// Vanilla `ServerPlayer.raidOmenPosition`: where a pending raid omen converts into a
+    /// raid. Runtime-only: Steel's command-NBT path only writes player data, so vanilla's
+    /// `raid_omen_position` reload is not restored across restarts (reported gap).
+    raid_omen_position: SyncMutex<Option<BlockPos>>,
 
     /// Player abilities (flight, invulnerability, build permissions, speeds, etc.)
     pub abilities: SyncMutex<Abilities>,
@@ -616,6 +620,7 @@ impl Player {
             tick_state: SyncMutex::new(PlayerTickState::new()),
             sleep_state: SyncMutex::new(PlayerSleepState::new()),
             respawn_config: SyncMutex::new(None),
+            raid_omen_position: SyncMutex::new(None),
             abilities: SyncMutex::new(Abilities::default()),
             block_breaking: SyncMutex::new(BlockBreakingManager::new()),
             living_base,
@@ -1159,7 +1164,30 @@ impl Player {
     }
 
     /// Appends vanilla-shaped player state used by command NBT predicates.
+    /// Vanilla `ServerPlayer.getRaidOmenPosition`.
+    #[must_use]
+    pub fn raid_omen_position(&self) -> Option<BlockPos> {
+        *self.raid_omen_position.lock()
+    }
+
+    /// Vanilla `ServerPlayer.setRaidOmenPosition`.
+    pub fn set_raid_omen_position(&self, pos: BlockPos) {
+        *self.raid_omen_position.lock() = Some(pos);
+    }
+
+    /// Vanilla `ServerPlayer.clearRaidOmenPosition`.
+    pub fn clear_raid_omen_position(&self) {
+        *self.raid_omen_position.lock() = None;
+    }
+
     pub(crate) fn save_command_nbt(&self, nbt: &mut NbtCompound) {
+        if let Some(pos) = self.raid_omen_position() {
+            nbt.insert(
+                "raid_omen_position",
+                NbtTag::IntArray(vec![pos.x(), pos.y(), pos.z()]),
+            );
+        }
+
         {
             let inventory = self.inventory.lock();
             nbt.insert("Inventory", inventory.to_vanilla_inventory_nbt());

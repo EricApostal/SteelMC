@@ -789,8 +789,11 @@ mod mob;
 pub mod mob_effect;
 mod monster;
 mod movement_sync;
+pub mod neutral_mob;
+pub mod npc;
 mod potion_contents;
 pub mod projectile;
+pub mod raid;
 mod reference;
 mod registry;
 mod spawn;
@@ -848,6 +851,7 @@ pub use movement_sync::{
     EntityRotationSyncState, EntityVelocitySyncState, POSITION_SYNC_THRESHOLD,
     PackedEntityRotation, ServerEntityMovementSyncState, ServerEntityMovementSyncUpdate,
 };
+pub use neutral_mob::{NeutralMob, PersistentAnger};
 pub(crate) use potion_contents::apply_potion_contents;
 pub use projectile::{
     EntityHitResult, Projectile, ProjectileBase, ProjectileDeflection, ProjectileEventSource,

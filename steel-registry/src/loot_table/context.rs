@@ -52,6 +52,11 @@ pub enum NumberProvider {
         score: &'static str,
         scale: f32,
     },
+    /// Vanilla `minecraft:add`: the sum of the nested providers, each resolved
+    /// with its own integer/float semantics.
+    Add {
+        inputs: &'static [NumberProvider],
+    },
     /// Get value from command storage.
     Storage {
         storage: Identifier,
@@ -93,6 +98,7 @@ impl NumberProvider {
                 }
                 count as f32
             }
+            Self::Add { inputs } => inputs.iter().map(|input| input.get(rng, ctx)).sum(),
             Self::Score { .. } => {
                 // TODO: Implement when scoreboard system is available
                 let _ = ctx;
@@ -129,15 +135,17 @@ impl NumberProvider {
                 }
                 count as f32
             }
+            Self::Add { inputs } => inputs.iter().map(|input| input.get_simple(rng)).sum(),
             // Context-dependent providers return 0 when no context available
             Self::Score { .. } | Self::Storage { .. } | Self::EnchantmentLevel { .. } => 0.0,
         }
     }
 
     /// Get the value as an integer.
-    pub fn get_int(&self, rng: &mut impl rand::Rng) -> i32 {
+    pub fn get_int<R: rand::Rng>(&self, rng: &mut R) -> i32 {
         match self {
             Self::Uniform { min, max } => uniform_int(rng, math_round(*min), math_round(*max)),
+            Self::Add { inputs } => inputs.iter().map(|input| input.get_int(rng)).sum(),
             other => math_round(other.get_simple(rng)),
         }
     }
@@ -150,6 +158,10 @@ impl NumberProvider {
     ) -> i32 {
         match self {
             Self::Uniform { min, max } => uniform_int(rng, math_round(*min), math_round(*max)),
+            Self::Add { inputs } => inputs
+                .iter()
+                .map(|input| input.get_int_with_ctx(rng, ctx))
+                .sum(),
             other => math_round(other.get(rng, ctx)),
         }
     }

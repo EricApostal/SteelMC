@@ -1494,6 +1494,14 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
         try_as_dyn::<Self, dyn Mob>(self)
     }
 
+    /// Returns this entity as a reputation event handler when it has one,
+    /// equivalent to vanilla's `instanceof ReputationEventHandler` test.
+    fn as_reputation_event_handler(
+        &self,
+    ) -> Option<&dyn crate::entity::npc::gossip::ReputationEventHandler> {
+        self.as_mob().and_then(Mob::as_reputation_event_handler)
+    }
+
     /// Returns this entity as a `Leashable` if it has [`Leashable`] behavior.
     fn as_leashable(&self) -> Option<&dyn Leashable> {
         try_as_dyn::<Self, dyn Leashable>(self)
@@ -1527,6 +1535,36 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
     /// Returns the `Enemy` marker, equivalent to vanilla's `instanceof Enemy`.
     fn as_enemy(&self) -> Option<&dyn Enemy> {
         try_as_dyn::<Self, dyn Enemy>(self)
+    }
+
+    /// Returns true for entities that implement vanilla `Npc` behavior.
+    fn is_npc(&self) -> bool {
+        self.as_npc().is_some()
+    }
+
+    /// Returns the `Npc` capability, equivalent to vanilla's `instanceof Npc`.
+    fn as_npc(&self) -> Option<&dyn crate::entity::npc::Npc> {
+        try_as_dyn::<Self, dyn crate::entity::npc::Npc>(self)
+    }
+
+    /// Returns true for entities that implement vanilla raid-mob behavior.
+    fn is_raider(&self) -> bool {
+        self.as_raider().is_some()
+    }
+
+    /// Returns the `Raider` capability, equivalent to vanilla's `instanceof Raider`.
+    fn as_raider(&self) -> Option<&dyn crate::entity::raid::Raider> {
+        try_as_dyn::<Self, dyn crate::entity::raid::Raider>(self)
+    }
+
+    /// Returns true for entities that implement vanilla `NeutralMob` behavior.
+    fn is_neutral_mob(&self) -> bool {
+        self.as_neutral_mob().is_some()
+    }
+
+    /// Returns the `NeutralMob` capability, equivalent to vanilla's `instanceof NeutralMob`.
+    fn as_neutral_mob(&self) -> Option<&dyn NeutralMob> {
+        try_as_dyn::<Self, dyn NeutralMob>(self)
     }
 
     /// Returns true for entities that implement vanilla ageable-mob behavior.

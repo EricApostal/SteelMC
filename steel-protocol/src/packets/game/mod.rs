@@ -24,6 +24,7 @@ mod c_hurt_animation;
 mod c_level_event;
 mod c_level_particles;
 mod c_login;
+mod c_merchant_offers;
 mod c_move_entity;
 mod c_move_vehicle;
 mod c_open_screen;
@@ -93,6 +94,7 @@ mod s_player_load;
 mod s_punch;
 mod s_rename_item;
 mod s_seen_advancement;
+mod s_select_trade;
 mod s_set_beacon;
 mod s_set_carried_item;
 mod s_set_creative_mode_slot;
@@ -133,6 +135,7 @@ pub use c_level_event::CLevelEvent;
 pub use c_level_particles::{CLevelParticles, RandomizationType};
 pub use c_login::CLogin;
 pub use c_login::CommonPlayerSpawnInfo;
+pub use c_merchant_offers::{CMerchantOffers, MerchantItemCost, MerchantOffer};
 pub use c_move_entity::{
     CMoveEntityPos, CMoveEntityPosRot, CMoveEntityRot, DeltaStep, PackedEntityDelta, VecDelta,
     calc_delta, to_angle_byte,
@@ -220,6 +223,7 @@ pub use s_player_load::SPlayerLoad;
 pub use s_punch::SPunch;
 pub use s_rename_item::SRenameItem;
 pub use s_seen_advancement::SSeenAdvancement;
+pub use s_select_trade::SSelectTrade;
 pub use s_set_beacon::SSetBeacon;
 pub use s_set_carried_item::SSetCarriedItem;
 pub use s_set_creative_mode_slot::SSetCreativeModeSlot;

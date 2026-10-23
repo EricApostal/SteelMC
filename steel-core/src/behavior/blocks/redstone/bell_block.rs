@@ -63,14 +63,27 @@ impl BellBlock {
         world.is_face_sturdy(support, support_pos, direction.opposite())
     }
 
-    // TODO: Notify villagers when the villager AI is fully implemented.
-    fn ring(source: Option<&dyn Entity>, world: &Arc<World>, pos: BlockPos, direction: Direction) {
+    /// Vanilla `BellBlock.attemptToRing(Entity, Level, BlockPos, @Nullable Direction)`.
+    ///
+    /// Rings the bell at `pos`, notifying villagers through the block entity and playing
+    /// the bell sound and game event. `direction` is the hit direction; `None` uses the
+    /// bell's facing, matching vanilla's `attemptToRing(level, pos, null)` overload.
+    ///
+    /// Returns whether the position held a bell block entity, i.e. whether it rang.
+    pub fn attempt_to_ring(
+        source: Option<&dyn Entity>,
+        world: &Arc<World>,
+        pos: BlockPos,
+        direction: Option<Direction>,
+    ) -> bool {
         let Some(block_entity) = world.get_block_entity(pos) else {
-            return;
+            return false;
         };
         let Some(bell) = block_entity.downcast_ref::<BellBlockEntity>() else {
-            return;
+            return false;
         };
+
+        let direction = direction.unwrap_or_else(|| world.get_block_state(pos).get_value(FACING));
         bell.on_hit(direction);
 
         world.play_sound(
@@ -91,6 +104,8 @@ impl BellBlock {
         {
             player.award_custom_stat(&BELL_RING);
         }
+
+        true
     }
 
     fn is_proper_hit(state: BlockStateId, direction: Direction, height: f64) -> bool {
@@ -124,7 +139,7 @@ impl BellBlock {
 
         if powered {
             let direction = state.get_value(FACING);
-            Self::ring(None, world, pos, direction);
+            Self::attempt_to_ring(None, world, pos, Some(direction));
         }
 
         let new_state = state.set_value(POWERED, powered);
@@ -250,7 +265,7 @@ impl BlockBehavior for BellBlock {
             return InteractionResult::Pass;
         }
 
-        Self::ring(Some(player), world, pos, hit.direction);
+        Self::attempt_to_ring(Some(player), world, pos, Some(hit.direction));
         InteractionResult::Success
     }
 
@@ -270,7 +285,7 @@ impl BlockBehavior for BellBlock {
         let source = owner
             .as_deref()
             .filter(|entity| entity.as_player().is_some());
-        Self::ring(source, world, hit.block_pos, hit.direction);
+        Self::attempt_to_ring(source, world, hit.block_pos, Some(hit.direction));
     }
 
     fn new_block_entity(

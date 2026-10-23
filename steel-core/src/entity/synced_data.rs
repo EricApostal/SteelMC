@@ -103,6 +103,12 @@ pub trait LivingEntitySyncedData: EntitySyncedData {
 
     /// Clears synchronized vanilla sleeping position.
     fn clear_sleeping_pos(&self);
+
+    /// Returns the vanilla `DATA_LIVING_ENTITY_FLAGS` byte.
+    fn living_entity_flags(&self) -> i8;
+
+    /// Sets the vanilla `DATA_LIVING_ENTITY_FLAGS` byte.
+    fn set_living_entity_flags(&self, flags: i8);
 }
 
 impl<T> LivingEntitySyncedData for SyncMutex<T>
@@ -118,6 +124,17 @@ where
 
     fn clear_sleeping_pos(&self) {
         self.lock().living_entity_mut().sleeping_pos.set(None);
+    }
+
+    fn living_entity_flags(&self) -> i8 {
+        *self.lock().living_entity().living_entity_flags.get()
+    }
+
+    fn set_living_entity_flags(&self, flags: i8) {
+        self.lock()
+            .living_entity_mut()
+            .living_entity_flags
+            .set(flags);
     }
 }
 
