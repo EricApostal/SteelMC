@@ -2,15 +2,19 @@
 # Documentation: https://steelmc.dev/configuration/server-configuration/
 
 [server]
-# Server port
+# Server port. The `--port` CLI flag overrides this unless it is negative,
+# mirroring vanilla's `--port`/`server-port` fallback.
 server_port = 25565
-# Maximum number of players allowed on the server
+# Maximum number of players allowed on the server. The player sample in the
+# status response and the list command read this value.
 max_players = 20
 # Allow view_distance above vanilla's 32-chunk cap, up to 128.
 allow_extended_view_distance = false
 # Maximum view distance in chunks. Normally 1-32; 1-128 when allow_extended_view_distance is true.
 view_distance = 10
-# Maximum simulation distance in chunks
+# Maximum simulation distance in chunks. Steel additionally requires
+# simulation_distance <= view_distance; vanilla accepts a larger simulation
+# distance and simply ticks fewer chunks than it sends.
 simulation_distance = 10
 # Maximum chained neighbor-update tasks. Negative values disable the limit.
 max_chained_neighbor_updates = 1000000
@@ -31,7 +35,9 @@ motd = "A Steel Server"
 
 # Whether to use a custom favicon for the server
 use_favicon = true
-# Path to the favicon file (PNG format, 64x64 pixels)
+# Path to the favicon file (PNG format, 64x64 pixels).
+# Difference: vanilla reads `server-icon.png` from the working directory and
+# falls back to the world icon; Steel reads this configured path instead.
 favicon = "config/favicon.png"
 # Whether to enforce secure chat
 enforce_secure_chat = false

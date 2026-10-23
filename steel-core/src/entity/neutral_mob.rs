@@ -16,7 +16,7 @@ use steel_registry::vanilla_game_rules::{FORGIVE_DEAD_PLAYERS, UNIVERSAL_ANGER};
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::GameType;
 
-use crate::entity::{Entity, EntityReference, LivingEntity, Mob};
+use crate::entity::{Entity, EntityReference, LivingEntity, Mob, SharedEntity};
 use crate::player::Player;
 use steel_utils::types::Difficulty;
 
@@ -261,10 +261,7 @@ pub trait NeutralMob: Mob {
     }
 
     /// Resolves this mob's persistent anger reference to a live entity in the same world.
-    fn resolve_persistent_anger_entity(
-        &self,
-        reference: &EntityReference,
-    ) -> Option<crate::entity::SharedEntity> {
+    fn resolve_persistent_anger_entity(&self, reference: &EntityReference) -> Option<SharedEntity> {
         let world = self.level()?;
         let entity = reference.get_entity(&world)?;
         Some(entity)

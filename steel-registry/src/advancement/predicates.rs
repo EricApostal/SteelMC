@@ -6,9 +6,9 @@
 //! keeps a separate set here because the loot runtime predates the advancement
 //! criteria and is being unified with it incrementally.
 
+use crate::data_components::components::ItemEnchantments;
 use crate::equipment::EquipmentSlot;
 pub use crate::item_predicate::{DoubleBounds, IntBounds};
-use crate::data_components::components::ItemEnchantments;
 use crate::loot_table::{ItemSetPredicate, PropertyCheck, ToolPredicate};
 use crate::{DyeColor, REGISTRY, RegistryExt, TaggedRegistryExt, item_stack::ItemStack};
 use steel_utils::{BlockPos, BlockStateId, Identifier};
@@ -133,21 +133,18 @@ impl ExactComponent {
     /// component must be present and equal to the expected value.
     #[must_use]
     pub fn matches(&self, stack: &ItemStack) -> bool {
-        use crate::data_components::vanilla_components::{
-            BANNER_PATTERNS, DAMAGE, ITEM_NAME,
-        };
+        use crate::data_components::vanilla_components::{BANNER_PATTERNS, DAMAGE, ITEM_NAME};
         match self {
             Self::Damage(expected) => stack.get(DAMAGE) == Some(expected),
             Self::BannerPatterns(expected) => stack.get(BANNER_PATTERNS).is_some_and(|layers| {
                 layers.layers().len() == expected.len()
-                    && layers
-                        .layers()
-                        .iter()
-                        .zip(expected.iter())
-                        .all(|(layer, (pattern, color))| {
-                            layer.pattern().key.path.as_ref() == *pattern
-                                && layer.color() == *color
-                        })
+                    && layers.layers().iter().zip(expected.iter()).all(
+                        |(layer, (pattern, color))| {
+                            layer.pattern().as_reference().is_some_and(|pattern_ref| {
+                                pattern_ref.key.path.as_ref() == *pattern
+                            }) && layer.color() == *color
+                        },
+                    )
             }),
             Self::ItemName(expected) => stack.get(ITEM_NAME) == Some(expected),
         }
@@ -171,8 +168,12 @@ impl EnchantmentPredicate {
         if let Some(required) = &self.enchantments {
             return enchantments.levels.iter().any(|(key, level)| {
                 required.contains_enchantment(key)
-                    && self.min_level.is_none_or(|min| i32::try_from(*level).unwrap_or(i32::MAX) >= min)
-                    && self.max_level.is_none_or(|max| i32::try_from(*level).unwrap_or(i32::MAX) <= max)
+                    && self
+                        .min_level
+                        .is_none_or(|min| i32::try_from(*level).unwrap_or(i32::MAX) >= min)
+                    && self
+                        .max_level
+                        .is_none_or(|max| i32::try_from(*level).unwrap_or(i32::MAX) <= max)
             });
         }
         if self.min_level.is_some() || self.max_level.is_some() {
@@ -211,11 +212,7 @@ impl ItemPredicate {
     #[must_use]
     pub fn test(&self, stack: &ItemStack) -> bool {
         use crate::data_components::vanilla_components::{ENCHANTMENTS, STORED_ENCHANTMENTS};
-        if self
-            .items
-            .as_ref()
-            .is_some_and(|items| !items.test(stack))
-        {
+        if self.items.as_ref().is_some_and(|items| !items.test(stack)) {
             return false;
         }
         if let Some(count) = &self.count
@@ -223,10 +220,18 @@ impl ItemPredicate {
         {
             return false;
         }
-        if !self.exact_components.iter().all(|exact| exact.matches(stack)) {
+        if !self
+            .exact_components
+            .iter()
+            .all(|exact| exact.matches(stack))
+        {
             return false;
         }
-        if !self.has_components.iter().all(|key| stack.has_component(key)) {
+        if !self
+            .has_components
+            .iter()
+            .all(|key| stack.has_component(key))
+        {
             return false;
         }
         if !self.enchantments.is_empty() {

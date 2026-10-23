@@ -37,19 +37,20 @@ use crate::entity::ai::behavior::set_walk_target_from_look_target::SetWalkTarget
 use crate::entity::ai::behavior::start_attacking::StartAttacking;
 use crate::entity::ai::brain::SensorType;
 use crate::entity::ai::brain::activity::Activity;
+use crate::entity::ai::brain::behavior::BehaviorContext;
 use crate::entity::ai::brain::behavior::builder::BehaviorBuilder;
 use crate::entity::ai::brain::behavior::gate::{GateBehavior, OrderPolicy, RunningPolicy};
-use crate::entity::ai::brain::behavior::BehaviorContext;
 use crate::entity::ai::brain::memory::module_type as mem;
-use crate::entity::ai::brain::memory::{MemoryModuleTypeRef, MemoryStatus, NearestVisibleLivingEntities};
+use crate::entity::ai::brain::memory::nearest_visible::NearestVisibleLivingEntities;
+use crate::entity::ai::brain::memory::{MemoryModuleTypeRef, MemoryStatus};
 use crate::entity::ai::brain::sensor::BrainSensor;
 use crate::entity::ai::brain::{ActivityData, Brain};
+use crate::entity::ai::goal::Tameable;
 use crate::entity::ai::sensing;
 use crate::entity::ai::sensing::tempting::TemptingSensor;
 use crate::entity::ai::sensing::villager as villager_sensors;
 use crate::entity::ai::targeting::TargetingConditions;
-use crate::entity::{AgeableMob, Entity, LivingEntity, Mob, SharedEntity};
-use crate::entity::ai::goal::Tameable;
+use crate::entity::{AgeableMob, Entity, Mob, SharedEntity};
 use crate::world::World;
 
 /// Vanilla `NautilusAi.TIME_BETWEEN_NON_PLAYER_ATTACKS`.
@@ -267,15 +268,9 @@ fn find_nearest_valid_attack_target(
     ctx: &BehaviorContext<'_>,
     body: &SharedEntity,
 ) -> Option<SharedEntity> {
-    let is_baby = body
-        .as_ageable_mob()
-        .is_some_and(AgeableMob::is_baby);
+    let is_baby = body.as_ageable_mob().is_some_and(AgeableMob::is_baby);
     let is_tame = body.as_tameable().is_some_and(Tameable::is_tame);
-    if ctx.has_memory_value(&mem::BREED_TARGET)
-        || !body.is_in_water()
-        || is_baby
-        || is_tame
-    {
+    if ctx.has_memory_value(&mem::BREED_TARGET) || !body.is_in_water() || is_baby || is_tame {
         return None;
     }
 
@@ -367,6 +362,3 @@ fn close_enough_distance_tempted(body: &SharedEntity) -> f64 {
         3.5
     }
 }
-
-/// Keeps the `LivingEntity` import used by the module documentation contract.
-const _: fn(&dyn LivingEntity) = |_| {};

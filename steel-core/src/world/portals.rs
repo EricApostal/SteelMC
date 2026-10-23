@@ -54,12 +54,16 @@ pub(super) const fn nether_portal_frame_offset_pos(
     )
 }
 
+/// Returns the block column vanilla scans downward from the spiral column.
+///
+/// Vanilla steps `direction` once to check the world border and then steps back,
+/// so the scan column keeps the spiral column's X/Z and only takes the new Y.
 pub(super) fn nether_portal_creation_scan_origin(
     column_pos: BlockPos,
-    direction: Direction,
+    _direction: Direction,
     height: i32,
 ) -> BlockPos {
-    column_pos.relative(direction.opposite()).at_y(height)
+    column_pos.at_y(height)
 }
 
 impl World {

@@ -366,7 +366,7 @@ pub(super) fn generate_configured_feature_kind(kind: &ConfiguredFeatureKind) -> 
             let can_place_on_ceiling = config.can_place_on_ceiling;
             let can_place_on_wall = config.can_place_on_wall;
             let chance_of_spreading = config.chance_of_spreading;
-            let can_be_placed_on = generate_vec(&config.can_be_placed_on, generate_block_ref);
+            let can_be_placed_on = generate_block_holder_set(&config.can_be_placed_on);
             quote! {
                 ConfiguredFeatureKind::MultifaceGrowth(MultifaceGrowthConfiguration {
                     block: #block,
@@ -774,7 +774,7 @@ pub(super) fn generate_vegetation_patch_kind(
     config: &VegetationPatchConfiguration,
 ) -> TokenStream {
     let variant = Ident::new(variant_name, Span::call_site());
-    let replaceable = generate_identifier(&config.replaceable);
+    let replaceable = generate_block_holder_set(&config.replaceable);
     let ground_state = generate_block_state_provider(&config.ground_state);
     let vegetation_feature = generate_placed_feature_ref(&config.vegetation_feature);
     let surface = generate_vertical_surface(config.surface);

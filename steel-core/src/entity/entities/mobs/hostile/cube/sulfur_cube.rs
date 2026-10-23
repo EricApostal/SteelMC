@@ -12,17 +12,23 @@
 //!
 //! ## Deviations
 //!
-//! - GAP(sulfur-cube): vanilla `SulfurCube.knockback` rewrites the knockback direction and power
-//!   using the archetype's `knockback_modifiers`, the attacker's eye position and aim vector, and
-//!   plays the archetype `hit_sound` — Steel's [`LivingEntity::knockback`] hook only receives
-//!   `(power, xd, zd)`, with no `DamageSource`, damage amount or `comesFromEffect` flag, so the
-//!   archetype-aware knockback and hit sound cannot be applied.
+//! - Vanilla `SulfurCube.knockback` is reproduced from
+//!   [`LivingEntity::apply_damage_knockback`], which does carry the `DamageSource`; the damage
+//!   amount is captured in `before_actually_hurt`. Steel's hook supplies the pre-armor damage
+//!   (armor/absorption are applied afterwards in `actually_hurt`), while vanilla hands the
+//!   post-reduction amount to `knockback`, so the `sqrt(damage)` power scale differs for armored
+//!   targets. GAP(sulfur-cube): exact `SulfurCube.knockback` damage scaling needs a post-armor
+//!   damage amount at the knockback hook.
 //! - GAP(sulfur-cube): vanilla `SulfurCube.isInvulnerableToPiercingWeapon` makes a primed cube
 //!   pierceable; Steel has no piercing-weapon invulnerability hook.
 //! - GAP(sulfur-cube): vanilla `SulfurCube.canBePickedFromInside` forbids picking a cube with a
 //!   swallowed block out of an entity's inside; Steel has no such hook.
 //! - GAP(sulfur-cube): vanilla `SulfurCube.omnidirectionalAirMover` (body item ⇒ air drag applies
 //!   on every axis) has no equivalent in Steel's movement code.
+//! - GAP(sulfur-cube): vanilla `SulfurCube.getLightLevelDependentMagicValue` returns a constant
+//!   `1.0`; Steel resolves that brightness from the world (`LevelReader`), and there is no
+//!   per-entity override hook. Sulfur cubes are not in `BURN_IN_DAYLIGHT`, so no server behavior
+//!   depends on the constant today.
 //! - GAP(sulfur-cube): vanilla `SulfurCube.getLeashOffset` (`bbHeight / 2`); Steel has no
 //!   per-entity leash attachment offset hook.
 //! - GAP(sulfur-cube): vanilla `Bucketable.loadFromBucketTag` / `setFromBucket(true)` are applied
@@ -37,56 +43,64 @@
 //!   when `getPortalCooldown() > 0`; Steel's [`World::explode_full`] accepts a damage calculator but
 //!   has no nether-portal-exempt implementation yet.
 
+use std::mem;
 use std::sync::{Arc, Weak};
 
-use glam::DVec3;
+use glam::{DVec3, Vec2};
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
+use steel_math::{DEGREE_90, RAD_TO_DEG};
 use steel_protocol::packets::game::{CTakeItemEntity, SoundSource};
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::data_components::components::{CustomData, SulfurCubeContent};
 use steel_registry::data_components::vanilla_components::{
     BUCKET_ENTITY_DATA, CUSTOM_NAME, SULFUR_CUBE_CONTENT,
 };
 use steel_registry::entity_type::{EntityAttachment, EntityDimensions, EntityTypeRef};
 use steel_registry::item_stack::ItemStack;
+use steel_registry::particle_type::ParticleData;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::sulfur_cube_archetype::{
-    SulfurContactDamage, SulfurCubeArchetype, SulfurExplosionData, SulfurSoundSettings,
+    SulfurContactDamage, SulfurCubeArchetype, SulfurExplosionData, SulfurKnockbackModifiers,
+    SulfurSoundSettings,
 };
 use steel_registry::vanilla_damage_type_tags::DamageTypeTag;
 use steel_registry::vanilla_entity_data::SulfurCubeEntityData;
 use steel_registry::vanilla_game_rules::{MOB_GRIEFING, TNT_EXPLODES};
-use steel_registry::particle_type::ParticleData;
 use steel_registry::vanilla_item_tags::ItemTag;
 use steel_registry::{
-    REGISTRY, RegistryExt, ItemStackTemplate, TaggedRegistryExt, sound_events,
-    vanilla_attributes, vanilla_entities, vanilla_game_events, vanilla_items,
-    vanilla_particle_types,
+    ItemStackTemplate, REGISTRY, RegistryExt, sound_events, vanilla_attributes,
+    vanilla_game_events, vanilla_items, vanilla_particle_types,
 };
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::InteractionHand;
-use steel_utils::{BlockPos, BlockStateId, Downcast as _, DowncastType, DowncastTypeKey, Identifier};
+use steel_utils::{
+    BlockPos, BlockStateId, ChunkPos, Downcast as _, DowncastType, DowncastTypeKey, Identifier,
+};
+use text_components::TextComponent;
 
-use crate::behavior::InteractionResult;
+use crate::behavior::{BLOCK_BEHAVIORS, InteractionResult};
 use crate::entity::ageable::AgeableMobBase;
+use crate::entity::ai::control::rotate_towards;
 use crate::entity::ai::goal::{Goal, GoalControls};
 use crate::entity::ai::targeting::TargetingConditions;
-use crate::entity::attribute::{AttributeModifier, AttributeModifierOperation};
+use crate::entity::attribute::AttributeModifier;
 use crate::entity::damage::DamageSource;
+use crate::entity::entities::objects::explosives::PrimedTntEntity;
 use crate::entity::entities::objects::items::ItemEntity;
 use crate::entity::leash::Leashable;
 use crate::entity::{
-    AgeableMob, Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
-    LivingEntity, LivingEntityBase, Mob, MobBase, PathfinderMob, RemovalReason, SharedEntity,
-    SpawnGroupData,
+    AgeableMob, Animal, ENTITIES, Entity, EntityBase, EntityBaseLoad, EntityPose,
+    EntitySpawnReason, EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase,
+    PathfinderMob, RemovalReason, SharedEntity, SpawnGroupData, next_entity_id,
 };
 use crate::inventory::equipment::EquipmentSlot;
 use crate::physics::MoveResult;
 use crate::player::Player;
 use crate::player::player_inventory::Prediction;
 use crate::world::explosion::ExplosionInteraction;
-use crate::world::{SignalGetter, World};
+use crate::world::{LevelReader, SignalGetter, World};
 
 use super::abstract_cube_mob::{
     CubeMoveState, CubeSquish, clamp_cube_size, cube_jump_delay, cube_movement_speed,
@@ -119,6 +133,26 @@ const FLOAT_VIBE_FREQUENCY: f32 = 0.4;
 const FLOAT_VIBE_AMPLITUDE: f32 = 0.2;
 /// Vanilla `SulfurCube` buoyancy push per tick.
 const FLOAT_PUSH_PER_TICK: f64 = 0.04;
+/// Vanilla `LivingEntity.DAMAGE_KNOCKBACK_POWER`.
+const DAMAGE_KNOCKBACK_POWER: f64 = 0.4;
+/// Vanilla `SulfurCubeArchetype.DEFAULT_KNOCKBACK_MODIFIERS` horizontal power.
+const DEFAULT_KNOCKBACK_HORIZONTAL_POWER: f32 = 0.33;
+/// Vanilla `SulfurCubeArchetype.DEFAULT_KNOCKBACK_MODIFIERS` vertical power.
+const DEFAULT_KNOCKBACK_VERTICAL_POWER: f32 = 0.06;
+/// Vanilla `SulfurCube.HORIZONTAL_HIT_ANGLE_SCALE`.
+const HORIZONTAL_HIT_ANGLE_SCALE: f32 = 1.6;
+/// Vanilla `SulfurCube.VERTICAL_HIT_ANGLE_SCALE`.
+const VERTICAL_HIT_ANGLE_SCALE: f32 = 0.5;
+/// Vanilla `SulfurCube.VERTICAL_POSITION_ANGLE_SCALE`.
+const VERTICAL_POSITION_ANGLE_SCALE: f32 = 0.8;
+/// Vanilla `SulfurCube.EXTRA_KNOCKBACK_DAMPENING`.
+const EXTRA_KNOCKBACK_DAMPENING: f32 = 0.25;
+/// Vanilla `SulfurCube.knockback` vertical impulse multiplier.
+const VERTICAL_KNOCKBACK_MULTIPLIER: f64 = 1.2;
+/// Vanilla `SulfurCube.knockback` horizontal power multiplier.
+const HORIZONTAL_KNOCKBACK_MULTIPLIER: f32 = 0.4;
+/// Vanilla `SulfurCube.knockback` power clamp.
+const KNOCKBACK_POWER_LIMIT: f32 = 128.0;
 /// Vanilla `SulfurCube.setCubeMobHealth` health per size.
 const HEALTH_PER_SIZE: f64 = 4.0;
 /// Vanilla `SulfurCubeTemptGoal` stop distance.
@@ -140,11 +174,21 @@ struct SulfurCubeState {
     floats_in_liquids: bool,
     explosion_data: Option<&'static SulfurExplosionData>,
     contact_damages: Vec<&'static SulfurContactDamage>,
+    knockback_modifiers: Option<&'static SulfurKnockbackModifiers>,
     sound_settings: Option<&'static SulfurSoundSettings>,
+    /// Damage amount of the in-flight hit, captured in `before_actually_hurt` for
+    /// vanilla `SulfurCube.knockback`'s `sqrt(damage)` power scale.
+    last_damage: f32,
     fuse: i32,
     /// Last seen `BODY` item, used to detect equipment changes like vanilla's
     /// `collectEquipmentChanges` override.
     last_body_item: ItemStack,
+}
+
+impl Default for SulfurCubeState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SulfurCubeState {
@@ -155,10 +199,34 @@ impl SulfurCubeState {
             floats_in_liquids: false,
             explosion_data: None,
             contact_damages: Vec::new(),
+            knockback_modifiers: None,
             sound_settings: None,
+            last_damage: 0.0,
             fuse: -1,
             last_body_item: ItemStack::empty(),
         }
+    }
+
+    /// Vanilla `SulfurCubeArchetype.DEFAULT_KNOCKBACK_MODIFIERS` fallback.
+    fn knockback_modifiers(&self) -> SulfurKnockbackModifiers {
+        self.knockback_modifiers.map_or(
+            SulfurKnockbackModifiers {
+                horizontal_power: DEFAULT_KNOCKBACK_HORIZONTAL_POWER,
+                vertical_power: DEFAULT_KNOCKBACK_VERTICAL_POWER,
+            },
+            |modifiers| SulfurKnockbackModifiers {
+                horizontal_power: modifiers.horizontal_power,
+                vertical_power: modifiers.vertical_power,
+            },
+        )
+    }
+
+    /// Vanilla `SulfurCubeArchetype.SoundSettings.hitSound`.
+    fn hit_sound(&self) -> SoundEventRef {
+        self.sound_settings
+            .map_or(&sound_events::ENTITY_SULFUR_CUBE_REGULAR_HIT, |settings| {
+                resolve_sound(&settings.hit_sound)
+            })
     }
 
     /// Vanilla `SulfurCubeArchetype.DEFAULT_SOUND_SETTINGS` fallback.
@@ -179,10 +247,10 @@ impl SulfurCubeState {
 
     /// Vanilla `SulfurCubeArchetype.SoundSettings.pushSound`.
     fn push_sound(&self) -> SoundEventRef {
-        self.sound_settings.map_or(
-            &sound_events::ENTITY_SULFUR_CUBE_REGULAR_PUSH,
-            |settings| resolve_sound(&settings.push_sound),
-        )
+        self.sound_settings
+            .map_or(&sound_events::ENTITY_SULFUR_CUBE_REGULAR_PUSH, |settings| {
+                resolve_sound(&settings.push_sound)
+            })
     }
 }
 
@@ -195,6 +263,112 @@ fn resolve_sound(identifier: &Identifier) -> SoundEventRef {
         log::error!("sulfur cube archetype references unknown sound {identifier:?}");
         &sound_events::ENTITY_SULFUR_CUBE_REGULAR_HIT
     })
+}
+
+/// Vanilla `Mth.clampedMap`.
+fn clamped_map(value: f64, min: f64, max: f64, new_min: f64, new_max: f64) -> f32 {
+    let lerp = ((value - min) / (max - min)).clamp(0.0, 1.0);
+    (new_min + lerp * (new_max - new_min)) as f32
+}
+
+/// Vanilla `Vec2.rotate` (radians).
+fn rotate_vec2(value: Vec2, angle: f32) -> Vec2 {
+    let (sin, cos) = angle.sin_cos();
+    Vec2::new(value.x * cos - value.y * sin, value.x * sin + value.y * cos)
+}
+
+/// Vanilla `SulfurCube.applyHorizontalHitAngleScale`.
+fn apply_horizontal_hit_angle_scale(
+    horizontal_angle_scale: f32,
+    original_angle: Vec2,
+    attacker_position: DVec3,
+    attacker_aim_direction: DVec3,
+    target_center: DVec3,
+) -> Vec2 {
+    let attacker_to_target = (target_center - attacker_position).normalize_or_zero();
+    let angle_diff = (attacker_aim_direction.x * attacker_to_target.z
+        - attacker_aim_direction.z * attacker_to_target.x)
+        .atan2(
+            attacker_aim_direction.x * attacker_to_target.x
+                + attacker_aim_direction.z * attacker_to_target.z,
+        ) as f32;
+    rotate_vec2(original_angle, angle_diff * horizontal_angle_scale)
+}
+
+/// Vanilla `SulfurCube.applyVerticalHitAnglePowerTransfer`.
+fn apply_vertical_hit_angle_power_transfer(
+    vertical_hit_angle_scale: f32,
+    horizontal_power: f32,
+    vertical_power: f32,
+    attacker_position: DVec3,
+    attacker_aim_direction: DVec3,
+    target_centered_position: DVec3,
+    target_height: f32,
+) -> Vec2 {
+    let target_half_height = 0.5 * f64::from(target_height);
+    let target_top_position = target_centered_position + DVec3::new(0.0, target_half_height, 0.0);
+    let target_bottom_position =
+        target_centered_position - DVec3::new(0.0, target_half_height, 0.0);
+    let attacker_to_target_top = (target_top_position - attacker_position).normalize_or_zero();
+    let attacker_to_target_bottom =
+        (target_bottom_position - attacker_position).normalize_or_zero();
+
+    let vertical_hit_angle_factor = clamped_map(
+        attacker_aim_direction.y,
+        attacker_to_target_top.y,
+        attacker_to_target_bottom.y,
+        -1.0,
+        1.0,
+    );
+    let mut transferred_power_ratio = (vertical_hit_angle_factor * vertical_hit_angle_scale).abs();
+    if vertical_hit_angle_factor < 0.0 {
+        transferred_power_ratio = -transferred_power_ratio;
+    }
+
+    Vec2::new(
+        horizontal_power * (1.0 - transferred_power_ratio),
+        vertical_power * (1.0 + transferred_power_ratio),
+    )
+}
+
+/// Vanilla `SulfurCube.applyVerticalPositionAnglePowerRotation`.
+fn apply_vertical_position_angle_power_rotation(
+    vertical_position_angle_scale: f32,
+    horizontal_power: f32,
+    vertical_power: f32,
+    original_horizontal_power: f32,
+    original_vertical_power: f32,
+    attacker_feet_position: DVec3,
+    target_feet_position: DVec3,
+) -> Vec2 {
+    let attacker_feet_to_target_feet = target_feet_position - attacker_feet_position;
+    let vertical_position_angle = (-attacker_feet_to_target_feet.y).atan2(
+        attacker_feet_to_target_feet
+            .x
+            .hypot(attacker_feet_to_target_feet.z),
+    ) as f32;
+    let power_before_rotation = Vec2::new(horizontal_power, vertical_power);
+    let mut rotated_power = rotate_vec2(
+        power_before_rotation,
+        -vertical_position_angle * vertical_position_angle_scale,
+    );
+
+    let horizontal_ratio = if original_horizontal_power > 0.0 {
+        rotated_power.x.abs() / original_horizontal_power
+    } else {
+        0.0
+    };
+    let vertical_ratio = if original_vertical_power > 0.0 {
+        rotated_power.y.abs() / original_vertical_power
+    } else {
+        0.0
+    };
+    let max_ratio = horizontal_ratio.max(vertical_ratio);
+    if max_ratio > 1.0 {
+        rotated_power /= max_ratio;
+    }
+
+    rotated_power
 }
 
 /// Vanilla `Mth.wrapDegrees90`.
@@ -317,7 +491,7 @@ impl SulfurCubeEntity {
 
     /// Vanilla `SulfurCube.setSize`.
     pub fn set_size(&self, size: i32, update_health: bool) {
-        let actual_size = clamp_cube_size(size).clamp(MIN_SIZE, MAX_SIZE);
+        let actual_size = clamp_cube_size(size);
         self.entity_data
             .lock()
             .abstract_cube_mob_mut()
@@ -391,17 +565,13 @@ impl SulfurCubeEntity {
     /// Vanilla `SulfurCube.canExplode`.
     #[must_use]
     pub fn can_explode(&self) -> bool {
-        self.state.lock().explosion_data.is_some()
-            && Entity::is_alive(self)
-            && !self.is_primed()
+        self.state.lock().explosion_data.is_some() && Entity::is_alive(self) && !self.is_primed()
     }
 
     /// Vanilla `SulfurCube.isSwallowableItem`.
     #[must_use]
     pub fn is_swallowable_item(item_stack: &ItemStack) -> bool {
-        item_stack
-            .item()
-            .has_tag(&ItemTag::SULFUR_CUBE_SWALLOWABLE)
+        item_stack.item().has_tag(&ItemTag::SULFUR_CUBE_SWALLOWABLE)
     }
 
     /// Vanilla `SulfurCube.isFood`.
@@ -437,7 +607,7 @@ impl SulfurCubeEntity {
             if ItemStack::matches(&state.last_body_item, &current) {
                 return;
             }
-            std::mem::replace(&mut state.last_body_item, current.clone())
+            mem::replace(&mut state.last_body_item, current.clone())
         };
 
         if !current.is_empty() {
@@ -452,13 +622,16 @@ impl SulfurCubeEntity {
                 let Some(attribute) = REGISTRY.attributes.by_key(&entry.attribute) else {
                     continue;
                 };
-                self.attributes().lock().remove_modifier(attribute, &entry.id);
+                self.attributes()
+                    .lock()
+                    .remove_modifier(attribute, &entry.id);
             }
         }
 
         let mut floats_in_liquids = false;
         let mut explosion_data = None;
         let mut contact_damages = Vec::new();
+        let mut knockback_modifiers = None;
         let mut sound_settings = None;
 
         for archetype in self.matching_archetypes(&current) {
@@ -474,6 +647,7 @@ impl SulfurCubeEntity {
                 contact_damages.push(contact_damage);
             }
 
+            knockback_modifiers = Some(&archetype.knockback_modifiers);
             sound_settings = Some(&archetype.sound_settings);
 
             for entry in &archetype.attribute_modifiers {
@@ -496,11 +670,12 @@ impl SulfurCubeEntity {
         state.floats_in_liquids = floats_in_liquids;
         state.explosion_data = explosion_data;
         state.contact_damages = contact_damages;
+        state.knockback_modifiers = knockback_modifiers;
         state.sound_settings = sound_settings;
     }
 
     /// Vanilla `SulfurCube.tickFuse`.
-    fn tick_fuse(&self) {
+    fn tick_fuse(self: &Arc<Self>) {
         {
             let mut state = self.state.lock();
             if state.fuse > 0 {
@@ -523,10 +698,10 @@ impl SulfurCubeEntity {
             } else {
                 ExplosionInteraction::None
             };
-            let explosion = self.state.lock().explosion_data.copied();
+            let explosion = self.state.lock().explosion_data;
             if let Some(explosion) = explosion {
                 let position = self.position();
-                let source: SharedEntity = self.as_entity_event_source().into_shared_entity();
+                let source: SharedEntity = Arc::clone(self) as SharedEntity;
                 world.explode_full(
                     Some(source),
                     None,
@@ -561,7 +736,7 @@ impl SulfurCubeEntity {
     ///
     /// Returns whether the cube was primed.
     pub fn prime_time(&self, imminent: bool) -> bool {
-        let Some(explosion) = self.state.lock().explosion_data.copied() else {
+        let Some(explosion) = self.state.lock().explosion_data else {
             return false;
         };
         if !Entity::is_alive(self) || self.is_primed() {
@@ -575,9 +750,7 @@ impl SulfurCubeEntity {
         }
 
         let fuse_time = if imminent {
-            crate::entity::entities::objects::explosives::primed_tnt::PrimedTntEntity::random_short_fuse(
-                explosion.fuse,
-            )
+            PrimedTntEntity::random_short_fuse(explosion.fuse)
         } else {
             explosion.fuse
         };
@@ -609,7 +782,7 @@ impl SulfurCubeEntity {
                 let count = (size * 16.0) as i32;
                 let position = self.position();
                 for _ in 0..count {
-                    let dir = rand::random::<f32>() * std::f32::consts::TAU;
+                    let dir = rand::random::<f32>() * f32::consts::TAU;
                     let d = rand::random::<f32>() * 0.5 + 0.5;
                     let xd = f64::from(dir.sin() * radius * d);
                     let zd = f64::from(dir.cos() * radius * d);
@@ -626,11 +799,7 @@ impl SulfurCubeEntity {
             // Vanilla plays the squish sound at `getSoundVolume()` with
             // `((random - random) * 0.2 + 1) / 0.8`.
             let pitch = ((rand::random::<f32>() - rand::random::<f32>()) * 0.2 + 1.0) / 0.8;
-            self.play_sound(
-                self.squish_sound(),
-                cube_sound_volume(self.size()),
-                pitch,
-            );
+            self.play_sound(self.squish_sound(), cube_sound_volume(self.size()), pitch);
             self.squish.lock().target = -0.5;
         } else if !on_ground && was_on_ground {
             self.squish.lock().target = 1.0;
@@ -648,7 +817,7 @@ impl SulfurCubeEntity {
 
         let (yaw, _pitch) = self.rotation();
         let mut state = *self.move_state.lock();
-        let new_yaw = crate::entity::ai::control::rotate_towards(yaw, state.y_rot, 90.0);
+        let new_yaw = rotate_towards(yaw, state.y_rot, 90.0);
         self.set_rotation((new_yaw, 0.0));
         self.set_y_head_rot(new_yaw);
         self.set_y_body_rot(new_yaw);
@@ -746,9 +915,9 @@ impl SulfurCubeEntity {
                 position.y + 0.5,
                 position.z + f64::from(zd * xz_cube_spawn_offset),
             );
-            let Some(child) = crate::entity::ENTITIES.create(
+            let Some(child) = ENTITIES.create(
                 entity_type,
-                crate::entity::next_entity_id(),
+                next_entity_id(),
                 child_position,
                 Arc::downgrade(world),
             ) else {
@@ -789,9 +958,7 @@ impl SulfurCubeEntity {
 
             let attributes_to_source = damage.attribute_to_source || entity.as_player().is_some();
             let source = match (attributes_to_source, &this) {
-                (true, Some(this)) => {
-                    DamageSource::environment(damage_type).with_causing_entity(Arc::clone(this))
-                }
+                (true, Some(this)) => DamageSource::direct(damage_type, Arc::clone(this)),
                 _ => DamageSource::environment(damage_type),
             };
 
@@ -817,9 +984,8 @@ impl SulfurCubeEntity {
         let cube_to_pusher = self.position() - pusher.position();
         let pusher_feet_position = pusher.position().y;
         let sulfur_cube_bottom_position = self.position().y;
-        let sulfur_cube_top_position =
-            sulfur_cube_bottom_position + f64::from(self.bounding_box().height());
-        let pusher_top_position = pusher_feet_position + f64::from(pusher.bounding_box().height());
+        let sulfur_cube_top_position = sulfur_cube_bottom_position + self.bounding_box().height();
+        let pusher_top_position = pusher_feet_position + pusher.bounding_box().height();
 
         if cube_to_pusher.x.hypot(cube_to_pusher.z) >= PUSH_DISTANCE_THRESHOLD
             || pusher_feet_position > sulfur_cube_top_position
@@ -845,8 +1011,7 @@ impl SulfurCubeEntity {
         } else {
             0.0
         };
-        let push_velocity =
-            DVec3::new(push_direction.x, vertical, push_direction.z) * player_speed;
+        let push_velocity = DVec3::new(push_direction.x, vertical, push_direction.z) * player_speed;
 
         self.mark_velocity_sync();
 
@@ -876,6 +1041,107 @@ impl SulfurCubeEntity {
         self.apply_contact_damage(&player_entity);
     }
 
+    /// Vanilla `SulfurCube.knockback` archetype-aware branch.
+    ///
+    /// Returns `false` when vanilla would fall through to `LivingEntity.knockback`
+    /// (no source entity, or no swallowed block).
+    fn sulfur_knockback(
+        &self,
+        power: f64,
+        xd: f64,
+        zd: f64,
+        source: &DamageSource,
+        damage: f32,
+        comes_from_effect: bool,
+    ) -> bool {
+        let Some(attacker) = source.causing_entity() else {
+            return false;
+        };
+        if !self.has_body_item() {
+            return false;
+        }
+
+        let (horizontal_power, vertical_power, hit_sound) = {
+            let state = self.state.lock();
+            let modifiers = state.knockback_modifiers();
+            (
+                modifiers.horizontal_power,
+                modifiers.vertical_power,
+                state.hit_sound(),
+            )
+        };
+        let original_horizontal_power = horizontal_power;
+        let original_vertical_power = vertical_power;
+
+        let attacker_position = attacker.position();
+        let attacker_eye_position =
+            attacker_position + DVec3::new(0.0, attacker.get_eye_height(), 0.0);
+        let attacker_aim_direction = attacker.look_angle().normalize_or_zero();
+        let target_center = self.bounding_box().center();
+        let target_height = self.bounding_box().height();
+
+        let original_angle = Vec2::new(xd as f32, zd as f32);
+        let new_angle = apply_horizontal_hit_angle_scale(
+            HORIZONTAL_HIT_ANGLE_SCALE,
+            original_angle,
+            attacker_eye_position,
+            attacker_aim_direction,
+            target_center,
+        );
+        let mut new_power = apply_vertical_hit_angle_power_transfer(
+            VERTICAL_HIT_ANGLE_SCALE,
+            horizontal_power,
+            vertical_power,
+            attacker_eye_position,
+            attacker_aim_direction,
+            target_center,
+            target_height as f32,
+        );
+        new_power = apply_vertical_position_angle_power_rotation(
+            VERTICAL_POSITION_ANGLE_SCALE,
+            new_power.x,
+            new_power.y,
+            original_horizontal_power,
+            original_vertical_power,
+            attacker_position,
+            self.position(),
+        );
+
+        let xd = f64::from(new_angle.x);
+        let zd = f64::from(new_angle.y);
+        let mut horizontal_power = new_power.x;
+        let mut vertical_power = new_power.y;
+
+        let power_multiplier = damage.sqrt()
+            * if comes_from_effect {
+                power as f32 * EXTRA_KNOCKBACK_DAMPENING
+            } else {
+                1.0
+            };
+        horizontal_power *= power_multiplier;
+        vertical_power *= power_multiplier;
+
+        let knockback_resistance = (1.0 - self.knockback_resistance()) as f32;
+        horizontal_power *= knockback_resistance;
+        vertical_power *= knockback_resistance;
+
+        self.mark_velocity_sync();
+        let delta_movement = self.velocity();
+        horizontal_power *= HORIZONTAL_KNOCKBACK_MULTIPLIER;
+        horizontal_power = horizontal_power.clamp(-KNOCKBACK_POWER_LIMIT, KNOCKBACK_POWER_LIMIT);
+        vertical_power = vertical_power.clamp(-KNOCKBACK_POWER_LIMIT, KNOCKBACK_POWER_LIMIT);
+
+        let horizontal_knockback =
+            DVec3::new(xd, 0.0, zd).normalize_or_zero() * f64::from(horizontal_power);
+        self.set_velocity(DVec3::new(
+            delta_movement.x - horizontal_knockback.x,
+            delta_movement.y + f64::from(vertical_power) * VERTICAL_KNOCKBACK_MULTIPLIER,
+            delta_movement.z - horizontal_knockback.z,
+        ));
+        self.play_sound(hit_sound, 1.0, 1.0);
+        true
+    }
+
     /// Vanilla `SulfurCube.equipItem`.
     pub fn equip_item(&self, held_item: &ItemStack) -> bool {
         if AgeableMob::is_baby(self) {
@@ -888,11 +1154,12 @@ impl SulfurCubeEntity {
                 return false;
             }
 
-            let offset = self.entity_type.dimensions.attachments.get_average(
-                EntityAttachment::Passenger,
-                self.cube_dimensions(),
-            );
-            self.spawn_at_location_with_offset(swallowed_item, offset);
+            let offset = self
+                .entity_type
+                .dimensions
+                .attachments
+                .get_average(EntityAttachment::Passenger, self.cube_dimensions());
+            let _ = self.spawn_at_location_with_offset(swallowed_item, offset);
         }
 
         self.set_body_item(held_item.copy_with_count(1));
@@ -918,18 +1185,20 @@ impl SulfurCubeEntity {
 
     /// Vanilla `SulfurCube.shear`.
     pub fn shear(&self) {
-        let offset = self.entity_type.dimensions.attachments.get_average(
-            EntityAttachment::Passenger,
-            self.cube_dimensions(),
-        );
+        let offset = self
+            .entity_type
+            .dimensions
+            .attachments
+            .get_average(EntityAttachment::Passenger, self.cube_dimensions());
         let item_stack_to_shear = self.equipment_in_slot(EquipmentSlot::Body);
         self.living_base
             .equipment()
             .lock()
             .set(EquipmentSlot::Body, ItemStack::empty());
-        self.spawn_at_location_with_offset(item_stack_to_shear, offset);
+        let _ = self.spawn_at_location_with_offset(item_stack_to_shear, offset);
         self.play_sound(self.eject_sound(), 1.0, 1.0);
         self.state.lock().pickup_timer = PICKUP_TIMER_DURATION;
+        self.sync_archetype_from_body();
     }
 
     /// Vanilla `SulfurCube.playEatingSound`.
@@ -1032,9 +1301,7 @@ impl SulfurCubeEntity {
     fn try_bucket_pickup(&self, player: &Player, hand: InteractionHand) -> bool {
         let holds_bucket = {
             let inventory = player.inventory.lock();
-            inventory
-                .get_item_in_hand(hand)
-                .is(&vanilla_items::BUCKET)
+            inventory.get_item_in_hand(hand).is(&vanilla_items::BUCKET)
         };
         if !holds_bucket || !Entity::is_alive(self) {
             return false;
@@ -1168,11 +1435,13 @@ impl Goal for SulfurCubeRandomDirectionGoal {
 }
 
 /// Vanilla `SulfurCube.SulfurCubeSearchForItemsGoal`.
-struct SulfurCubeSearchForItemsGoal;
+struct SulfurCubeSearchForItemsGoal {
+    target_item: Option<SharedEntity>,
+}
 
 impl SulfurCubeSearchForItemsGoal {
     const fn new() -> Self {
-        Self
+        Self { target_item: None }
     }
 }
 
@@ -1189,14 +1458,21 @@ impl Goal for SulfurCubeSearchForItemsGoal {
             return false;
         }
 
-        nearest_allowed_item(cube).is_some()
+        self.target_item = nearest_allowed_item(cube);
+        self.target_item.is_some()
+    }
+
+    fn start(&mut self, _mob: &dyn PathfinderMob) {}
+
+    fn stop(&mut self, _mob: &dyn PathfinderMob) {
+        self.target_item = None;
     }
 
     fn tick(&mut self, mob: &dyn PathfinderMob, _entity: &SharedEntity) {
-        let Some(cube) = sulfur_cube_of(mob) else {
+        let Some(item) = &self.target_item else {
             return;
         };
-        let Some(item) = nearest_allowed_item(cube) else {
+        let Some(cube) = sulfur_cube_of(mob) else {
             return;
         };
 
@@ -1214,9 +1490,9 @@ impl Goal for SulfurCubeSearchForItemsGoal {
 /// Finds the nearest pickup-ready item entity inside vanilla's inflated search box.
 fn nearest_allowed_item(cube: &SulfurCubeEntity) -> Option<SharedEntity> {
     let world = cube.level()?;
-    let area = cube
-        .bounding_box()
-        .inflate_xyz(ITEM_SEARCH_RANGE, ITEM_SEARCH_RANGE, ITEM_SEARCH_RANGE);
+    let area =
+        cube.bounding_box()
+            .inflate_xyz(ITEM_SEARCH_RANGE, ITEM_SEARCH_RANGE, ITEM_SEARCH_RANGE);
 
     let candidates = world.get_entities_in_aabb_matching(&area, |entity| {
         entity.downcast_ref::<ItemEntity>().is_some_and(|item| {
@@ -1284,8 +1560,9 @@ impl Goal for SulfurCubeTemptGoal {
             .attributes()
             .lock()
             .required_value(vanilla_attributes::TEMPT_RANGE);
-        let targeting_conditions =
-            TargetingConditions::for_non_combat().ignore_line_of_sight().range(range);
+        let targeting_conditions = TargetingConditions::for_non_combat()
+            .ignore_line_of_sight()
+            .range(range);
 
         self.player = world.nearest_player(mob.position(), range, |player| {
             targeting_conditions.test(world.as_ref(), Some(mob), player)
@@ -1396,27 +1673,11 @@ impl Entity for SulfurCubeEntity {
         SoundSource::Neutral
     }
 
-    fn fall_sounds(&self) -> (SoundEventRef, SoundEventRef) {
-        (
-            &sound_events::ENTITY_HOSTILE_SMALL_FALL,
-            &sound_events::ENTITY_HOSTILE_BIG_FALL,
-        )
-    }
-
-    fn swim_sound(&self) -> SoundEventRef {
-        &sound_events::ENTITY_GENERIC_SWIM
-    }
-
     /// Vanilla `SulfurCube.playStepSound` only plays without a swallowed block.
     fn play_step_sound(&self, _pos: BlockPos, block_state: BlockStateId) {
         if !self.has_body_item() {
             self.play_block_step_sound(block_state);
         }
-    }
-
-    /// Vanilla `SulfurCube.getLightLevelDependentMagicValue`.
-    fn light_level_dependent_magic_value(&self) -> f32 {
-        1.0
     }
 
     /// Vanilla `SulfurCube.canFreeze`: a cube carrying a block never freezes.
@@ -1425,6 +1686,11 @@ impl Entity for SulfurCubeEntity {
             return false;
         }
         LivingEntity::default_living_can_freeze(self)
+    }
+
+    /// Vanilla `SulfurCube.getFluidJumpThreshold`.
+    fn get_fluid_jump_threshold(&self) -> f64 {
+        self.bounding_box().height() * 0.2
     }
 
     /// Vanilla `SulfurCube.hurtServer` fuse priming and block-immunity branch.
@@ -1444,7 +1710,10 @@ impl Entity for SulfurCubeEntity {
             if source.is(&DamageTypeTag::SULFUR_CUBE_WITH_BLOCK_IMMUNE_TO) {
                 if !source.is(&DamageTypeTag::NO_KNOCKBACK) {
                     let (xd, zd) = self.damage_knockback_direction(source);
-                    self.knockback(0.4, xd, zd);
+                    if !self.sulfur_knockback(DAMAGE_KNOCKBACK_POWER, xd, zd, source, amount, false)
+                    {
+                        self.knockback(DAMAGE_KNOCKBACK_POWER, xd, zd);
+                    }
                 }
                 return true;
             }
@@ -1533,14 +1802,37 @@ impl LivingEntity for SulfurCubeEntity {
         })
     }
 
+    /// Vanilla `SulfurCube.isEquippableInSlot`.
+    fn is_equippable_in_slot(&self, item_stack: &ItemStack, slot: EquipmentSlot) -> bool {
+        if slot == EquipmentSlot::Body {
+            return Self::is_swallowable_item(item_stack);
+        }
+
+        let Some(equippable) = item_stack.get_equippable() else {
+            return slot == EquipmentSlot::MainHand && self.can_use_slot(EquipmentSlot::MainHand);
+        };
+
+        slot == equippable.slot
+            && self.can_use_slot(equippable.slot)
+            && equippable.can_be_equipped_by(self.entity_type())
+    }
+
+    /// Vanilla `SulfurCube.canUseSlot`.
+    fn can_use_slot(&self, slot: EquipmentSlot) -> bool {
+        if slot == EquipmentSlot::Body {
+            return Entity::is_alive(self) && !AgeableMob::is_baby(self);
+        }
+        true
+    }
+
+    /// Vanilla `SulfurCube.canDispenserEquipIntoSlot`.
+    fn can_dispenser_equip_into_slot(&self, slot: EquipmentSlot) -> bool {
+        slot == EquipmentSlot::Body
+    }
+
     /// Vanilla `SulfurCube.canBreatheUnderwater`.
     fn can_breathe_underwater(&self) -> bool {
         self.has_body_item() || self.entity_type().flags.can_breathe_underwater
-    }
-
-    /// Vanilla `SulfurCube.getFluidJumpThreshold`.
-    fn get_fluid_jump_threshold(&self) -> f64 {
-        f64::from(self.bounding_box().height()) * 0.2
     }
 
     /// Vanilla `SulfurCube.travelInFluid` buoyancy.
@@ -1572,8 +1864,7 @@ impl LivingEntity for SulfurCubeEntity {
             if immersion > 0.0 {
                 let velocity = self.velocity();
                 self.set_velocity(
-                    velocity
-                        + DVec3::new(0.0, immersion.min(1.0) * FLOAT_PUSH_PER_TICK, 0.0),
+                    velocity + DVec3::new(0.0, immersion.min(1.0) * FLOAT_PUSH_PER_TICK, 0.0),
                 );
             }
         }
@@ -1597,14 +1888,30 @@ impl LivingEntity for SulfurCubeEntity {
         result
     }
 
-    /// Vanilla `SulfurCube.customServerAiStep` pickup and push-sound timers.
-    fn custom_server_ai_step(&self) {
-        let mut state = self.state.lock();
-        if state.pickup_timer > 0 {
-            state.pickup_timer -= 1;
+    /// Vanilla `SulfurCube.knockback` entry for the damage path.
+    fn apply_damage_knockback(&self, source: &DamageSource) {
+        if source.is(&DamageTypeTag::NO_KNOCKBACK) {
+            return;
         }
-        if state.push_sound_cooldown > 0 {
-            state.push_sound_cooldown -= 1;
+
+        let damage = self.state.lock().last_damage;
+        let (xd, zd) = self.damage_knockback_direction(source);
+        if self.sulfur_knockback(DAMAGE_KNOCKBACK_POWER, xd, zd, source, damage, false) {
+            self.indicate_damage(xd, zd);
+            return;
+        }
+
+        // Shared `LivingEntity.apply_damage_knockback` body, inlined because a UFCS
+        // call would dispatch back into this override.
+        self.knockback(DAMAGE_KNOCKBACK_POWER, xd, zd);
+        self.indicate_damage(xd, zd);
+    }
+
+    /// Captures the damage amount vanilla `SulfurCube.knockback` scales by.
+    fn before_actually_hurt(&self, _source: &DamageSource, amount: f32) {
+        self.state.lock().last_damage = amount;
+        if let Some(animal) = self.as_animal() {
+            animal.reset_love();
         }
     }
 
@@ -1646,6 +1953,17 @@ impl Mob for SulfurCubeEntity {
         0.0
     }
 
+    /// Vanilla `SulfurCube.customServerAiStep` pickup and push-sound timers.
+    fn custom_server_ai_step(&self) {
+        let mut state = self.state.lock();
+        if state.pickup_timer > 0 {
+            state.pickup_timer -= 1;
+        }
+        if state.push_sound_cooldown > 0 {
+            state.push_sound_cooldown -= 1;
+        }
+    }
+
     /// Vanilla `SulfurCube.finalizeSpawn`.
     fn finalize_spawn(
         &self,
@@ -1669,10 +1987,7 @@ impl Mob for SulfurCubeEntity {
 
     /// Vanilla `SulfurCube.requiresCustomPersistence`.
     fn requires_custom_persistence(&self) -> bool {
-        self.is_passenger()
-            || self.is_leashed()
-            || self.has_body_item()
-            || self.from_bucket()
+        self.is_passenger() || self.is_leashed() || self.has_body_item() || self.from_bucket()
     }
 
     /// Vanilla `SulfurCube.canBeLeashed`.
@@ -1687,9 +2002,7 @@ impl Mob for SulfurCubeEntity {
 
     /// Vanilla `SulfurCube.canHoldItem`.
     fn can_hold_item(&self, item_stack: &ItemStack) -> bool {
-        !self.has_body_item()
-            && Self::is_swallowable_item(item_stack)
-            && !AgeableMob::is_baby(self)
+        !self.has_body_item() && Self::is_swallowable_item(item_stack) && !AgeableMob::is_baby(self)
     }
 
     /// Vanilla `SulfurCube.getEquipmentSlotForItem`.
@@ -1704,34 +2017,6 @@ impl Mob for SulfurCubeEntity {
         }
     }
 
-    /// Vanilla `SulfurCube.isEquippableInSlot`.
-    fn is_equippable_in_slot(&self, item_stack: &ItemStack, slot: EquipmentSlot) -> bool {
-        if slot == EquipmentSlot::Body {
-            return Self::is_swallowable_item(item_stack);
-        }
-
-        let Some(equippable) = item_stack.get_equippable() else {
-            return slot == EquipmentSlot::MainHand && self.can_use_slot(EquipmentSlot::MainHand);
-        };
-
-        slot == equippable.slot
-            && self.can_use_slot(equippable.slot)
-            && equippable.can_be_equipped_by(self.entity_type())
-    }
-
-    /// Vanilla `SulfurCube.canUseSlot`.
-    fn can_use_slot(&self, slot: EquipmentSlot) -> bool {
-        if slot == EquipmentSlot::Body {
-            return Entity::is_alive(self) && !AgeableMob::is_baby(self);
-        }
-        true
-    }
-
-    /// Vanilla `SulfurCube.canDispenserEquipIntoSlot`.
-    fn can_dispenser_equip_into_slot(&self, slot: EquipmentSlot) -> bool {
-        slot == EquipmentSlot::Body
-    }
-
     /// Vanilla `SulfurCube.pickUpItem` with the swallow pickup timer.
     fn pick_up_item(&self, world: &Arc<World>, item_entity: &ItemEntity) {
         let item_stack = item_entity.get_item();
@@ -1739,14 +2024,11 @@ impl Mob for SulfurCubeEntity {
             return;
         }
 
-        let mut remaining = item_entity.get_item();
-        let swallowed = remaining.split(1);
-        self.set_body_item(swallowed);
+        self.set_body_item(item_stack.copy_with_count(1));
         self.play_sound(self.absorb_sound(), 1.0, 1.0);
-        self.set_guaranteed_drop(EquipmentSlot::Body);
         self.sync_archetype_from_body();
 
-        let chunk_pos = crate::chunk::ChunkPos::from_entity_pos(item_entity.position());
+        let chunk_pos = ChunkPos::from_entity_pos(item_entity.position());
         world.broadcast_to_nearby(
             chunk_pos,
             CTakeItemEntity::new(item_entity.id(), self.id(), 1),
@@ -1795,7 +2077,10 @@ impl Mob for SulfurCubeEntity {
         if !self.can_explode() || !is_igniter {
             if held_item.is(&vanilla_items::SHEARS) && self.ready_for_shearing() {
                 self.shear();
-                self.game_event_with_source_entity(&vanilla_game_events::SHEAR, Some(player));
+                self.game_event_with_source_entity(
+                    &vanilla_game_events::SHEAR,
+                    Some(player as &dyn Entity),
+                );
                 {
                     let mut inventory = player.inventory.lock();
                     inventory
@@ -1833,9 +2118,9 @@ impl Mob for SulfurCubeEntity {
             return InteractionResult::Pass;
         };
         if !world.get_game_rule(&TNT_EXPLODES) {
-            player.send_overlay_message(
-                &steel_utils::translations::BLOCK_MINECRAFT_TNT_DISABLED.msg(),
-            );
+            player.send_overlay_message(&TextComponent::translated(
+                steel_utils::translations::BLOCK_MINECRAFT_TNT_DISABLED.msg(),
+            ));
             return InteractionResult::Pass;
         }
 
@@ -1850,7 +2135,10 @@ impl Mob for SulfurCubeEntity {
             }
         }
 
-        player.award_stat(&steel_registry::stat::vanilla_stat_types::ITEM_USED, held_item.item());
+        player.award_stat(
+            &steel_registry::stat::vanilla_stat_types::ITEM_USED,
+            held_item.item(),
+        );
         InteractionResult::SuccessServer
     }
 
@@ -1862,7 +2150,7 @@ impl Mob for SulfurCubeEntity {
     /// spawn reason still requires a valid ground position.
     fn check_mob_spawn_rules(
         entity_type: EntityTypeRef,
-        level: &dyn crate::world::LevelReader,
+        level: &dyn LevelReader,
         spawn_reason: EntitySpawnReason,
         pos: BlockPos,
     ) -> bool
@@ -1872,22 +2160,65 @@ impl Mob for SulfurCubeEntity {
         if spawn_reason.is_spawner() {
             return true;
         }
-        <Self as Mob>::check_mob_spawn_rules(entity_type, level, spawn_reason, pos)
+
+        // Shared `Mob.check_mob_spawn_rules` body, inlined because a UFCS call would
+        // dispatch back into this override.
+        let below = pos.below();
+        let state = level.get_block_state(below);
+        BLOCK_BEHAVIORS
+            .get_behavior(state.get_block())
+            .is_valid_spawn(state, level, below, entity_type)
     }
 
     /// Vanilla `SulfurCube` look control: with a swallowed block the body yaw snaps to the
     /// nearest 90° axis and the head follows it.
     fn tick_look_control(&self) {
-        if !self.has_body_item() {
-            Mob::tick_look_control(self);
+        if self.has_body_item() {
+            let (yaw, pitch) = self.rotation();
+            let close_angle = wrap_degrees_90(yaw);
+            let new_yaw = yaw - close_angle;
+            self.set_rotation((new_yaw, pitch));
+            self.set_y_head_rot(new_yaw);
             return;
         }
 
-        let (yaw, pitch) = self.rotation();
-        let close_angle = wrap_degrees_90(yaw);
-        let new_yaw = yaw - close_angle;
-        self.set_rotation((new_yaw, pitch));
-        self.set_y_head_rot(new_yaw);
+        // Shared `Mob.tick_look_control` body, inlined because a UFCS call would
+        // dispatch back into this override.
+        let look_control = {
+            let mut controls = self.mob_base().controls().lock();
+            let look_control = controls.look_control;
+            controls.look_control.tick_cooldown();
+            look_control
+        };
+
+        let mut rotation = self.rotation();
+        rotation.1 = 0.0;
+        if look_control.is_looking_at_target() {
+            let position = self.position();
+            let wanted_position = look_control.wanted_position();
+            let xd = wanted_position.x - position.x;
+            let yd = wanted_position.y - self.get_eye_y();
+            let zd = wanted_position.z - position.z;
+            let horizontal = xd.hypot(zd);
+            if horizontal.abs() > 1.0e-5 || yd.abs() > 1.0e-5 {
+                let target_pitch = -(yd.atan2(horizontal)) as f32 * RAD_TO_DEG;
+                rotation.1 =
+                    rotate_towards(rotation.1, target_pitch, look_control.x_max_rot_angle());
+            }
+            if zd.abs() > 1.0e-5 || xd.abs() > 1.0e-5 {
+                let target_yaw = zd.atan2(xd) as f32 * RAD_TO_DEG - DEGREE_90;
+                self.set_y_head_rot(rotate_towards(
+                    self.y_head_rot(),
+                    target_yaw,
+                    look_control.y_max_rot_speed(),
+                ));
+            }
+        } else {
+            self.set_y_head_rot(rotate_towards(self.y_head_rot(), self.y_body_rot(), 10.0));
+        }
+
+        self.set_rotation(rotation);
+        self.clamp_head_rotation_to_body_when_pathing();
     }
 }
 

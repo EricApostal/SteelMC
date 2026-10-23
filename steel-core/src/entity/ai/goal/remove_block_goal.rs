@@ -4,6 +4,8 @@
 //! Vanilla extends `MoveToBlockGoal`; Steel embeds the landed [`MoveToBlockGoal`] and drives
 //! it through the module-private hooks, exactly as `ZombieAttackGoal` embeds `MeleeAttackGoal`.
 
+use std::ptr;
+
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::particle_type::{ItemParticleOption, ParticleData};
@@ -73,9 +75,8 @@ impl RemoveBlockGoal {
 
     /// Vanilla `RemoveBlockGoal.getPosWithBlock`: the mob's own block, then its neighbors.
     fn pos_with_block(&self, pos: BlockPos, level: &dyn LevelReader) -> Option<BlockPos> {
-        let matches = |pos: BlockPos| {
-            std::ptr::eq(level.get_block_state(pos).get_block(), self.block_to_remove)
-        };
+        let matches =
+            |pos: BlockPos| ptr::eq(level.get_block_state(pos).get_block(), self.block_to_remove);
         if matches(pos) {
             return Some(pos);
         }
@@ -94,7 +95,7 @@ impl RemoveBlockGoal {
 
 /// Vanilla `RemoveBlockGoal.isValidTarget`.
 fn is_valid_target(level: &dyn LevelReader, pos: BlockPos, block_to_remove: BlockRef) -> bool {
-    std::ptr::eq(level.get_block_state(pos).get_block(), block_to_remove)
+    ptr::eq(level.get_block_state(pos).get_block(), block_to_remove)
         && level.get_block_state(pos.above()).is_air()
         && level.get_block_state(pos.above_n(2)).is_air()
 }

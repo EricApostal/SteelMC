@@ -246,22 +246,21 @@ impl Player {
         if !transmitter.is_transmitting_waypoint() {
             return None;
         }
-        // Vanilla `WaypointTransmitter.doesSourceIgnoreReceiver`.
-        if self.is_spectator() {
-            // Spectator receivers still see waypoints.
-        } else if !transmitter.is_spectator()
-            && transmitter
-                .passengers()
-                .iter()
-                .all(|passenger| passenger.id() != self.id())
-        {
+
+        // Vanilla `WaypointTransmitter.doesSourceIgnoreReceiver`: spectators always
+        // see waypoints, a source only hides itself from receivers it carries, and
+        // otherwise the waypoint disappears past the smaller of the two ranges.
+        let ignored = if self.is_spectator() {
+            false
+        } else if !transmitter.is_spectator() && !has_indirect_passenger(transmitter, self) {
             let broadcast_range = transmitter
                 .waypoint_transmit_range()
                 .min(self.waypoint_receive_range());
-            if transmitter.position().distance(self.position()) >= broadcast_range {
-                return None;
-            }
+            transmitter.position().distance(self.position()) >= broadcast_range
         } else {
+            true
+        };
+        if ignored {
             return None;
         }
 
@@ -288,6 +287,16 @@ impl Player {
         let direction = rotate_clockwise_90(self.position() - transmitter.position());
         direction.z.atan2(direction.x) as f32
     }
+}
+
+/// Vanilla `Entity.hasIndirectPassenger`, over the whole passenger tree.
+fn has_indirect_passenger(source: &Player, receiver: &Player) -> bool {
+    source.passengers().iter().any(|passenger| {
+        passenger.id() == receiver.id()
+            || passenger
+                .as_player()
+                .is_some_and(|passenger| has_indirect_passenger(passenger, receiver))
+    })
 }
 
 /// Vanilla `Vec3.rotateClockwise90`: `(x, y, z)` becomes `(-z, y, x)`.

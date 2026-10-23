@@ -62,8 +62,6 @@ const TAG_VARIANT: &str = "Variant";
 const COMMON_VARIANT_CHANCE: f32 = 0.9;
 /// Vanilla `Mob` default step height used when the attribute is missing.
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
-/// Vanilla `LivingEntity.getSoundVolume` for fish.
-const SOUND_VOLUME: f32 = 0.4;
 /// Vanilla `TropicalFish.packVariant` bit layout.
 const BASE_COLOR_SHIFT: i32 = 16;
 const PATTERN_COLOR_SHIFT: i32 = 24;
@@ -462,19 +460,7 @@ impl Entity for TropicalFishEntity {
     fn load_additional(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
         self.load_mob(nbt);
         self.set_from_bucket(nbt.byte("FromBucket").is_some_and(|value| value != 0));
-        self.set_packed_variant(
-            nbt.int(TAG_VARIANT)
-                .map_or_else(|| DEFAULT_VARIANT.packed_id(), |packed| packed),
-        );
-    }
-
-    fn mob_interact(&self, player: &Player, hand: InteractionHand) -> InteractionResult {
-        // Vanilla `AbstractFish.mobInteract`: bucket pickup, else `super.mobInteract`
-        // (`Mob` default is `PASS`).
-        if self.try_bucket_pickup(player, hand) {
-            return InteractionResult::Success;
-        }
-        InteractionResult::Pass
+        self.set_packed_variant(nbt.int(TAG_VARIANT).unwrap_or(DEFAULT_VARIANT.packed_id()));
     }
 
     fn as_schooling_fish(&self) -> Option<&dyn SchoolingFish> {
@@ -499,10 +485,6 @@ impl LivingEntity for TropicalFishEntity {
             .living_entity_mut()
             .health
             .set(clamped);
-    }
-
-    fn sound_volume(&self) -> f32 {
-        SOUND_VOLUME
     }
 
     fn hurt_sound(&self, _source: &DamageSource) -> Option<SoundEventRef> {
@@ -569,13 +551,29 @@ impl TropicalFishEntity {
 }
 
 impl Mob for TropicalFishEntity {
+    fn mob_interact(&self, player: &Player, hand: InteractionHand) -> InteractionResult {
+        // Vanilla `AbstractFish.mobInteract`: bucket pickup, else `super.mobInteract`
+        // (`Mob` default is `PASS`).
+        if self.try_bucket_pickup(player, hand) {
+            return InteractionResult::Success;
+        }
+        InteractionResult::Pass
+    }
     fn mob_base(&self) -> &MobBase {
         &self.mob_base
     }
 
+    fn tick_goal_selectors(&self, entity: &SharedEntity) {
+        PathfinderMob::tick_pathfinder_goal_selectors(self, entity);
+    }
+
+    fn tick_path_navigation(&self) {
+        PathfinderMob::tick_pathfinder_path_navigation(self);
+    }
+
     /// Vanilla `AbstractSchoolingFish.getMaxSpawnClusterSize` = `getMaxSchoolSize`.
     fn max_spawn_cluster_size(&self) -> i32 {
-        abstract_fish::max_spawn_cluster_size(MAX_SCHOOL_SIZE)
+        MAX_SCHOOL_SIZE
     }
 
     /// Vanilla `TropicalFish.isMaxGroupSizeReached`.

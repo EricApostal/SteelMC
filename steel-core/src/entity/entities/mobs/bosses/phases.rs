@@ -7,6 +7,9 @@
 //! `doClientTick` presentation (breath particles, local growls) is not ported
 //! because Steel has no client.
 
+use std::array;
+use std::fmt;
+use std::mem;
 use std::sync::Arc;
 
 use glam::DVec3;
@@ -23,15 +26,18 @@ use steel_utils::locks::SyncMutex;
 use crate::chunk::heightmap::HeightmapType;
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::objects::projectiles::{AreaEffectCloudEntity, DragonFireballEntity};
-use crate::entity::{Entity, LivingEntity, Projectile, SharedEntity, next_entity_id};
+use crate::entity::{
+    Entity, LivingEntity, Projectile, RemovalReason, SharedEntity, next_entity_id,
+};
+use crate::player::Player;
 use crate::world::{LevelReader, World};
 
 use super::ender_dragon::{DragonPath, EnderDragonEntity, normalize_vec};
 
 /// Degrees-to-radians factor used throughout the vanilla dragon.
-const DEG_TO_RAD: f32 = std::f32::consts::PI / 180.0;
+const DEG_TO_RAD: f32 = f32::consts::PI / 180.0;
 /// Radians-to-degrees factor used throughout the vanilla dragon.
-const RAD_TO_DEG: f32 = 180.0 / std::f32::consts::PI;
+const RAD_TO_DEG: f32 = 180.0 / f32::consts::PI;
 /// Vanilla `DragonChargePlayerPhase.CHARGE_RECOVERY_TIME`.
 const CHARGE_RECOVERY_TIME: i32 = 10;
 /// Vanilla `DragonStrafePlayerPhase.FIREBALL_CHARGE_AMOUNT`.
@@ -170,8 +176,8 @@ impl EnderDragonPhase {
     }
 }
 
-impl std::fmt::Display for EnderDragonPhase {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for EnderDragonPhase {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{} (#{})", self.name(), self.id())
     }
 }
@@ -196,7 +202,7 @@ pub trait DragonPhaseInstance: Send + Sync {
         _crystal: &SharedEntity,
         _pos: BlockPos,
         _source: &DamageSource,
-        _player: Option<&crate::player::Player>,
+        _player: Option<&Player>,
     ) {
     }
 
@@ -377,7 +383,7 @@ impl DragonHoldingPatternPhase {
         }
     }
 
-    fn strafe_player(&self, dragon: &EnderDragonEntity, player: Arc<crate::player::Player>) {
+    fn strafe_player(&self, dragon: &EnderDragonEntity, player: Arc<Player>) {
         dragon.set_phase(EnderDragonPhase::StrafePlayer);
         let player: SharedEntity = player;
         dragon
@@ -430,7 +436,7 @@ impl DragonPhaseInstance for DragonHoldingPatternPhase {
         _crystal: &SharedEntity,
         _pos: BlockPos,
         _source: &DamageSource,
-        player: Option<&crate::player::Player>,
+        player: Option<&Player>,
     ) {
         let Some(player) = player else {
             return;
@@ -655,7 +661,7 @@ impl DragonPhaseInstance for DragonStrafePlayerPhase {
         _crystal: &SharedEntity,
         _pos: BlockPos,
         _source: &DamageSource,
-        _player: Option<&crate::player::Player>,
+        _player: Option<&Player>,
     ) {
     }
 }
@@ -1053,7 +1059,7 @@ impl DragonPhaseInstance for DragonSittingFlamingPhase {
 
     fn end(&mut self, _dragon: &EnderDragonEntity) {
         if let Some(flame) = self.flame.take() {
-            flame.set_removed(crate::entity::RemovalReason::Discarded);
+            flame.set_removed(RemovalReason::Discarded);
         }
     }
 
@@ -1427,7 +1433,7 @@ impl EnderDragonPhaseManager {
     pub fn new() -> Self {
         Self {
             current: SyncMutex::new(EnderDragonPhase::Hovering),
-            instances: std::array::from_fn(|index| {
+            instances: array::from_fn(|index| {
                 SyncMutex::new(Some(create_instance(EnderDragonPhase::from_id(
                     index as i32,
                 ))))
@@ -1446,7 +1452,7 @@ impl EnderDragonPhaseManager {
 
         let previous = {
             let mut current = self.current.lock();
-            std::mem::replace(&mut *current, target)
+            mem::replace(&mut *current, target)
         };
 
         // Vanilla ends the previous phase before starting the new one. When the
@@ -1543,7 +1549,7 @@ impl EnderDragonPhaseManager {
         crystal: &SharedEntity,
         pos: BlockPos,
         source: &DamageSource,
-        player: Option<&crate::player::Player>,
+        player: Option<&Player>,
     ) {
         self.with_current(&mut |instance| {
             instance.on_crystal_destroyed(dragon, crystal, pos, source, player);

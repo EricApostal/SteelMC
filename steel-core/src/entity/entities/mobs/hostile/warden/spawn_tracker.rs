@@ -14,6 +14,7 @@ use steel_utils::WorldAabb;
 use steel_utils::types::Difficulty;
 
 use super::warden::WardenEntity;
+use crate::entity::spawn::create_entity_instance;
 use crate::entity::{Entity, SharedEntity};
 use crate::player::Player;
 use crate::world::World;
@@ -237,9 +238,7 @@ impl WardenSpawnTracker {
             f64::from(pos.y()) + 1.0,
             f64::from(pos.z()) + 0.5,
         );
-        let warden =
-            crate::entity::spawn::create_entity_instance(world, &vanilla_entities::WARDEN, spawn)
-                .ok()?;
+        let warden = create_entity_instance(world, &vanilla_entities::WARDEN, spawn).ok()?;
         warden.snap_to(spawn, rand::random::<f32>() * 360.0, 0.0);
         if world.try_add_entity(Arc::clone(&warden)).is_ok() {
             Some(warden)

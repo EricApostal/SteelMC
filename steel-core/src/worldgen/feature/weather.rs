@@ -1,24 +1,61 @@
 use super::prelude::*;
 use super::runner::FeatureDecorationRunner;
 
-static TEMPERATURE_NOISE: LazyLock<PerlinSimplexNoise> = LazyLock::new(|| {
+use steel_worldgen::noise::SimplexNoise;
+
+/// Vanilla `Biome.TEMPERATURE_NOISE`: `new SimplexNoise(new WorldgenRandom(new
+/// LegacyRandomSource(1234L)), true)` — the offsets are discarded, so the
+/// sampler is built from a zero noise offset.
+static TEMPERATURE_NOISE: LazyLock<SimplexNoise> = LazyLock::new(|| {
     let mut random = RandomSource::Legacy(LegacyRandom::from_seed(1234));
-    PerlinSimplexNoise::new(&mut random, &[0])
+    SimplexNoise::new_without_noise_offset(&mut random)
 });
 
-static FROZEN_TEMPERATURE_NOISE: LazyLock<PerlinSimplexNoise> = LazyLock::new(|| {
-    let mut random = RandomSource::Legacy(LegacyRandom::from_seed(3456));
-    PerlinSimplexNoise::new(&mut random, &[-2, -1, 0])
-});
-
-static BIOME_INFO_NOISE: LazyLock<PerlinSimplexNoise> = LazyLock::new(|| {
+/// Vanilla `Biome.BIOME_INFO_NOISE`: `new SimplexNoise(new WorldgenRandom(new
+/// LegacyRandomSource(2345L)), true)`.
+static BIOME_INFO_NOISE: LazyLock<SimplexNoise> = LazyLock::new(|| {
     let mut random = RandomSource::Legacy(LegacyRandom::from_seed(2345));
-    PerlinSimplexNoise::new(&mut random, &[0])
+    SimplexNoise::new_without_noise_offset(&mut random)
 });
+
+/// Vanilla `Biome.FROZEN_TEMPERATURE_NOISE`: a `NoiseStack` of three
+/// offset-free simplex octaves built from one seeded random.
+struct FrozenTemperatureNoise {
+    layers: [(SimplexNoise, f64, f32); 3],
+}
+
+impl FrozenTemperatureNoise {
+    fn new() -> Self {
+        let mut random = RandomSource::Legacy(LegacyRandom::from_seed(3456));
+        let first = SimplexNoise::new_without_noise_offset(&mut random);
+        let second = SimplexNoise::new_without_noise_offset(&mut random);
+        let third = SimplexNoise::new_without_noise_offset(&mut random);
+        Self {
+            layers: [
+                (first, 1.0, 0.142_857_15),
+                (second, 0.5, 0.285_714_3),
+                (third, 0.25, 0.571_428_6),
+            ],
+        }
+    }
+
+    /// Vanilla `NoiseStack.get(x, z)`: each layer scales its input by its
+    /// frequency and its sample by its amplitude, accumulating in `f32`.
+    fn get_value(&self, x: f64, z: f64) -> f32 {
+        self.layers
+            .iter()
+            .fold(0.0_f32, |value, (noise, frequency, amplitude)| {
+                value + amplitude * noise.get_value_2d(x * frequency, z * frequency)
+            })
+    }
+}
+
+static FROZEN_TEMPERATURE_NOISE: LazyLock<FrozenTemperatureNoise> =
+    LazyLock::new(FrozenTemperatureNoise::new);
 
 impl FeatureDecorationRunner {
     pub(super) fn biome_info_noise_value(x: f64, z: f64) -> f64 {
-        f64::from(BIOME_INFO_NOISE.get_value(x, z))
+        f64::from(BIOME_INFO_NOISE.get_value_2d(x, z))
     }
 
     pub(super) fn biome_at_block(
@@ -120,13 +157,14 @@ impl FeatureDecorationRunner {
                         * 7.0,
                 );
                 let edge = f64::from(
-                    BIOME_INFO_NOISE.get_value(f64::from(pos.x()) * 0.2, f64::from(pos.z()) * 0.2),
+                    BIOME_INFO_NOISE
+                        .get_value_2d(f64::from(pos.x()) * 0.2, f64::from(pos.z()) * 0.2),
                 );
                 if large + edge < 0.3 {
-                    let small = f64::from(
-                        BIOME_INFO_NOISE
-                            .get_value(f64::from(pos.x()) * 0.09, f64::from(pos.z()) * 0.09),
-                    );
+                    let small = f64::from(BIOME_INFO_NOISE.get_value_2d(
+                        f64::from(pos.x()) * 0.09,
+                        f64::from(pos.z()) * 0.09,
+                    ));
                     if small < 0.8 { 0.2 } else { base_temp }
                 } else {
                     base_temp
@@ -139,7 +177,7 @@ impl FeatureDecorationRunner {
             return modified_temp;
         }
 
-        let value = TEMPERATURE_NOISE.get_value(
+        let value = TEMPERATURE_NOISE.get_value_2d(
             f64::from(pos.x() as f32 / 8.0),
             f64::from(pos.z() as f32 / 8.0),
         ) * 8.0;

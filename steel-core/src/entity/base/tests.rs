@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::entity::damage::{DamageHistory, DamageSource};
 use crate::entity::{
     Entity, EntityLevelCallback, InsideBlockEffectType, RemovalReason, SharedEntity,
+    impl_test_downcast_type,
 };
 use crate::portal::PortalKind;
 use crate::test_support::{TestEntity, fresh_test_world};
@@ -87,7 +88,7 @@ fn generation_distinguishes_reconstructed_entity_identity() {
     assert_ne!(first.generation(), reincarnated.generation());
 }
 
-crate::entity::impl_test_downcast_type!(FallDamageTestEntity);
+impl_test_downcast_type!(FallDamageTestEntity);
 
 impl Entity for FallDamageTestEntity {
     fn base(&self) -> &EntityBase {
@@ -308,7 +309,7 @@ fn removal_unlocks_lifecycle_before_destroying_retained_sources() {
         victim: Weak<dyn Entity>,
     }
 
-    crate::entity::impl_test_downcast_type!(RemovalSourceEntity);
+    impl_test_downcast_type!(RemovalSourceEntity);
 
     impl Entity for RemovalSourceEntity {
         fn base(&self) -> &EntityBase {

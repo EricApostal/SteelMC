@@ -19,6 +19,7 @@ use steel_utils::ChunkPos;
 use steel_utils::locks::{SyncMutex, SyncRwLock};
 
 use crate::chunk::player_chunk_view::PlayerChunkView;
+use crate::entity::entities::objects::HurtingProjectile;
 use crate::entity::leash::Leashable;
 use crate::entity::{
     Entity, EntityMovementSyncPacket, MobEffectSyncPacket, ServerEntityMovementSyncState,
@@ -402,6 +403,9 @@ impl EntityTracker {
                         force_velocity_sync: entity.forces_fall_flying_velocity_sync(),
                         force_position_rotation: forces_position_rotation(entity.as_ref()),
                         requires_precise_position: entity.base().requires_precise_position(),
+                        projectile_power: entity
+                            .as_hurting_projectile()
+                            .map(HurtingProjectile::acceleration_power),
                     });
             if result.should_clear_velocity_sync() {
                 entity.clear_velocity_sync();
@@ -768,12 +772,7 @@ impl EntityTracker {
 /// asks `createMovePacket` for position *and* rotation, so arrows bypass the
 /// movement thresholds instead of only sending what changed.
 fn forces_position_rotation(entity: &dyn Entity) -> bool {
-    [
-        &vanilla_entities::ARROW,
-        &vanilla_entities::SPECTRAL_ARROW,
-        &vanilla_entities::TRIDENT,
-    ]
-    .contains(&entity.entity_type())
+    entity.is_abstract_arrow()
 }
 
 fn leash_holder_id(entity: &dyn Entity) -> Option<i32> {

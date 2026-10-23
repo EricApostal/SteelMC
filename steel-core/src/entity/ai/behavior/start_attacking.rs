@@ -1,9 +1,9 @@
 //! Vanilla `StartAttacking`: remember the finder-supplied attack target.
 
-use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
 use crate::entity::ai::brain::memory::MemoryStatus;
 use crate::entity::ai::brain::memory::module_type as mem;
+use crate::entity::{Mob, SharedEntity};
 
 /// Vanilla `StartAttacking.TargetFinder<E>`.
 pub type TargetFinder = fn(&BehaviorContext<'_>, &SharedEntity) -> Option<SharedEntity>;
@@ -66,7 +66,7 @@ impl Trigger for StartAttacking {
         let can_attack = target.as_living_entity().is_some_and(|living| {
             ctx.body
                 .as_mob()
-                .is_some_and(|mob| crate::entity::Mob::can_attack(mob, living))
+                .is_some_and(|mob| Mob::can_attack(mob, living))
         });
         if !can_attack {
             return false;

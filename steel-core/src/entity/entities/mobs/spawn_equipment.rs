@@ -6,8 +6,8 @@
 //! standalone structs, so the two passes live here as free functions over
 //! `&dyn Mob` and each mob calls the ones vanilla's class hierarchy reaches.
 
-use steel_registry::enchantment::table::EnchantmentRandom;
 use steel_registry::enchantment::provider;
+use steel_registry::enchantment::table::EnchantmentRandom;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::ItemRef;
 use steel_registry::vanilla_items;
@@ -54,7 +54,9 @@ pub(crate) fn populate_default_equipment_slots(
         }
     }
 
-    let partial_chance = if mob.level().is_some_and(|world| world.difficulty() == Difficulty::Hard)
+    let partial_chance = if mob
+        .level()
+        .is_some_and(|world| world.difficulty() == Difficulty::Hard)
     {
         0.1
     } else {
@@ -168,13 +170,7 @@ pub(crate) fn enchant_spawned_armor(
         EquipmentSlot::Chest,
         EquipmentSlot::Head,
     ] {
-        enchant_spawned_equipment(
-            mob,
-            slot,
-            random,
-            ARMOR_ENCHANT_CHANCE,
-            difficulty_modifier,
-        );
+        enchant_spawned_equipment(mob, slot, random, ARMOR_ENCHANT_CHANCE, difficulty_modifier);
     }
 }
 
@@ -197,8 +193,5 @@ fn enchant_spawned_equipment(
         difficulty_modifier,
         &mut *random,
     );
-    mob.living_base()
-        .equipment()
-        .lock()
-        .set(slot, item_stack);
+    mob.living_base().equipment().lock().set(slot, item_stack);
 }

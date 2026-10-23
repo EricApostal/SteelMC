@@ -213,3 +213,98 @@ impl CriterionProgress {
         self.0.is_some()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use steel_registry::advancement::registry::AdvancementRef;
+    use steel_registry::{REGISTRY, init_vanilla_registry};
+    use steel_utils::Identifier;
+
+    use super::{AdvancementProgress, AdvancementProgressMap};
+
+    fn advancement(key: &str) -> AdvancementRef {
+        REGISTRY
+            .advancements
+            .value_by_key(&Identifier::vanilla_static(key))
+            .unwrap_or_else(|| panic!("{key} should be registered"))
+    }
+
+    /// `husbandry/leash_all_frog_variants` needs all three frog variants, one per
+    /// requirement group, so it exercises AND semantics with partial progress.
+    #[test]
+    fn partial_progress_on_a_multi_criterion_advancement_is_not_done() {
+        init_vanilla_registry();
+
+        let advancement = advancement("husbandry/leash_all_frog_variants");
+        let mut map = AdvancementProgressMap::default();
+        let progress = map.get_mut_or_start_progress(advancement);
+
+        assert!(progress.grant_progress("minecraft:cold"));
+        assert!(progress.grant_progress("minecraft:temperate"));
+
+        assert!(
+            !progress.is_done(),
+            "two of three requirements are not enough"
+        );
+        assert!(
+            progress.has_progress(),
+            "the client needs the partial progress"
+        );
+        assert_eq!(progress.get_completed_criteria().count(), 2);
+        assert_eq!(
+            progress.get_remaining_criteria().collect::<Vec<_>>(),
+            vec!["minecraft:warm"]
+        );
+    }
+
+    #[test]
+    fn every_requirement_group_completes_a_multi_criterion_advancement() {
+        init_vanilla_registry();
+
+        let advancement = advancement("husbandry/leash_all_frog_variants");
+        let mut map = AdvancementProgressMap::default();
+        let progress = map.get_mut_or_start_progress(advancement);
+
+        for criterion in ["minecraft:cold", "minecraft:temperate", "minecraft:warm"] {
+            assert!(progress.grant_progress(criterion));
+        }
+
+        assert!(progress.is_done());
+        assert_eq!(progress.get_remaining_criteria().count(), 0);
+    }
+
+    /// `adventure/root` puts both criteria in a single requirement group, which is
+    /// vanilla's "any of" form: the first granted criterion completes it.
+    #[test]
+    fn any_of_requirements_complete_on_the_first_criterion() {
+        init_vanilla_registry();
+
+        let advancement = advancement("adventure/root");
+        let mut map = AdvancementProgressMap::default();
+        let progress = map.get_mut_or_start_progress(advancement);
+
+        assert!(progress.grant_progress("killed_something"));
+        assert!(progress.is_done());
+        assert_eq!(progress.get_completed_criteria().count(), 1);
+        assert_eq!(progress.get_remaining_criteria().count(), 1);
+    }
+
+    #[test]
+    fn starting_progress_seeds_every_criterion_of_the_advancement() {
+        init_vanilla_registry();
+
+        let advancement = advancement("husbandry/leash_all_frog_variants");
+        let mut map = AdvancementProgressMap::default();
+        let progress = map.get_mut_or_start_progress(advancement);
+
+        let mut criteria: Vec<&str> = progress.criteria.keys().map(|key| &**key).collect();
+        criteria.sort_unstable();
+
+        assert_eq!(
+            criteria,
+            vec!["minecraft:cold", "minecraft:temperate", "minecraft:warm"]
+        );
+        assert!(!progress.has_progress());
+        assert!(!AdvancementProgress::default().is_done());
+    }
+}

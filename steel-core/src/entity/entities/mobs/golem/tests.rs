@@ -1,3 +1,4 @@
+use std::io::Cursor;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -29,7 +30,7 @@ fn player_created_flag_round_trips_through_nbt() {
     golem.set_player_created(false);
     let mut bytes = Vec::new();
     nbt.write(&mut bytes);
-    let borrowed = read_borrowed_compound(&mut std::io::Cursor::new(&bytes))
+    let borrowed = read_borrowed_compound(&mut Cursor::new(&bytes))
         .unwrap_or_else(|error| panic!("test nbt should reborrow: {error}"));
     golem.load_additional((&borrowed).into());
 
@@ -55,7 +56,7 @@ fn anger_timer_and_target_use_vanilla_save_keys() {
     let reloaded = golem();
     let mut bytes = Vec::new();
     nbt.write(&mut bytes);
-    let borrowed = read_borrowed_compound(&mut std::io::Cursor::new(&bytes))
+    let borrowed = read_borrowed_compound(&mut Cursor::new(&bytes))
         .unwrap_or_else(|error| panic!("test nbt should reborrow: {error}"));
     reloaded.read_persistent_anger_save_data(&(&borrowed).into());
 
@@ -76,7 +77,7 @@ fn legacy_anger_time_key_is_still_read() {
 
     let mut bytes = Vec::new();
     nbt.write(&mut bytes);
-    let borrowed = read_borrowed_compound(&mut std::io::Cursor::new(&bytes))
+    let borrowed = read_borrowed_compound(&mut Cursor::new(&bytes))
         .unwrap_or_else(|error| panic!("test nbt should reborrow: {error}"));
     golem.read_persistent_anger_save_data(&(&borrowed).into());
 
@@ -138,11 +139,11 @@ fn triggered_spawn_marks_the_golem_player_created() {
 
     let world_fixture = fresh_test_world("iron_golem_finalize_spawn");
     let world = &world_fixture.world;
-    let golem: SharedEntity = std::sync::Arc::new(IronGolemEntity::new(
+    let golem: SharedEntity = Arc::new(IronGolemEntity::new(
         &vanilla_entities::IRON_GOLEM,
         1,
         DVec3::ZERO,
-        std::sync::Arc::downgrade(world),
+        Arc::downgrade(world),
     ));
     let golem_entity = golem
         .downcast_ref::<IronGolemEntity>()
@@ -152,11 +153,11 @@ fn triggered_spawn_marks_the_golem_player_created() {
     golem_entity.finalize_spawn(world, EntitySpawnReason::Triggered, None);
     assert!(golem_entity.is_player_created());
 
-    let other: SharedEntity = std::sync::Arc::new(IronGolemEntity::new(
+    let other: SharedEntity = Arc::new(IronGolemEntity::new(
         &vanilla_entities::IRON_GOLEM,
         2,
         DVec3::ZERO,
-        std::sync::Arc::downgrade(world),
+        Arc::downgrade(world),
     ));
     let other_entity = other
         .downcast_ref::<IronGolemEntity>()

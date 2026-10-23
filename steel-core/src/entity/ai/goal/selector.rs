@@ -391,6 +391,7 @@ mod tests {
     use super::*;
     use crate::entity::{
         Entity, EntityBase, LivingEntity, LivingEntityBase, Mob, MobBase, PathfinderMob,
+        impl_test_downcast_type,
     };
 
     struct TestPathfinderMob {
@@ -419,7 +420,7 @@ mod tests {
         }
     }
 
-    crate::entity::impl_test_downcast_type!(TestPathfinderMob);
+    impl_test_downcast_type!(TestPathfinderMob);
 
     impl Entity for TestPathfinderMob {
         fn base(&self) -> &EntityBase {

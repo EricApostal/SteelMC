@@ -27,16 +27,16 @@ use steel_registry::entity_type::{
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::NautilusEntityData;
-use steel_registry::{sound_events, vanilla_attributes, vanilla_damage_types, vanilla_entities};
-use steel_utils::entity_events::EntityStatus;
+use steel_registry::{sound_events, vanilla_damage_types};
 use steel_utils::locks::SyncMutex;
-use steel_utils::types::{Difficulty, InteractionHand};
-use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, UuidExt as _};
+use steel_utils::types::InteractionHand;
+use steel_utils::{BlockPos, BlockStateId, Downcast as _, DowncastType, DowncastTypeKey};
 use uuid::Uuid;
 
 use crate::behavior::InteractionResult;
 use crate::entity::ai::brain::Brain;
 use crate::entity::ai::goal::Tameable;
+use crate::entity::ai::path::PathType;
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::mobs::neutral::nautilus::abstract_nautilus::{
     self, AbstractNautilusParts, Nautilus,
@@ -45,9 +45,8 @@ use crate::entity::entities::mobs::neutral::nautilus::brain;
 use crate::entity::{
     AgeableMob, AgeableMobBase, Animal, AnimalBase, Entity, EntityBase, EntityBaseLoad, EntityPose,
     EntitySpawnReason, EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase,
-    PathfinderMob, SharedEntity, SpawnGroupData,
+    MobEffectInstance, PathfinderMob, SharedEntity, SpawnGroupData,
 };
-use crate::entity::ai::path::PathType;
 use crate::inventory::equipment::EquipmentSlot;
 use crate::physics::MoveResult;
 use crate::player::Player;
@@ -204,6 +203,33 @@ impl NautilusEntity {
         abstract_nautilus::is_aggravated(self)
     }
 
+    /// Vanilla `AbstractNautilus.canJump`.
+    #[must_use]
+    pub fn can_jump(&self) -> bool {
+        abstract_nautilus::can_jump(self)
+    }
+
+    /// Vanilla `AbstractNautilus.onPlayerJump`.
+    pub fn on_player_jump(&self, jump_amount: i32) {
+        abstract_nautilus::on_player_jump(self, jump_amount);
+    }
+
+    /// Vanilla `AbstractNautilus.handleStartJump`.
+    pub fn handle_start_jump(&self) {
+        abstract_nautilus::handle_start_jump(self);
+    }
+
+    /// Vanilla `AbstractNautilus.handleStopJump` is empty.
+    pub fn handle_stop_jump(&self) {
+        abstract_nautilus::handle_stop_jump();
+    }
+
+    /// Vanilla `AbstractNautilus.getJumpCooldown`.
+    #[must_use]
+    pub fn get_jump_cooldown(&self) -> i32 {
+        abstract_nautilus::get_jump_cooldown(self)
+    }
+
     /// Vanilla `Nautilus.getBreedOffspring`.
     #[must_use]
     pub fn breed_offspring(&self, world: &Arc<World>) -> Option<SharedEntity> {
@@ -327,7 +353,11 @@ impl NautilusEntity {
 fn set_tamable_flag(entity_data: &SyncMutex<NautilusEntityData>, flag: i8, value: bool) {
     let mut entity_data = entity_data.lock();
     let current = *entity_data.tamable_animal().flags.get();
-    let next = if value { current | flag } else { current & !flag };
+    let next = if value {
+        current | flag
+    } else {
+        current & !flag
+    };
     entity_data.tamable_animal_mut().flags.set(next);
 }
 
@@ -522,30 +552,11 @@ impl Entity for NautilusEntity {
         abstract_nautilus::controlling_passenger(self)
     }
 
-    fn equip_sound(&self, slot: EquipmentSlot, stack: &ItemStack) -> Option<SoundEventRef> {
-        abstract_nautilus::equip_sound(self, slot, stack)
-    }
-
     /// Vanilla `AbstractNautilus.hurtServer`: an entity attacker becomes the anger
     /// target once the damage lands.
     fn hurt(&self, world: &World, source: &DamageSource, amount: f32) -> bool {
         let was_hurt = LivingEntity::hurt_server(self, world, source, amount);
-        if was_hurt
-            && let Some(attacker) = source.causing_entity()
-        {
-            brain::set_anger_target(world, self, attacker);
-        }
-
-        was_hurt
-    }
-
-    /// Vanilla `AbstractNautilus.hurtServer`: an entity attacker becomes the anger
-    /// target once the damage lands.
-    fn hurt(&self, world: &World, source: &DamageSource, amount: f32) -> bool {
-        let was_hurt = LivingEntity::hurt_server(self, world, source, amount);
-        if was_hurt
-            && let Some(attacker) = source.causing_entity()
-        {
+        if was_hurt && let Some(attacker) = source.causing_entity() {
             brain::set_anger_target(world, self, attacker);
         }
 
@@ -562,6 +573,10 @@ impl Entity for NautilusEntity {
 }
 
 impl LivingEntity for NautilusEntity {
+    fn equip_sound(&self, slot: EquipmentSlot, stack: &ItemStack) -> Option<SoundEventRef> {
+        abstract_nautilus::equip_sound(self, slot, stack)
+    }
+
     fn living_base(&self) -> &LivingEntityBase {
         &self.living_base
     }
@@ -596,7 +611,7 @@ impl LivingEntity for NautilusEntity {
         abstract_nautilus::can_dispenser_equip_into_slot(self, slot)
     }
 
-    fn can_be_affected(&self, effect: &crate::entity::MobEffectInstance) -> bool {
+    fn can_be_affected(&self, effect: &MobEffectInstance) -> bool {
         abstract_nautilus::can_be_affected(self, effect)
     }
 
@@ -621,19 +636,6 @@ impl LivingEntity for NautilusEntity {
         _old_y: f64,
     ) -> Option<MoveResult> {
         abstract_nautilus::travel_in_water(entity, input)
-    }
-
-    /// Vanilla `AbstractNautilus.hurtServer`: an entity attacker becomes the anger
-    /// target once the damage lands.
-    fn hurt(&self, world: &World, source: &DamageSource, amount: f32) -> bool {
-        let was_hurt = LivingEntity::hurt_server(self, world, source, amount);
-        if was_hurt
-            && let Some(attacker) = source.causing_entity()
-        {
-            brain::set_anger_target(world, self, attacker);
-        }
-
-        was_hurt
     }
 
     /// Vanilla `Nautilus.baseTick` -> `handleAirSupply` replaces the generic
@@ -663,6 +665,14 @@ impl LivingEntity for NautilusEntity {
 }
 
 impl AgeableMob for NautilusEntity {
+    fn get_breed_offspring(
+        &self,
+        world: &Arc<World>,
+        _partner: &dyn AgeableMob,
+    ) -> Option<SharedEntity> {
+        self.breed_offspring(world)
+    }
+
     fn ageable_base(&self) -> &AgeableMobBase {
         &self.ageable_base
     }
@@ -705,14 +715,6 @@ impl Animal for NautilusEntity {
             &sound_events::ENTITY_NAUTILUS_EAT
         };
         self.make_sound(Some(sound));
-    }
-
-    fn get_breed_offspring(
-        &self,
-        world: &Arc<World>,
-        _partner: &dyn AgeableMob,
-    ) -> Option<SharedEntity> {
-        self.breed_offspring(world)
     }
 }
 
@@ -798,6 +800,3 @@ impl PathfinderMob for NautilusEntity {
         0.0
     }
 }
-
-/// Keeps the vanilla difficulty import used by the spawn signature contract.
-const _: Option<Difficulty> = None;

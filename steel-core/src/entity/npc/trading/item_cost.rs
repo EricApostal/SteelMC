@@ -1,6 +1,6 @@
 //! Vanilla `ItemCost`: one item requirement of a trade.
 
-use std::io::{Cursor, Result as IoResult, Write};
+use std::io::{Cursor, Error, Result as IoResult, Write};
 
 use simdnbt::FromNbtTag as _;
 use simdnbt::borrow::NbtCompound as NbtCompoundView;
@@ -155,11 +155,11 @@ impl ReadFrom for ItemCost {
     fn read(data: &mut Cursor<&[u8]>) -> IoResult<Self> {
         let item_id = VarInt::read(data)?.0;
         let item_id = usize::try_from(item_id)
-            .map_err(|_| std::io::Error::other(format!("Negative item id: {item_id}")))?;
+            .map_err(|_| Error::other(format!("Negative item id: {item_id}")))?;
         let item = REGISTRY
             .items
             .by_id(item_id)
-            .ok_or_else(|| std::io::Error::other(format!("Unknown item id: {item_id}")))?;
+            .ok_or_else(|| Error::other(format!("Unknown item id: {item_id}")))?;
 
         let count = VarInt::read(data)?.0;
         let components = DataComponentExactPredicate::read(data)?;

@@ -1,9 +1,9 @@
 //! Vanilla `PlayerSensor`.
 
 use crate::entity::SharedEntity;
-use crate::entity::ai::brain::memory::MemoryModuleTypeRef;
 use crate::entity::ai::brain::memory::MemoryStore;
 use crate::entity::ai::brain::memory::module_type as mem;
+use crate::entity::ai::brain::memory::{MemoryModuleType, MemoryModuleTypeRef};
 use crate::entity::ai::brain::sensor::BrainSensor;
 use crate::entity::ai::sensing::villager::{
     closer_than, follow_range, is_entity_attackable, is_entity_targetable,
@@ -82,7 +82,7 @@ impl BrainSensor for PlayerSensor {
 /// Vanilla `brain.setMemory(type, list.isEmpty() ? null : list.get(0))`.
 fn set_single_memory(
     memories: &mut MemoryStore,
-    ty: &crate::entity::ai::brain::memory::MemoryModuleType<SharedEntity>,
+    ty: &MemoryModuleType<SharedEntity>,
     entities: &[SharedEntity],
 ) {
     match entities.first() {

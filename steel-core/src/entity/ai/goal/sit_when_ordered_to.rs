@@ -4,7 +4,9 @@
 //! Vanilla stores the `TamableAnimal`; Steel reads the same state through
 //! [`Tameable`](crate::entity::ai::goal::Tameable).
 
-use crate::entity::PathfinderMob;
+use std::sync::Arc;
+
+use crate::entity::{PathfinderMob, SharedEntity};
 
 use super::selector::{Goal, GoalControls};
 
@@ -91,9 +93,9 @@ impl Goal for SitWhenOrderedToGoal {
 }
 
 /// Vanilla's `owner.level() == this.mob.level()` identity check.
-fn same_level(mob: &dyn PathfinderMob, owner: &crate::entity::SharedEntity) -> bool {
+fn same_level(mob: &dyn PathfinderMob, owner: &SharedEntity) -> bool {
     match (mob.level(), owner.level()) {
-        (Some(mob_level), Some(owner_level)) => std::sync::Arc::ptr_eq(&mob_level, &owner_level),
+        (Some(mob_level), Some(owner_level)) => Arc::ptr_eq(&mob_level, &owner_level),
         _ => false,
     }
 }

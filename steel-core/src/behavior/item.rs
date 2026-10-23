@@ -116,6 +116,7 @@ pub trait ItemBehavior: Send + Sync {
         }
 
         let slot = equippable.slot;
+        let used_item = context.inv.with_item(ItemStack::item);
         let result = context.inv.with_inventory(|inventory| {
             inventory.try_swap_with_equipment_slot(
                 context.hand,
@@ -126,6 +127,11 @@ pub trait ItemBehavior: Send + Sync {
 
         match result {
             EquipmentSwapResult::Success(overflow) => {
+                // Vanilla `Equippable.swapWithEquipmentSlot`: a successful equip awards the
+                // `used` stat for the held item.
+                context
+                    .player
+                    .award_stat(&vanilla_stat_types::ITEM_USED, used_item);
                 if !overflow.is_empty() {
                     let _ = context
                         .player

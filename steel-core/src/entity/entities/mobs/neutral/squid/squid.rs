@@ -29,6 +29,7 @@ use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 use crate::entity::ai::goal::{Goal, GoalControls};
 use crate::entity::ai::path::PathType;
 use crate::entity::damage::DamageSource;
+use crate::entity::entities::mobs::water::abstract_fish::check_water_animal_spawn_obstruction;
 use crate::entity::{
     AgeableMob, AgeableMobBase, Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason,
     EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity,
@@ -38,7 +39,6 @@ use crate::physics::MoveResult;
 use crate::world::{LevelReader, World};
 
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
-const XP_REWARD: i32 = 1;
 /// Vanilla `Squid.getDefaultGravity`.
 const SQUID_GRAVITY: f64 = 0.08;
 /// Vanilla `Squid.SquidFleeGoal.SQUID_FLEE_SPEED`.
@@ -61,7 +61,7 @@ pub(super) const SQUID_BABY_HEIGHT: f32 = 0.5;
 pub(super) const SQUID_BABY_EYE_HEIGHT: f32 = 0.37;
 /// Vanilla `Squid.spawnInk` particle count.
 const INK_PARTICLE_COUNT: i32 = 30;
-const TAU: f32 = std::f32::consts::TAU;
+const TAU: f32 = f32::consts::TAU;
 
 /// Vanilla `Squid`.
 #[entity_behavior(class = "Squid")]
@@ -112,7 +112,6 @@ impl SquidEntity {
     fn new_with_base(base: EntityBase, entity_type: EntityTypeRef) -> Self {
         let living_base = LivingEntityBase::new(entity_type);
         let mob_base = MobBase::new();
-        mob_base.set_xp_reward(XP_REWARD);
         let ageable_base = AgeableMobBase::new();
         // Vanilla `AgeableWaterCreature`: `setPathfindingMalus(WATER, 0.0F)`.
         mob_base
@@ -259,12 +258,12 @@ impl SquidEntity {
 
         if in_water {
             let tentacle_movement = *self.tentacle_movement.lock();
-            if tentacle_movement < std::f32::consts::PI {
-                let tentacle_scale = tentacle_movement / std::f32::consts::PI;
-                *self.tentacle_angle.lock() =
-                    (tentacle_scale * tentacle_scale * std::f32::consts::PI).sin()
-                        * std::f32::consts::PI
-                        * 0.25;
+            if tentacle_movement < f32::consts::PI {
+                let tentacle_scale = tentacle_movement / f32::consts::PI;
+                *self.tentacle_angle.lock() = (tentacle_scale * tentacle_scale * f32::consts::PI)
+                    .sin()
+                    * f32::consts::PI
+                    * 0.25;
                 if tentacle_scale > 0.75 {
                     let movement = self.movement_vector();
                     self.set_velocity(movement);
@@ -283,7 +282,7 @@ impl SquidEntity {
             let velocity = self.velocity();
             let horizontal = velocity.x.hypot(velocity.z);
             let target_yaw =
-                -((velocity.x as f32).atan2(velocity.z as f32)) * (180.0 / std::f32::consts::PI);
+                -((velocity.x as f32).atan2(velocity.z as f32)) * (180.0 / f32::consts::PI);
             let body_rot = self.y_body_rot();
             let new_body_rot = body_rot + (target_yaw - body_rot) * 0.1;
             self.set_y_body_rot(new_body_rot);
@@ -291,15 +290,15 @@ impl SquidEntity {
             self.set_rotation((new_body_rot, pitch));
 
             let rotate_speed = *self.rotate_speed.lock();
-            *self.z_body_rot.lock() += std::f32::consts::PI * rotate_speed * 1.5;
+            *self.z_body_rot.lock() += f32::consts::PI * rotate_speed * 1.5;
 
             let target_pitch =
-                -((horizontal as f32).atan2(velocity.y as f32)) * (180.0 / std::f32::consts::PI);
+                -((horizontal as f32).atan2(velocity.y as f32)) * (180.0 / f32::consts::PI);
             let x_body_rot = *self.x_body_rot.lock();
             *self.x_body_rot.lock() = x_body_rot + (target_pitch - x_body_rot) * 0.1;
         } else {
             *self.tentacle_angle.lock() =
-                self.tentacle_movement.lock().sin().abs() * std::f32::consts::PI * 0.25;
+                self.tentacle_movement.lock().sin().abs() * f32::consts::PI * 0.25;
 
             let velocity = self.velocity();
             let mut yd = velocity.y;
@@ -594,6 +593,12 @@ impl LivingEntity for SquidEntity {
         Mob::mob_server_ai_step(self, entity);
     }
 
+    /// Vanilla `AgeableWaterCreature.getBaseExperienceReward`: `1 + random.nextInt(3)`,
+    /// with no equipment bonus.
+    fn base_experience_reward(&self) -> i32 {
+        1 + rand::random_range(0..3)
+    }
+
     fn ai_step(&self, entity: &SharedEntity) -> Option<MoveResult> {
         self.mob_ai_step(entity)
     }
@@ -606,6 +611,12 @@ impl Mob for SquidEntity {
 
     fn tick_goal_selectors(&self, entity: &SharedEntity) {
         PathfinderMob::tick_pathfinder_goal_selectors(self, entity);
+    }
+
+    /// Vanilla `AgeableWaterCreature.checkSpawnObstruction`: `level.isUnobstructed(this)`
+    /// only tests other blocking entities, unlike `Mob`'s liquid-inclusive default.
+    fn check_spawn_obstruction(&self, world: &Arc<World>) -> bool {
+        check_water_animal_spawn_obstruction(world, self)
     }
 
     fn tick_path_navigation(&self) {

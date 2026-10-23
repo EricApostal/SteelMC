@@ -10,6 +10,7 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::mem;
 use std::sync::Arc;
 
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
@@ -160,7 +161,7 @@ impl AngerManagement {
             true
         });
 
-        let suspects = std::mem::take(&mut self.suspects);
+        let suspects = mem::take(&mut self.suspects);
         for suspect in suspects {
             let Some(anger) = self.anger_by_suspect.get(&suspect.uuid).copied() else {
                 continue;
@@ -196,7 +197,7 @@ impl AngerManagement {
     /// Vanilla `AngerManagement.convertFromUuids`: resolve saved suspects that
     /// are loaded again.
     fn convert_from_uuids(&mut self, world: &World) {
-        for (uuid, anger) in std::mem::take(&mut self.anger_by_uuid) {
+        for (uuid, anger) in mem::take(&mut self.anger_by_uuid) {
             let Some(entity) = world.get_entity_by_uuid(&uuid) else {
                 self.anger_by_uuid.push((uuid, anger));
                 continue;

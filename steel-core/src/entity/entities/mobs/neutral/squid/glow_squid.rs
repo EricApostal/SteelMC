@@ -18,6 +18,7 @@ use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
 use crate::entity::ai::path::PathType;
 use crate::entity::damage::DamageSource;
+use crate::entity::entities::mobs::water::abstract_fish::check_water_animal_spawn_obstruction;
 use crate::entity::{
     AgeableMob, AgeableMobBase, Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason,
     EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity,
@@ -26,7 +27,6 @@ use crate::physics::MoveResult;
 use crate::world::{LevelReader, World};
 
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
-const XP_REWARD: i32 = 1;
 /// Vanilla `GlowSquid` hurt response (`setDarkTicks(100)`).
 const HURT_DARK_TICKS: i32 = 100;
 
@@ -68,7 +68,6 @@ impl GlowSquidEntity {
     fn new_with_base(base: EntityBase, entity_type: EntityTypeRef) -> Self {
         let living_base = LivingEntityBase::new(entity_type);
         let mob_base = MobBase::new();
-        mob_base.set_xp_reward(XP_REWARD);
         let ageable_base = AgeableMobBase::new();
         // Vanilla `AgeableWaterCreature`: `setPathfindingMalus(WATER, 0.0F)`.
         mob_base
@@ -302,6 +301,12 @@ impl LivingEntity for GlowSquidEntity {
         Mob::mob_server_ai_step(self, entity);
     }
 
+    /// Vanilla `AgeableWaterCreature.getBaseExperienceReward`: `1 + random.nextInt(3)`,
+    /// with no equipment bonus.
+    fn base_experience_reward(&self) -> i32 {
+        1 + rand::random_range(0..3)
+    }
+
     fn ai_step(&self, entity: &SharedEntity) -> Option<MoveResult> {
         self.mob_ai_step(entity)
     }
@@ -314,6 +319,12 @@ impl Mob for GlowSquidEntity {
 
     fn tick_goal_selectors(&self, entity: &SharedEntity) {
         PathfinderMob::tick_pathfinder_goal_selectors(self, entity);
+    }
+
+    /// Vanilla `AgeableWaterCreature.checkSpawnObstruction`: `level.isUnobstructed(this)`
+    /// only tests other blocking entities, unlike `Mob`'s liquid-inclusive default.
+    fn check_spawn_obstruction(&self, world: &Arc<World>) -> bool {
+        check_water_animal_spawn_obstruction(world, self)
     }
 
     fn tick_path_navigation(&self) {

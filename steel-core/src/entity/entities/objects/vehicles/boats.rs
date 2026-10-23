@@ -86,13 +86,14 @@ use crate::physics::MoverType;
 use crate::physics::collision::{WorldCollisionProvider, has_block_collision};
 use crate::physics::shapes::join_is_not_empty;
 use crate::player::Player;
+use crate::portal::portal_shape::PortalShape;
 use crate::world::World;
 
 /// Ticks a boat may stay submerged before its passengers are ejected.
 const TIME_TO_EJECT: f32 = 60.0;
 
 /// Paddle animation advance per tick, vanilla `PADDLE_SPEED`.
-const PADDLE_SPEED: f32 = std::f32::consts::PI / 8.0;
+const PADDLE_SPEED: f32 = f32::consts::PI / 8.0;
 
 /// Bubble-column wobble duration in ticks, vanilla `BUBBLE_TIME`.
 const BUBBLE_TIME: i32 = 60;
@@ -425,7 +426,7 @@ trait AbstractBoat: Entity + Leashable {
             acceleration -= 0.005;
         }
 
-        let yaw = f64::from(self.rotation().0) * std::f64::consts::PI / 180.0;
+        let yaw = f64::from(self.rotation().0) * f64::consts::PI / 180.0;
         let velocity = self.velocity();
         self.set_velocity(
             velocity
@@ -809,8 +810,8 @@ trait AbstractBoat: Entity + Leashable {
                 (previous, next)
             };
 
-            let full_turn = std::f32::consts::TAU;
-            let quarter = std::f32::consts::FRAC_PI_4;
+            let full_turn = f32::consts::TAU;
+            let quarter = f32::consts::FRAC_PI_4;
             if previous % full_turn <= quarter
                 && next % full_turn >= quarter
                 && let Some(sound) = self.paddle_sound()
@@ -920,7 +921,7 @@ trait AbstractBoat: Entity + Leashable {
             }
         }
 
-        let angle = -f64::from(self.rotation().0) * std::f64::consts::PI / 180.0;
+        let angle = -f64::from(self.rotation().0) * f64::consts::PI / 180.0;
         DVec3::new(
             offset * angle.sin(),
             self.ride_height(dimensions),
@@ -1150,7 +1151,7 @@ macro_rules! impl_boat_entity {
                 portal_area: steel_utils::block_util::FoundRectangle,
             ) -> DVec3 {
                 reset_forward_direction_of_relative_portal_position(
-                    crate::portal::portal_shape::PortalShape::get_relative_position(
+                    PortalShape::get_relative_position(
                         portal_area,
                         axis,
                         self.position(),

@@ -80,7 +80,7 @@ impl NoiseSettingsKey {
 
     /// The `noise_settings` registry identifier for this key.
     #[must_use]
-    pub fn identifier(self) -> Identifier {
+    pub const fn identifier(self) -> Identifier {
         Identifier::vanilla_static(self.path())
     }
 

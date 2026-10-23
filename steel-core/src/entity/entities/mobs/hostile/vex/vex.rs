@@ -7,6 +7,7 @@
 //! goals writing a wanted position onto the entity and [`VexEntity::ai_step`]
 //! applying the same delta-movement integration each tick.
 
+use std::iter::empty;
 use std::sync::Weak;
 
 use glam::DVec3;
@@ -30,9 +31,11 @@ use crate::entity::ai::goal::{
 };
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::mobs::illager::RaiderKeys;
+use crate::entity::entities::mobs::spawn_equipment::populate_default_equipment_enchantments;
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySyncedData, LivingEntity,
-    LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, SharedEntity,
+    Entity, EntityBase, EntityBaseLoad, EntityPose, EntityReference, EntitySpawnReason,
+    EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase, Monster, PathfinderMob,
+    SharedEntity, SpawnGroupData,
 };
 use crate::physics::MoveResult;
 use crate::world::World;
@@ -60,7 +63,7 @@ pub struct VexEntity {
     mob_base: MobBase,
     entity_data: SyncMutex<VexEntityData>,
     /// Vanilla `Vex.owner`: the summoning evoker, persisted as an entity reference.
-    owner: SyncMutex<Option<crate::entity::EntityReference>>,
+    owner: SyncMutex<Option<EntityReference>>,
     /// Vanilla `Vex.boundOrigin`.
     bound_origin: SyncMutex<Option<BlockPos>>,
     /// Vanilla `Vex.hasLimitedLife`.
@@ -118,7 +121,7 @@ impl VexEntity {
                 1,
                 HurtByTargetGoal::new()
                     .with_ignored_damage_types(RaiderKeys::ALL)
-                    .set_alert_others(std::iter::empty()),
+                    .set_alert_others(empty()),
             );
             targets.add_goal(2, VexCopyOwnerTargetGoal::new());
             targets.add_goal(
@@ -152,7 +155,7 @@ impl VexEntity {
 
     /// Vanilla `Vex.setOwner`.
     pub fn set_owner(&self, owner: Option<&SharedEntity>) {
-        *self.owner.lock() = owner.map(crate::entity::EntityReference::from_entity);
+        *self.owner.lock() = owner.map(EntityReference::from_entity);
     }
 
     /// Resolves vanilla `Vex.getOwner`.
@@ -350,7 +353,7 @@ impl Entity for VexEntity {
         } else {
             *self.has_limited_life.lock() = false;
         }
-        *self.owner.lock() = crate::entity::EntityReference::read(&nbt, "owner");
+        *self.owner.lock() = EntityReference::read(&nbt, "owner");
     }
 }
 
@@ -438,10 +441,10 @@ impl Mob for VexEntity {
     /// before `Mob`'s follow-range bonus.
     fn finalize_spawn(
         &self,
-        world: &Arc<crate::world::World>,
-        spawn_reason: crate::entity::EntitySpawnReason,
-        group_data: Option<crate::entity::SpawnGroupData>,
-    ) -> Option<crate::entity::SpawnGroupData> {
+        world: &Arc<World>,
+        spawn_reason: EntitySpawnReason,
+        group_data: Option<SpawnGroupData>,
+    ) -> Option<SpawnGroupData> {
         let mut random = LegacyRandom::from_seed(rand::random());
         let difficulty_modifier = world
             .current_difficulty_at(self.block_position())
@@ -451,11 +454,7 @@ impl Mob for VexEntity {
             ItemStack::new(&vanilla_items::IRON_SWORD),
         );
         self.set_equipment_drop_chance(EquipmentSlot::MainHand, 0.0);
-        crate::entity::entities::mobs::spawn_equipment::populate_default_equipment_enchantments(
-            self,
-            &mut random,
-            difficulty_modifier,
-        );
+        populate_default_equipment_enchantments(self, &mut random, difficulty_modifier);
         self.finalize_spawn_mob_base(world, spawn_reason, group_data)
     }
 }
@@ -578,7 +577,7 @@ impl Goal for VexCopyOwnerTargetGoal {
         };
         if !target
             .as_living_entity()
-            .is_some_and(|target| crate::entity::Mob::can_attack(mob, target))
+            .is_some_and(|target| Mob::can_attack(mob, target))
         {
             return false;
         }

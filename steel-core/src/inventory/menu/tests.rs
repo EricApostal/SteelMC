@@ -289,8 +289,7 @@ fn plain_menu(container: Shared<SimpleContainer>) -> Menu {
 fn click_player(key: &'static str) -> (TestWorld, Arc<Player>) {
     init_vanilla_registry();
     let world_fixture = fresh_test_world(key);
-    let player =
-        TestPlayerBuilder::new(Arc::clone(&world_fixture.world), "ClickTester", 1).build();
+    let player = TestPlayerBuilder::new(Arc::clone(&world_fixture.world), "ClickTester", 1).build();
     (world_fixture, player)
 }
 
@@ -364,13 +363,7 @@ fn double_click_collects_matching_stacks_in_both_directions() {
 
         // The double-clicked slot itself is empty, so collection runs over the
         // whole menu in the requested direction.
-        menu.clicked(
-            Click::PickupAll {
-                slot: 2,
-                direction,
-            },
-            &player,
-        );
+        menu.clicked(Click::PickupAll { slot: 2, direction }, &player);
 
         assert_eq!(menu.behavior().carried().count(), 6);
         let guard = container.lock();

@@ -1,5 +1,6 @@
 //! Vanilla `CaveSpider` (`net.minecraft.world.entity.monster.spider.CaveSpider`).
 
+use std::ptr;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -251,7 +252,7 @@ impl LivingEntity for CaveSpiderEntity {
 
     /// Vanilla `Spider.canBeAffected` rejects poison; inherited unchanged.
     fn can_be_affected(&self, effect: &MobEffectInstance) -> bool {
-        if std::ptr::eq(effect.effect(), &*vanilla_mob_effects::POISON) {
+        if ptr::eq(effect.effect(), &*vanilla_mob_effects::POISON) {
             return false;
         }
         LivingEntity::default_can_be_affected(self, effect)

@@ -7,6 +7,7 @@
 //! once per tick, so the methods need no world handle.
 
 use std::collections::BTreeMap;
+use std::mem;
 use std::sync::Arc;
 
 use steel_protocol::packets::game::{BossBarColor, BossBarOverlay, BossEventOperation, CBossEvent};
@@ -394,7 +395,7 @@ impl ServerBossEvent {
     /// Vanilla `ServerBossEvent` sends from inside its setters; Steel records the same operations
     /// and hands them to the owner-provided per-tick drain so the bar needs no world handle.
     pub fn broadcast_pending(&mut self) {
-        let pending = std::mem::take(&mut self.pending);
+        let pending = mem::take(&mut self.pending);
         for PendingBossPacket { packet, receiver } in pending {
             match receiver {
                 Some(player) => player.send_packet(packet),
@@ -413,7 +414,7 @@ impl ServerBossEvent {
     /// `addPlayer`/`removePlayer` transitions and is only for callers that send the operations
     /// themselves.
     pub fn drain_packets(&mut self) -> Vec<CBossEvent> {
-        std::mem::take(&mut self.pending)
+        mem::take(&mut self.pending)
             .into_iter()
             .map(|pending| pending.packet)
             .collect()

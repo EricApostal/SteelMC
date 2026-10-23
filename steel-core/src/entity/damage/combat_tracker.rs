@@ -384,7 +384,7 @@ impl CombatTracker {
 
     /// The recorded damage entries, oldest first.
     #[must_use]
-    pub const fn entries(&self) -> &[CombatEntry] {
+    pub fn entries(&self) -> &[CombatEntry] {
         &self.entries
     }
 

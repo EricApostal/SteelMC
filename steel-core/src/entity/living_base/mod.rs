@@ -28,6 +28,7 @@ use steel_utils::{BlockPos, Identifier};
 use uuid::Uuid;
 
 use crate::behavior::MOB_EFFECT_BEHAVIORS;
+use crate::enchantment_helper;
 use crate::entity::attribute::{AttributeMap, AttributeModifier, AttributeModifierOperation};
 use crate::entity::damage::CombatTracker;
 use crate::entity::{LivingEntity, SharedEntity, WeakEntity};
@@ -1024,7 +1025,7 @@ impl LivingEntityBase {
         // Vanilla `LivingEntity.detectEquipmentUpdates` runs `ItemStack.forEachModifier`
         // (item component modifiers) and then the enchantment `minecraft:attributes`
         // effects through the same transient attribute list.
-        crate::enchantment_helper::for_each_enchantment_attribute_modifier(
+        enchantment_helper::for_each_enchantment_attribute_modifier(
             item_stack,
             slot,
             |attribute, modifier| {

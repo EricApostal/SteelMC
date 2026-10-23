@@ -7,6 +7,7 @@
 //! Subclasses only add their own effects (`do_post_hurt_effects`), sounds and
 //! pickup items.
 
+use std::ptr;
 use std::str::FromStr;
 use std::sync::{Arc, Weak};
 
@@ -37,12 +38,12 @@ use crate::entity::entities::ArrowEntity;
 use crate::entity::projectile::triangle_random;
 use crate::entity::{
     Entity, EntityEventSource as _, EntityReference, LivingEntity, Projectile,
-    ProjectileDeflection, ProjectileHit, RemovalReason, SharedEntity,
+    ProjectileDeflection, ProjectileHit, RemovalReason, SharedEntity, next_entity_id,
 };
 use crate::inventory::container::Container as _;
 use crate::physics::{WorldCollisionProvider, has_block_collision};
 use crate::player::Player;
-use crate::world::World;
+use crate::world::{ClipHitResult, World};
 
 /// Vanilla `AbstractArrow.ARROW_BASE_DAMAGE`.
 pub const ARROW_BASE_DAMAGE: f64 = 2.0;
@@ -739,7 +740,7 @@ pub trait AbstractArrow: Projectile + Sized {
                 if let Some(victim_player) = entity.as_player()
                     && let Some(owner_player) = owner.as_ref().and_then(|owner| owner.as_player())
                     && !self.is_silent()
-                    && !std::ptr::eq(victim_player, owner_player)
+                    && !ptr::eq(victim_player, owner_player)
                 {
                     owner_player.send_packet(CGameEvent {
                         event: GameEventType::PlayArrowHitSound,
@@ -807,7 +808,7 @@ pub trait AbstractArrow: Projectile + Sized {
     }
 
     /// Vanilla `AbstractArrow.onHitBlock`.
-    fn abstract_arrow_on_hit_block(self: Arc<Self>, hit: &crate::world::ClipHitResult) {
+    fn abstract_arrow_on_hit_block(self: Arc<Self>, hit: &ClipHitResult) {
         let Some(world) = self.level() else {
             return;
         };
@@ -1011,7 +1012,7 @@ pub fn get_mob_arrow(
         );
         return ArrowEntity::new(
             &vanilla_entities::ARROW,
-            crate::entity::next_entity_id(),
+            next_entity_id(),
             mob.position(),
             Weak::<World>::new(),
         );
@@ -1027,7 +1028,7 @@ pub fn get_mob_arrow(
     let position = mob.position();
     let arrow = ArrowEntity::new(
         &vanilla_entities::ARROW,
-        crate::entity::next_entity_id(),
+        next_entity_id(),
         DVec3::new(position.x, mob.get_eye_y() - 0.1, position.z),
         Arc::downgrade(&world),
     );

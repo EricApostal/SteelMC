@@ -15,12 +15,14 @@ use rustc_hash::FxHashMap;
 use serde_json::Value;
 use steel_protocol::packets::game::{
     CChangeDifficulty, CGameRuleValues, CSetHeldSlot, CSetPlayerInventory, CTagQuery,
-    RelativeMovement, SBlockEntityTagQuery, SBundleItemSelected, SDebugSubscriptionRequest,
-    SEditBook, SEntityTagQuery, SJigsawGenerate, SLockDifficulty, SPaddleBoat, SPickItemFromEntity,
-    SSetCommandBlock, SSetCommandMinecart, SSetGameRule, SSetJigsawBlock, SSetStructureBlock,
-    SSetTestBlock, STeleportToEntity, STestInstanceBlockAction,
+    CTestInstanceBlockStatus, RelativeMovement, SBlockEntityTagQuery, SBundleItemSelected,
+    SDebugSubscriptionRequest, SEditBook, SEntityTagQuery, SJigsawGenerate, SLockDifficulty,
+    SPaddleBoat, SPickItemFromEntity, SSetCommandBlock, SSetCommandMinecart, SSetGameRule,
+    SSetJigsawBlock, SSetStructureBlock, SSetTestBlock, STeleportToEntity,
+    STestInstanceBlockAction,
 };
 use steel_registry::REGISTRY;
+use steel_registry::RegistryExt as _;
 use steel_registry::data_components::components::{
     Filterable, WritableBookContent, WrittenBookContent,
 };
@@ -536,6 +538,7 @@ impl Player {
     /// Vanilla requires the gamemaster-block permission, writes every editor field onto the jigsaw
     /// block entity and resends the block.
     pub fn handle_set_jigsaw_block(&self, packet: SSetJigsawBlock) {
+        use steel_registry::structure::template_pool::JointType;
         use steel_utils::types::UpdateFlags;
 
         use crate::block_entity::entities::JigsawBlockEntity;
@@ -556,7 +559,11 @@ impl Player {
         jigsaw.set_target(&packet.target.to_string());
         jigsaw.set_pool(&packet.pool.to_string());
         jigsaw.set_final_state(&packet.final_state);
-        jigsaw.set_joint(&packet.joint.to_string());
+        // Vanilla `JigsawBlockEntity.JointType.CODEC` names.
+        jigsaw.set_joint(match packet.joint {
+            JointType::Rollable => "rollable",
+            JointType::Aligned => "aligned",
+        });
         jigsaw.set_placement_priority(packet.placement_priority);
         jigsaw.set_selection_priority(packet.selection_priority);
 
@@ -934,19 +941,30 @@ fn entity_pick_result(entity: &SharedEntity) -> Option<ItemStack> {
 /// Builds the `commands.fetchprofile.entity.success` body vanilla's
 /// `FetchProfileCommand.printForAvatar` sends when pick-block runs with data on an avatar.
 ///
-/// Vanilla prints the profile NBT plus a copy-text affordance; Steel has no
-/// mannequin-profile-serializing path behind this packet yet, so the body echoes the resolved
-/// profile name and id (reported gap below) using the same message id.
+/// Vanilla prints the resolved profile's NBT plus a copy-text affordance. Steel has no
+/// profile-NBT serialization for this message yet, so the body carries the resolved name and id
+/// under the same message id (reported gap).
 fn fetch_profile_body(entity: &SharedEntity) -> TextComponent {
+    use steel_registry::resolvable_profile::ResolvableProfileContents;
+
     let Some(mannequin) = entity.downcast_ref::<MannequinEntity>() else {
-        return translations::COMMANDS_FETCHPROFILE_NO_PROFILE.msg();
+        return TextComponent::translated(translations::COMMANDS_FETCHPROFILE_NO_PROFILE.msg());
     };
-    let profile = mannequin.profile();
+
+    let (name, id) = match mannequin.profile().contents() {
+        ResolvableProfileContents::StaticFull(profile) => {
+            (profile.name().to_owned(), profile.id().to_string())
+        }
+        ResolvableProfileContents::StaticPartial(profile) => (
+            profile.name().unwrap_or_default().to_owned(),
+            profile.id().map(|id| id.to_string()).unwrap_or_default(),
+        ),
+        ResolvableProfileContents::DynamicName(name) => (name.clone(), String::new()),
+        ResolvableProfileContents::DynamicId(id) => (String::new(), id.to_string()),
+    };
+
     translations::COMMANDS_FETCHPROFILE_ENTITY_SUCCESS
-        .message([
-            TextComponent::from(profile.name().to_owned()),
-            TextComponent::from(format!("{:?}", profile.id())),
-        ])
+        .message([TextComponent::plain(name), TextComponent::plain(id)])
         .component()
 }
 
@@ -985,52 +1003,65 @@ fn cushion_item_for(color: steel_registry::DyeColor) -> Option<ItemRef> {
 
 /// Builds the description text vanilla's `GameTestInstance.describe` sends for a query.
 ///
-/// Vanilla renders one `test_instance.description.*` row per field with the value in blue; the
-/// registry entry supplies the type, structure, batch and dimension.
+/// Vanilla renders one `test_instance.description.*` row per field with the value in blue and a
+/// trailing newline; the registry entry supplies the type, structure, batch and dimension.
 fn describe_test_instance(test: &Identifier) -> TextComponent {
     use steel_registry::REGISTRY;
     use steel_registry::test_instance::TestInstance;
 
     let Some(entry) = REGISTRY.test_instances.by_key(test) else {
-        return translations::TEST_INSTANCE_DESCRIPTION_NO_TEST.msg();
+        return TextComponent::translated(translations::TEST_INSTANCE_DESCRIPTION_NO_TEST.msg())
+            .color(text_components::format::Color::Red);
     };
 
-    let (type_row, function_row) = match &entry.instance {
+    let (type_component, function_row, info) = match &entry.instance {
         TestInstance::Function(function) => (
-            translations::TEST_INSTANCE_TYPE_FUNCTION.msg(),
-            Some(
-                translations::TEST_INSTANCE_DESCRIPTION_FUNCTION
-                    .message([TextComponent::from(function.function.to_string())])
-                    .component(),
-            ),
+            TextComponent::translated(translations::TEST_INSTANCE_TYPE_FUNCTION.msg()),
+            Some(description_row(
+                translations::TEST_INSTANCE_DESCRIPTION_FUNCTION,
+                TextComponent::plain(function.function.to_string()),
+            )),
+            &function.info,
         ),
-        TestInstance::BlockBased(_) => (translations::TEST_INSTANCE_TYPE_BLOCK_BASED.msg(), None),
-    };
-    let info = match &entry.instance {
-        TestInstance::Function(function) => &function.info,
-        TestInstance::BlockBased(block) => &block.info,
+        TestInstance::BlockBased(block) => (
+            TextComponent::translated(translations::TEST_INSTANCE_TYPE_BLOCK_BASED.msg()),
+            None,
+            &block.info,
+        ),
     };
 
-    let mut description = type_row;
+    let mut description =
+        description_row(translations::TEST_INSTANCE_DESCRIPTION_TYPE, type_component);
     if let Some(function_row) = function_row {
-        description = description.append(function_row);
+        description.children.push(function_row);
     }
+    description.children.extend([
+        description_row(
+            translations::TEST_INSTANCE_DESCRIPTION_STRUCTURE,
+            TextComponent::plain(info.structure.to_string()),
+        ),
+        description_row(
+            translations::TEST_INSTANCE_DESCRIPTION_BATCH,
+            TextComponent::plain(info.environment.to_string()),
+        ),
+        description_row(
+            translations::TEST_INSTANCE_DESCRIPTION_DIMENSION,
+            TextComponent::plain(info.dimension.to_string()),
+        ),
+    ]);
     description
-        .append(
-            translations::TEST_INSTANCE_DESCRIPTION_STRUCTURE
-                .message([TextComponent::from(info.structure.to_string())])
-                .component(),
-        )
-        .append(
-            translations::TEST_INSTANCE_DESCRIPTION_BATCH
-                .message([TextComponent::from(info.environment.to_string())])
-                .component(),
-        )
-        .append(
-            translations::TEST_INSTANCE_DESCRIPTION_DIMENSION
-                .message([TextComponent::from(info.dimension.to_string())])
-                .component(),
-        )
+}
+
+/// Vanilla `GameTestInstance.descriptionRow`: the translation with the blue value and a newline.
+fn description_row(
+    key: text_components::translation::Translation<1>,
+    value: TextComponent,
+) -> TextComponent {
+    let mut row = key
+        .message([value.color(text_components::format::Color::Blue)])
+        .component();
+    row.children.push(TextComponent::plain("\n"));
+    row
 }
 
 /// Formats a game rule's name the way vanilla's `commands.gamerule.set` message does.

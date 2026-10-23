@@ -7,11 +7,11 @@ use steel_registry::vanilla_block_tags::BlockTag;
 use steel_utils::BlockPos;
 
 use super::utils;
-use crate::entity::LivingEntity;
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::ai::brain::memory::{MemoryModuleTypeRef, MemoryStatus};
 use crate::entity::ai::brain::tracker::BlockPosTracker;
+use crate::entity::{LivingEntity, SharedEntity};
 
 /// Vanilla `JumpOnBed.MAX_TIME_TO_REACH_BED`.
 const MAX_TIME_TO_REACH_BED: i32 = 100;
@@ -63,18 +63,18 @@ impl JumpOnBed {
     }
 
     /// Vanilla `JumpOnBed.nearBed`.
-    fn near_bed(ctx: &BehaviorContext<'_>, body: &crate::entity::SharedEntity) -> bool {
+    fn near_bed(ctx: &BehaviorContext<'_>, body: &SharedEntity) -> bool {
         Self::on_or_over_bed(ctx, body) || ctx.has_memory_value(&mem::NEAREST_BED)
     }
 
     /// Vanilla `JumpOnBed.onOrOverBed`.
-    fn on_or_over_bed(ctx: &BehaviorContext<'_>, body: &crate::entity::SharedEntity) -> bool {
+    fn on_or_over_bed(ctx: &BehaviorContext<'_>, body: &SharedEntity) -> bool {
         let pos = body.block_position();
         Self::is_jumpable(ctx, pos) || Self::is_jumpable(ctx, pos.below())
     }
 
     /// Vanilla `JumpOnBed.onBedSurface`.
-    fn on_bed_surface(ctx: &BehaviorContext<'_>, body: &crate::entity::SharedEntity) -> bool {
+    fn on_bed_surface(ctx: &BehaviorContext<'_>, body: &SharedEntity) -> bool {
         Self::is_jumpable(ctx, body.block_position())
     }
 

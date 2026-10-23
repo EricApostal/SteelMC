@@ -13,9 +13,10 @@ use crate::behavior::{
 };
 use crate::entity::Entity;
 use crate::fluid::FluidStateExt;
-use crate::world::{RandomizationType, RaytraceAction};
+use crate::world::RaytraceAction;
 use glam::DVec3;
 use steel_macros::item_behavior;
+use steel_protocol::packets::game::RandomizationType;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::Direction;

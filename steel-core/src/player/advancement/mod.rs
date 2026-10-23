@@ -211,8 +211,8 @@ impl PlayerAdvancement {
                 player.send_packet(CUpdateAdvancements::new(
                     self.is_first_packet,
                     added,
-                    parsed_progress,
                     removed,
+                    parsed_progress,
                     show_advancement,
                 ));
             }

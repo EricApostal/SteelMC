@@ -250,6 +250,7 @@ impl BundleContents {
         }
         Self {
             items: builder.items,
+            selected_item: -1,
         }
     }
 
@@ -271,7 +272,7 @@ struct BundleBuilder {
 
 impl BundleBuilder {
     /// Vanilla `BundleContents.Mutable.tryInsert`; returns the inserted count.
-    fn try_insert(&mut self, mut stack: ItemStack) -> i32 {
+    fn try_insert(&mut self, stack: ItemStack) -> i32 {
         if stack.is_empty() {
             return 0;
         }

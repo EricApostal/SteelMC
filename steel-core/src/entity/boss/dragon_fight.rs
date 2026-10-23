@@ -35,6 +35,7 @@ use steel_protocol::packets::game::{BossBarColor, BossBarOverlay, CBossEvent};
 use super::event::ServerBossEvent;
 use crate::chunk::heightmap::HeightmapType;
 use crate::entity::entities::EndCrystalEntity;
+use crate::entity::spawn::create_entity_instance;
 use crate::entity::{Entity, RemovalReason, SharedEntity};
 use crate::world::World;
 use crate::world::explosion::ExplosionInteraction;
@@ -512,12 +513,7 @@ impl EnderDragonFight {
     /// Vanilla `EnderDragonFight.createNewDragon`.
     fn create_new_dragon(&mut self, world: &Arc<World>) -> Option<SharedEntity> {
         let spawn = self.pool_center();
-        let dragon = crate::entity::spawn::create_entity_instance(
-            world,
-            &vanilla_entities::ENDER_DRAGON,
-            spawn,
-        )
-        .ok()?;
+        let dragon = create_entity_instance(world, &vanilla_entities::ENDER_DRAGON, spawn).ok()?;
         // Vanilla `dragon.setDragonFight(this)` + `dragon.setFightOrigin(origin)`.
         Self::bind_dragon(&dragon, self.origin);
         dragon.snap_to(spawn, rand::random::<f32>() * 360.0, 0.0);
@@ -817,7 +813,7 @@ impl EnderDragonFight {
             self.set_dirty();
             return;
         };
-        let angle = -std::f64::consts::PI + std::f64::consts::PI / 20.0 * f64::from(gateway);
+        let angle = -f64::consts::PI + f64::consts::PI / 20.0 * f64::from(gateway);
         let x = (GATEWAY_DISTANCE * angle.cos()).floor() as i32 + self.origin.x();
         let z = (GATEWAY_DISTANCE * angle.sin()).floor() as i32 + self.origin.z();
         let pos = BlockPos::new(x, 75, z);
@@ -955,7 +951,7 @@ struct EndSpike {
 fn end_spikes_for_seed(seed: i64) -> Vec<EndSpike> {
     const COUNT: usize = 10;
     const DISTANCE: f64 = 42.0;
-    const ANGLE_STEP: f64 = std::f64::consts::PI / 10.0;
+    const ANGLE_STEP: f64 = f64::consts::PI / 10.0;
     let mut seed_random = LegacyRandom::from_seed(seed as u64);
     let cache_key = seed_random.next_i64() & 65_535;
     let mut random = LegacyRandom::from_seed(cache_key as u64);
@@ -971,7 +967,7 @@ fn end_spikes_for_seed(seed: i64) -> Vec<EndSpike> {
         .iter()
         .enumerate()
         .map(|(index, size)| {
-            let angle = 2.0 * (-std::f64::consts::PI + ANGLE_STEP * index as f64);
+            let angle = 2.0 * (-f64::consts::PI + ANGLE_STEP * index as f64);
             EndSpike {
                 center_x: (DISTANCE * angle.cos()).floor() as i32,
                 center_z: (DISTANCE * angle.sin()).floor() as i32,

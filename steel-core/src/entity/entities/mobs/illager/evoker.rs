@@ -12,6 +12,7 @@
 //! - the summoned vex is not added to the evoker's scoreboard team: Steel's scoreboard teams
 //!   are owned by the scoreboard lane and the evoker has no team accessor yet.
 
+use std::iter;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -40,10 +41,11 @@ use crate::entity::entities::mobs::passive::SheepEntity;
 use crate::entity::entities::objects::projectiles::EvokerFangsEntity;
 use crate::entity::raid::RaidSnapshot;
 use crate::entity::raid::raider::{Raider, RaiderBase};
-use crate::entity::spawn::add_spawned_entity;
+use crate::entity::spawn::{add_spawned_entity, create_entity_instance};
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
-    LivingEntity, LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity, next_entity_id,
+    ENTITIES, Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
+    LivingEntity, LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, SharedEntity,
+    next_entity_id,
 };
 use crate::physics::MoveResult;
 use crate::world::LevelReader;
@@ -144,7 +146,7 @@ impl EvokerEntity {
                 }),
             );
             // Vanilla goal 3 avoids `Creaking`; Steel has no creaking factory yet.
-            if crate::entity::ENTITIES.has_factory(&vanilla_entities::CREAKING) {
+            if ENTITIES.has_factory(&vanilla_entities::CREAKING) {
                 goals.add_goal(
                     3,
                     AvoidEntityGoal::with_selector(8.0, 0.6, 1.0, |target, _| {
@@ -170,7 +172,7 @@ impl EvokerEntity {
                 1,
                 HurtByTargetGoal::new()
                     .with_ignored_damage_types(RaiderKeys::ALL)
-                    .set_alert_others(std::iter::empty()),
+                    .set_alert_others(iter::empty()),
             );
             targets.add_goal(
                 2,
@@ -383,7 +385,7 @@ impl LivingEntity for EvokerEntity {
 
     fn ai_step(&self, entity: &SharedEntity) -> Option<MoveResult> {
         Raider::raider_ai_step(self, entity);
-        crate::entity::Monster::monster_ai_step(self, entity)
+        Monster::monster_ai_step(self, entity)
     }
 
     fn on_death(&self, source: &DamageSource) {
@@ -430,7 +432,7 @@ impl Mob for EvokerEntity {
     }
 }
 
-impl crate::entity::Monster for EvokerEntity {}
+impl Monster for EvokerEntity {}
 
 impl PathfinderMob for EvokerEntity {}
 
@@ -504,7 +506,7 @@ impl SpellcasterSpell for EvokerAttackSpell {
 
         if mob.distance_to_sqr(target_pos) < FANGS_ARC_DISTANCE_SQR {
             for i in 0..5 {
-                let fang_angle = angle + i as f32 * std::f32::consts::PI * 0.4;
+                let fang_angle = angle + i as f32 * f32::consts::PI * 0.4;
                 create_fang(
                     &world,
                     origin.x + f64::from(fang_angle.cos()) * 1.5,
@@ -518,9 +520,8 @@ impl SpellcasterSpell for EvokerAttackSpell {
             }
 
             for i in 0..8 {
-                let fang_angle = angle
-                    + i as f32 * std::f32::consts::PI * 2.0 / 8.0
-                    + (std::f32::consts::PI * 2.0 / 5.0);
+                let fang_angle =
+                    angle + i as f32 * f32::consts::PI * 2.0 / 8.0 + (f32::consts::PI * 2.0 / 5.0);
                 create_fang(
                     &world,
                     origin.x + f64::from(fang_angle.cos()) * 2.5,
@@ -666,7 +667,7 @@ impl SpellcasterSpell for EvokerSummonSpell {
                 1,
                 -2 + rand::random_range(0..5),
             );
-            let Ok(vex) = crate::entity::spawn::create_entity_instance(
+            let Ok(vex) = create_entity_instance(
                 &world,
                 &vanilla_entities::VEX,
                 DVec3::new(

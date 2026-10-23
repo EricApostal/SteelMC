@@ -359,8 +359,7 @@ impl WitherBossEntity {
 
     /// The shared `WitherBoss.getHeadX`/`getHeadZ` side-head angle, converted to radians.
     fn side_head_angle(&self, index: i32) -> f64 {
-        f64::from(self.y_body_rot() + SIDE_HEAD_ANGLE_STEP * (index - 1) as f32)
-            * std::f64::consts::PI
+        f64::from(self.y_body_rot() + SIDE_HEAD_ANGLE_STEP * (index - 1) as f32) * f64::consts::PI
             / 180.0
     }
 

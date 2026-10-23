@@ -2,6 +2,8 @@
 # Documentation: https://steelmc.dev/configuration/world-configuration/
 
 # Root defaults inherited by domains and worlds unless overridden.
+# `save_path` is Steel's save root (overridable with `--universe`); a domain is
+# Steel's `level-name` equivalent (selectable with `--world`).
 save_path = "saves"
 seed = ""
 default_gamemode = "survival"

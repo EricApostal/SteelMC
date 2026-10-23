@@ -1,5 +1,6 @@
 //! Vanilla `Spider` (`net.minecraft.world.entity.monster.spider.Spider`).
 
+use std::ptr;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -23,9 +24,9 @@ use crate::entity::ai::goal::{
 use crate::entity::damage::DamageSource;
 use crate::entity::mob::LIGHT_MAGIC_VALUE_BRIGHTNESS_GATE;
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
+    ENTITIES, Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
     LivingEntity, LivingEntityBase, Mob, MobBase, MobEffectInstance, Monster, PathfinderMob,
-    SharedEntity, SpawnGroupData,
+    SharedEntity, SpawnGroupData, next_entity_id,
 };
 use crate::physics::MoveResult;
 use crate::world::{LevelReader, World};
@@ -177,9 +178,9 @@ impl SpiderEntity {
         let group_data = self.finalize_spawn_mob_base(world, spawn_reason, group_data);
 
         if rand::random_range(0..SKELETON_JOCKEY_BOUND) == 0
-            && let Some(skeleton) = crate::entity::ENTITIES.create(
+            && let Some(skeleton) = ENTITIES.create(
                 &vanilla_entities::SKELETON,
-                crate::entity::next_entity_id(),
+                next_entity_id(),
                 self.position(),
                 Arc::downgrade(world),
             )
@@ -424,7 +425,7 @@ impl LivingEntity for SpiderEntity {
 
     /// Vanilla `Spider.canBeAffected` rejects poison.
     fn can_be_affected(&self, effect: &MobEffectInstance) -> bool {
-        if std::ptr::eq(effect.effect(), &*vanilla_mob_effects::POISON) {
+        if ptr::eq(effect.effect(), &*vanilla_mob_effects::POISON) {
             return false;
         }
         LivingEntity::default_can_be_affected(self, effect)

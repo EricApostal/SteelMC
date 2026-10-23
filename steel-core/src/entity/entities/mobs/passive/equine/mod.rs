@@ -84,6 +84,7 @@ use steel_utils::{Downcast as _, UuidExt as _};
 
 use crate::behavior::InteractionResult;
 use crate::entity::ai::goal::{Goal, GoalControls, PanicGoal};
+use crate::entity::entities::mobs::passive::camel::CamelEntity;
 use crate::entity::npc::inventory_carrier::InventoryCarrier;
 use crate::entity::{
     AgeableMob, AgeableMobGroupData, Animal, Entity, LivingEntity, PathfinderMob, SharedEntity,
@@ -485,7 +486,7 @@ pub(crate) const MAX_MOVEMENT_SPEED: f64 = 0.3375;
 /// Vanilla `AbstractHorse.setOffspringAttributes`.
 pub(crate) fn set_offspring_attributes(
     parent: &dyn Animal,
-    partner: &dyn crate::entity::AgeableMob,
+    partner: &dyn AgeableMob,
     baby: &dyn Animal,
 ) {
     let ranges = [
@@ -670,6 +671,37 @@ pub(crate) fn open_mount_inventory<E: Animal + ?Sized>(
             generation,
         )
     });
+}
+
+/// Vanilla `HasCustomInventoryScreen.openCustomInventoryScreen` dispatch for the
+/// player-command `OPEN_INVENTORY` action (the inventory key while riding).
+///
+/// Returns `true` when the vehicle has a custom inventory screen, so the caller
+/// knows the command was handled. Vanilla dispatches through the interface;
+/// Steel has no such trait on `Entity`, so the known mount types are matched
+/// here. Chest boats own their own screen and are not part of this module.
+pub(crate) fn open_vehicle_inventory(vehicle: &dyn Entity, player: &Player) -> bool {
+    let Some(mob) = vehicle.as_mob() else {
+        return false;
+    };
+
+    if let Some(horse) = mob.downcast_ref::<HorseEntity>() {
+        horse.open_custom_inventory_screen(player);
+    } else if let Some(donkey) = mob.downcast_ref::<DonkeyEntity>() {
+        donkey.open_custom_inventory_screen(player);
+    } else if let Some(mule) = mob.downcast_ref::<MuleEntity>() {
+        mule.open_custom_inventory_screen(player);
+    } else if let Some(horse) = mob.downcast_ref::<SkeletonHorseEntity>() {
+        horse.open_custom_inventory_screen(player);
+    } else if let Some(horse) = mob.downcast_ref::<ZombieHorseEntity>() {
+        horse.open_custom_inventory_screen(player);
+    } else if let Some(camel) = mob.downcast_ref::<CamelEntity>() {
+        camel.open_custom_inventory_screen(player);
+    } else {
+        return false;
+    }
+
+    true
 }
 
 /// Vanilla `AbstractHorse.mobInteract`.

@@ -37,6 +37,7 @@ use crate::entity::ai::behavior::random_stroll::RandomStroll;
 use crate::entity::ai::behavior::set_walk_target_from_attack_target_if_target_out_of_reach::SetWalkTargetFromAttackTargetIfTargetOutOfReach;
 use crate::entity::ai::behavior::stop_attacking_if_target_invalid::StopAttackingIfTargetInvalid;
 use crate::entity::ai::behavior::swim::Swim;
+use crate::entity::ai::behavior::utils::set_look_target;
 use crate::entity::ai::behavior::warden;
 use crate::entity::ai::brain::SensorType;
 use crate::entity::ai::brain::activity::Activity;
@@ -353,10 +354,7 @@ impl Trigger for SetAttackTargetLookTarget {
             return false;
         }
 
-        crate::entity::ai::behavior::utils::set_look_target(
-            ctx,
-            Arc::new(EntityTracker::new(target, true)),
-        );
+        set_look_target(ctx, Arc::new(EntityTracker::new(target, true)));
         true
     }
 }

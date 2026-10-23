@@ -1,8 +1,8 @@
 //! Vanilla `StopBeingAngryIfTargetDead`: drop anger once the target is gone.
 
-use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
 use crate::entity::ai::brain::memory::module_type as mem;
+use crate::entity::{LivingEntity, SharedEntity};
 use steel_registry::vanilla_entities;
 use steel_registry::vanilla_game_rules::FORGIVE_DEAD_PLAYERS;
 
@@ -41,7 +41,7 @@ impl Trigger for StopBeingAngryIfTargetDead {
 fn is_dead_living(entity: &SharedEntity) -> bool {
     entity
         .as_living_entity()
-        .is_some_and(crate::entity::LivingEntity::is_dead_or_dying)
+        .is_some_and(LivingEntity::is_dead_or_dying)
 }
 
 /// Vanilla `.filter(angerTarget -> !angerTarget.is(EntityTypes.PLAYER) ||

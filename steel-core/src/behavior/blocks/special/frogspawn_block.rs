@@ -17,7 +17,7 @@ use steel_registry::vanilla_entities;
 use steel_utils::{BlockPos, BlockStateId, Direction};
 
 use crate::behavior::{BlockBehavior, BlockPlaceContext};
-use crate::entity::{Entity, Mob, add_spawned_entity, create_entity_instance};
+use crate::entity::{Entity, add_spawned_entity, create_entity_instance};
 use crate::world::{LevelReader, ScheduledTickAccess, World};
 
 /// Vanilla `FrogspawnBlock.MIN_TADPOLES_SPAWN`.

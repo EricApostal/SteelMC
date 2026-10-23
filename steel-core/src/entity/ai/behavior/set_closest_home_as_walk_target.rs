@@ -1,6 +1,7 @@
 //! Vanilla `SetClosestHomeAsWalkTarget`.
 
 use std::cell::{Cell, RefCell};
+use std::mem;
 
 use rustc_hash::FxHashMap;
 use steel_utils::BlockPos;
@@ -78,7 +79,7 @@ impl Trigger for SetClosestHomeAsWalkTarget {
         self.last_update = ctx.level.game_time() + i64::from(rand::random_range(0..RATE as i32));
         let deadline = self.last_update + CACHE_TIMEOUT;
 
-        let mut cache = std::mem::take(&mut self.batch_cache);
+        let mut cache = mem::take(&mut self.batch_cache);
         let pois = {
             let cache_cell = RefCell::new(cache);
             let found = poi::find_all_closest_first_with_type(

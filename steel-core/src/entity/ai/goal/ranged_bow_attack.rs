@@ -8,6 +8,8 @@
 //! `RangedBowAttackGoal` and `RangedCrossbowAttackGoal` as separate goals because the charge
 //! timing, strafing and item-use handling differ.
 
+use std::ptr;
+
 use glam::DVec3;
 use steel_math::wrap_degrees;
 use steel_registry::vanilla_items;
@@ -96,7 +98,7 @@ impl RangedBowAttackGoal {
 
     /// Vanilla `RangedBowAttackGoal.isHoldingBow`.
     fn is_holding_bow(mob: &dyn PathfinderMob) -> bool {
-        mob.is_holding(&mut |stack| std::ptr::eq(stack.item(), &*vanilla_items::BOW))
+        mob.is_holding(&mut |stack| ptr::eq(stack.item(), &*vanilla_items::BOW))
     }
 
     /// Vanilla `ProjectileUtil.getWeaponHoldingHand`: the main hand when it holds the bow,

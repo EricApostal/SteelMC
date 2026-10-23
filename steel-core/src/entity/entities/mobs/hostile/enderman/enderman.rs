@@ -27,6 +27,8 @@ use crate::entity::ai::goal::{
     NearestAttackableTargetGoal, RandomLookAroundGoal, ResetUniversalAngerTargetGoal,
     WaterAvoidingRandomStrollGoal,
 };
+use crate::entity::ai::path::PathType;
+use crate::entity::attribute::{AttributeModifier, AttributeModifierOperation};
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::objects::items::ItemEntity;
 use crate::entity::neutral_mob::{NeutralMob, PersistentAnger};
@@ -110,7 +112,7 @@ impl EndermanEntity {
         mob_base
             .pathfinding_malus()
             .lock()
-            .set(crate::entity::ai::path::PathType::Water, -1.0);
+            .set(PathType::Water, -1.0);
 
         {
             // Vanilla `Enderman.registerGoals`.
@@ -945,10 +947,10 @@ impl Mob for EndermanEntity {
         ) {
             attributes.add_modifier(
                 vanilla_attributes::MOVEMENT_SPEED,
-                crate::entity::attribute::AttributeModifier {
+                AttributeModifier {
                     id: SPEED_MODIFIER_ATTACKING_ID,
                     amount: SPEED_MODIFIER_ATTACKING_AMOUNT,
-                    operation: crate::entity::attribute::AttributeModifierOperation::AddValue,
+                    operation: AttributeModifierOperation::AddValue,
                 },
                 false,
             );

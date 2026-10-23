@@ -81,7 +81,9 @@ mod tests {
     use steel_utils::locks::SyncMutex;
 
     use super::*;
-    use crate::entity::{Entity, EntityBase, LivingEntity, LivingEntityBase, Mob, MobBase};
+    use crate::entity::{
+        Entity, EntityBase, LivingEntity, LivingEntityBase, Mob, MobBase, impl_test_downcast_type,
+    };
 
     struct TestPathfinderMob {
         base: EntityBase,
@@ -109,7 +111,7 @@ mod tests {
         }
     }
 
-    crate::entity::impl_test_downcast_type!(TestPathfinderMob);
+    impl_test_downcast_type!(TestPathfinderMob);
 
     impl Entity for TestPathfinderMob {
         fn base(&self) -> &EntityBase {

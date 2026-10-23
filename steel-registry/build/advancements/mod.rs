@@ -158,7 +158,7 @@ pub(crate) fn build() -> TokenStream {
             TargetHitTriggerInstance, TradeTriggerInstance, UsedEnderEyeTriggerInstance,
         };
         use crate::advancement::registry::AdvancementRegistry;
-        use crate::loot_table::PropertyCheck;
+        use crate::loot_table::{ItemSetPredicate, PropertyCheck};
         use crate::vanilla_items;
         use crate::vanilla_recipes;
         use crate::ItemStackTemplate;

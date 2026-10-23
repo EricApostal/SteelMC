@@ -46,11 +46,9 @@ pub(super) const MAX_SCHOOL_SIZE: i32 = 5;
 const TAG_TYPE: &str = "type";
 /// Vanilla `Mob` default step height used when the attribute is missing.
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
-/// Vanilla `LivingEntity.getSoundVolume` for fish.
-const SOUND_VOLUME: f32 = 0.4;
 /// Vanilla `Salmon.finalizeSpawn` weighted variant table (`WeightedList.Builder`):
-/// 30 small / 50 medium / 15 large out of `nextInt(95)`.
-const VARIANT_ROLL_BOUND: i32 = 100;
+/// 30 small / 50 medium / 15 large, i.e. a `nextInt(totalWeight)` over 95 slots.
+const VARIANT_ROLL_BOUND: i32 = 95;
 const SMALL_WEIGHT: i32 = 30;
 const MEDIUM_WEIGHT: i32 = 50;
 const LARGE_WEIGHT: i32 = 15;
@@ -99,14 +97,17 @@ impl SalmonEntity {
         abstract_fish::register_abstract_fish_goals(&mob_base);
         abstract_fish::register_schooling_goals(&mob_base);
 
-        Self {
+        let entity = Self {
             base,
             entity_type,
             living_base,
             mob_base,
             entity_data: SyncMutex::new(entity_data),
             schooling: SyncMutex::new(SchoolingState::new()),
-        }
+        };
+        // Vanilla `Salmon` constructor: `refreshDimensions()`.
+        entity.refresh_dimensions();
+        entity
     }
 
     /// Vanilla `Salmon.getVariant`.
@@ -293,15 +294,6 @@ impl Entity for SalmonEntity {
         );
     }
 
-    fn mob_interact(&self, player: &Player, hand: InteractionHand) -> InteractionResult {
-        // Vanilla `AbstractFish.mobInteract`: bucket pickup, else `super.mobInteract`
-        // (`Mob` default is `PASS`).
-        if self.try_bucket_pickup(player, hand) {
-            return InteractionResult::Success;
-        }
-        InteractionResult::Pass
-    }
-
     fn as_schooling_fish(&self) -> Option<&dyn SchoolingFish> {
         Some(self)
     }
@@ -324,10 +316,6 @@ impl LivingEntity for SalmonEntity {
             .living_entity_mut()
             .health
             .set(clamped);
-    }
-
-    fn sound_volume(&self) -> f32 {
-        SOUND_VOLUME
     }
 
     fn hurt_sound(&self, _source: &DamageSource) -> Option<SoundEventRef> {
@@ -360,13 +348,29 @@ impl LivingEntity for SalmonEntity {
 }
 
 impl Mob for SalmonEntity {
+    fn mob_interact(&self, player: &Player, hand: InteractionHand) -> InteractionResult {
+        // Vanilla `AbstractFish.mobInteract`: bucket pickup, else `super.mobInteract`
+        // (`Mob` default is `PASS`).
+        if self.try_bucket_pickup(player, hand) {
+            return InteractionResult::Success;
+        }
+        InteractionResult::Pass
+    }
     fn mob_base(&self) -> &MobBase {
         &self.mob_base
     }
 
+    fn tick_goal_selectors(&self, entity: &SharedEntity) {
+        PathfinderMob::tick_pathfinder_goal_selectors(self, entity);
+    }
+
+    fn tick_path_navigation(&self) {
+        PathfinderMob::tick_pathfinder_path_navigation(self);
+    }
+
     /// Vanilla `AbstractSchoolingFish.getMaxSpawnClusterSize` = `getMaxSchoolSize`.
     fn max_spawn_cluster_size(&self) -> i32 {
-        abstract_fish::max_spawn_cluster_size(MAX_SCHOOL_SIZE)
+        MAX_SCHOOL_SIZE
     }
 
     /// Vanilla `Salmon.finalizeSpawn`: roll the weighted size, then the schooling spawn

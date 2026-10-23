@@ -8,10 +8,12 @@
 //!
 //! - GAP(snow-golem-melt): `SnowGolem.aiStep`'s `EnvironmentAttributes.SNOW_GOLEM_MELTS` damage —
 //!   Steel has no environment-attribute system, so the golem never melts.
-//! - GAP(leash-offset): `SnowGolem.getLeashOffset` — neither `Entity` nor `Leashable` exposes a
-//!   leash-offset hook (the camel records the same gap), so the default rope attachment is used.
+//! - GAP(snow-golem-leash-offset): `SnowGolem.getLeashOffset` —
+//!   [`SnowGolemEntity::leash_offset`] records vanilla's `(0, 0.75 * eyeHeight, bbWidth * 0.4)`,
+//!   but neither `Entity` nor `Leashable` exposes a `getLeashOffset` hook, so nothing consumes it
+//!   and the default rope attachment stays in force.
 
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 
 use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
@@ -39,10 +41,11 @@ use crate::entity::ai::goal::{
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::SnowballEntity;
 use crate::entity::living_entity::shearing_loot_items_with_rng;
+use crate::entity::projectile::spawn_projectile;
 use crate::entity::{
     Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySyncedData, LivingEntity,
     LivingEntityBase, Mob, MobBase, PathfinderMob, Projectile as _, SharedEntity,
-    ThrowableItemProjectile as _,
+    ThrowableItemProjectile as _, next_entity_id,
 };
 use crate::physics::MoveResult;
 use crate::player::Player;
@@ -174,6 +177,16 @@ impl SnowGolemEntity {
     #[must_use]
     pub const fn is_sensitive_to_water(&self) -> bool {
         true
+    }
+
+    /// Vanilla `SnowGolem.getLeashOffset`.
+    ///
+    /// No `Entity`/`Leashable` hook consumes this yet — see the module-level GAP.
+    #[must_use]
+    pub fn leash_offset(&self) -> DVec3 {
+        // Vanilla multiplies the float bounding-box width: `getBbWidth() * 0.4F`.
+        let width = self.bounding_box().width() as f32;
+        DVec3::new(0.0, 0.75 * self.get_eye_height(), f64::from(width * 0.4))
     }
 
     /// Runs vanilla `SnowGolem.shear`: plays the shear sound, removes the pumpkin and drops the
@@ -390,9 +403,6 @@ impl RangedAttackMob for SnowGolemEntity {
         let Some(world) = self.level() else {
             return false;
         };
-        let Some(owner) = world.get_entity_by_id(self.id()) else {
-            return false;
-        };
 
         let position = self.position();
         let xd = target.position().x - position.x;
@@ -400,32 +410,30 @@ impl RangedAttackMob for SnowGolemEntity {
         let zd = target.position().z - position.z;
         let yo = (xd * xd + zd * zd).sqrt() * 0.2;
 
-        let mut item_stack = ItemStack::new(&vanilla_items::SNOWBALL);
-        // Vanilla `new Snowball(ServerLevel, LivingEntity, ItemStack)` spawns at the thrower's
-        // eye height minus 0.1 and renders the snowball item.
-        let snowball = SnowballEntity::new(
-            &vanilla_entities::SNOWBALL,
-            crate::entity::next_entity_id(),
-            DVec3::new(position.x, self.get_eye_y() - 0.1, position.z),
-            std::sync::Arc::downgrade(&world),
-        );
-        snowball.set_owner_entity(Some(&owner));
-        snowball.set_item(item_stack.copy_with_count(1));
+        let spawned = world.get_entity_by_id(self.id()).and_then(|owner| {
+            let mut item_stack = ItemStack::new(&vanilla_items::SNOWBALL);
+            // Vanilla `new Snowball(ServerLevel, LivingEntity, ItemStack)` spawns at the
+            // thrower's eye height minus 0.1 and renders the snowball item.
+            let snowball = SnowballEntity::new(
+                &vanilla_entities::SNOWBALL,
+                next_entity_id(),
+                DVec3::new(position.x, self.get_eye_y() - 0.1, position.z),
+                Arc::downgrade(&world),
+            );
+            snowball.set_owner_entity(Some(&owner));
+            snowball.set_item(item_stack.copy_with_count(1));
 
-        let spawned = crate::entity::projectile::spawn_projectile(
-            &world,
-            snowball,
-            &mut item_stack,
-            |snowball| {
+            spawn_projectile(&world, snowball, &mut item_stack, |snowball| {
                 // Vanilla `projectile.shoot(xd, yd + yo - projectile.getY(), zd, 1.6F, 12.0F)`.
                 snowball.shoot(
                     DVec3::new(xd, yd + yo - snowball.position().y, zd),
                     SNOWBALL_POWER,
                     RANGED_ATTACK_UNCERTAINTY,
                 );
-            },
-        );
+            })
+        });
 
+        // Vanilla plays `SNOW_GOLEM_SHOOT` unconditionally, whether or not the snowball spawned.
         self.play_sound(
             &sound_events::ENTITY_SNOW_GOLEM_SHOOT,
             1.0,

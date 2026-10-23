@@ -16,7 +16,10 @@ use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, types::InteractionHand};
 
 use crate::behavior::init_behaviors;
-use crate::entity::{Entity, EntityBase, LivingEntity, Mob, MobBase, PathfinderMob, SharedEntity};
+use crate::entity::{
+    Entity, EntityBase, LivingEntity, Mob, MobBase, PathfinderMob, SharedEntity,
+    impl_test_downcast_type,
+};
 use crate::inventory::equipment::EquipmentSlot;
 use crate::test_support::fresh_test_world;
 use crate::world::World;
@@ -670,7 +673,7 @@ impl ItemUseTestMob {
     }
 }
 
-crate::entity::impl_test_downcast_type!(ItemUseTestMob);
+impl_test_downcast_type!(ItemUseTestMob);
 
 impl Entity for ItemUseTestMob {
     fn base(&self) -> &EntityBase {
@@ -728,7 +731,7 @@ impl TraderDrinkSoundMob {
     }
 }
 
-crate::entity::impl_test_downcast_type!(TraderDrinkSoundMob);
+impl_test_downcast_type!(TraderDrinkSoundMob);
 
 impl Entity for TraderDrinkSoundMob {
     fn base(&self) -> &EntityBase {

@@ -40,8 +40,7 @@ impl FeatureDecorationRunner {
                 })
             .sqrt();
         // Vanilla compares the sampled `float` against a `double` chance value.
-        let should_generate_crack =
-            f64::from(random.next_f32()) < crack.generate_crack_chance;
+        let should_generate_crack = f64::from(random.next_f32()) < crack.generate_crack_chance;
 
         let Some(points) =
             Self::geode_distribution_points(region, random, registry, config, origin, num_points)
@@ -70,94 +69,75 @@ impl FeatureDecorationRunner {
             )) * config.noise_multiplier;
             let dist_sum_shell =
                 Self::geode_distance_sum(pos, &points, noise_offset, |offset| offset);
+
+            if dist_sum_shell < outer_crust {
+                return;
+            }
+
+            if dist_sum_shell >= inner_air {
+                let state = BlockStateProviderEvaluator::sample_block_state_provider(
+                    region,
+                    registry,
+                    random,
+                    &blocks.filling_provider,
+                    pos,
+                );
+                Self::safe_set_geode_block(region, registry, pos, state, &blocks.cannot_replace);
+                return;
+            }
+
+            // Vanilla only accumulates the crack distance inside the hollow core.
             let dist_sum_crack = Self::geode_distance_sum(pos, &crack_points, noise_offset, |_| {
                 crack.crack_point_offset
             });
 
-            if dist_sum_shell >= outer_crust {
-                if should_generate_crack
-                    && dist_sum_crack >= crack_size
-                    && dist_sum_shell < inner_air
-                {
-                    Self::safe_set_geode_block(
-                        region,
-                        registry,
-                        pos,
-                        vanilla_blocks::AIR.default_state(),
-                        &blocks.cannot_replace,
-                    );
-                    Self::schedule_geode_adjacent_fluid_ticks(region, pos);
-                } else if dist_sum_shell >= inner_air {
-                    let state = BlockStateProviderEvaluator::sample_block_state_provider(
-                        region,
-                        registry,
-                        random,
-                        &blocks.filling_provider,
-                        pos,
-                    );
-                    Self::safe_set_geode_block(
-                        region,
-                        registry,
-                        pos,
-                        state,
-                        &blocks.cannot_replace,
-                    );
-                } else if dist_sum_shell >= innermost_block_layer {
-                    let use_alternate_layer =
-                        f64::from(random.next_f32()) < config.use_alternate_layer0_chance;
-                    let provider = if use_alternate_layer {
-                        &blocks.alternate_inner_layer_provider
-                    } else {
-                        &blocks.inner_layer_provider
-                    };
-                    let state = BlockStateProviderEvaluator::sample_block_state_provider(
-                        region, registry, random, provider, pos,
-                    );
-                    Self::safe_set_geode_block(
-                        region,
-                        registry,
-                        pos,
-                        state,
-                        &blocks.cannot_replace,
-                    );
+            if should_generate_crack && dist_sum_crack >= crack_size {
+                Self::safe_set_geode_block(
+                    region,
+                    registry,
+                    pos,
+                    vanilla_blocks::AIR.default_state(),
+                    &blocks.cannot_replace,
+                );
+                Self::schedule_geode_adjacent_fluid_ticks(region, pos);
+            } else if dist_sum_shell >= innermost_block_layer {
+                let use_alternate_layer =
+                    f64::from(random.next_f32()) < config.use_alternate_layer0_chance;
+                let provider = if use_alternate_layer {
+                    &blocks.alternate_inner_layer_provider
+                } else {
+                    &blocks.inner_layer_provider
+                };
+                let state = BlockStateProviderEvaluator::sample_block_state_provider(
+                    region, registry, random, provider, pos,
+                );
+                Self::safe_set_geode_block(region, registry, pos, state, &blocks.cannot_replace);
 
-                    if (!config.placements_require_layer0_alternate || use_alternate_layer)
-                        && f64::from(random.next_f32())
-                            < config.use_potential_placements_chance
-                    {
-                        potential_crystal_placements.push(pos);
-                    }
-                } else if dist_sum_shell >= inner_crust {
-                    let state = BlockStateProviderEvaluator::sample_block_state_provider(
-                        region,
-                        registry,
-                        random,
-                        &blocks.middle_layer_provider,
-                        pos,
-                    );
-                    Self::safe_set_geode_block(
-                        region,
-                        registry,
-                        pos,
-                        state,
-                        &blocks.cannot_replace,
-                    );
-                } else if dist_sum_shell >= outer_crust {
-                    let state = BlockStateProviderEvaluator::sample_block_state_provider(
-                        region,
-                        registry,
-                        random,
-                        &blocks.outer_layer_provider,
-                        pos,
-                    );
-                    Self::safe_set_geode_block(
-                        region,
-                        registry,
-                        pos,
-                        state,
-                        &blocks.cannot_replace,
-                    );
+                if (!config.placements_require_layer0_alternate || use_alternate_layer)
+                    && f64::from(random.next_f32()) < config.use_potential_placements_chance
+                {
+                    potential_crystal_placements.push(pos);
                 }
+            } else if dist_sum_shell >= inner_crust {
+                let state = BlockStateProviderEvaluator::sample_block_state_provider(
+                    region,
+                    registry,
+                    random,
+                    &blocks.middle_layer_provider,
+                    pos,
+                );
+                Self::safe_set_geode_block(region, registry, pos, state, &blocks.cannot_replace);
+            } else {
+                // The outer-crust guard above already returned for smaller values, so
+                // this is vanilla's `distSumShell >= outerCrust` branch.
+                let state = BlockStateProviderEvaluator::sample_block_state_provider(
+                    region,
+                    registry,
+                    random,
+                    &blocks.outer_layer_provider,
+                    pos,
+                );
+                Self::safe_set_geode_block(region, registry, pos, state, &blocks.cannot_replace);
             }
         });
 

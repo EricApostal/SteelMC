@@ -237,7 +237,6 @@ impl World {
         self.entity_tracker().on_player_leave(&player);
 
         self.player_area_map.on_player_leave(&player);
-        self.locator_bar_remove_player(&player);
         (player, domain, player_data)
     }
 
@@ -254,7 +253,6 @@ impl World {
         self.unregister_player_entity(&player);
         self.entity_tracker().on_player_leave(&player);
         self.player_area_map.on_player_leave(&player);
-        self.locator_bar_remove_player(&player);
         // Note: no CRemovePlayerInfo — player stays in the global tab list
     }
 
@@ -289,7 +287,6 @@ impl World {
         self.unregister_player_entity(&detached_player);
         self.entity_tracker().on_player_leave(&detached_player);
         self.player_area_map.on_player_leave(&detached_player);
-        self.locator_bar_remove_player(&detached_player);
         self.update_sleeping_player_list();
         true
     }
@@ -317,7 +314,6 @@ impl World {
         self.unregister_player_entity(&player);
         self.entity_tracker().on_player_leave(&player);
         self.player_area_map.on_player_leave(&player);
-        self.locator_bar_remove_player(&player);
         let residence_token = player.advance_domain_residence();
         Some((player_data, residence_token))
     }
@@ -339,7 +335,6 @@ impl World {
 
         self.register_player_entity(&player);
         self.chunk_map.update_player_status(&player);
-        self.locator_bar_add_player(&player);
         self.update_sleeping_player_list();
 
         player.send_packet(CGameEvent {

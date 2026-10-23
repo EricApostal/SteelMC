@@ -79,7 +79,9 @@ mod tests {
 
     use super::*;
     use crate::behavior::init_behaviors;
-    use crate::entity::{Entity, EntityBase, LivingEntity, LivingEntityBase, Mob, MobBase};
+    use crate::entity::{
+        Entity, EntityBase, LivingEntity, LivingEntityBase, Mob, MobBase, impl_test_downcast_type,
+    };
     use crate::inventory::equipment::EquipmentSlot;
 
     struct TestPathfinderMob {
@@ -109,7 +111,7 @@ mod tests {
         }
     }
 
-    crate::entity::impl_test_downcast_type!(TestPathfinderMob);
+    impl_test_downcast_type!(TestPathfinderMob);
 
     impl Entity for TestPathfinderMob {
         fn base(&self) -> &EntityBase {

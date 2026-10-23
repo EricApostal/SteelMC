@@ -13,7 +13,7 @@ use steel_utils::locks::{Shared, SyncMutex};
 use crate::entity::entities::mobs::npc::villager::VillagerEntity;
 use crate::entity::npc::trading::offer;
 use crate::entity::npc::trading::{Merchant, MerchantOffer, MerchantOffers, MerchantOffersGuard};
-use crate::entity::{Entity, SharedEntity};
+use crate::entity::{Entity, SharedEntity, entity_loot_ref, loot_equipment};
 use crate::player::Player;
 use crate::world::World;
 
@@ -100,11 +100,11 @@ pub(super) fn add_offers_from_trade_set(
 ) {
     let mut rng = offer::trade_set_rng(world.seed(), trade_set.random_sequence.as_ref());
     let position = entity.position();
-    let equipment = crate::entity::loot_equipment(entity);
+    let equipment = loot_equipment(entity);
     let mut context = LootContext::new(&mut rng)
         .with_origin(position.x, position.y, position.z)
         .with_game_time(world.game_time())
-        .with_this_entity(crate::entity::entity_loot_ref(entity, equipment.as_ref()));
+        .with_this_entity(entity_loot_ref(entity, equipment.as_ref()));
     offer::add_offers_from_trade_set(&mut context, offers, trade_set, villager_type);
 }
 

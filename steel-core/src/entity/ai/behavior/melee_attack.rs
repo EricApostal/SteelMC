@@ -1,5 +1,7 @@
 //! Vanilla `MeleeAttack`: hit the attack target when it is in reach.
 
+use std::sync::Arc;
+
 use steel_utils::types::InteractionHand;
 
 use super::utils;
@@ -75,7 +77,7 @@ impl Trigger for MeleeAttack {
 
         ctx.set_memory(
             &mem::LOOK_TARGET,
-            std::sync::Arc::new(EntityTracker::new(target.clone(), true)),
+            Arc::new(EntityTracker::new(target.clone(), true)),
         );
         if let Some(living) = ctx.body.as_living_entity() {
             living.swing_for_attack(InteractionHand::MainHand);

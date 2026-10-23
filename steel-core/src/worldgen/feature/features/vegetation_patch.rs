@@ -158,9 +158,7 @@ impl FeatureDecorationRunner {
             );
             let current_state = region.block_state(*pos);
             if state_to_place.get_block() != current_state.get_block() {
-                if !registry
-                    .blocks
-                    .is_in_tag(current_state.get_block(), &config.replaceable)
+                if !Self::block_matches_holder_set(current_state.get_block(), &config.replaceable)
                 {
                     return i != 0;
                 }

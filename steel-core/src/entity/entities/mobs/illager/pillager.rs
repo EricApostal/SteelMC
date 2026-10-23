@@ -1,5 +1,7 @@
 //! Vanilla `Pillager` (vanilla `net.minecraft.world.entity.monster.illager.Pillager`).
 
+use std::iter;
+use std::ptr;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -22,10 +24,12 @@ use crate::entity::ai::goal::{
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::mobs::spawn_equipment;
 use crate::entity::raid::RaidSnapshot;
+use crate::entity::raid::pillager_raid_enchant_provider;
 use crate::entity::raid::raider::{Raider, RaiderBase};
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySyncedData, LivingEntity,
-    LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity,
+    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
+    LivingEntity, LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, SharedEntity,
+    SpawnGroupData,
 };
 use crate::physics::MoveResult;
 use crate::world::World;
@@ -92,7 +96,7 @@ impl PillagerEntity {
                 1,
                 HurtByTargetGoal::new()
                     .with_ignored_damage_types(RaiderKeys::ALL)
-                    .set_alert_others(std::iter::empty()),
+                    .set_alert_others(iter::empty()),
             );
             targets.add_goal(
                 2,
@@ -142,9 +146,7 @@ impl PillagerEntity {
     pub fn arm_pose(&self) -> IllagerArmPose {
         if self.is_charging_crossbow() {
             IllagerArmPose::CrossbowCharge
-        } else if self
-            .is_holding(&mut |stack| std::ptr::eq(stack.item(), &*vanilla_items::CROSSBOW))
-        {
+        } else if self.is_holding(&mut |stack| ptr::eq(stack.item(), &*vanilla_items::CROSSBOW)) {
             IllagerArmPose::CrossbowHold
         } else if self.is_aggressive() {
             IllagerArmPose::Attacking
@@ -264,7 +266,7 @@ impl LivingEntity for PillagerEntity {
 
     fn ai_step(&self, entity: &SharedEntity) -> Option<MoveResult> {
         Raider::raider_ai_step(self, entity);
-        crate::entity::Monster::monster_ai_step(self, entity)
+        Monster::monster_ai_step(self, entity)
     }
 
     fn on_death(&self, source: &DamageSource) {
@@ -287,18 +289,18 @@ impl Mob for PillagerEntity {
     fn finalize_spawn(
         &self,
         world: &Arc<World>,
-        spawn_reason: crate::entity::EntitySpawnReason,
-        group_data: Option<crate::entity::SpawnGroupData>,
-    ) -> Option<crate::entity::SpawnGroupData> {
+        spawn_reason: EntitySpawnReason,
+        group_data: Option<SpawnGroupData>,
+    ) -> Option<SpawnGroupData> {
         let mut random = LegacyRandom::from_seed(rand::random());
         let difficulty_modifier = world
             .current_difficulty_at(self.block_position())
             .special_multiplier();
 
-        self.living_base
-            .equipment()
-            .lock()
-            .set(EquipmentSlot::MainHand, ItemStack::new(&vanilla_items::CROSSBOW));
+        self.living_base.equipment().lock().set(
+            EquipmentSlot::MainHand,
+            ItemStack::new(&vanilla_items::CROSSBOW),
+        );
         spawn_equipment::enchant_spawned_weapon(self, &mut random, difficulty_modifier);
         // Vanilla `Pillager.enchantSpawnedWeapon` adds the raid crossbow roll after
         // `Mob.enchantSpawnedWeapon`.
@@ -358,7 +360,7 @@ impl Mob for PillagerEntity {
     }
 }
 
-impl crate::entity::Monster for PillagerEntity {}
+impl Monster for PillagerEntity {}
 
 impl PathfinderMob for PillagerEntity {}
 
@@ -392,7 +394,7 @@ impl Raider for PillagerEntity {
         if rand::random::<f32>() > raid.enchant_odds {
             return;
         }
-        let Some(provider) = crate::entity::raid::pillager_raid_enchant_provider(wave) else {
+        let Some(provider) = pillager_raid_enchant_provider(wave) else {
             return;
         };
 

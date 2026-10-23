@@ -8,6 +8,7 @@ use steel_registry::vanilla_entities;
 use steel_utils::DowncastTypeKey;
 
 use crate::entity::LivingEntity;
+use crate::world::World;
 
 /// Vanilla `AbstractIllager.IllagerArmPose`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -116,20 +117,20 @@ impl RaiderKeys {
 
 /// Vanilla `NearestAttackableTargetGoal<>(this, AbstractVillager.class, …)`.
 #[must_use]
-pub fn is_target_villager(target: &dyn LivingEntity, _world: &crate::world::World) -> bool {
+pub fn is_target_villager(target: &dyn LivingEntity, _world: &World) -> bool {
     let entity_type = target.entity_type();
     entity_type == &vanilla_entities::VILLAGER || entity_type == &vanilla_entities::WANDERING_TRADER
 }
 
 /// Vanilla `AbstractIllager.canAttack`: never attack a baby villager.
 #[must_use]
-pub fn can_attack_villager(target: &dyn LivingEntity, world: &crate::world::World) -> bool {
+pub fn can_attack_villager(target: &dyn LivingEntity, world: &World) -> bool {
     !(is_target_villager(target, world) && target.is_baby())
 }
 
 /// Vanilla `NearestAttackableTargetGoal<>(this, IronGolem.class, …)`.
 #[must_use]
-pub fn is_target_iron_golem(target: &dyn LivingEntity, _world: &crate::world::World) -> bool {
+pub fn is_target_iron_golem(target: &dyn LivingEntity, _world: &World) -> bool {
     target.entity_type() == &vanilla_entities::IRON_GOLEM
 }
 

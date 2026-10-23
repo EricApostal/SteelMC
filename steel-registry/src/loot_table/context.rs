@@ -1,6 +1,5 @@
 use super::{
-    BlockStateId, CopySource, DyeColor, Identifier, ItemStack, LootCondition, REGISTRY,
-    RegistryExt, RngExt,
+    BlockStateId, DyeColor, Identifier, ItemStack, LootCondition, REGISTRY, RegistryExt, RngExt,
 };
 use crate::advancement::predicates::LevelView;
 use crate::data_components::DataComponentMap;

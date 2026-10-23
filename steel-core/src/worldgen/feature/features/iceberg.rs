@@ -199,8 +199,11 @@ impl FeatureDecorationRunner {
             );
         }
 
+        // Vanilla evaluates `-height + random.nextInt(5)` once, in the loop's
+        // initializer, not on every iteration.
+        let cut_out_floor = -height + random.next_i32_bounded(5);
         let mut y_offset = -1;
-        while y_offset > -height + random.next_i32_bounded(5) {
+        while y_offset > cut_out_floor {
             let radius = Self::height_dependent_radius_steep(random, -y_offset, height, width);
             Self::carve_iceberg(
                 region,

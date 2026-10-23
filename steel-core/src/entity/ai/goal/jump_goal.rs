@@ -169,7 +169,7 @@ impl Goal for DolphinJumpGoal {
             mob.set_rotation((yaw, rot_lerp(ROTATION_LERP_RATE, pitch, 0.0)));
         } else if velocity.length() > 1.0e-5 {
             let horizontal = (velocity.x * velocity.x + velocity.z * velocity.z).sqrt();
-            let rotation = (-velocity.y / horizontal).atan() * 180.0 / std::f64::consts::PI;
+            let rotation = (-velocity.y / horizontal).atan() * 180.0 / f64::consts::PI;
             mob.set_rotation((yaw, rotation as f32));
         }
     }

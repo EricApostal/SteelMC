@@ -1,6 +1,6 @@
 //! Vanilla `Ocelot` entity: wild cat that can be fed into trusting the player.
 
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 
 use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
@@ -459,7 +459,7 @@ impl Mob for OcelotEntity {
         AMBIENT_SOUND_INTERVAL
     }
 
-    fn check_spawn_obstruction(&self, world: &std::sync::Arc<World>) -> bool {
+    fn check_spawn_obstruction(&self, world: &Arc<World>) -> bool {
         // Vanilla `Ocelot.checkSpawnObstruction`: unobstructed, dry, above sea level and
         // standing on grass or leaves.
         //
@@ -492,7 +492,7 @@ impl Mob for OcelotEntity {
 
     fn finalize_spawn(
         &self,
-        world: &std::sync::Arc<World>,
+        world: &Arc<World>,
         spawn_reason: EntitySpawnReason,
         group_data: Option<SpawnGroupData>,
     ) -> Option<SpawnGroupData> {

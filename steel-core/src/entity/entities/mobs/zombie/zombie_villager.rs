@@ -465,9 +465,7 @@ impl ZombieVillagerEntity {
                         // Vanilla `ZombieVillager.finishConversion`:
                         // `CriteriaTriggers.CURED_ZOMBIE_VILLAGER.trigger(player, this, villager)`.
                         crate::player::advancement::triggers::raise_cured_zombie_villager(
-                            player,
-                            self,
-                            villager,
+                            player, self, villager,
                         );
                         villager.on_reputation_event_from(
                             ReputationEventType::ZOMBIE_VILLAGER_CURED,
@@ -839,7 +837,9 @@ impl Mob for ZombieVillagerEntity {
                 self.set_baby(true);
             }
 
-            self.set_can_break_doors(random.next_f32() < difficulty_modifier * ZOMBIE_BREAK_DOOR_CHANCE);
+            self.set_can_break_doors(
+                random.next_f32() < difficulty_modifier * ZOMBIE_BREAK_DOOR_CHANCE,
+            );
             if spawn_reason != EntitySpawnReason::Conversion {
                 zombie::populate_zombie_equipment_slots(self, &mut random, difficulty_modifier);
                 zombie::populate_zombie_equipment_enchantments(

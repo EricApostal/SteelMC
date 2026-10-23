@@ -20,7 +20,7 @@ use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::{Axis, BlockStateProperties, EnumProperty};
 use steel_registry::vanilla_blocks::AIR;
 use steel_registry::vanilla_entities;
-use steel_utils::{BlockPos, BlockStateId, ChunkPos, Difficulty, Direction};
+use steel_utils::{BlockPos, BlockStateId, ChunkPos, Direction, types::Difficulty};
 
 /// Behavior for the nether portal block.
 #[block_behavior]

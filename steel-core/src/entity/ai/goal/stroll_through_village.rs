@@ -11,7 +11,8 @@ use super::random_pos::land_random_pos_with_weight;
 use super::reduced_tick_delay;
 use super::selector::{Goal, GoalControls};
 use crate::chunk::heightmap::HeightmapType;
-use crate::entity::PathfinderMob;
+use crate::entity::{PathfinderMob, SharedEntity};
+use crate::world::World;
 
 const DISTANCE_THRESHOLD: f64 = 10.0;
 const LONG_DISTANCE_SCALE: f64 = 0.4;
@@ -36,7 +37,7 @@ impl StrollThroughVillageGoal {
     }
 
     /// Vanilla `StrollThroughVillageGoal.moveRandomly`.
-    fn move_randomly(&self, mob: &dyn PathfinderMob, world: &crate::world::World) {
+    fn move_randomly(&self, mob: &dyn PathfinderMob, world: &World) {
         let pos = mob.block_position();
         let target = BlockPos::new(
             pos.x() - RANDOM_STEP_RADIUS + rand::random_range(0..2 * RANDOM_STEP_RADIUS),
@@ -99,7 +100,7 @@ impl Goal for StrollThroughVillageGoal {
         !navigation.is_done() && navigation.target_pos() == Some(wanted_pos)
     }
 
-    fn tick(&mut self, mob: &dyn PathfinderMob, _entity: &crate::entity::SharedEntity) {
+    fn tick(&mut self, mob: &dyn PathfinderMob, _entity: &SharedEntity) {
         let Some(wanted_pos) = self.wanted_pos else {
             return;
         };

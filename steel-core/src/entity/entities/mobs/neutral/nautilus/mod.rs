@@ -12,6 +12,6 @@ pub mod brain;
 mod nautilus;
 mod zombie_nautilus;
 
-pub use abstract_nautilus::{check_nautilus_spawn_rules, AbstractNautilusParts};
+pub use abstract_nautilus::{AbstractNautilusParts, check_nautilus_spawn_rules};
 pub use nautilus::NautilusEntity;
 pub use zombie_nautilus::ZombieNautilusEntity;

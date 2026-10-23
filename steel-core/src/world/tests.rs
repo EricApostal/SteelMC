@@ -195,16 +195,18 @@ fn nether_portal_frame_offsets_match_vanilla_create_portal_axes() {
 }
 
 #[test]
-fn nether_portal_creation_scan_origin_matches_vanilla_column_shift() {
+fn nether_portal_creation_scan_origin_keeps_spiral_column() {
     let column = BlockPos::new(10, 0, 20);
 
+    // Vanilla steps `direction` only for the border check and steps back, so the
+    // scan stays on the spiral column.
     assert_eq!(
         nether_portal_creation_scan_origin(column, Direction::East, 70),
-        BlockPos::new(9, 70, 20)
+        BlockPos::new(10, 70, 20)
     );
     assert_eq!(
         nether_portal_creation_scan_origin(column, Direction::South, 70),
-        BlockPos::new(10, 70, 19)
+        BlockPos::new(10, 70, 20)
     );
 }
 

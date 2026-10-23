@@ -1,5 +1,7 @@
 //! Vanilla `VillagerData`, `VillagerDataHolder` and `VillagerType` transforms.
 
+use std::sync::LazyLock;
+
 use steel_registry::biome::BiomeRef;
 use steel_registry::entity_data::VillagerData;
 use steel_registry::vanilla_biomes;
@@ -118,8 +120,8 @@ impl VillagerDataExt for VillagerData {
 /// Biome entries are `LazyLock` statics, so the table is built on first use and the
 /// borrowed keys stay `'static`.
 fn by_biome() -> &'static [(&'static Identifier, VillagerTypeRef)] {
-    static BY_BIOME: std::sync::LazyLock<Vec<(&'static Identifier, VillagerTypeRef)>> =
-        std::sync::LazyLock::new(|| {
+    static BY_BIOME: LazyLock<Vec<(&'static Identifier, VillagerTypeRef)>> =
+        LazyLock::new(|| {
             vec![
                 (
                     &vanilla_biomes::BADLANDS.key,

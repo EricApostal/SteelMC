@@ -22,11 +22,14 @@ use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
 use crate::block_entity::entities::CreakingHeartBlockEntity;
 use crate::entity::ai::brain::Brain;
+use crate::entity::ai::brain::memory::module_type;
+use crate::entity::ai::path::PathType;
 use crate::entity::damage::DamageSource;
 use crate::entity::{
     Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySyncedData, LivingEntity,
     LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, RemovalReason, SharedEntity,
 };
+use crate::inventory::equipment::EquipmentSlot;
 use crate::physics::MoveResult;
 use crate::world::World;
 
@@ -179,20 +182,17 @@ impl CreakingEntity {
     pub fn set_transient(&self, pos: BlockPos) {
         self.set_home_pos(pos);
         let mut malus = self.mob_base.pathfinding_malus().lock();
-        malus.set(crate::entity::ai::path::PathType::Damaging, 8.0);
-        malus.set(crate::entity::ai::path::PathType::PowderSnow, 8.0);
-        malus.set(crate::entity::ai::path::PathType::Lava, 8.0);
-        malus.set(crate::entity::ai::path::PathType::Fire, 0.0);
+        malus.set(PathType::Damaging, 8.0);
+        malus.set(PathType::PowderSnow, 8.0);
+        malus.set(PathType::Lava, 8.0);
+        malus.set(PathType::Fire, 0.0);
     }
 
     /// Vanilla `Creaking.activate`.
     pub fn activate(&self, player: &SharedEntity) {
         {
             let mut brain = self.brain.lock();
-            brain.set_memory(
-                &crate::entity::ai::brain::memory::module_type::ATTACK_TARGET,
-                Some(player.clone()),
-            );
+            brain.set_memory(&module_type::ATTACK_TARGET, Some(player.clone()));
         }
         self.game_event(&steel_registry::vanilla_game_events::ENTITY_ACTION);
         self.play_sound(&sound_events::ENTITY_CREAKING_ACTIVATE, 1.0, 1.0);
@@ -203,7 +203,7 @@ impl CreakingEntity {
     pub fn deactivate(&self) {
         {
             let mut brain = self.brain.lock();
-            brain.erase_memory(&crate::entity::ai::brain::memory::module_type::ATTACK_TARGET);
+            brain.erase_memory(&module_type::ATTACK_TARGET);
         }
         self.game_event(&steel_registry::vanilla_game_events::ENTITY_ACTION);
         self.play_sound(&sound_events::ENTITY_CREAKING_DEACTIVATE, 1.0, 1.0);
@@ -215,7 +215,7 @@ impl CreakingEntity {
         let players = {
             let brain = self.brain.lock();
             brain
-                .get_memory(&crate::entity::ai::brain::memory::module_type::NEAREST_PLAYERS)
+                .get_memory(&module_type::NEAREST_PLAYERS)
                 .unwrap_or_default()
         };
         let active = self.is_active();
@@ -238,12 +238,9 @@ impl CreakingEntity {
             has_potential_target = true;
 
             let mut disguised = false;
-            player_living.with_equipment_slot(
-                crate::inventory::equipment::EquipmentSlot::Head,
-                &mut |stack| {
-                    disguised = stack.is(&steel_registry::vanilla_items::CARVED_PUMPKIN);
-                },
-            );
+            player_living.with_equipment_slot(EquipmentSlot::Head, &mut |stack| {
+                disguised = stack.is(&steel_registry::vanilla_items::CARVED_PUMPKIN);
+            });
             if (!active || !disguised) && self.is_looking_at_me(player, GAZE_TOLERANCE) {
                 if active {
                     return false;

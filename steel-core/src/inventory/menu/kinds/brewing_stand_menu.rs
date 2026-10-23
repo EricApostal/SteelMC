@@ -298,7 +298,7 @@ mod tests {
     use steel_registry::{init_vanilla_registry, item_stack::ItemStack, vanilla_items};
     use steel_utils::locks::{IntoShared as _, Shared};
 
-    use super::{brewing_stand, FUEL_SLOT, INGREDIENT_SLOT};
+    use super::{FUEL_SLOT, INGREDIENT_SLOT, brewing_stand};
     use crate::block_entity::entities::BrewingStandContainer;
     use crate::inventory::click::{Click, MouseButton};
     use crate::inventory::container::{Container as _, SimpleContainer};
@@ -412,8 +412,7 @@ mod tests {
             1,
             ContainerRef::from(Arc::clone(&container)),
         );
-        *menu.behavior_mut().carried_mut() =
-            ItemStack::with_count(&vanilla_items::GLASS_BOTTLE, 5);
+        *menu.behavior_mut().carried_mut() = ItemStack::with_count(&vanilla_items::GLASS_BOTTLE, 5);
 
         menu.clicked(
             Click::Pickup {

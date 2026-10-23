@@ -1,11 +1,19 @@
 use steel_utils::types::GameType;
 
-use steel_registry::vanilla_game_rules::{COMMAND_BLOCK_OUTPUT, COMMAND_BLOCKS_WORK, LOCATOR_BAR};
+use crate::entity::Entity as _;
+use steel_protocol::packets::game::CEntityEvent;
+use steel_utils::entity_events::EntityStatus;
+
+use steel_registry::vanilla_game_rules::{
+    COMMAND_BLOCK_OUTPUT, COMMAND_BLOCKS_WORK, IMMEDIATE_RESPAWN, LIMITED_CRAFTING,
+    REDUCED_DEBUG_INFO,
+};
 
 use super::{
-    ADVANCE_TIME, BlockPos, CChangeDifficulty, ChunkPos, Difficulty, Digest, ErasedGameRuleRef,
-    GameRule, GameRuleValue, GameRuleValueType, LevelDataManager, OffsetVoxelShape, Ordering,
-    Player, REGISTRY, SectionPos, Sha256, World, vanilla_dimension_types,
+    ADVANCE_TIME, BlockPos, CChangeDifficulty, CGameEvent, ChunkPos, Difficulty, Digest,
+    ErasedGameRuleRef, GameEventType, GameRule, GameRuleValue, GameRuleValueType, LevelDataManager,
+    OffsetVoxelShape, Ordering, Player, REGISTRY, SectionPos, Sha256, World,
+    vanilla_dimension_types,
 };
 
 impl World {
@@ -231,8 +239,8 @@ impl World {
         if updated && rule.key() == ADVANCE_TIME.key() {
             self.broadcast_time_sync();
         }
-        if updated && rule.key() == LOCATOR_BAR.key() {
-            self.locator_bar_rule_changed();
+        if updated {
+            self.on_game_rule_changed(rule);
         }
         updated
     }
@@ -262,10 +270,55 @@ impl World {
         if updated && rule.key() == ADVANCE_TIME.key() {
             self.broadcast_time_sync();
         }
-        if updated && rule.key() == LOCATOR_BAR.key() {
-            self.locator_bar_rule_changed();
+        if updated {
+            self.on_game_rule_changed(rule);
         }
         updated
+    }
+
+    /// Mirrors vanilla `MinecraftServer.onGameRuleChanged` for the rules that
+    /// push state to already-connected clients.
+    ///
+    /// `advance_time` is handled by the caller (it broadcasts the clock sync) and
+    /// the dynamic `/gamerule` path goes through [`World::set_erased_game_rule`],
+    /// which compares the rule key and forwards here.
+    fn on_game_rule_changed(&self, rule: ErasedGameRuleRef) {
+        let key = rule.key();
+        let current = self.get_erased_game_rule(rule);
+        let Some(value) = current.downcast_ref::<bool>() else {
+            return;
+        };
+        let value = *value;
+
+        if key == REDUCED_DEBUG_INFO.key() {
+            // Vanilla sends `ReducedDebugInfo`/`FullDebugInfo` to every player.
+            let status = if value {
+                EntityStatus::ReducedDebugInfo
+            } else {
+                EntityStatus::FullDebugInfo
+            };
+            self.players.iter_players(|_, player| {
+                player.send_packet(CEntityEvent {
+                    entity_id: player.id(),
+                    event: status,
+                });
+                true
+            });
+        } else if key == LIMITED_CRAFTING.key() {
+            self.broadcast_game_event(GameEventType::LimitedCrafting, value);
+        } else if key == IMMEDIATE_RESPAWN.key() {
+            self.broadcast_game_event(GameEventType::ImmediateRespawn, value);
+        }
+    }
+
+    fn broadcast_game_event(&self, event: GameEventType, enabled: bool) {
+        self.players.iter_players(|_, player| {
+            player.send_packet(CGameEvent {
+                event,
+                data: if enabled { 1.0 } else { 0.0 },
+            });
+            true
+        });
     }
 
     pub(super) fn advance_time_with_guard(&self, guard: &LevelDataManager) -> bool {

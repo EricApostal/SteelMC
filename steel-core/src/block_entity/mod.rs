@@ -472,6 +472,14 @@ pub trait BlockEntity: ErasedType + Send + Sync {
         self.base().stored_components()
     }
 
+    /// Replaces the stored component map.
+    ///
+    /// Mirrors vanilla `BlockEntity.setComponents`, used by block entities that write
+    /// their own implicit components (e.g. `CopperGolemStatueBlockEntity.createStatue`).
+    fn set_components(&self, components: DataComponentMap) {
+        self.base().set_components(components);
+    }
+
     /// Saves entity-specific data and stored components without position/type metadata.
     fn save_without_metadata(&self) -> NbtCompound {
         let mut nbt = self.save_custom_only();

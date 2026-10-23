@@ -1,5 +1,7 @@
 //! Vanilla `MoveToSkySeeingSpot`: walk to a nearby spot that can see the sky.
 
+use std::sync::Arc;
+
 use crate::chunk::heightmap::HeightmapType;
 use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
@@ -61,7 +63,7 @@ impl Trigger for MoveToSkySeeingSpot {
             ctx.set_memory(
                 &mem::WALK_TARGET,
                 WalkTarget::new(
-                    std::sync::Arc::new(BlockPosTracker::from_vec(glam::DVec3::new(x, y, z))),
+                    Arc::new(BlockPosTracker::from_vec(glam::DVec3::new(x, y, z))),
                     self.speed_modifier,
                     0,
                 ),

@@ -6,6 +6,9 @@
 //! simply has nothing to release, exactly like the goal version in
 //! `entity/ai/goal/ranged_crossbow_attack.rs`.
 
+use std::ptr;
+use std::sync::Arc;
+
 use steel_registry::vanilla_items;
 use steel_utils::Downcast as _;
 use steel_utils::types::InteractionHand;
@@ -15,6 +18,7 @@ use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorStat
 use crate::entity::ai::brain::memory::MemoryStatus;
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::ai::brain::tracker::EntityTracker;
+use crate::entity::entities::mobs::illager::PillagerEntity;
 use crate::entity::{LivingEntity as _, SharedEntity};
 
 /// Vanilla `CrossbowAttack.TIMEOUT`.
@@ -63,9 +67,7 @@ impl CrossbowAttack {
     /// Vanilla `CrossbowAttackMob.setChargingCrossbow`: only pillagers are
     /// `CrossbowAttackMob`s, so the concrete capability is reached by key.
     fn set_charging_crossbow(body: &SharedEntity, charging: bool) {
-        if let Some(pillager) =
-            body.downcast_ref::<crate::entity::entities::mobs::illager::PillagerEntity>()
-        {
+        if let Some(pillager) = body.downcast_ref::<PillagerEntity>() {
             pillager.set_charging_crossbow(charging);
         }
     }
@@ -89,8 +91,7 @@ impl CrossbowAttack {
     fn is_holding_crossbow(body: &SharedEntity) -> bool {
         let mut holding = false;
         body.with_weapon_item(&mut |item| {
-            holding =
-                item.is_some_and(|stack| std::ptr::eq(stack.item(), &*vanilla_items::CROSSBOW));
+            holding = item.is_some_and(|stack| ptr::eq(stack.item(), &*vanilla_items::CROSSBOW));
         });
         holding
     }
@@ -140,10 +141,7 @@ impl Behavior for CrossbowAttack {
             return;
         };
 
-        utils::set_look_target(
-            ctx,
-            std::sync::Arc::new(EntityTracker::new(target.clone(), true)),
-        );
+        utils::set_look_target(ctx, Arc::new(EntityTracker::new(target.clone(), true)));
 
         match self.crossbow_state {
             CrossbowState::Uncharged => {

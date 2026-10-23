@@ -40,6 +40,7 @@
 
 mod brain;
 
+use std::mem;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -60,9 +61,12 @@ use steel_registry::{
 };
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::InteractionHand;
-use steel_utils::{BlockPos, BlockStateId, Downcast as _, DowncastType, DowncastTypeKey, WorldAabb};
+use steel_utils::{
+    BlockPos, BlockStateId, Downcast as _, DowncastType, DowncastTypeKey, WorldAabb,
+};
 
 use crate::behavior::InteractionResult;
+use crate::chunk::heightmap::HeightmapType;
 use crate::entity::ai::brain::Brain;
 use crate::entity::ai::control::{FlyingMoveControl, FlyingMoveControlInput, MoveControlOperation};
 use crate::entity::ai::goal::{FloatGoal, Goal, GoalControls};
@@ -70,13 +74,13 @@ use crate::entity::ai::targeting::TargetingConditions;
 use crate::entity::damage::DamageSource;
 use crate::entity::{
     AgeableMob, AgeableMobBase, Animal, AnimalBase, ENTITIES, Entity, EntityBase, EntityBaseLoad,
-    EntitySpawnReason, EntitySyncedData, Leashable as _, LivingEntity, LivingEntityBase,
-    LivingTravelInput, Mob, MobBase, PathfinderMob, SharedEntity, SpawnGroupData, next_entity_id,
+    EntitySpawnReason, EntitySyncedData, LivingEntity, LivingEntityBase, LivingTravelInput, Mob,
+    MobBase, PathfinderMob, SharedEntity, SpawnGroupData, next_entity_id,
 };
 use crate::inventory::equipment::EquipmentSlot;
 use crate::physics::{MoveResult, MoverType};
 use crate::player::Player;
-use crate::world::{HeightmapType, World};
+use crate::world::{LevelReader as _, World};
 
 /// Vanilla `HappyGhast.BABY_SCALE`.
 pub const BABY_SCALE: f32 = 0.2375;
@@ -340,10 +344,7 @@ impl HappyGhastEntity {
 
     /// Vanilla `HappyGhast.setLeashHolder`.
     fn set_leash_holder(&self, is_leash_holder: bool) {
-        self.entity_data
-            .lock()
-            .is_leash_holder
-            .set(is_leash_holder);
+        self.entity_data.lock().is_leash_holder.set(is_leash_holder);
     }
 
     /// Vanilla `HappyGhast.leashHolderTime`.
@@ -545,7 +546,7 @@ impl HappyGhastEntity {
             .collect::<Vec<_>>();
         let previous = {
             let mut state = self.state.lock();
-            std::mem::replace(&mut state.last_passenger_ids, current.clone())
+            mem::replace(&mut state.last_passenger_ids, current.clone())
         };
         if previous == current {
             return;
@@ -553,7 +554,11 @@ impl HappyGhastEntity {
 
         if previous.is_empty() && !current.is_empty() {
             // Vanilla `addPassenger`: `if (!this.isVehicle()) playSound(...)`.
-            self.play_sound(&sound_events::ENTITY_HAPPY_GHAST_HARNESS_GOGGLES_DOWN, 1.0, 1.0);
+            self.play_sound(
+                &sound_events::ENTITY_HAPPY_GHAST_HARNESS_GOGGLES_DOWN,
+                1.0,
+                1.0,
+            );
             if self.level().is_some() {
                 if !self.scan_player_above_ghast() {
                     self.set_server_still_timeout(0);
@@ -567,7 +572,11 @@ impl HappyGhastEntity {
                 self.set_server_still_timeout(MAX_STILL_TIMEOUT);
             }
             self.clear_home();
-            self.play_sound(&sound_events::ENTITY_HAPPY_GHAST_HARNESS_GOGGLES_UP, 1.0, 1.0);
+            self.play_sound(
+                &sound_events::ENTITY_HAPPY_GHAST_HARNESS_GOGGLES_UP,
+                1.0,
+                1.0,
+            );
         }
     }
 
@@ -581,7 +590,11 @@ impl HappyGhastEntity {
     /// Vanilla `HappyGhast.getDismountLocationForPassenger`.
     #[must_use]
     pub fn get_dismount_location_for_passenger(&self, _passenger: &dyn LivingEntity) -> DVec3 {
-        DVec3::new(self.position().x, self.bounding_box().max_y(), self.position().z)
+        DVec3::new(
+            self.position().x,
+            self.bounding_box().max_y(),
+            self.position().z,
+        )
     }
 
     /// Vanilla `HappyGhast.supportQuadLeashAsHolder`.
@@ -768,7 +781,8 @@ impl HappyGhastEntity {
             self.state.lock().float_duration = float_duration;
             return;
         }
-        let next_duration = float_duration + rand::random_range(0..MOVE_FLOAT_DURATION_RANGE)
+        let next_duration = float_duration
+            + rand::random_range(0..MOVE_FLOAT_DURATION_RANGE)
             + MOVE_FLOAT_DURATION_BASE;
         self.state.lock().float_duration = next_duration;
 
@@ -1100,14 +1114,16 @@ impl LivingEntity for HappyGhastEntity {
 
         if self.is_in_water() {
             self.move_relative(FLYING_WATER_SPEED, input);
-            let result = Arc::clone(entity).move_entity(MoverType::SelfMovement, self.velocity())?;
+            let result =
+                Arc::clone(entity).move_entity(MoverType::SelfMovement, self.velocity())?;
             self.set_velocity(self.velocity() * FLYING_WATER_DRAG);
             return Some(result);
         }
 
         if self.is_in_lava() {
             self.move_relative(FLYING_LAVA_SPEED, input);
-            let result = Arc::clone(entity).move_entity(MoverType::SelfMovement, self.velocity())?;
+            let result =
+                Arc::clone(entity).move_entity(MoverType::SelfMovement, self.velocity())?;
             self.set_velocity(self.velocity() * FLYING_LAVA_DRAG);
             return Some(result);
         }
@@ -1644,7 +1660,7 @@ impl HappyGhastRandomFloatGoal {
 
         let mut result = result.unwrap_or_else(|| choose_random_position(center));
         let pos = BlockPos::containing(result.x, result.y, result.z);
-        let height = world.heightmap_pos(HeightmapType::MotionBlocking, pos).y();
+        let height = world.height_at(HeightmapType::MotionBlocking, pos.x(), pos.z());
         if height < pos.y() && height > world.get_min_y() {
             result.y = mob.position().y - (mob.position().y - result.y).abs();
         }

@@ -7,7 +7,8 @@
 //! stack carries `Loyalty` — flies back to its owner after the hit, dragging the
 //! owner toward it until it is close enough to be caught. The loyalty level and
 //! the enchantment glint are synced so clients can render the returning
-//! trident.
+//! trident. Vanilla's `shouldRender` (always true) is client-local and has no
+//! server counterpart.
 //!
 //! GAP(thrown_trident): channeling does not summon its lightning bolt or play
 //! `ITEM_TRIDENT_THUNDER`. The enchantment data is present
@@ -148,12 +149,16 @@ impl ThrownTridentEntity {
         trident_item: ItemStack,
     ) -> Self {
         let trident = Self::new(entity_type, id, position, world);
-        trident.init_trident_item(&trident_item, None);
+        // Vanilla's position constructor passes the trident stack as both the
+        // pickup stack and the firing weapon.
+        trident.init_trident_item(&trident_item, None, Some(&trident_item));
         trident
     }
 
     /// Vanilla `ThrownTrident(Level, LivingEntity, ItemStack)`: a trident
     /// thrown by `owner`, spawned at the owner's eye height minus `0.1`.
+    /// Vanilla passes no firing weapon to the superclass here, so block-hit
+    /// and enchantment lookups fall back to the pickup stack.
     #[must_use]
     pub fn from_owner(
         entity_type: EntityTypeRef,
@@ -169,7 +174,7 @@ impl ThrownTridentEntity {
             DVec3::new(position.x, owner.get_eye_y() - 0.1, position.z),
             world,
         );
-        trident.init_trident_item(&trident_item, Some(owner));
+        trident.init_trident_item(&trident_item, Some(owner), None);
         trident
     }
 
@@ -191,8 +196,13 @@ impl ThrownTridentEntity {
     /// Vanilla `ThrownTrident` constructors after `super(...)`: seeds the pickup
     /// stack, the firing weapon and the owner, then copies the loyalty level and
     /// the glint flag from the item.
-    fn init_trident_item(&self, trident_item: &ItemStack, owner: Option<&SharedEntity>) {
-        self.init_arrow(trident_item.clone(), Some(trident_item), owner);
+    fn init_trident_item(
+        &self,
+        trident_item: &ItemStack,
+        owner: Option<&SharedEntity>,
+        fired_from_weapon: Option<&ItemStack>,
+    ) {
+        self.init_arrow(trident_item.clone(), fired_from_weapon, owner);
         self.set_loyalty(Self::loyalty_from_item(trident_item));
         self.set_foil(Self::foil_from_item(trident_item));
     }
@@ -501,6 +511,10 @@ impl AbstractArrow for ThrownTridentEntity {
 
     /// Vanilla `ThrownTrident.tryPickup`: a returning trident is caught by its
     /// owner even when its pickup rule would not allow it.
+    ///
+    /// The first half mirrors `AbstractArrow::try_pickup` (vanilla
+    /// `super.tryPickup`); Rust cannot call a trait default from its own
+    /// override, so the body is repeated instead of delegated.
     fn try_pickup(&self, player: &Arc<Player>) -> bool {
         let picked_up = match self.abstract_arrow_base().pickup() {
             Pickup::Disallowed => false,

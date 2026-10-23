@@ -12,7 +12,7 @@ use steel_utils::{BlockPos, GlobalPos};
 use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::{MemoryModuleTypeRef, MemoryStatus, module_type as mem};
-use crate::entity::ai::brain::tracker::BlockPosTracker;
+use crate::entity::ai::brain::tracker::{BlockPosTracker, WalkTarget};
 
 /// Vanilla `TransportItemsBetweenContainers.TARGET_INTERACTION_TIME`.
 pub const TARGET_INTERACTION_TIME: i32 = 60;
@@ -231,7 +231,7 @@ impl Behavior for TransportItemsBetweenContainers {
 
                 ctx.set_memory(
                     &mem::WALK_TARGET,
-                    crate::entity::ai::brain::tracker::WalkTarget::new(
+                    WalkTarget::new(
                         Arc::new(BlockPosTracker::from_block_pos(target.pos)),
                         self.speed_modifier,
                         0,

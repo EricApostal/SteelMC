@@ -86,11 +86,7 @@ impl TurtleEggBlock {
     /// Vanilla `TurtleEggBlock.shouldUpdateHatchLevel`: roll the
     /// `gameplay/turtle_egg_hatch_chance` environment attribute.
     fn should_update_hatch_level(world: &Arc<World>) -> bool {
-        let chance = float_attribute(
-            world,
-            TURTLE_EGG_HATCH_CHANCE_ATTRIBUTE,
-            BASE_HATCH_CHANCE,
-        );
+        let chance = float_attribute(world, TURTLE_EGG_HATCH_CHANCE_ATTRIBUTE, BASE_HATCH_CHANCE);
         chance > 0.0 && rand::random::<f32>() < chance
     }
 

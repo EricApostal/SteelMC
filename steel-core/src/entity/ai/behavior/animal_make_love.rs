@@ -5,10 +5,10 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use steel_registry::entity_type::EntityTypeRef;
 
 use super::utils;
-use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::MemoryStatus;
 use crate::entity::ai::brain::memory::module_type as mem;
+use crate::entity::{Mob, SharedEntity};
 
 /// Vanilla `AnimalMakeLove.BREED_RANGE`.
 const BREED_RANGE: f64 = 3.0;
@@ -100,7 +100,7 @@ impl AnimalMakeLove {
     /// Steel brains are reachable through `Mob::brain`, but never through the
     /// body's own lock (the body brain is already borrowed for this tick).
     fn set_partner_breed_target(&self, partner: &SharedEntity, body: &SharedEntity) {
-        if let Some(brain) = partner.as_mob().and_then(crate::entity::Mob::brain) {
+        if let Some(brain) = partner.as_mob().and_then(Mob::brain) {
             brain
                 .lock()
                 .set_memory(&mem::BREED_TARGET, Some(body.clone()));
@@ -113,7 +113,7 @@ impl AnimalMakeLove {
 fn entity_is_panicking(entity: &SharedEntity) -> bool {
     entity
         .as_mob()
-        .and_then(crate::entity::Mob::brain)
+        .and_then(Mob::brain)
         .is_some_and(|brain| brain.lock().has_memory_value(&mem::IS_PANICKING))
 }
 
@@ -201,7 +201,7 @@ impl Behavior for AnimalMakeLove {
         }
 
         ctx.erase_memory(&mem::BREED_TARGET);
-        if let Some(brain) = partner.as_mob().and_then(crate::entity::Mob::brain) {
+        if let Some(brain) = partner.as_mob().and_then(Mob::brain) {
             brain.lock().erase_memory(&mem::BREED_TARGET);
         }
     }

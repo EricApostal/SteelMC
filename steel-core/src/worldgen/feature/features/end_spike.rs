@@ -7,6 +7,7 @@ use steel_registry::vanilla_entities;
 
 use super::super::prelude::*;
 use super::super::runner::FeatureDecorationRunner;
+use crate::behavior::blocks::FireBlock;
 use crate::entity::{Entity, entities::EndCrystalEntity, next_entity_id};
 
 const END_SPIKE_COUNT: usize = 10;
@@ -192,8 +193,48 @@ impl FeatureDecorationRunner {
         let bedrock = REGISTRY
             .blocks
             .get_default_state_id(&vanilla_blocks::BEDROCK);
-        let fire = REGISTRY.blocks.get_default_state_id(&vanilla_blocks::FIRE);
         let _ = region.set_block_state(crystal_pos.below(), bedrock, UpdateFlags::UPDATE_ALL);
+        // Vanilla `FireBlock.getState(level, crystalPos)`, evaluated after the bedrock
+        // base is in place.
+        let fire = FireBlock::get_state(&*region, crystal_pos);
         let _ = region.set_block_state(crystal_pos, fire, UpdateFlags::UPDATE_ALL);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FeatureDecorationRunner;
+
+    /// Vanilla `EndSpikeFeature.SpikeCacheLoader`: the ten spikes come from a
+    /// shuffled permutation of the sizes `0..10`, so every size is used exactly
+    /// once and drives `radius`/`height`/`guarded`.
+    #[test]
+    fn generated_end_spikes_use_each_size_once() {
+        let spikes = FeatureDecorationRunner::end_spikes_for_level(0);
+        assert_eq!(spikes.len(), 10);
+
+        let mut heights: Vec<i32> = spikes.iter().map(|spike| spike.height).collect();
+        heights.sort_unstable();
+        assert_eq!(heights, (0..10).map(|size| 76 + size * 3).collect::<Vec<_>>());
+
+        let mut guarded = 0;
+        for spike in &spikes {
+            // `height = 76 + 3 * size` recovers the shuffled size.
+            let size = (spike.height - 76) / 3;
+            assert_eq!(spike.radius, 2 + size / 3);
+            assert_eq!(spike.guarded, size == 1 || size == 2);
+            if spike.guarded {
+                guarded += 1;
+            }
+        }
+        assert_eq!(guarded, 2);
+
+        // Centers are `floor(42 * cos/sin(...))`, so they sit on the radius-42
+        // ring once floored to whole blocks.
+        for spike in &spikes {
+            assert!(spike.center_x.abs() <= 42);
+            assert!(spike.center_z.abs() <= 42);
+            assert!(spike.center_x * spike.center_x + spike.center_z * spike.center_z >= 1600);
+        }
     }
 }

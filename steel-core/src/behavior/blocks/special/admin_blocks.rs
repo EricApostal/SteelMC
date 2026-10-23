@@ -27,7 +27,7 @@ use crate::behavior::{
     BlockBehavior, BlockEntityCreation, BlockHitResult, BlockPlaceContext, InteractionResult,
     InventoryAccess,
 };
-use crate::block_entity::{BLOCK_ENTITIES, BlockEntityTicker};
+use crate::block_entity::{BLOCK_ENTITIES, BlockEntity as _, BlockEntityTicker};
 use crate::player::Player;
 use crate::world::{LevelReader, SignalGetter as _, SignalQueryContext, World};
 

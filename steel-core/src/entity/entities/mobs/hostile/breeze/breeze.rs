@@ -20,6 +20,7 @@ use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
 use crate::entity::ai::brain::Brain;
+use crate::entity::ai::path::PathType;
 use crate::entity::damage::DamageSource;
 use crate::entity::{
     Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySyncedData, LivingEntity,
@@ -86,8 +87,8 @@ impl BreezeEntity {
         // Vanilla `Breeze` constructor pathfinding maluses.
         {
             let mut malus = mob_base.pathfinding_malus().lock();
-            malus.set(crate::entity::ai::path::PathType::OnTopOfTrapdoor, -1.0);
-            malus.set(crate::entity::ai::path::PathType::Fire, -1.0);
+            malus.set(PathType::OnTopOfTrapdoor, -1.0);
+            malus.set(PathType::Fire, -1.0);
         }
 
         Self {

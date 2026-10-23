@@ -1,4 +1,5 @@
 use crate::entity::entities::{ExperienceOrbEntity, ItemEntity};
+use crate::entity::loot::loot_level_view;
 use crate::entity::projectile::triangle_random;
 use crate::entity::{
     Entity, EntityBase, EntityBaseLoad, EntityMovementEmission, EntitySyncedData,
@@ -559,10 +560,7 @@ impl FishingHookEntity {
                         // Vanilla loot params carry the level, which
                         // `minecraft:location_check` resolves against (the junk
                         // table's jungle-only bamboo entry).
-                        let level = crate::entity::loot::loot_level_view(
-                            &world,
-                            (position.x, position.y, position.z),
-                        );
+                        let level = loot_level_view(&world, (position.x, position.y, position.z));
 
                         // This is equivalent to `LootParams params` in the java src.
                         let mut loot_ctx = LootContext::new(&mut rng)

@@ -14,10 +14,11 @@ use steel_utils::{BlockPos, ChunkPos};
 use uuid::Uuid;
 
 use crate::entity::raid::raid::{
-    MAX_NO_ACTION_TIME, Raid, RaidStatus, VALID_RAID_RADIUS_SQR, village_raid_center,
+    DEFAULT_MAX_RAID_OMEN_LEVEL, MAX_NO_ACTION_TIME, Raid, RaidStatus, VALID_RAID_RADIUS_SQR,
+    village_raid_center,
 };
 use crate::entity::raid::raider::Raider;
-use crate::entity::{Entity, Player, SharedEntity};
+use crate::entity::{Entity, LivingEntity, Player, SharedEntity};
 use crate::world::World;
 
 /// Vanilla `Raids.RAID_FILE_ID`.
@@ -29,9 +30,9 @@ const SAVED_DIRTY_INTERVAL_TICKS: i32 = 200;
 /// Vanilla `Raids.canJoinRaid`.
 #[must_use]
 pub fn can_join_raid(raider: &dyn Raider) -> bool {
-    crate::entity::LivingEntity::is_alive(raider)
+    LivingEntity::is_alive(raider)
         && raider.can_join_raid()
-        && crate::entity::LivingEntity::no_action_time(raider) <= MAX_NO_ACTION_TIME
+        && LivingEntity::no_action_time(raider) <= MAX_NO_ACTION_TIME
 }
 
 /// A read-only view of one raid, handed to consumers that cannot hold the raid lock.
@@ -107,7 +108,7 @@ impl RaidSnapshot {
     /// Vanilla `Raid.getMaxRaidOmenLevel`.
     #[must_use]
     pub const fn max_raid_omen_level(&self) -> i32 {
-        crate::entity::raid::raid::DEFAULT_MAX_RAID_OMEN_LEVEL
+        DEFAULT_MAX_RAID_OMEN_LEVEL
     }
 
     /// Vanilla `Raid.isBetweenWaves`.
@@ -417,10 +418,7 @@ impl Raids {
             return;
         };
         raid.add_wave_mob(world, wave, &raider, false);
-        if raider
-            .as_raider()
-            .is_some_and(crate::entity::raid::raider::Raider::is_patrol_leader)
-        {
+        if raider.as_raider().is_some_and(Raider::is_patrol_leader) {
             raid.set_leader(wave, &raider);
         }
         self.dirty = true;

@@ -20,6 +20,7 @@ use crate::entity::ai::goal::{
     Goal, GoalControls, HurtByTargetGoal, LookAtPlayerGoal, MoveTowardsRestrictionGoal,
     NearestAttackableTargetGoal, RandomLookAroundGoal, WaterAvoidingRandomStrollGoal,
 };
+use crate::entity::ai::path::PathType;
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::objects::projectiles::SmallFireballEntity;
 use crate::entity::projectile::spawn_projectile_using_shoot;
@@ -101,11 +102,8 @@ impl BlazeEntity {
         mob_base
             .pathfinding_malus()
             .lock()
-            .set(crate::entity::ai::path::PathType::Water, -1.0);
-        mob_base
-            .pathfinding_malus()
-            .lock()
-            .set(crate::entity::ai::path::PathType::Lava, 8.0);
+            .set(PathType::Water, -1.0);
+        mob_base.pathfinding_malus().lock().set(PathType::Lava, 8.0);
 
         {
             // Vanilla `Blaze.registerGoals`.

@@ -581,11 +581,6 @@ impl LivingEntity for MuleEntity {
         }
     }
 
-    /// Vanilla `AbstractHorse.getMaxSpawnClusterSize`.
-    fn max_spawn_cluster_size(&self) -> i32 {
-        6
-    }
-
     fn is_immobile(&self) -> bool {
         self.default_is_immobile() && self.is_vehicle() && self.is_saddled()
             || is_immobile_from_state(&self.entity_data.lock().abstract_horse())
@@ -765,6 +760,11 @@ impl Mob for MuleEntity {
 
     fn mob_interact(&self, player: &Player, hand: InteractionHand) -> InteractionResult {
         self.donkey_mob_interact(player, hand)
+    }
+
+    /// Vanilla `AbstractHorse.getMaxSpawnClusterSize`.
+    fn max_spawn_cluster_size(&self) -> i32 {
+        6
     }
 
     fn mob_flags(&self) -> i8 {

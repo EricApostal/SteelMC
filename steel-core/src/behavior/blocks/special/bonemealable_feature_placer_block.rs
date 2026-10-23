@@ -43,7 +43,7 @@ impl BonemealableFeaturePlacerBlock {
     }
 
     /// Returns the configured feature this block grows (vanilla `feature` field).
-    const fn configured_feature(&self) -> &'static steel_registry::feature::ConfiguredFeature {
+    fn configured_feature(&self) -> &'static steel_registry::feature::ConfiguredFeature {
         if std::ptr::eq(self.block, &vanilla_blocks::PALE_MOSS_BLOCK) {
             &steel_registry::vanilla_configured_features::PALE_MOSS_PATCH_BONEMEAL
         } else {

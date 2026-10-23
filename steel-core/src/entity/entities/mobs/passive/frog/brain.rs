@@ -38,7 +38,7 @@ use crate::entity::ai::brain::SensorType;
 use crate::entity::ai::brain::activity::Activity;
 use crate::entity::ai::brain::behavior::builder::BehaviorBuilder;
 use crate::entity::ai::brain::behavior::gate::{GateBehavior, OrderPolicy, RunOne, RunningPolicy};
-use crate::entity::ai::brain::behavior::{BehaviorContext, TriggerIf};
+use crate::entity::ai::brain::behavior::{BehaviorContext, BehaviorControl, TriggerIf};
 use crate::entity::ai::brain::memory::MemoryStatus;
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::ai::brain::{ActivityData, Brain};
@@ -368,7 +368,7 @@ pub(crate) fn update_activity(brain: &mut Brain, _body: &SharedEntity) {
 
 /// Vanilla `SetEntityLookTargetSometimes.create(EntityTypes.PLAYER, 6.0F,
 /// UniformInt.of(30, 60))`.
-fn look_at_players() -> Box<dyn crate::entity::ai::brain::behavior::BehaviorControl> {
+fn look_at_players() -> Box<dyn BehaviorControl> {
     BehaviorBuilder::boxed(SetEntityLookTargetSometimes::for_type(
         &vanilla_entities::PLAYER,
         LOOK_DISTANCE,
@@ -377,12 +377,12 @@ fn look_at_players() -> Box<dyn crate::entity::ai::brain::behavior::BehaviorCont
 }
 
 /// Vanilla `new FollowTemptation(s -> 1.25F)`.
-fn follow_temptation() -> Box<dyn crate::entity::ai::brain::behavior::BehaviorControl> {
+fn follow_temptation() -> Box<dyn BehaviorControl> {
     BehaviorBuilder::boxed(FollowTemptation::new(SPEED_MULTIPLIER_WHEN_TEMPTED))
 }
 
 /// Vanilla `StartAttacking.create(FrogAi::canAttack, brain.getMemory(NEAREST_ATTACKABLE))`.
-fn start_attacking() -> Box<dyn crate::entity::ai::brain::behavior::BehaviorControl> {
+fn start_attacking() -> Box<dyn BehaviorControl> {
     BehaviorBuilder::boxed(StartAttacking::create_if(
         can_attack,
         nearest_attackable_target,

@@ -11,7 +11,7 @@ struct ResolvedMultifaceGrowth<'a> {
     raw: &'a MultifaceGrowthConfiguration,
     place_block: BlockRef,
     default_state: BlockStateId,
-    can_be_placed_on: &'a [BlockRef],
+    can_be_placed_on: &'a BlockHolderSet,
     is_sculk_vein: bool,
 }
 
@@ -394,10 +394,7 @@ impl FeatureDecorationRunner {
         config: &ResolvedMultifaceGrowth<'_>,
         state: BlockStateId,
     ) -> bool {
-        config
-            .can_be_placed_on
-            .iter()
-            .any(|block| state.get_block() == *block)
+        Self::block_matches_holder_set(state.get_block(), config.can_be_placed_on)
     }
 
     fn multiface_is_place_block(config: &ResolvedMultifaceGrowth<'_>, state: BlockStateId) -> bool {

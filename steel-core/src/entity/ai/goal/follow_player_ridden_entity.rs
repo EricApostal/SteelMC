@@ -6,6 +6,7 @@
 //! ([`FollowPlayerRiddenEntityGoal::new_matching`]) and the concrete mob arrives as
 //! `&dyn PathfinderMob`.
 
+use std::ptr;
 use std::sync::Arc;
 
 use glam::DVec3;
@@ -46,7 +47,7 @@ impl FollowPlayerRiddenEntityGoal {
     /// Vanilla `new FollowPlayerRiddenEntityGoal(mob, entityTypeToFollow)` for a single type.
     #[must_use]
     pub fn new(entity_type_to_follow: EntityTypeRef) -> Self {
-        Self::new_matching(move |entity_type| std::ptr::eq(entity_type, entity_type_to_follow))
+        Self::new_matching(move |entity_type| ptr::eq(entity_type, entity_type_to_follow))
     }
 
     /// Vanilla's `Class<? extends Entity>` argument, which matches subclasses: Steel entity

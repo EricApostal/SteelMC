@@ -47,7 +47,6 @@ use steel_utils::{BlockPos, Downcast as _};
 
 use crate::entity::ai::goal::{
     AvoidEntityGoal, FollowFlockLeaderGoal, Goal, GoalControls, PanicGoal, RandomSwimmingGoal,
-    SchoolingFish,
 };
 use crate::entity::ai::path::PathType;
 use crate::entity::damage::DamageSource;
@@ -82,10 +81,6 @@ const WATER_TRAVEL_SPEED: f32 = 0.01;
 /// Vanilla `AbstractFish.travelInWater` drag and sink impulse.
 const WATER_TRAVEL_DRAG: f64 = 0.9;
 const WATER_SINK_IMPULSE: f64 = -0.005;
-/// Vanilla `AbstractFish` flop sound volume/pitch (`makeSound` -> `getSoundVolume`,
-/// `getVoicePitch`).
-const FLOP_SOUND_VOLUME: f32 = 0.4;
-const FLOP_SOUND_PITCH: f32 = 1.0;
 /// Vanilla `Bucketable.bucketMobPickup` plays the pickup sound at volume/pitch 1.
 const BUCKET_SOUND_VOLUME: f32 = 1.0;
 const BUCKET_SOUND_PITCH: f32 = 1.0;
@@ -259,7 +254,9 @@ pub(crate) fn travel_in_water(entity: &SharedEntity, input: DVec3) -> Option<Mov
 }
 
 /// Vanilla `AbstractFish.aiStep` flop: bounce and play the flop sound on land.
-pub(crate) fn tick_flop(entity: &dyn Entity, flop_sound: SoundEventRef) {
+///
+/// Vanilla plays it through `makeSound`, i.e. at `getSoundVolume()`/`getVoicePitch()`.
+pub(crate) fn tick_flop(entity: &dyn LivingEntity, flop_sound: SoundEventRef) {
     if entity.is_in_water() || !entity.on_ground() || !entity.vertical_collision() {
         return;
     }
@@ -271,7 +268,7 @@ pub(crate) fn tick_flop(entity: &dyn Entity, flop_sound: SoundEventRef) {
         velocity.z + f64::from(rand::random::<f32>() * 2.0 - 1.0) * FLOP_HORIZONTAL_IMPULSE,
     ));
     entity.set_on_ground(false);
-    entity.play_sound(flop_sound, FLOP_SOUND_VOLUME, FLOP_SOUND_PITCH);
+    entity.make_sound(Some(flop_sound));
 }
 
 /// Vanilla `Bucketable.bucketMobPickup`: a water bucket captures this fish.
@@ -386,7 +383,6 @@ pub(crate) fn swim_sound() -> SoundEventRef {
 }
 
 /// Vanilla `AbstractSchoolingFish` flock membership state.
-#[derive(Debug)]
 pub(crate) struct SchoolingState {
     /// Vanilla `AbstractSchoolingFish.leader`.
     leader: Option<SharedEntity>,
@@ -420,12 +416,6 @@ impl SchoolingState {
     #[must_use]
     pub(crate) fn can_be_followed(&self, max_school_size: i32) -> bool {
         self.has_followers() && self.school_size < max_school_size
-    }
-
-    /// Vanilla `AbstractSchoolingFish.schoolSize`.
-    #[must_use]
-    pub(crate) fn school_size(&self) -> i32 {
-        self.school_size
     }
 
     /// Vanilla `AbstractSchoolingFish.addFollower`.
@@ -573,11 +563,4 @@ pub(crate) fn tick_schooling(entity: &dyn Entity) {
     if neighbors.len() <= 1 {
         state.lock().reset_school_size();
     }
-}
-
-/// Vanilla `AbstractSchoolingFish.getMaxSpawnClusterSize`, which returns
-/// `getMaxSchoolSize`.
-#[must_use]
-pub(crate) fn max_spawn_cluster_size(max_school_size: i32) -> i32 {
-    max_school_size
 }

@@ -636,8 +636,9 @@ pub(crate) fn populate_zombie_equipment_slots(
 /// `ZombieVillager`.
 pub(crate) fn populate_zombie_equipment_enchantments(
     mob: &dyn Mob,
-    random: &mut (impl steel_utils::random::Random
-          + steel_registry::enchantment::table::EnchantmentRandom),
+    random: &mut (
+             impl steel_utils::random::Random + steel_registry::enchantment::table::EnchantmentRandom
+         ),
     difficulty_modifier: f32,
 ) {
     crate::entity::entities::mobs::spawn_equipment::populate_default_equipment_enchantments(
@@ -800,8 +801,9 @@ impl ZombieEntity {
     /// override, so it is `Mob`'s weapon-then-armor pass.
     fn populate_default_equipment_enchantments(
         &self,
-        random: &mut (impl steel_utils::random::Random
-              + steel_registry::enchantment::table::EnchantmentRandom),
+        random: &mut (
+                 impl steel_utils::random::Random + steel_registry::enchantment::table::EnchantmentRandom
+             ),
         difficulty_modifier: f32,
     ) {
         populate_zombie_equipment_enchantments(self, random, difficulty_modifier);

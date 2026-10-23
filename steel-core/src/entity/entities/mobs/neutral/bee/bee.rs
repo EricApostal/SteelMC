@@ -30,7 +30,8 @@ use crate::entity::damage::DamageSource;
 use crate::entity::neutral_mob::{NeutralMob, PersistentAnger};
 use crate::entity::{
     AgeableMob, AgeableMobBase, Animal, AnimalBase, Entity, EntityBase, EntityBaseLoad, EntityPose,
-    EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity,
+    EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase, MobEffectInstance,
+    PathfinderMob, SharedEntity,
 };
 use crate::physics::MoveResult;
 use crate::world::World;
@@ -487,7 +488,7 @@ impl Mob for BeeEntity {
                 _ => 0,
             };
             if poison_seconds > 0 {
-                target_living.add_mob_effect(crate::entity::MobEffectInstance::with_duration(
+                target_living.add_mob_effect(MobEffectInstance::with_duration(
                     &steel_registry::vanilla_mob_effects::POISON,
                     poison_seconds * TICKS_PER_SECOND,
                     0,

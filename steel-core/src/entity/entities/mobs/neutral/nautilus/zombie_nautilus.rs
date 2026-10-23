@@ -28,14 +28,13 @@ use steel_registry::item_stack::ItemStack;
 use steel_registry::shared_structs::pick_spawn_conditioned_entry;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::ZombieNautilusEntityData;
-use steel_registry::vanilla_zombie_nautilus_variants;
 use steel_registry::zombie_nautilus_variant::{ZombieNautilusVariant, ZombieNautilusVariantRef};
 use steel_registry::{REGISTRY, RegistryExt as _, RegistryReference, sound_events};
 use steel_utils::Identifier;
 use steel_utils::locks::SyncMutex;
-use steel_utils::random::LegacyRandom;
+use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::types::InteractionHand;
-use steel_utils::{BlockPos, DowncastType, DowncastTypeKey, UuidExt as _};
+use steel_utils::{BlockPos, DowncastType, DowncastTypeKey};
 use uuid::Uuid;
 
 use crate::behavior::InteractionResult;
@@ -50,7 +49,7 @@ use crate::entity::entities::mobs::neutral::nautilus::brain;
 use crate::entity::{
     AgeableMob, AgeableMobBase, Animal, AnimalBase, Entity, EntityBase, EntityBaseLoad, EntityPose,
     EntitySpawnReason, EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase,
-    PathfinderMob, SharedEntity, SpawnGroupData,
+    MobEffectInstance, PathfinderMob, SharedEntity, SpawnGroupData,
 };
 use crate::inventory::equipment::EquipmentSlot;
 use crate::physics::MoveResult;
@@ -200,6 +199,33 @@ impl ZombieNautilusEntity {
         abstract_nautilus::is_aggravated(self)
     }
 
+    /// Vanilla `AbstractNautilus.canJump`.
+    #[must_use]
+    pub fn can_jump(&self) -> bool {
+        abstract_nautilus::can_jump(self)
+    }
+
+    /// Vanilla `AbstractNautilus.onPlayerJump`.
+    pub fn on_player_jump(&self, jump_amount: i32) {
+        abstract_nautilus::on_player_jump(self, jump_amount);
+    }
+
+    /// Vanilla `AbstractNautilus.handleStartJump`.
+    pub fn handle_start_jump(&self) {
+        abstract_nautilus::handle_start_jump(self);
+    }
+
+    /// Vanilla `AbstractNautilus.handleStopJump` is empty.
+    pub fn handle_stop_jump(&self) {
+        abstract_nautilus::handle_stop_jump();
+    }
+
+    /// Vanilla `AbstractNautilus.getJumpCooldown`.
+    #[must_use]
+    pub fn get_jump_cooldown(&self) -> i32 {
+        abstract_nautilus::get_jump_cooldown(self)
+    }
+
     /// Vanilla `AbstractNautilus.isMobControlled`.
     #[must_use]
     pub fn is_mob_controlled(&self) -> bool {
@@ -270,7 +296,11 @@ impl ZombieNautilusEntity {
 fn set_tamable_flag(entity_data: &SyncMutex<ZombieNautilusEntityData>, flag: i8, value: bool) {
     let mut entity_data = entity_data.lock();
     let current = *entity_data.tamable_animal().flags.get();
-    let next = if value { current | flag } else { current & !flag };
+    let next = if value {
+        current | flag
+    } else {
+        current & !flag
+    };
     entity_data.tamable_animal_mut().flags.set(next);
 }
 
@@ -468,16 +498,10 @@ impl Entity for ZombieNautilusEntity {
         abstract_nautilus::controlling_passenger(self)
     }
 
-    fn equip_sound(&self, slot: EquipmentSlot, stack: &ItemStack) -> Option<SoundEventRef> {
-        abstract_nautilus::equip_sound(self, slot, stack)
-    }
-
     /// Vanilla `AbstractNautilus.hurtServer` anger reaction.
     fn hurt(&self, world: &World, source: &DamageSource, amount: f32) -> bool {
         let was_hurt = LivingEntity::hurt_server(self, world, source, amount);
-        if was_hurt
-            && let Some(attacker) = source.causing_entity()
-        {
+        if was_hurt && let Some(attacker) = source.causing_entity() {
             brain::set_anger_target(world, self, attacker);
         }
 
@@ -510,6 +534,10 @@ impl Entity for ZombieNautilusEntity {
 }
 
 impl LivingEntity for ZombieNautilusEntity {
+    fn equip_sound(&self, slot: EquipmentSlot, stack: &ItemStack) -> Option<SoundEventRef> {
+        abstract_nautilus::equip_sound(self, slot, stack)
+    }
+
     fn living_base(&self) -> &LivingEntityBase {
         &self.living_base
     }
@@ -544,7 +572,7 @@ impl LivingEntity for ZombieNautilusEntity {
         abstract_nautilus::can_dispenser_equip_into_slot(self, slot)
     }
 
-    fn can_be_affected(&self, effect: &crate::entity::MobEffectInstance) -> bool {
+    fn can_be_affected(&self, effect: &MobEffectInstance) -> bool {
         abstract_nautilus::can_be_affected(self, effect)
     }
 
@@ -584,6 +612,15 @@ impl LivingEntity for ZombieNautilusEntity {
 }
 
 impl AgeableMob for ZombieNautilusEntity {
+    /// Vanilla `ZombieNautilus.getBreedOffspring` returns `null`.
+    fn get_breed_offspring(
+        &self,
+        _world: &Arc<World>,
+        _partner: &dyn AgeableMob,
+    ) -> Option<SharedEntity> {
+        None
+    }
+
     fn ageable_base(&self) -> &AgeableMobBase {
         &self.ageable_base
     }
@@ -630,15 +667,6 @@ impl Animal for ZombieNautilusEntity {
     /// Vanilla `ZombieNautilus.playEatingSound`.
     fn play_eating_sound(&self) {
         self.make_sound(Some(&sound_events::ENTITY_ZOMBIE_NAUTILUS_EAT));
-    }
-
-    /// Vanilla `ZombieNautilus.getBreedOffspring` returns `null`.
-    fn get_breed_offspring(
-        &self,
-        _world: &Arc<World>,
-        _partner: &dyn AgeableMob,
-    ) -> Option<SharedEntity> {
-        None
     }
 }
 
@@ -733,6 +761,3 @@ impl PathfinderMob for ZombieNautilusEntity {
         0.0
     }
 }
-
-/// Re-exported variant statics pointer used by the spawn-time default.
-const _: ZombieNautilusVariantRef = &vanilla_zombie_nautilus_variants::TEMPERATE;

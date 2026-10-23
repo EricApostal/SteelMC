@@ -574,6 +574,7 @@ const fn direction_3d_data_value(direction: Direction) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
     use std::string::ToString;
     use steel_registry::vanilla_entities;
 
@@ -596,7 +597,7 @@ mod tests {
         use simdnbt::borrow::read_compound;
         let mut bytes = Vec::new();
         nbt.write(&mut bytes);
-        let mut cursor = std::io::Cursor::new(bytes.as_slice());
+        let mut cursor = Cursor::new(bytes.as_slice());
         let base = read_compound(&mut cursor).expect("entity NBT should reborrow");
         let borrowed: simdnbt::borrow::NbtCompound<'_, '_> = (&base).into();
         visitor(borrowed)

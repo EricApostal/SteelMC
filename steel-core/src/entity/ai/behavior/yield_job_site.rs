@@ -1,5 +1,7 @@
 //! Vanilla `YieldJobSite`.
 
+use std::sync::Arc;
+
 use steel_registry::poi::PoiTypeRef;
 use steel_registry::vanilla_villager_professions;
 
@@ -106,7 +108,7 @@ impl Trigger for YieldJobSite {
             .get_memory(&mem::NEAREST_LIVING_ENTITIES)
             .unwrap_or_default();
         let wants = nearby.iter().any(|entity| {
-            !std::sync::Arc::ptr_eq(entity, ctx.body)
+            !Arc::ptr_eq(entity, ctx.body)
                 && Self::nearby_wants_job_site(poi_type, entity, site.pos)
         });
 

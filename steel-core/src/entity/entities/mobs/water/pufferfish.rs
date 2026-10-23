@@ -55,8 +55,6 @@ const TOUCH_INFLATION: f64 = 0.3;
 const POISON_DURATION_PER_STATE: i32 = 60;
 /// Vanilla `Mob` default step height used when the attribute is missing.
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
-/// Vanilla `LivingEntity.getSoundVolume` for fish.
-const SOUND_VOLUME: f32 = 0.4;
 /// Vanilla `Pufferfish.touch` sting sound volume/pitch.
 const STING_SOUND_VOLUME: f32 = 1.0;
 const STING_SOUND_PITCH: f32 = 1.0;
@@ -135,7 +133,7 @@ impl PufferfishEntity {
             .lock()
             .add_goal(1, PufferfishPuffGoal);
 
-        Self {
+        let entity = Self {
             base,
             entity_type,
             living_base,
@@ -143,7 +141,10 @@ impl PufferfishEntity {
             entity_data: SyncMutex::new(entity_data),
             inflate_counter: SyncMutex::new(0),
             deflate_timer: SyncMutex::new(0),
-        }
+        };
+        // Vanilla `Pufferfish` constructor: `refreshDimensions()`.
+        entity.refresh_dimensions();
+        entity
     }
 
     /// Vanilla `Pufferfish.getPuffState`.
@@ -237,24 +238,24 @@ impl PufferfishEntity {
 
         if self.inflate_counter() > 0 {
             if self.puff_state() == STATE_SMALL {
-                self.make_sound(&sound_events::ENTITY_PUFFER_FISH_BLOW_UP);
+                self.make_sound(Some(&sound_events::ENTITY_PUFFER_FISH_BLOW_UP));
                 self.set_puff_state(STATE_MID);
             } else if self.inflate_counter() > INFLATE_FULL_THRESHOLD
                 && self.puff_state() == STATE_MID
             {
-                self.make_sound(&sound_events::ENTITY_PUFFER_FISH_BLOW_UP);
+                self.make_sound(Some(&sound_events::ENTITY_PUFFER_FISH_BLOW_UP));
                 self.set_puff_state(STATE_FULL);
             }
 
             self.set_inflate_counter(self.inflate_counter() + 1);
         } else if self.puff_state() != STATE_SMALL {
             if self.deflate_timer() > DEFLATE_MID_THRESHOLD && self.puff_state() == STATE_FULL {
-                self.make_sound(&sound_events::ENTITY_PUFFER_FISH_BLOW_OUT);
+                self.make_sound(Some(&sound_events::ENTITY_PUFFER_FISH_BLOW_OUT));
                 self.set_puff_state(STATE_MID);
             } else if self.deflate_timer() > DEFLATE_SMALL_THRESHOLD
                 && self.puff_state() == STATE_MID
             {
-                self.make_sound(&sound_events::ENTITY_PUFFER_FISH_BLOW_OUT);
+                self.make_sound(Some(&sound_events::ENTITY_PUFFER_FISH_BLOW_OUT));
                 self.set_puff_state(STATE_SMALL);
             }
 
@@ -400,15 +401,6 @@ impl Entity for PufferfishEntity {
         self.set_puff_state(nbt.int("PuffState").unwrap_or(0).min(MAX_PUFF_STATE));
     }
 
-    fn mob_interact(&self, player: &Player, hand: InteractionHand) -> InteractionResult {
-        // Vanilla `AbstractFish.mobInteract`: bucket pickup, else `super.mobInteract`
-        // (`Mob` default is `PASS`).
-        if self.try_bucket_pickup(player, hand) {
-            return InteractionResult::Success;
-        }
-        InteractionResult::Pass
-    }
-
     /// Vanilla `Pufferfish.playerTouch`.
     ///
     /// Deviation: vanilla only stings a `ServerPlayer`; every Steel player is
@@ -467,10 +459,6 @@ impl LivingEntity for PufferfishEntity {
             .set(clamped);
     }
 
-    fn sound_volume(&self) -> f32 {
-        SOUND_VOLUME
-    }
-
     fn hurt_sound(&self, _source: &DamageSource) -> Option<SoundEventRef> {
         Some(&sound_events::ENTITY_PUFFER_FISH_HURT)
     }
@@ -525,8 +513,24 @@ impl LivingEntity for PufferfishEntity {
 }
 
 impl Mob for PufferfishEntity {
+    fn mob_interact(&self, player: &Player, hand: InteractionHand) -> InteractionResult {
+        // Vanilla `AbstractFish.mobInteract`: bucket pickup, else `super.mobInteract`
+        // (`Mob` default is `PASS`).
+        if self.try_bucket_pickup(player, hand) {
+            return InteractionResult::Success;
+        }
+        InteractionResult::Pass
+    }
     fn mob_base(&self) -> &MobBase {
         &self.mob_base
+    }
+
+    fn tick_goal_selectors(&self, entity: &SharedEntity) {
+        PathfinderMob::tick_pathfinder_goal_selectors(self, entity);
+    }
+
+    fn tick_path_navigation(&self) {
+        PathfinderMob::tick_pathfinder_path_navigation(self);
     }
 
     /// Vanilla `AbstractFish.getMaxSpawnClusterSize`.

@@ -18,6 +18,7 @@ use steel_registry::{sound_events, vanilla_attributes, vanilla_entities};
 use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
+use crate::chunk::heightmap::HeightmapType;
 use crate::entity::ai::goal::{Goal, GoalControls};
 use crate::entity::damage::DamageSource;
 use crate::entity::{
@@ -320,7 +321,7 @@ impl Goal for PhantomAttackStrategyGoal {
             // Vanilla `getHeightmapPos(MOTION_BLOCKING, anchor).above(10 + random.nextInt(20))`.
             let height = LevelReader::height_at(
                 world.as_ref(),
-                crate::chunk::heightmap::HeightmapType::MotionBlocking,
+                HeightmapType::MotionBlocking,
                 anchor.x(),
                 anchor.z(),
             );
@@ -403,7 +404,7 @@ impl PhantomCircleAroundAnchorGoal {
         if phantom.anchor_point().is_none() {
             phantom.set_anchor_point(Some(phantom.block_position()));
         }
-        self.angle += self.clockwise * 15.0 * (std::f32::consts::PI / 180.0);
+        self.angle += self.clockwise * 15.0 * (f32::consts::PI / 180.0);
         let anchor = phantom.anchor_or_block();
         phantom.set_move_target_point(DVec3::new(
             f64::from(anchor.x()) + f64::from(self.distance * self.angle.cos()),
@@ -451,7 +452,7 @@ impl Goal for PhantomCircleAroundAnchorGoal {
             }
         }
         if rand::random_range(0..225) == 0 {
-            self.angle = rand::random::<f32>() * 2.0 * std::f32::consts::PI;
+            self.angle = rand::random::<f32>() * 2.0 * f32::consts::PI;
             self.select_next(phantom);
         }
         if mob.position().distance_squared(phantom.move_target_point()) < 1.0 {

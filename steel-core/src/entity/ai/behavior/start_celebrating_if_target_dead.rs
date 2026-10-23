@@ -3,9 +3,9 @@
 use steel_registry::vanilla_entities;
 use steel_registry::vanilla_game_rules::FORGIVE_DEAD_PLAYERS;
 
-use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
 use crate::entity::ai::brain::memory::{MemoryStatus, module_type as mem};
+use crate::entity::{LivingEntity, SharedEntity};
 
 /// Vanilla `BiPredicate<LivingEntity, LivingEntity>` dance gate.
 pub type DancePredicate = fn(&SharedEntity, &SharedEntity) -> bool;
@@ -50,7 +50,7 @@ impl Trigger for StartCelebratingIfTargetDead {
 
         if !target
             .as_living_entity()
-            .is_some_and(crate::entity::LivingEntity::is_dead_or_dying)
+            .is_some_and(LivingEntity::is_dead_or_dying)
         {
             return false;
         }

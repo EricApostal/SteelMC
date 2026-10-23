@@ -7,6 +7,8 @@
 //! `TriggerGate` are covered by [`TriggerSequence`], [`TriggerIf`] and
 //! [`TriggerOneShuffled`].
 
+use std::any;
+
 use super::super::memory::MemoryModuleTypeRef;
 use super::BehaviorContext;
 use super::BehaviorControl;
@@ -76,7 +78,7 @@ impl<T: Trigger> BehaviorControl for OneShot<T> {
     }
 
     fn debug_string(&self) -> String {
-        format!("OneShot[{}]", std::any::type_name::<T>())
+        format!("OneShot[{}]", any::type_name::<T>())
     }
 }
 

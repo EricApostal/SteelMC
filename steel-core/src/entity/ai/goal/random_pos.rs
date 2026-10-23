@@ -11,10 +11,10 @@ use crate::fluid::FluidStateExt as _;
 const RANDOM_POS_ATTEMPTS: usize = 10;
 
 /// Vanilla's callers pass `(float) (Math.PI / 2)`; the `float` narrowing is part of the math.
-pub(crate) const HALF_PI: f64 = std::f32::consts::FRAC_PI_2 as f64;
+pub(crate) const HALF_PI: f64 = f32::consts::FRAC_PI_2 as f64;
 
 /// Vanilla `Raider.ObtainLeaderBannerGoal` passes `(float) (Math.PI / 10)`.
-pub(crate) const TENTH_PI: f64 = (std::f64::consts::PI / 10.0) as f32 as f64;
+pub(crate) const TENTH_PI: f64 = (f64::consts::PI / 10.0) as f32 as f64;
 
 pub(crate) fn default_random_pos(
     mob: &dyn PathfinderMob,
@@ -310,7 +310,7 @@ fn generate_random_direction_within_radians(
     z_dir: f64,
     max_xz_radians_from_dir: f64,
 ) -> Option<BlockPos> {
-    let y_radians_center = z_dir.atan2(x_dir) - f64::from(std::f32::consts::FRAC_PI_2);
+    let y_radians_center = z_dir.atan2(x_dir) - f64::from(f32::consts::FRAC_PI_2);
     // Vanilla computes the jitter in `float` arithmetic: `2.0F * nextFloat() - 1.0F`.
     let jitter = f64::from(2.0_f32 * random.next_f32() - 1.0);
     let y_radians = y_radians_center + jitter * max_xz_radians_from_dir;
@@ -319,7 +319,7 @@ fn generate_random_direction_within_radians(
         random.next_f64().sqrt(),
         min_horizontal_dist,
         max_horizontal_dist,
-    ) * f64::from(std::f32::consts::SQRT_2);
+    ) * f64::from(f32::consts::SQRT_2);
     let xt = -dist * y_radians.sin();
     let zt = dist * y_radians.cos();
     if xt.abs() > max_horizontal_dist || zt.abs() > max_horizontal_dist {

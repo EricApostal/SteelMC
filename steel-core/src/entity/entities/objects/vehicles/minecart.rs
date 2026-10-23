@@ -23,6 +23,7 @@ use steel_utils::block_util::FoundRectangle;
 use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
+use crate::entity::damage::DamageSource;
 use crate::entity::{Entity, EntityBase, EntityBaseLoad, EntitySyncedData};
 use crate::world::World;
 
@@ -166,12 +167,7 @@ impl Entity for MinecartEntity {
         minecart_base::minecart_relative_portal_position(self, axis, portal_area)
     }
 
-    fn hurt(
-        &self,
-        world: &World,
-        source: &crate::entity::damage::DamageSource,
-        amount: f32,
-    ) -> bool {
+    fn hurt(&self, world: &World, source: &DamageSource, amount: f32) -> bool {
         self.minecart_hurt(world, source, amount)
     }
 

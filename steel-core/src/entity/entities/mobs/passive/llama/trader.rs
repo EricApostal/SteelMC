@@ -14,13 +14,18 @@ use steel_utils::locks::SyncMutex;
 use steel_utils::{Downcast as _, DowncastType, DowncastTypeKey};
 
 use super::LlamaEntity;
+use crate::behavior::InteractionResult;
 use crate::entity::ai::goal::{Goal, GoalControls, NearestAttackableTargetGoal, PanicGoal};
+use crate::entity::damage::DamageSource;
 use crate::entity::entities::mobs::npc::wandering_trader::WanderingTraderEntity;
 use crate::entity::leash::Leashable;
 use crate::entity::{
-    AgeableMob, Entity, EntityBase, EntityBaseLoad, EntitySpawnReason, EntitySyncedData,
-    LivingEntity, LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity, SpawnGroupData,
+    AgeableMob, AgeableMobBase, Animal, AnimalBase, Entity, EntityBase, EntityBaseLoad, EntityPose,
+    EntitySpawnReason, EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase,
+    PathfinderMob, RemovalReason, SharedEntity, SpawnGroupData,
 };
+use crate::physics::MoveResult;
+use crate::player::Player;
 use crate::world::World;
 
 /// Vanilla `TraderLlama.DEFAULT_DESPAWN_DELAY`.
@@ -157,7 +162,7 @@ impl TraderLlamaEntity {
 
         if next_delay <= 0 {
             self.remove_leash();
-            self.set_removed(crate::entity::RemovalReason::Discarded);
+            self.set_removed(RemovalReason::Discarded);
         }
     }
 
@@ -184,7 +189,7 @@ impl Entity for TraderLlamaEntity {
 
     fn dimensions_for_pose(
         &self,
-        pose: crate::entity::EntityPose,
+        pose: EntityPose,
     ) -> steel_registry::entity_type::EntityDimensions {
         self.llama.dimensions_for_pose(pose)
     }
@@ -243,7 +248,7 @@ impl LivingEntity for TraderLlamaEntity {
 
     fn hurt_sound(
         &self,
-        source: &crate::entity::damage::DamageSource,
+        source: &DamageSource,
     ) -> Option<steel_registry::sound_event::SoundEventRef> {
         self.llama.hurt_sound(source)
     }
@@ -257,13 +262,13 @@ impl LivingEntity for TraderLlamaEntity {
         self.maybe_despawn();
     }
 
-    fn ai_step(&self, entity: &SharedEntity) -> Option<crate::physics::MoveResult> {
+    fn ai_step(&self, entity: &SharedEntity) -> Option<MoveResult> {
         self.llama.ai_step(entity)
     }
 }
 
 impl AgeableMob for TraderLlamaEntity {
-    fn ageable_base(&self) -> &crate::entity::AgeableMobBase {
+    fn ageable_base(&self) -> &AgeableMobBase {
         self.llama.ageable_base()
     }
 
@@ -284,13 +289,13 @@ impl AgeableMob for TraderLlamaEntity {
     }
 }
 
-impl crate::entity::Animal for TraderLlamaEntity {
-    fn animal_base(&self) -> &crate::entity::AnimalBase {
+impl Animal for TraderLlamaEntity {
+    fn animal_base(&self) -> &AnimalBase {
         self.llama.animal_base()
     }
 
     fn is_food(&self, item_stack: &steel_registry::item_stack::ItemStack) -> bool {
-        crate::entity::Animal::is_food(&self.llama, item_stack)
+        Animal::is_food(&self.llama, item_stack)
     }
 }
 
@@ -338,9 +343,9 @@ impl Mob for TraderLlamaEntity {
 
     fn mob_interact(
         &self,
-        player: &crate::player::Player,
+        player: &Player,
         hand: steel_utils::types::InteractionHand,
-    ) -> crate::behavior::InteractionResult {
+    ) -> InteractionResult {
         Mob::mob_interact(&self.llama, player, hand)
     }
 }

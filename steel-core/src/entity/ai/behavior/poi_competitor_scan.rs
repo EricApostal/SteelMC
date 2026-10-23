@@ -1,5 +1,7 @@
 //! Vanilla `PoiCompetitorScan`.
 
+use std::sync::Arc;
+
 use super::poi;
 use super::villager;
 use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
@@ -51,7 +53,7 @@ impl Trigger for PoiCompetitorScan {
             .unwrap_or_default();
 
         let outperformed = nearby.iter().any(|entity| {
-            if std::sync::Arc::ptr_eq(entity, ctx.body) {
+            if Arc::ptr_eq(entity, ctx.body) {
                 return false;
             }
             let Some(other) = villager::as_villager(entity) else {

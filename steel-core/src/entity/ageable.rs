@@ -445,7 +445,9 @@ mod tests {
     use steel_registry::{init_vanilla_registry, vanilla_entities};
 
     use super::*;
-    use crate::entity::{EntityBase, LivingEntity, LivingEntityBase, MobBase};
+    use crate::entity::{
+        EntityBase, LivingEntity, LivingEntityBase, MobBase, impl_test_downcast_type,
+    };
 
     struct TestAgeableMob {
         base: EntityBase,
@@ -479,7 +481,7 @@ mod tests {
         }
     }
 
-    crate::entity::impl_test_downcast_type!(TestAgeableMob);
+    impl_test_downcast_type!(TestAgeableMob);
 
     impl Entity for TestAgeableMob {
         fn base(&self) -> &EntityBase {

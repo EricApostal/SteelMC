@@ -40,6 +40,7 @@ use steel_utils::{BlockPos, BlockStateId, Downcast, DowncastType, DowncastTypeKe
 
 use crate::behavior::InteractionResult;
 use crate::entity::ai::brain::Brain;
+use crate::entity::ai::brain::memory::MemoryModuleTypeRef;
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::ai::goal::{
     BreedGoal, FloatGoal, FollowParentGoal, Goal, GoalControls, LookAtPlayerGoal, PanicGoal,
@@ -50,8 +51,8 @@ use crate::entity::leash::Leashable;
 use crate::entity::living_entity::shearing_loot_items_with_rng;
 use crate::entity::{
     AgeableMob, AgeableMobBase, Animal, AnimalBase, Entity, EntityBase, EntityBaseLoad, EntityPose,
-    EntitySpawnReason, EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase,
-    PathfinderMob, SharedEntity, SpawnGroupData, entity_loot_ref, living_loot_equipment,
+    EntitySpawnReason, EntitySyncedData, LivingEntity, LivingEntityBase, LivingTravelInput, Mob,
+    MobBase, PathfinderMob, SharedEntity, SpawnGroupData, entity_loot_ref, living_loot_equipment,
 };
 use crate::physics::MoveResult;
 use crate::player::Player;
@@ -92,7 +93,7 @@ const SCUTE_SPAWN_Y_OFFSET: f64 = 1.0;
 
 /// Memory types registered by vanilla `Armadillo.BRAIN_PROVIDER`'s sensors and
 /// behavior entry conditions.
-fn armadillo_memory_types() -> [crate::entity::ai::brain::memory::MemoryModuleTypeRef; 1] {
+fn armadillo_memory_types() -> [MemoryModuleTypeRef; 1] {
     [&mem::DANGER_DETECTED_RECENTLY]
 }
 
@@ -247,8 +248,7 @@ impl ArmadilloEntity {
 
         self.mob_base().navigation().lock().stop();
         self.living_base().set_speed(0.0);
-        self.living_base()
-            .set_travel_input(crate::entity::LivingTravelInput::ZERO);
+        self.living_base().set_travel_input(LivingTravelInput::ZERO);
         self.reset_love();
         self.game_event(&vanilla_game_events::ENTITY_ACTION);
         self.make_sound(Some(&sound_events::ENTITY_ARMADILLO_ROLL));

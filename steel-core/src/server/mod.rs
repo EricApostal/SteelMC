@@ -722,6 +722,8 @@ impl Server {
         let player_lists = PlayerLists::load(&resolved_worlds.save_path, config.white_list)
             .await
             .map_err(|error| format!("failed to load server player lists: {error}"))?;
+        crate::datapack::init(&resolved_worlds.save_path)
+            .map_err(|error| format!("failed to load data packs: {error}"))?;
         let mut worlds = WorldMap::new(
             resolved_worlds.default_domain.clone(),
             &resolved_worlds.domains,

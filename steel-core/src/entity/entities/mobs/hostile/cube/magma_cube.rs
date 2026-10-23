@@ -17,13 +17,16 @@ use steel_utils::random::RandomSource;
 use steel_utils::types::Difficulty;
 use steel_utils::{BlockPos, BlockStateId, Downcast as _, DowncastType, DowncastTypeKey};
 
+use crate::entity::ai::control::rotate_towards;
 use crate::entity::ai::goal::{Goal, GoalControls, NearestAttackableTargetGoal};
 use crate::entity::damage::DamageSource;
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
+    ENTITIES, Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
     LivingEntity, LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, SharedEntity,
+    next_entity_id,
 };
 use crate::physics::MoveResult;
+use crate::player::Player;
 use crate::world::World;
 
 use super::abstract_cube_mob::{
@@ -247,7 +250,7 @@ impl MagmaCubeEntity {
                 let count = (size * 16.0) as i32;
                 let position = self.position();
                 for _ in 0..count {
-                    let dir = rand::random::<f32>() * std::f32::consts::TAU;
+                    let dir = rand::random::<f32>() * f32::consts::TAU;
                     let d = rand::random::<f32>() * 0.5 + 0.5;
                     let xd = f64::from(dir.sin() * radius * d);
                     let zd = f64::from(dir.cos() * radius * d);
@@ -270,7 +273,7 @@ impl MagmaCubeEntity {
     fn tick_cube_movement(&self) {
         let (yaw, _pitch) = self.rotation();
         let mut state = *self.move_state.lock();
-        let new_yaw = crate::entity::ai::control::rotate_towards(yaw, state.y_rot, 90.0);
+        let new_yaw = rotate_towards(yaw, state.y_rot, 90.0);
         self.set_rotation((new_yaw, 0.0));
         self.set_y_head_rot(new_yaw);
         self.set_y_body_rot(new_yaw);
@@ -327,9 +330,9 @@ impl MagmaCubeEntity {
                 position.y + 0.5,
                 position.z + f64::from(zd * xz_cube_spawn_offset),
             );
-            let Some(child) = crate::entity::ENTITIES.create(
+            let Some(child) = ENTITIES.create(
                 entity_type,
-                crate::entity::next_entity_id(),
+                next_entity_id(),
                 child_position,
                 Arc::downgrade(world),
             ) else {
@@ -634,7 +637,7 @@ impl Entity for MagmaCubeEntity {
         *self.was_on_ground.lock() = nbt.byte("wasOnGround").is_some_and(|value| value != 0);
     }
     /// Vanilla `AbstractCubeMob.playerTouch`: contact damage when a player walks into the cube.
-    fn player_touch(self: Arc<Self>, player: &Arc<crate::player::Player>) {
+    fn player_touch(self: Arc<Self>, player: &Arc<Player>) {
         if !self.can_deal_damage() {
             return;
         }
@@ -642,7 +645,7 @@ impl Entity for MagmaCubeEntity {
             return;
         };
         let entity: SharedEntity = Arc::<Self>::clone(&self);
-        let target: SharedEntity = Arc::<crate::player::Player>::clone(player);
+        let target: SharedEntity = Arc::<Player>::clone(player);
         self.deal_damage(&entity, &world, &target);
     }
 }

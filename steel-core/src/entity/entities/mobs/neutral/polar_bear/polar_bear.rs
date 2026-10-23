@@ -16,9 +16,9 @@ use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
 use crate::entity::ai::goal::{
-    FloatGoal, FollowParentGoal, HurtByTargetGoal, LookAtPlayerGoal, MeleeAttackGoal,
-    NearestAttackableTargetGoal, PanicGoal, RandomLookAroundGoal, RandomStrollGoal,
-    ResetUniversalAngerTargetGoal,
+    FloatGoal, FollowParentGoal, Goal, GoalControls, HurtByTargetGoal, LookAtPlayerGoal,
+    MeleeAttackGoal, NearestAttackableTargetGoal, PanicGoal, RandomLookAroundGoal,
+    RandomStrollGoal, ResetUniversalAngerTargetGoal,
 };
 use crate::entity::damage::DamageSource;
 use crate::entity::neutral_mob::{NeutralMob, PersistentAnger};
@@ -28,7 +28,7 @@ use crate::entity::{
     PathfinderMob, SharedEntity, SpawnGroupData,
 };
 use crate::physics::MoveResult;
-use crate::world::World;
+use crate::world::{LevelReader, World};
 use steel_utils::Downcast as _;
 
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
@@ -200,9 +200,9 @@ impl PolarBearMeleeAttackGoal {
     }
 }
 
-impl crate::entity::ai::goal::Goal for PolarBearMeleeAttackGoal {
-    fn controls(&self) -> crate::entity::ai::goal::GoalControls {
-        crate::entity::ai::goal::GoalControls::MOVE
+impl Goal for PolarBearMeleeAttackGoal {
+    fn controls(&self) -> GoalControls {
+        GoalControls::MOVE
     }
 
     fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
@@ -427,7 +427,7 @@ impl Mob for PolarBearEntity {
     /// alternate-block biome branch needs a biome-tag lookup this static rule cannot reach).
     fn check_mob_spawn_rules(
         entity_type: EntityTypeRef,
-        level: &dyn crate::world::LevelReader,
+        level: &dyn LevelReader,
         spawn_reason: EntitySpawnReason,
         pos: BlockPos,
     ) -> bool

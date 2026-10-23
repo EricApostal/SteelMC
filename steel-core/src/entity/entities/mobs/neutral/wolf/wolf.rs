@@ -220,11 +220,11 @@ impl WolfEntity {
     #[must_use]
     pub fn tail_angle(&self) -> f32 {
         if self.is_angry() {
-            TAIL_ANGLE_MAX * (std::f32::consts::PI / 5.0).sin()
+            TAIL_ANGLE_MAX * (f32::consts::PI / 5.0).sin()
         } else {
             let health = self.get_health();
             let ratio = (TAIL_ANGLE_MAX_HEALTH - health) / TAIL_ANGLE_MAX_HEALTH;
-            TAIL_ANGLE_MAX * (ratio * std::f32::consts::PI).sin()
+            TAIL_ANGLE_MAX * (ratio * f32::consts::PI).sin()
         }
     }
 

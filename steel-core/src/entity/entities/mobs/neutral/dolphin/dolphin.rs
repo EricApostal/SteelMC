@@ -12,6 +12,7 @@
 //! Deviation: vanilla `getSwimSplashSound` has no Steel hook; only `getSwimSound`
 //! (`ENTITY_DOLPHIN_SWIM`) is reachable, so water-entry splashes use the generic sound.
 
+use std::ptr;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -30,7 +31,6 @@ use steel_registry::vanilla_mob_effects;
 use steel_registry::{
     sound_events, vanilla_attributes, vanilla_blocks, vanilla_entities, vanilla_item_tags,
 };
-use steel_utils::entity_events::EntityStatus;
 use steel_utils::locks::SyncMutex;
 use steel_utils::random::RandomSource;
 use steel_utils::types::InteractionHand;
@@ -51,6 +51,7 @@ use crate::entity::ai::navigation::NavigationKind;
 use crate::entity::ai::path::PathType;
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::ItemEntity;
+use crate::entity::entities::mobs::water::abstract_fish::check_water_animal_spawn_obstruction;
 use crate::entity::{
     AgeableMob, AgeableMobBase, AgeableMobGroupData, Animal, AnimalBase, Entity, EntityBase,
     EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData, LivingEntity,
@@ -391,6 +392,11 @@ impl Entity for DolphinEntity {
         SoundSource::Neutral
     }
 
+    /// Vanilla `Dolphin.getMaxAirSupply`.
+    fn max_air_supply(&self) -> i32 {
+        MAX_AIR_SUPPLY
+    }
+
     fn swim_sound(&self) -> SoundEventRef {
         &sound_events::ENTITY_DOLPHIN_SWIM
     }
@@ -437,17 +443,26 @@ impl LivingEntity for DolphinEntity {
         0.4
     }
 
+    /// Vanilla `Dolphin.canDispenserEquipIntoSlot` always returns `false`.
+    fn can_dispenser_equip_into_slot(&self, _slot: EquipmentSlot) -> bool {
+        false
+    }
+
+    /// Vanilla `Dolphin.getAgeScale`.
+    fn get_age_scale(&self) -> f32 {
+        if AgeableMob::is_baby(self) {
+            BABY_AGE_SCALE
+        } else {
+            1.0
+        }
+    }
+
     fn hurt_sound(&self, _source: &DamageSource) -> Option<SoundEventRef> {
         Some(&sound_events::ENTITY_DOLPHIN_HURT)
     }
 
     fn death_sound(&self) -> Option<SoundEventRef> {
         Some(&sound_events::ENTITY_DOLPHIN_DEATH)
-    }
-
-    /// Vanilla `Dolphin.getMaxAirSupply`.
-    fn max_air_supply(&self) -> i32 {
-        MAX_AIR_SUPPLY
     }
 
     /// Vanilla `Dolphin.increaseAirSupply`: refill straight to the maximum.
@@ -558,14 +573,16 @@ impl Mob for DolphinEntity {
         1.0
     }
 
-    /// Vanilla `Dolphin.canDispenserEquipIntoSlot` always returns `false`.
-    fn can_dispenser_equip_into_slot(&self, _slot: EquipmentSlot) -> bool {
-        false
-    }
-
     /// Vanilla `Dolphin.canBeLeashed`.
     fn mob_can_be_leashed(&self) -> bool {
         true
+    }
+
+    /// Vanilla `AgeableWaterCreature.checkSpawnObstruction` is
+    /// `level.isUnobstructed(this)`; the shared `Mob` default would reject the water
+    /// the dolphin spawns in.
+    fn check_spawn_obstruction(&self, world: &Arc<World>) -> bool {
+        check_water_animal_spawn_obstruction(world, self)
     }
 
     /// Vanilla `Dolphin.finalizeSpawn`: fill the air supply, level the pitch and
@@ -636,25 +653,16 @@ impl AgeableMob for DolphinEntity {
     fn set_synced_baby(&self, baby: bool) {
         self.entity_data.lock().ageable_mob_mut().baby.set(baby);
     }
-
-    /// Vanilla `Dolphin.getAgeScale`.
-    fn get_age_scale(&self) -> f32 {
-        if AgeableMob::is_baby(self) {
-            BABY_AGE_SCALE
-        } else {
-            1.0
-        }
-    }
-
-    fn spawn_child_from_breeding(&self, world: &Arc<World>, partner: &dyn Animal) {
-        // Vanilla `Dolphin.getBreedOffspring`.
-        self.finalize_spawn_child_from_breeding(world, partner, None);
-    }
 }
 
 impl Animal for DolphinEntity {
     fn animal_base(&self) -> &AnimalBase {
         &self.animal_base
+    }
+
+    fn spawn_child_from_breeding(&self, world: &Arc<World>, partner: &dyn Animal) {
+        // Vanilla `Dolphin.getBreedOffspring`.
+        self.finalize_spawn_child_from_breeding(world, partner, None);
     }
 
     /// Vanilla `Dolphin.isFood` accepts `#minecraft:fishes` (dolphins eat fish).
@@ -675,8 +683,8 @@ fn is_boat_type(entity_type: EntityTypeRef) -> bool {
 
 /// Vanilla `FollowPlayerRiddenEntityGoal(AbstractNautilus)`.
 fn is_nautilus_type(entity_type: EntityTypeRef) -> bool {
-    std::ptr::eq(entity_type, &vanilla_entities::NAUTILUS)
-        || std::ptr::eq(entity_type, &vanilla_entities::ZOMBIE_NAUTILUS)
+    ptr::eq(entity_type, &vanilla_entities::NAUTILUS)
+        || ptr::eq(entity_type, &vanilla_entities::ZOMBIE_NAUTILUS)
 }
 
 /// Vanilla `Dolphin.DolphinSwimWithPlayerGoal`: an unridden dolphin escorts a
@@ -819,7 +827,7 @@ fn dolphin_drop_held_item(dolphin: &DolphinEntity) -> bool {
     let (yaw, pitch) = dolphin.rotation();
     let yaw_rad = f64::from(yaw.to_radians());
     let pitch_rad = f64::from(pitch.to_radians());
-    let direction = rand::random::<f32>() * std::f32::consts::TAU;
+    let direction = rand::random::<f32>() * f32::consts::TAU;
     let jitter = ITEM_DROP_JITTER * f64::from(rand::random::<f32>());
     let velocity = DVec3::new(
         ITEM_DROP_IMPULSE * -yaw_rad.sin() * pitch_rad.cos() + f64::from(direction.cos()) * jitter,
@@ -866,7 +874,7 @@ impl MoveToItemGoal {
         let search_box = dolphin.bounding_box().inflate(ITEM_SEARCH_RADIUS);
         world.get_entities_in_aabb_matching(&search_box, |entity| {
             entity.downcast_ref::<ItemEntity>().is_some_and(|item| {
-                !item.has_pickup_delay() && Entity::is_alive(entity) && entity.is_in_water()
+                !item.has_pickup_delay() && entity.is_alive() && entity.is_in_water()
             })
         })
     }

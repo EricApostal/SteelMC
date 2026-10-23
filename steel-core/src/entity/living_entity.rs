@@ -12,6 +12,7 @@ use crate::behavior::{
 };
 use crate::entity::consume_effect::apply_consume_effect;
 use crate::entity::damage::RecentDamageSource;
+use crate::entity::loot::experience_reward_with_enchantments;
 
 const BED_SLEEP_POSITION_OFFSET: f64 = 0.125;
 /// Vanilla `DATA_LIVING_ENTITY_FLAGS` bit 0: the entity is using an item.
@@ -882,6 +883,12 @@ pub trait LivingEntity: Entity {
         }
 
         if damage != 0.0 {
+            // Vanilla `LivingEntity.actuallyHurt` records the combat entry before
+            // applying the damage.
+            self.living_base()
+                .combat_tracker()
+                .lock()
+                .record_damage(self, source, damage);
             self.set_health(self.get_health() - damage);
             self.set_absorption_amount(self.get_absorption_amount() - damage);
             self.game_event(&vanilla_game_events::ENTITY_DAMAGE);
@@ -1066,6 +1073,10 @@ pub trait LivingEntity: Entity {
             }
         }
 
+        self.living_base()
+            .combat_tracker()
+            .lock()
+            .recheck_status(self);
         self.broadcast_entity_event(EntityStatus::Death);
         self.set_pose(EntityPose::Dying);
     }
@@ -1107,12 +1118,11 @@ pub trait LivingEntity: Entity {
         self.as_mob().map_or(0, Mob::base_experience_reward_mob)
     }
 
-    /// Returns the experience reward for this entity's death; currently
-    /// equal to the base reward (see TODO).
-    fn experience_reward(&self, _world: &World, _killer_entity: Option<&dyn Entity>) -> i32 {
-        // TODO: Apply EnchantmentHelper.processMobExperience once enchantment
-        // value-effect hooks can receive the killer/living-entity context.
-        self.base_experience_reward()
+    /// Returns the experience reward for this entity's death, folded through the
+    /// killer's `mob_experience` enchantment effects (vanilla
+    /// `EnchantmentHelper.processMobExperience`).
+    fn experience_reward(&self, _world: &World, killer_entity: Option<&dyn Entity>) -> i32 {
+        experience_reward_with_enchantments(self, killer_entity)
     }
 
     /// Runs the currently implemented subset of vanilla `LivingEntity.dropAllDeathLoot`.
@@ -2222,6 +2232,14 @@ pub trait LivingEntity: Entity {
         self.living_base().decrement_invulnerable_time();
         self.tick_mob_effects();
         self.detect_equipment_updates();
+
+        // Vanilla `LivingEntity.tick` rechecks combat state every 20 ticks.
+        if self.tick_count() % 20 == 0 {
+            self.living_base()
+                .combat_tracker()
+                .lock()
+                .recheck_status(self);
+        }
 
         if self.is_dead_or_dying() {
             self.tick_death();

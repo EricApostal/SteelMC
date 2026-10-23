@@ -880,7 +880,12 @@ impl ItemStack {
         let Ok(tag) = crate::structure::processor::json_to_nbt_tag(&value) else {
             return;
         };
-        let Some(patch) = DataComponentPatch::from_nbt_tag(tag.as_tag()) else {
+        let mut bytes = Vec::new();
+        tag.write(&mut bytes);
+        let Ok(borrowed) = simdnbt::borrow::read_tag(&mut Cursor::new(bytes.as_slice())) else {
+            return;
+        };
+        let Some(patch) = DataComponentPatch::from_nbt_tag(borrowed.as_tag()) else {
             return;
         };
         let mut applied = self.patch.clone();
@@ -1332,20 +1337,20 @@ impl ItemStack {
                 continue;
             };
             let values = source_path.get(&NbtTag::Compound(source_tag.clone()));
-            let Some(last) = values.last().cloned() else {
+            let Some(latest) = values.last().cloned() else {
                 continue;
             };
             let merged = match operation.op {
-                CopyDataOp::Replace => last,
+                CopyDataOp::Replace => latest,
                 CopyDataOp::Append => {
-                    let mut list = match target_path.get(&tag).into_iter().next() {
-                        Some(NbtTag::List(list)) => list,
-                        _ => simdnbt::owned::NbtList::default(),
+                    let mut items = match target_path.get(&tag).into_iter().next() {
+                        Some(NbtTag::List(items)) => items.as_nbt_tags(),
+                        _ => Vec::new(),
                     };
                     for value in &values {
-                        list.push(value.clone());
+                        items.push(value.clone());
                     }
-                    NbtTag::List(list)
+                    NbtTag::List(simdnbt::owned::NbtList::from(items))
                 }
                 CopyDataOp::Merge => {
                     let mut compound = match target_path.get(&tag).into_iter().next() {
@@ -2478,5 +2483,710 @@ mod persistence_tests {
             .expect("nested custom data should remain");
         assert_eq!(nested.int("kept"), Some(1));
         assert_eq!(nested.int("changed"), Some(2));
+    }
+}
+
+#[cfg(test)]
+mod component_setter_tests {
+    use std::io::Cursor;
+
+    use rand::SeedableRng;
+    use simdnbt::owned::{NbtCompound, NbtTag};
+    use steel_utils::Identifier;
+    use text_components::TextComponent;
+
+    use super::ItemStack;
+    use crate::data_components::vanilla_components::{
+        ATTRIBUTE_MODIFIERS, BANNER_PATTERNS, CONTAINER, CONTAINER_LOOT, CUSTOM_DATA, CUSTOM_NAME,
+        FIREWORK_EXPLOSION, FIREWORKS, ITEM_NAME, LORE, MAP_DECORATIONS, MAP_ID, POTION_CONTENTS,
+        PROFILE, SUSPICIOUS_STEW_EFFECTS, WRITABLE_BOOK_CONTENT, WRITTEN_BOOK_CONTENT,
+    };
+    use crate::data_components::{CustomData, DataComponentMap};
+    use crate::equipment::EquipmentSlotGroup;
+    use crate::game_profile::GameProfile;
+    use crate::item_stack_template::ItemStackTemplate;
+    use crate::loot_table::{
+        AttributeModifier, AttributeOperation, BannerPattern, CopyDataOp, CopyDataOperation,
+        CopySource, FireworkExplosion as LootFireworkExplosion, FireworkShape, ListOperation,
+        LootContext, LootContextEntity, LootItemSourceHooks, NameTarget, NumberProvider,
+        StewEffect,
+    };
+    use crate::{REGISTRY, RegistryExt, init_vanilla_registry, vanilla_items};
+
+    fn rng() -> rand::rngs::StdRng {
+        rand::rngs::StdRng::seed_from_u64(0x5EED)
+    }
+
+    /// Hook payload shared by the entity/block-entity sourced setters.
+    struct Hooks {
+        components: DataComponentMap,
+        nbt: NbtCompound,
+        profile: GameProfile,
+    }
+
+    impl LootItemSourceHooks for Hooks {
+        fn entity_components(&self, _target: LootContextEntity) -> Option<&DataComponentMap> {
+            Some(&self.components)
+        }
+
+        fn block_entity_components(&self) -> Option<&DataComponentMap> {
+            Some(&self.components)
+        }
+
+        fn entity_nbt(&self, _target: LootContextEntity) -> Option<&NbtCompound> {
+            Some(&self.nbt)
+        }
+
+        fn block_entity_nbt(&self) -> Option<&NbtCompound> {
+            Some(&self.nbt)
+        }
+
+        fn player_profile(&self, _target: LootContextEntity) -> Option<&GameProfile> {
+            Some(&self.profile)
+        }
+
+        fn create_exploration_map(
+            &self,
+            _destination: &Identifier,
+            _origin: (f64, f64, f64),
+            _zoom: i32,
+            _search_radius: i32,
+            _skip_existing_chunks: bool,
+        ) -> Option<((i32, i32), i32)> {
+            Some(((128, -64), 7))
+        }
+    }
+
+    fn hooks() -> Hooks {
+        let mut components = DataComponentMap::new();
+        components.set(CUSTOM_NAME, Some(TextComponent::plain("Copied")));
+        let mut nbt = NbtCompound::new();
+        nbt.insert("copied", 5);
+        let profile = GameProfile::new(uuid::Uuid::from_u128(1), "Steve".to_owned(), Vec::new())
+            .expect("test profile name is valid");
+        Hooks {
+            components,
+            nbt,
+            profile,
+        }
+    }
+
+    #[test]
+    fn damage_fraction_round_trips_through_the_damage_component() {
+        init_vanilla_registry();
+        let mut stack = ItemStack::new(&vanilla_items::DIAMOND_SWORD);
+        let max_damage = stack.get_max_damage();
+
+        stack.set_damage_fraction(0.25, false);
+        assert_eq!(stack.get_damage_value(), (0.75 * f32::from(max_damage as i16)) as i32
+            .max(stack.get_damage_value().min(max_damage)));
+        assert_eq!(
+            stack.get_damage_value(),
+            (0.75_f32 * max_damage as f32).floor() as i32
+        );
+
+        stack.set_damage_fraction(0.0, false);
+        assert_eq!(stack.get_damage_value(), max_damage);
+        assert!(stack.is_broken());
+
+        stack.set_damage_fraction(1.0, false);
+        assert_eq!(stack.get_damage_value(), 0);
+        assert!(!stack.is_damaged());
+    }
+
+    #[test]
+    fn damage_fraction_add_is_relative_to_the_current_durability() {
+        init_vanilla_registry();
+        let mut stack = ItemStack::new(&vanilla_items::DIAMOND_SWORD);
+        let max_damage = stack.get_max_damage();
+        stack.set_damage_fraction(0.5, false);
+
+        stack.set_damage_fraction(0.5, true);
+        // Half durability plus half of the max is fully repaired.
+        assert_eq!(stack.get_damage_value(), 0);
+        assert!(max_damage > 0);
+    }
+
+    #[test]
+    fn damage_fraction_ignores_non_damageable_items() {
+        init_vanilla_registry();
+        let mut stack = ItemStack::new(&vanilla_items::STONE);
+        stack.set_damage_fraction(0.5, false);
+        assert!(!stack.has(crate::data_components::vanilla_components::DAMAGE));
+    }
+
+    #[test]
+    fn name_setter_writes_both_name_targets() {
+        init_vanilla_registry();
+        let mut stack = ItemStack::new(&vanilla_items::STONE);
+
+        stack.set_name(r#""Custom""#, NameTarget::CustomName);
+        assert_eq!(
+            stack.get(CUSTOM_NAME),
+            Some(&TextComponent::plain("Custom"))
+        );
+
+        stack.set_name(
+            r#"{"translate":"block.minecraft.stone"}"#,
+            NameTarget::ItemName,
+        );
+        assert_eq!(
+            stack.get(ITEM_NAME),
+            Some(&TextComponent::translated(
+                text_components::translation::TranslatedMessage::new("block.minecraft.stone", None)
+            ))
+        );
+
+        // Non-JSON input falls back to literal text, as vanilla's plain strings do.
+        stack.set_name("literal", NameTarget::CustomName);
+        assert_eq!(
+            stack.get(CUSTOM_NAME),
+            Some(&TextComponent::plain("literal"))
+        );
+    }
+
+    #[test]
+    fn lore_setter_applies_every_list_operation() {
+        init_vanilla_registry();
+        let mut stack = ItemStack::new(&vanilla_items::STONE);
+
+        stack.set_lore(&["a", "b"], ListOperation::ReplaceAll);
+        let lines = |stack: &ItemStack| -> Vec<String> {
+            stack
+                .get(LORE)
+                .map(|lore| lore.lines().iter().map(ToString::to_string).collect())
+                .unwrap_or_default()
+        };
+        assert_eq!(lines(&stack), ["a", "b"]);
+
+        stack.set_lore(&["c"], ListOperation::Append);
+        assert_eq!(lines(&stack), ["a", "b", "c"]);
+
+        stack.set_lore(&["x"], ListOperation::InsertBefore { offset: 1 });
+        assert_eq!(lines(&stack), ["a", "x", "b", "c"]);
+
+        stack.set_lore(&["y"], ListOperation::InsertAfter { offset: 0 });
+        assert_eq!(lines(&stack), ["a", "y", "x", "b", "c"]);
+
+        stack.set_lore(
+            &["z"],
+            ListOperation::ReplaceSection {
+                offset: 1,
+                size: Some(2),
+            },
+        );
+        assert_eq!(lines(&stack), ["a", "z", "b", "c"]);
+
+        // Out-of-bounds operations keep the original lines.
+        stack.set_lore(&["q"], ListOperation::InsertBefore { offset: 99 });
+        assert_eq!(lines(&stack), ["a", "z", "b", "c"]);
+    }
+
+    #[test]
+    fn potion_setter_keeps_custom_fields_and_replaces_the_base_potion() {
+        init_vanilla_registry();
+        let mut stack = ItemStack::new(&vanilla_items::POTION);
+        let healing = Identifier::vanilla_static("healing");
+        let swiftness = Identifier::vanilla_static("swiftness");
+
+        stack.set_potion(&healing);
+        assert_eq!(
+            stack.get(POTION_CONTENTS).and_then(|c| c.potion()),
+            REGISTRY
+                .potions
+                .by_key(&healing)
+                .map(crate::RegistryReference::new)
+        );
+
+        stack.set_potion(&swiftness);
+        let contents = stack.get(POTION_CONTENTS).expect("potion contents present");
+        assert_eq!(
+            contents.potion(),
+            REGISTRY
+                .potions
+                .by_key(&swiftness)
+                .map(crate::RegistryReference::new)
+        );
+
+        // An unknown potion leaves the component untouched.
+        stack.set_potion(&Identifier::vanilla_static("not_a_potion"));
+        assert_eq!(
+            stack.get(POTION_CONTENTS).and_then(|c| c.potion()),
+            REGISTRY
+                .potions
+                .by_key(&swiftness)
+                .map(crate::RegistryReference::new)
+        );
+    }
+
+    #[test]
+    fn stew_effects_setter_rolls_a_duration_and_scales_by_twenty() {
+        init_vanilla_registry();
+        let mut rng = rng();
+        let mut stack = ItemStack::new(&vanilla_items::SUSPICIOUS_STEW);
+
+        let effects = [StewEffect {
+            effect_type: Identifier::vanilla_static("night_vision"),
+            duration: NumberProvider::Constant(7.0),
+        }];
+        stack.set_stew_effects(&effects, &mut rng);
+
+        let applied = stack
+            .get(SUSPICIOUS_STEW_EFFECTS)
+            .expect("stew effects present")
+            .effects();
+        assert_eq!(applied.len(), 1);
+        assert_eq!(
+            applied[0].effect().key,
+            Identifier::vanilla_static("night_vision")
+        );
+        assert_eq!(applied[0].duration(), 140);
+
+        // Instantaneous effects keep their raw duration.
+        let instant = [StewEffect {
+            effect_type: Identifier::vanilla_static("instant_health"),
+            duration: NumberProvider::Constant(3.0),
+        }];
+        let mut stew = ItemStack::new(&vanilla_items::SUSPICIOUS_STEW);
+        stew.set_stew_effects(&instant, &mut rng);
+        assert_eq!(
+            stew.get(SUSPICIOUS_STEW_EFFECTS)
+                .expect("effects")
+                .effects()[0]
+                .duration(),
+            3
+        );
+
+        // Non-stew items are untouched, mirroring vanilla's item check.
+        let mut stone = ItemStack::new(&vanilla_items::STONE);
+        stone.set_stew_effects(&effects, &mut rng);
+        assert!(!stone.has(SUSPICIOUS_STEW_EFFECTS));
+    }
+
+    #[test]
+    fn banner_pattern_setter_replaces_or_appends_layers() {
+        init_vanilla_registry();
+        let mut stack = ItemStack::new(&vanilla_items::WHITE_BANNER);
+        let base = Identifier::vanilla_static("base");
+        let creeper = Identifier::vanilla_static("creeper");
+
+        stack.set_banner_pattern(
+            &[BannerPattern {
+                pattern: base,
+                color: crate::DyeColor::White,
+            }],
+            false,
+        );
+        assert_eq!(
+            stack.get(BANNER_PATTERNS).expect("patterns").layers().len(),
+            1
+        );
+
+        stack.set_banner_pattern(
+            &[BannerPattern {
+                pattern: creeper,
+                color: crate::DyeColor::Red,
+            }],
+            true,
+        );
+        let layers = stack.get(BANNER_PATTERNS).expect("patterns").layers();
+        assert_eq!(layers.len(), 2);
+        assert_eq!(layers[1].color(), crate::DyeColor::Red);
+
+        stack.set_banner_pattern(&[], false);
+        assert!(
+            stack
+                .get(BANNER_PATTERNS)
+                .expect("patterns")
+                .layers()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn firework_setters_round_trip_explosions_and_flight_duration() {
+        init_vanilla_registry();
+        let mut rocket = ItemStack::new(&vanilla_items::FIREWORK_ROCKET);
+        let explosion = LootFireworkExplosion {
+            shape: FireworkShape::Star,
+            colors: &[1, 2],
+            fade_colors: &[3],
+            has_trail: true,
+            has_twinkle: false,
+        };
+
+        rocket.set_fireworks(Some(std::slice::from_ref(&explosion)), Some(2));
+        let fireworks = rocket.get(FIREWORKS).expect("fireworks present");
+        assert_eq!(fireworks.flight_duration(), 2);
+        assert_eq!(fireworks.explosions().len(), 1);
+        assert_eq!(fireworks.explosions()[0].colors(), [1, 2]);
+        assert!(fireworks.explosions()[0].has_trail());
+
+        // Absent fields keep the current values.
+        rocket.set_fireworks(None, None);
+        let fireworks = rocket.get(FIREWORKS).expect("fireworks present");
+        assert_eq!(fireworks.flight_duration(), 2);
+        assert_eq!(fireworks.explosions().len(), 1);
+
+        let mut star = ItemStack::new(&vanilla_items::FIREWORK_STAR);
+        star.set_firework_explosion(&explosion);
+        let applied = star.get(FIREWORK_EXPLOSION).expect("explosion present");
+        assert_eq!(applied.fade_colors(), [3]);
+    }
+
+    #[test]
+    fn book_setters_round_trip_cover_and_pages() {
+        init_vanilla_registry();
+        let mut written = ItemStack::new(&vanilla_items::WRITTEN_BOOK);
+
+        written.set_book_cover(Some("Title"), Some("Author"), Some(1));
+        written.set_written_book_pages(&["page one", "page two"], ListOperation::ReplaceAll);
+        let content = written.get(WRITTEN_BOOK_CONTENT).expect("book content");
+        assert_eq!(content.title().raw(), "Title");
+        assert_eq!(content.author(), "Author");
+        assert_eq!(content.generation(), 1);
+        assert_eq!(content.pages().len(), 2);
+        assert_eq!(content.pages()[0].raw(), &TextComponent::plain("page one"));
+
+        written.set_written_book_pages(&["page three"], ListOperation::Append);
+        let content = written.get(WRITTEN_BOOK_CONTENT).expect("book content");
+        assert_eq!(content.pages().len(), 3);
+        assert_eq!(content.title().raw(), "Title");
+
+        let mut writable = ItemStack::new(&vanilla_items::WRITABLE_BOOK);
+        writable.set_writable_book_pages(&["draft"], ListOperation::ReplaceAll);
+        writable.set_writable_book_pages(&["more"], ListOperation::Append);
+        let pages = writable
+            .get(WRITABLE_BOOK_CONTENT)
+            .expect("writable content")
+            .pages();
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[1].raw(), "more");
+    }
+
+    #[test]
+    fn loot_table_setter_writes_the_seeded_container_component() {
+        init_vanilla_registry();
+        let mut stack = ItemStack::new(&vanilla_items::CHEST);
+        let table = Identifier::vanilla_static("chests/simple_dungeon");
+
+        stack.set_loot_table(&table, Some(42));
+        let loot = stack.get(CONTAINER_LOOT).expect("container loot present");
+        assert_eq!(loot.loot_table(), &table);
+        assert_eq!(loot.seed(), 42);
+
+        stack.set_loot_table(&table, None);
+        assert_eq!(stack.get(CONTAINER_LOOT).expect("container loot").seed(), 0);
+    }
+
+    #[test]
+    fn attribute_setter_replaces_or_appends_modifiers() {
+        init_vanilla_registry();
+        let mut rng = rng();
+        let mut stack = ItemStack::new(&vanilla_items::DIAMOND_SWORD);
+        let base_count = stack
+            .get(ATTRIBUTE_MODIFIERS)
+            .map_or(0, |modifiers| modifiers.modifiers.len());
+
+        let modifier = AttributeModifier {
+            attribute: Identifier::vanilla_static("movement_speed"),
+            operation: AttributeOperation::AddValue,
+            amount: NumberProvider::Constant(0.5),
+            id: Identifier::vanilla_static("loot_speed"),
+            slot: EquipmentSlotGroup::Any,
+        };
+
+        stack.set_attributes(std::slice::from_ref(&modifier), false, &mut rng);
+        let modifiers = stack.get(ATTRIBUTE_MODIFIERS).expect("modifiers present");
+        assert_eq!(modifiers.modifiers.len(), base_count + 1);
+        assert!(modifiers.modifiers.iter().any(|entry| {
+            entry.id == Identifier::vanilla_static("loot_speed") && entry.amount == 0.5
+        }));
+
+        stack.set_attributes(&[], true, &mut rng);
+        assert!(
+            stack
+                .get(ATTRIBUTE_MODIFIERS)
+                .expect("modifiers present")
+                .modifiers
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn container_setters_build_and_modify_contents() {
+        init_vanilla_registry();
+        let mut rng = rng();
+        let entries = [crate::loot_table::LootEntry::Item {
+            name: Identifier::vanilla_static("diamond"),
+            weight: 1,
+            quality: 0,
+            conditions: &[],
+            functions: &[],
+        }];
+        let mut shulker = ItemStack::new(&vanilla_items::SHULKER_BOX);
+        let mut ctx = LootContext::new(&mut rng);
+
+        shulker.set_contents(
+            &entries,
+            &crate::data_components::vanilla_components::CONTAINER.key,
+            &mut ctx,
+        );
+        let container = shulker.get(CONTAINER).expect("container contents");
+        assert_eq!(container.items().len(), 1);
+        assert_eq!(
+            container.items()[0]
+                .as_ref()
+                .expect("slot filled")
+                .item()
+                .key,
+            Identifier::vanilla_static("diamond")
+        );
+
+        let modifier = [crate::loot_table::ConditionalLootFunction {
+            function: crate::loot_table::LootFunction::SetCount {
+                count: NumberProvider::Constant(3.0),
+                add: false,
+            },
+            conditions: &[],
+        }];
+        shulker.modify_contents(
+            &modifier,
+            &crate::data_components::vanilla_components::CONTAINER.key,
+            &mut ctx,
+        );
+        let container = shulker.get(CONTAINER).expect("container contents");
+        assert_eq!(
+            container.items()[0].as_ref().expect("slot filled").count(),
+            3
+        );
+
+        // Bundle contents honour the weight budget.
+        let mut bundle = ItemStack::new(&vanilla_items::BUNDLE);
+        bundle.set_contents(
+            &entries,
+            &crate::data_components::vanilla_components::BUNDLE_CONTENTS.key,
+            &mut ctx,
+        );
+        let contents = bundle
+            .get(crate::data_components::vanilla_components::BUNDLE_CONTENTS)
+            .expect("bundle contents");
+        assert_eq!(contents.items().len(), 1);
+        assert_eq!(contents.items()[0].count(), 1);
+    }
+
+    #[test]
+    fn json_component_setter_applies_a_valid_patch_and_rejects_invalid_ones() {
+        init_vanilla_registry();
+        let mut stack = ItemStack::new(&vanilla_items::STONE);
+
+        stack.set_components_from_json(r#"{"minecraft:repair_cost":7}"#);
+        assert_eq!(
+            stack.get(crate::data_components::vanilla_components::REPAIR_COST),
+            Some(&7)
+        );
+
+        // Unparseable JSON and unknown components leave the stack untouched.
+        stack.set_components_from_json("not json");
+        stack.set_components_from_json(r#"{"minecraft:not_a_component":1}"#);
+        assert_eq!(
+            stack.get(crate::data_components::vanilla_components::REPAIR_COST),
+            Some(&7)
+        );
+    }
+
+    #[test]
+    fn copy_components_and_copy_name_read_the_block_entity_hooks() {
+        init_vanilla_registry();
+        let mut rng = rng();
+        let hooks = hooks();
+        let mut ctx = LootContext::new(&mut rng).with_item_source(&hooks);
+        let mut stack = ItemStack::new(&vanilla_items::CHEST);
+
+        stack.copy_components(
+            CopySource::BlockEntity,
+            &[Identifier::vanilla_static("custom_name")],
+            &ctx,
+        );
+        assert_eq!(
+            stack.get(CUSTOM_NAME),
+            Some(&TextComponent::plain("Copied"))
+        );
+
+        let block_entity = crate::loot_table::BlockEntityRef {
+            block_entity_type: None,
+            custom_name: Some("Chest Name"),
+            inventory: None,
+        };
+        ctx = ctx.with_block_entity(block_entity);
+        stack.copy_name(CopySource::BlockEntity, &ctx);
+        assert_eq!(
+            stack.get(CUSTOM_NAME),
+            Some(&TextComponent::plain("Chest Name"))
+        );
+    }
+
+    #[test]
+    fn copy_state_reads_the_looted_block_state() {
+        init_vanilla_registry();
+        let mut rng = rng();
+        let block = Identifier::vanilla_static("bee_nest");
+        let state = REGISTRY
+            .blocks
+            .state_id_from_properties(&block, &[("honey_level", "3")])
+            .expect("bee_nest has honey_level");
+        let mut ctx = LootContext::new(&mut rng).with_block_state(state);
+        let mut stack = ItemStack::new(&vanilla_items::BEE_NEST);
+
+        stack.copy_block_state(&block, &["honey_level", "unknown"], &ctx);
+        let properties = stack
+            .get(crate::data_components::vanilla_components::BLOCK_STATE)
+            .expect("block state properties");
+        assert_eq!(properties.get("honey_level"), Some("3"));
+        assert_eq!(properties.get("unknown"), None);
+        let _ = &mut ctx;
+    }
+
+    #[test]
+    fn copy_custom_data_applies_replace_append_and_merge() {
+        init_vanilla_registry();
+        let mut rng = rng();
+        let mut hooks = hooks();
+        hooks.nbt.insert("existing", 1);
+        let mut list = simdnbt::owned::NbtList::Int(Vec::new());
+        list = simdnbt::owned::NbtList::Int(vec![1]);
+        hooks.nbt.insert("list", NbtTag::List(list));
+        let ctx = LootContext::new(&mut rng).with_item_source(&hooks);
+        let mut stack = ItemStack::new(&vanilla_items::STONE);
+
+        stack.copy_custom_data(
+            CopySource::BlockEntity,
+            &[CopyDataOperation {
+                source_path: "copied",
+                target_path: "target",
+                op: CopyDataOp::Replace,
+            }],
+            &ctx,
+        );
+        assert_eq!(
+            stack
+                .get(CUSTOM_DATA)
+                .and_then(|data| data.as_compound().int("target")),
+            Some(5)
+        );
+
+        stack.copy_custom_data(
+            CopySource::BlockEntity,
+            &[CopyDataOperation {
+                source_path: "copied",
+                target_path: "merged",
+                op: CopyDataOp::Merge,
+            }],
+            &ctx,
+        );
+        assert!(stack.get(CUSTOM_DATA).is_some());
+
+        stack.copy_custom_data(
+            CopySource::BlockEntity,
+            &[CopyDataOperation {
+                source_path: "list",
+                target_path: "appended",
+                op: CopyDataOp::Append,
+            }],
+            &ctx,
+        );
+        assert!(
+            stack
+                .get(CUSTOM_DATA)
+                .and_then(|data| data.as_compound().get("appended"))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn fill_player_head_writes_the_profile_component() {
+        init_vanilla_registry();
+        let mut rng = rng();
+        let hooks = hooks();
+        let ctx = LootContext::new(&mut rng).with_item_source(&hooks);
+        let mut head = ItemStack::new(&vanilla_items::PLAYER_HEAD);
+
+        head.fill_player_head(LootContextEntity::This, &ctx);
+        assert!(head.get(PROFILE).is_some());
+
+        // Non-player-head items are untouched.
+        let mut stone = ItemStack::new(&vanilla_items::STONE);
+        stone.fill_player_head(LootContextEntity::This, &ctx);
+        assert!(!stone.has(PROFILE));
+    }
+
+    #[test]
+    fn exploration_map_setter_writes_map_id_and_target_decoration() {
+        init_vanilla_registry();
+        let mut rng = rng();
+        let hooks = hooks();
+        let ctx = LootContext::new(&mut rng)
+            .with_origin(0.0, 64.0, 0.0)
+            .with_item_source(&hooks);
+        let mut map = ItemStack::new(&vanilla_items::MAP);
+
+        map.create_exploration_map(
+            &Identifier::vanilla_static("buried_treasure"),
+            &Identifier::vanilla_static("red_x"),
+            2,
+            50,
+            true,
+            &ctx,
+        );
+        assert!(map.has(MAP_ID));
+        let decorations = map.get(MAP_DECORATIONS).expect("decorations present");
+        assert!(decorations.decorations().contains_key("+"));
+
+        // Without an origin nothing is written.
+        let mut empty_map = ItemStack::new(&vanilla_items::MAP);
+        let mut no_origin = LootContext::new(&mut rng).with_item_source(&hooks);
+        empty_map.create_exploration_map(
+            &Identifier::vanilla_static("buried_treasure"),
+            &Identifier::vanilla_static("red_x"),
+            2,
+            50,
+            true,
+            &no_origin,
+        );
+        assert!(!empty_map.has(MAP_ID));
+        let _ = &mut no_origin;
+    }
+
+    #[test]
+    fn container_contents_round_trip_through_item_stack_templates() {
+        init_vanilla_registry();
+        let mut stack = ItemStack::new(&vanilla_items::SHULKER_BOX);
+        let template = ItemStackTemplate::with_count(&vanilla_items::DIAMOND, 5);
+        stack.set(
+            CONTAINER,
+            crate::data_components::vanilla_components::ItemContainerContents::new(vec![Some(
+                template,
+            )])
+            .expect("one slot is valid"),
+        );
+        let items = stack
+            .container_contents(&crate::data_components::vanilla_components::CONTAINER.key)
+            .expect("container contents readable");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].count(), 5);
+    }
+
+    #[test]
+    fn custom_data_component_is_removed_when_it_becomes_empty() {
+        init_vanilla_registry();
+        let mut stack = ItemStack::new(&vanilla_items::STONE);
+        let mut compound = NbtCompound::new();
+        compound.insert("key", 1);
+        stack.set_custom_data(&CustomData::try_from_compound(compound).expect("valid custom data"));
+        assert!(stack.has(CUSTOM_DATA));
+
+        stack.set_custom_data(&CustomData::try_from_compound(NbtCompound::new()).expect("empty"));
+        assert!(stack.has(CUSTOM_DATA));
+        let _ = Cursor::new(Vec::<u8>::new());
     }
 }

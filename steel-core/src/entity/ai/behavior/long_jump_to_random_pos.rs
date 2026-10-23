@@ -1,5 +1,7 @@
 //! Vanilla `LongJumpToRandomPos`: prepare, then perform, a long jump to a random spot.
 
+use std::any::Any;
+use std::mem;
 use std::sync::Arc;
 
 use glam::DVec3;
@@ -49,7 +51,7 @@ impl PossibleJump {
 ///
 /// Vanilla subclasses (`LongJumpToPreferredBlock`) override this single method;
 /// Steel expresses the same extension seam as a trait over the candidate pool.
-pub trait JumpCandidatePicker: std::any::Any + Send + Sync {
+pub trait JumpCandidatePicker: Any + Send + Sync {
     /// Picks (and removes) the next candidate from `pool`, or `None` when the
     /// pool holds no acceptable candidate.
     fn pick(
@@ -181,7 +183,7 @@ impl LongJumpToRandomPos {
 
     /// Mutable access to the candidate picker for subclass reset hooks.
     pub fn picker_as_mut<T: JumpCandidatePicker + 'static>(&mut self) -> Option<&mut T> {
-        (self.picker.as_mut() as &mut dyn std::any::Any).downcast_mut::<T>()
+        (self.picker.as_mut() as &mut dyn Any).downcast_mut::<T>()
     }
 
     /// Vanilla's `acceptableLandingSpot` default predicate.
@@ -249,7 +251,7 @@ impl LongJumpToRandomPos {
 
     /// Vanilla `pickCandidate`.
     fn pick_candidate(&mut self, ctx: &mut BehaviorContext<'_>) {
-        let mut pool = std::mem::take(&mut self.jump_candidates);
+        let mut pool = mem::take(&mut self.jump_candidates);
         let mut picked = None;
         while !pool.is_empty() {
             let Some(jump) = self.picker.pick(ctx, &mut pool) else {

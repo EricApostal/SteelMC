@@ -85,3 +85,24 @@ impl FeatureDecorationRunner {
         xz_diff
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::FeatureDecorationRunner;
+
+    /// `yOffset / 2` must truncate toward zero like Java's `int` division, so
+    /// negative offsets shrink the spread radius symmetrically.
+    #[test]
+    fn blue_ice_xz_diff_truncates_toward_zero() {
+        assert_eq!(FeatureDecorationRunner::blue_ice_xz_diff(4), 3);
+        assert_eq!(FeatureDecorationRunner::blue_ice_xz_diff(2), 3);
+        assert_eq!(FeatureDecorationRunner::blue_ice_xz_diff(1), 3);
+        assert_eq!(FeatureDecorationRunner::blue_ice_xz_diff(0), 3);
+        assert_eq!(FeatureDecorationRunner::blue_ice_xz_diff(-1), 3);
+        assert_eq!(FeatureDecorationRunner::blue_ice_xz_diff(-2), 2);
+        assert_eq!(FeatureDecorationRunner::blue_ice_xz_diff(-3), 2);
+        assert_eq!(FeatureDecorationRunner::blue_ice_xz_diff(-4), 1);
+        assert_eq!(FeatureDecorationRunner::blue_ice_xz_diff(-5), 1);
+        assert_eq!(FeatureDecorationRunner::blue_ice_xz_diff(-6), 0);
+    }
+}

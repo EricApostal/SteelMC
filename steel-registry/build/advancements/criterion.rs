@@ -170,7 +170,11 @@ impl CriterionJson {
                     },
                 )
             }
-            "location" | "slept_in_bed" | "tick" | "hero_of_the_village" | "voluntary_exile"
+            "location"
+            | "slept_in_bed"
+            | "tick"
+            | "hero_of_the_village"
+            | "voluntary_exile"
             | "avoid_vibration" => {
                 let json: PlayerOnlyJson = conditions!(PlayerOnlyJson);
                 let player = generator.player(json.player);
@@ -669,7 +673,8 @@ impl CriterionGenerator {
     }
 
     fn item_predicates(&mut self, items: Vec<ItemPredicateJson>) -> TokenStream {
-        let elements: Vec<TokenStream> = items.iter().map(|item| self.item_predicate(item)).collect();
+        let elements: Vec<TokenStream> =
+            items.iter().map(|item| self.item_predicate(item)).collect();
         self.array(quote! { ItemPredicate }, elements)
     }
 
@@ -703,6 +708,41 @@ impl CriterionGenerator {
         }
     }
 
+    /// Emits an `ItemSetPredicate`, the item holder-set shape of an item predicate.
+    fn optional_item_set(&mut self, set: Option<HolderSetJson>) -> TokenStream {
+        let Some(set) = set else {
+            return quote! { None };
+        };
+        let set = match &set {
+            HolderSetJson::Single(value) => {
+                if let Some(tag) = value.strip_prefix('#') {
+                    let tag = identifier(tag);
+                    quote! { ItemSetPredicate::Tag(#tag) }
+                } else {
+                    let key = value.strip_prefix("minecraft:").unwrap_or(value).to_owned();
+                    let keys = self.array(quote! { &'static str }, vec![quote! { #key }]);
+                    quote! { ItemSetPredicate::Items(#keys) }
+                }
+            }
+            HolderSetJson::List(values) => {
+                let elements: Vec<TokenStream> = values
+                    .iter()
+                    .map(|value| {
+                        assert!(
+                            !value.starts_with('#'),
+                            "an item set cannot mix tags and direct keys: {value}"
+                        );
+                        let key = value.strip_prefix("minecraft:").unwrap_or(value).to_owned();
+                        quote! { #key }
+                    })
+                    .collect();
+                let keys = self.array(quote! { &'static str }, elements);
+                quote! { ItemSetPredicate::Items(#keys) }
+            }
+        };
+        quote! { Some(#set) }
+    }
+
     fn holder_set(&mut self, set: &HolderSetJson) -> TokenStream {
         match set {
             HolderSetJson::Single(value) => {
@@ -710,10 +750,7 @@ impl CriterionGenerator {
                     let tag = identifier(tag);
                     quote! { HolderSet::Tag(#tag) }
                 } else {
-                    let key = value
-                        .strip_prefix("minecraft:")
-                        .unwrap_or(value)
-                        .to_owned();
+                    let key = value.strip_prefix("minecraft:").unwrap_or(value).to_owned();
                     let keys = self.array(quote! { &'static str }, vec![quote! { #key }]);
                     quote! { HolderSet::Keys(#keys) }
                 }
@@ -726,10 +763,7 @@ impl CriterionGenerator {
                             !value.starts_with('#'),
                             "a holder set cannot mix tags and direct keys: {value}"
                         );
-                        let key = value
-                            .strip_prefix("minecraft:")
-                            .unwrap_or(value)
-                            .to_owned();
+                        let key = value.strip_prefix("minecraft:").unwrap_or(value).to_owned();
                         quote! { #key }
                     })
                     .collect();
@@ -739,10 +773,7 @@ impl CriterionGenerator {
         }
     }
 
-    fn optional_state(
-        &mut self,
-        state: Option<BTreeMap<String, String>>,
-    ) -> TokenStream {
+    fn optional_state(&mut self, state: Option<BTreeMap<String, String>>) -> TokenStream {
         match state {
             Some(state) => {
                 let elements: Vec<TokenStream> = state
@@ -926,7 +957,7 @@ impl CriterionGenerator {
         let player = predicate.player.as_ref().map_or_else(
             || quote! { None },
             |player| {
-                let looking_at = self.optional_boxed_entity(player.looking_at.as_deref());
+                let looking_at = self.optional_entity_predicate(player.looking_at.as_deref());
                 let recipes = player.recipes.as_ref().map_or_else(
                     || quote! { None },
                     |recipes| {
@@ -944,19 +975,19 @@ impl CriterionGenerator {
                         quote! { Some(#recipes) }
                     },
                 );
-                quote! { Some(PlayerPredicate { looking_at: #looking_at, recipes: #recipes }) }
+                quote! { Some(Box::new(PlayerPredicate { looking_at: #looking_at, recipes: #recipes })) }
             },
         );
         let lightning = predicate.lightning.as_ref().map_or_else(
             || quote! { None },
             |lightning| {
-                let blocks = self.int_bounds(lightning.blocks_set_on_fire.clone());
-                let struck = self.optional_boxed_entity(lightning.entity_struck.as_deref());
+                let blocks = self.optional_int_bounds(lightning.blocks_set_on_fire.clone());
+                let struck = self.optional_entity_predicate(lightning.entity_struck.as_deref());
                 quote! {
-                    Some(LightningPredicate {
+                    Some(Box::new(LightningPredicate {
                         blocks_set_on_fire: #blocks,
                         entity_struck: #struck,
-                    })
+                    }))
                 }
             },
         );
@@ -978,12 +1009,26 @@ impl CriterionGenerator {
         }
     }
 
+    /// Emits an `Option<Box<EntityPredicate>>` (vanilla `vehicle`/`passenger`).
     fn optional_boxed_entity(&mut self, predicate: Option<&EntityPredicateJson>) -> TokenStream {
         match predicate {
             Some(predicate) => {
                 let predicate = self.entity_predicate(predicate);
-                let predicate = self.single(quote! { EntityPredicate }, predicate);
-                quote! { Some(&#predicate) }
+                quote! { Some(Box::new(#predicate)) }
+            }
+            None => quote! { None },
+        }
+    }
+
+    /// Emits an `Option<EntityPredicate>` (vanilla `looking_at`/`entity_struck`).
+    fn optional_entity_predicate(
+        &mut self,
+        predicate: Option<&EntityPredicateJson>,
+    ) -> TokenStream {
+        match predicate {
+            Some(predicate) => {
+                let predicate = self.entity_predicate(predicate);
+                quote! { Some(#predicate) }
             }
             None => quote! { None },
         }
@@ -1003,9 +1048,9 @@ impl CriterionGenerator {
         let position = location.position.as_ref().map_or_else(
             || quote! { None },
             |position| {
-                let x = self.double_bounds(position.x.clone());
-                let y = self.double_bounds(position.y.clone());
-                let z = self.double_bounds(position.z.clone());
+                let x = self.optional_double_bounds(position.x.clone());
+                let y = self.optional_double_bounds(position.y.clone());
+                let z = self.optional_double_bounds(position.z.clone());
                 quote! { Some(PositionPredicate { x: #x, y: #y, z: #z }) }
             },
         );
@@ -1042,11 +1087,11 @@ impl CriterionGenerator {
     fn optional_distance(&mut self, distance: Option<DistancePredicateJson>) -> TokenStream {
         match distance {
             Some(distance) => {
-                let x = self.double_bounds(distance.x);
-                let y = self.double_bounds(distance.y);
-                let z = self.double_bounds(distance.z);
-                let horizontal = self.double_bounds(distance.horizontal);
-                let absolute = self.double_bounds(distance.absolute);
+                let x = self.optional_double_bounds(distance.x);
+                let y = self.optional_double_bounds(distance.y);
+                let z = self.optional_double_bounds(distance.z);
+                let horizontal = self.optional_double_bounds(distance.horizontal);
+                let absolute = self.optional_double_bounds(distance.absolute);
                 quote! {
                     Some(DistancePredicate {
                         x: #x,
@@ -1071,8 +1116,8 @@ impl CriterionGenerator {
                     .iter()
                     .map(|(key, effect)| {
                         let key = key.strip_prefix("minecraft:").unwrap_or(key).to_owned();
-                        let amplifier = self.int_bounds(effect.amplifier.clone());
-                        let duration = self.int_bounds(effect.duration.clone());
+                        let amplifier = self.optional_int_bounds(effect.amplifier.clone());
+                        let duration = self.optional_int_bounds(effect.duration.clone());
                         let ambient = optional_bool(effect.ambient);
                         let visible = optional_bool(effect.visible);
                         quote! {
@@ -1085,17 +1130,15 @@ impl CriterionGenerator {
                         }
                     })
                     .collect();
-                let effects = self.array(quote! { (&'static str, MobEffectPredicateData) }, elements);
+                let effects =
+                    self.array(quote! { (&'static str, MobEffectPredicateData) }, elements);
                 quote! { Some(MobEffectsPredicate { effects: #effects }) }
             }
             None => quote! { None },
         }
     }
 
-    fn optional_equipment(
-        &mut self,
-        equipment: Option<EntityEquipmentJson>,
-    ) -> TokenStream {
+    fn optional_equipment(&mut self, equipment: Option<EntityEquipmentJson>) -> TokenStream {
         match equipment {
             Some(equipment) => {
                 let head = self.optional_item_predicate(equipment.head);
@@ -1122,7 +1165,7 @@ impl CriterionGenerator {
     }
 
     fn item_predicate(&mut self, item: &ItemPredicateJson) -> TokenStream {
-        let items = self.optional_holder_set(item.items.clone());
+        let items = self.optional_item_set(item.items.clone());
         let count = self.optional_int_bounds(item.count.clone());
         let mut exact = Vec::new();
         let mut has = Vec::new();
@@ -1135,8 +1178,8 @@ impl CriterionGenerator {
                         exact.push(quote! { ExactComponent::Damage(#value) });
                     }
                     "minecraft:banner_patterns" => {
-                        let layers: Vec<BannerLayerJson> =
-                            serde_json::from_value(value.clone()).unwrap_or_else(|error| {
+                        let layers: Vec<BannerLayerJson> = serde_json::from_value(value.clone())
+                            .unwrap_or_else(|error| {
                                 panic!("invalid `minecraft:banner_patterns`: {error}")
                             });
                         let elements: Vec<TokenStream> = layers
@@ -1151,7 +1194,8 @@ impl CriterionGenerator {
                                 quote! { (#pattern, #color) }
                             })
                             .collect();
-                        let layers = self.array(quote! { (&'static str, DyeColor) }, elements);
+                        let layers =
+                            self.array(quote! { (&'static str, crate::DyeColor) }, elements);
                         exact.push(quote! { ExactComponent::BannerPatterns(#layers) });
                     }
                     "minecraft:item_name" => {
@@ -1223,10 +1267,9 @@ impl CriterionGenerator {
                     Some(IntBoundsJson::Exact(value)) => {
                         (quote! { Some(#value) }, quote! { Some(#value) })
                     }
-                    Some(IntBoundsJson::Bounds { min, max }) => (
-                        optional_i32(*min),
-                        optional_i32(*max),
-                    ),
+                    Some(IntBoundsJson::Bounds { min, max }) => {
+                        (optional_i32(*min), optional_i32(*max))
+                    }
                 };
                 quote! {
                     EnchantmentPredicate {
@@ -1245,7 +1288,7 @@ impl CriterionGenerator {
                 let dealt = self.optional_double_bounds(damage.dealt);
                 let taken = self.optional_double_bounds(damage.taken);
                 let blocked = optional_bool(damage.blocked);
-                let source_entity = self.optional_entity_predicate(damage.source_entity);
+                let source_entity = self.optional_entity_predicate(damage.source_entity.as_ref());
                 let damage_type = self.optional_damage_source(damage.damage_type);
                 quote! {
                     Some(DamagePredicate {
@@ -1271,23 +1314,7 @@ impl CriterionGenerator {
         }
     }
 
-    fn optional_entity_predicate(
-        &mut self,
-        predicate: Option<EntityPredicateJson>,
-    ) -> TokenStream {
-        match predicate {
-            Some(predicate) => {
-                let predicate = self.entity_predicate(&predicate);
-                quote! { Some(#predicate) }
-            }
-            None => quote! { None },
-        }
-    }
-
-    fn optional_damage_source(
-        &mut self,
-        source: Option<DamageSourcePredicateJson>,
-    ) -> TokenStream {
+    fn optional_damage_source(&mut self, source: Option<DamageSourcePredicateJson>) -> TokenStream {
         match source {
             Some(source) => {
                 let tags: Vec<TokenStream> = source
@@ -1302,8 +1329,8 @@ impl CriterionGenerator {
                     })
                     .collect();
                 let tags = self.array(quote! { (&'static str, bool) }, tags);
-                let source_entity = self.optional_entity_predicate(source.source_entity);
-                let direct_entity = self.optional_entity_predicate(source.direct_entity);
+                let source_entity = self.optional_entity_predicate(source.source_entity.as_ref());
+                let direct_entity = self.optional_entity_predicate(source.direct_entity.as_ref());
                 let is_direct = optional_bool(source.is_direct);
                 quote! {
                     Some(DamageSourcePredicate {
@@ -1366,8 +1393,20 @@ fn trigger_static(trigger: &Identifier) -> TokenStream {
         "minecraft",
         "advancement triggers must be vanilla ids: {trigger}"
     );
-    let path = trigger.path.as_ref();
-    let ident = Ident::new(&path.to_shouty_snake_case(), Span::call_site());
+    // Vanilla names the singleton after the `CriteriaTriggers` constant, which is
+    // not always the trigger id (e.g. `TRADE` is `villager_trade`).
+    let constant = match trigger.path.as_ref() {
+        "villager_trade" => "TRADE",
+        "player_generates_container_loot" => "GENERATE_LOOT",
+        "hero_of_the_village" => "RAID_WIN",
+        "voluntary_exile" => "RAID_OMEN",
+        "started_riding" => "START_RIDING",
+        other => {
+            let ident = Ident::new(&other.to_shouty_snake_case(), Span::call_site());
+            return quote! { crate::advancement::triggers::#ident };
+        }
+    };
+    let ident = Ident::new(constant, Span::call_site());
     quote! { crate::advancement::triggers::#ident }
 }
 

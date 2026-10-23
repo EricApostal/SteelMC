@@ -2,6 +2,8 @@
 
 use std::io::{Cursor, Result as IoResult, Write};
 use std::ops::{Deref, DerefMut};
+use std::slice::Iter;
+use std::vec::IntoIter;
 
 use simdnbt::borrow::NbtCompound as NbtCompoundView;
 use simdnbt::owned::{NbtCompound, NbtList};
@@ -567,7 +569,7 @@ impl FromIterator<MerchantOffer> for MerchantOffers {
 
 impl IntoIterator for MerchantOffers {
     type Item = MerchantOffer;
-    type IntoIter = std::vec::IntoIter<MerchantOffer>;
+    type IntoIter = IntoIter<MerchantOffer>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
@@ -576,7 +578,7 @@ impl IntoIterator for MerchantOffers {
 
 impl<'a> IntoIterator for &'a MerchantOffers {
     type Item = &'a MerchantOffer;
-    type IntoIter = std::slice::Iter<'a, MerchantOffer>;
+    type IntoIter = Iter<'a, MerchantOffer>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()

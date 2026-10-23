@@ -13,6 +13,7 @@ use super::selector::{Goal, GoalControls};
 use crate::entity::PathfinderMob;
 use crate::poi::OccupationStatus;
 use crate::world::World;
+use crate::world::village::golem::wants_to_spawn_golem;
 use crate::world::village::poi::{section_center, sections_in_cube};
 
 const STROLL_INTERVAL: i32 = 240;
@@ -69,9 +70,9 @@ impl GolemRandomStrollInVillageGoal {
             })
             .into_iter()
             .filter(|villager| {
-                villager.as_mob().is_some_and(|mob| {
-                    crate::world::village::golem::wants_to_spawn_golem(mob, game_time)
-                })
+                villager
+                    .as_mob()
+                    .is_some_and(|mob| wants_to_spawn_golem(mob, game_time))
             })
             .map(|villager| villager.position())
             .collect();

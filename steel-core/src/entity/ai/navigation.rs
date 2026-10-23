@@ -549,7 +549,7 @@ impl PathNavigation {
 
     pub fn create_path(
         &mut self,
-        evaluator: &mut impl crate::entity::ai::walk::NodeEvaluator,
+        evaluator: &mut impl NodeEvaluator,
         level: &dyn LevelReader,
         collision: &mut impl WalkNodeCollision,
         request: NavigationPathRequest<'_>,

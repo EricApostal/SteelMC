@@ -24,7 +24,7 @@ use std::sync::{Arc, Weak};
 
 use glam::DVec3;
 use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
-use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
+use simdnbt::owned::{NbtCompound, NbtList};
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{
     BlockStateProperties, BoolProperty, Direction, EnumProperty, IntProperty,
@@ -270,6 +270,13 @@ unsafe impl DowncastType for BeehiveBlockEntity {
 }
 
 impl BeehiveBlockEntity {
+    /// Vanilla `BeeReleaseStatus.HONEY_DELIVERED`.
+    pub const HONEY_DELIVERED: BeeReleaseStatus = BeeReleaseStatus::HoneyDelivered;
+    /// Vanilla `BeeReleaseStatus.BEE_RELEASED`.
+    pub const BEE_RELEASED: BeeReleaseStatus = BeeReleaseStatus::BeeReleased;
+    /// Vanilla `BeeReleaseStatus.EMERGENCY`.
+    pub const EMERGENCY: BeeReleaseStatus = BeeReleaseStatus::Emergency;
+
     /// Creates a new beehive block entity.
     #[must_use]
     pub fn new(level: Weak<World>, pos: BlockPos, state: BlockStateId) -> Self {
@@ -400,7 +407,6 @@ impl BeehiveBlockEntity {
             return;
         }
         bee.stop_riding();
-        bee.set_no_gravity(true);
 
         let occupant = BeehiveBeeOccupant::of(bee.as_ref());
         let flower_pos = bee

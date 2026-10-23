@@ -17,7 +17,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use steel_registry::stat::vanilla_stat_types;
-use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_custom_stats, vanilla_entities, vanilla_items};
+use steel_registry::{
+    init_vanilla_registry, vanilla_blocks, vanilla_custom_stats, vanilla_entities, vanilla_items,
+};
 use tokio::fs;
 
 fn temp_storage_root(name: &str) -> PathBuf {

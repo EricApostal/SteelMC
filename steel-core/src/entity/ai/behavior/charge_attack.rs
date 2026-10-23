@@ -5,6 +5,7 @@ use glam::DVec3;
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::{MemoryModuleTypeRef, MemoryStatus, module_type as mem};
 use crate::entity::ai::targeting::TargetingConditions;
+use crate::entity::{EntityAnchor, SharedEntity};
 
 /// Vanilla `ChargeAttack` (no fixed duration; the default 60-tick window is
 /// irrelevant because `canStillUse` gates every tick).
@@ -65,18 +66,14 @@ impl ChargeAttack {
     }
 
     /// Vanilla `dealDamageToTarget`.
-    fn deal_damage_to_target(
-        &self,
-        ctx: &mut BehaviorContext<'_>,
-        target: &crate::entity::SharedEntity,
-    ) {
+    fn deal_damage_to_target(&self, ctx: &mut BehaviorContext<'_>, target: &SharedEntity) {
         if let Some(mob) = ctx.body.as_mob() {
             mob.do_hurt_target(ctx.body, ctx.level, target);
         }
     }
 
     /// Vanilla `dealKnockBack`.
-    fn deal_knockback(&self, ctx: &BehaviorContext<'_>, target: &crate::entity::SharedEntity) {
+    fn deal_knockback(&self, ctx: &BehaviorContext<'_>, target: &SharedEntity) {
         // Vanilla adds `0.25F * (speedAmplifier - slownessAmplifier)`; Steel's
         // effect surface has no amplifier accessor here, so the unmodified factor
         // is used (equivalent for mobs without Speed/Slowness).
@@ -151,9 +148,9 @@ impl Behavior for ChargeAttack {
         };
 
         ctx.body.look_at_entity(
-            crate::entity::EntityAnchor::Eyes,
+            EntityAnchor::Eyes,
             attack_target.as_ref(),
-            crate::entity::EntityAnchor::Eyes,
+            EntityAnchor::Eyes,
         );
         ctx.body.set_velocity(self.charge_velocity_vector);
 

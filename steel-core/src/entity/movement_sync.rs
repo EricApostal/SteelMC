@@ -2,8 +2,9 @@
 
 use glam::DVec3;
 use steel_protocol::packets::game::{
-    CEntityPositionSync, CMoveEntityPos, CMoveEntityPosRot, CMoveEntityRot, CRotateHead,
-    CSetEntityMotion, PackedEntityDelta, PositionPath, VecDelta, calc_delta, to_angle_byte,
+    CEntityPositionSync, CMoveEntityPos, CMoveEntityPosRot, CMoveEntityRot, CProjectilePower,
+    CRotateHead, CSetEntityMotion, PackedEntityDelta, PositionPath, VecDelta, calc_delta,
+    to_angle_byte,
 };
 use steel_registry::{entity_type::EntityTypeRef, vanilla_entities};
 
@@ -147,6 +148,9 @@ pub enum EntityMovementSyncPacket {
     PositionSync(CEntityPositionSync),
     /// Velocity sync.
     Velocity(CSetEntityMotion),
+    /// Acceleration-power sync that vanilla bundles with a hurting projectile's
+    /// velocity update so client-side prediction matches the server.
+    ProjectilePower(CProjectilePower),
 }
 
 impl From<EntityPositionSyncPacket> for EntityMovementSyncPacket {
@@ -514,6 +518,9 @@ pub struct ServerEntityMovementSyncUpdate {
     /// Vanilla `Entity.getRequiresPrecisePosition`: forces a full absolute
     /// position sync instead of a delta movement packet.
     pub requires_precise_position: bool,
+    /// Vanilla `AbstractHurtingProjectile.accelerationPower`, sent with the
+    /// velocity update when the entity is a hurting projectile.
+    pub projectile_power: Option<f64>,
 }
 
 impl ServerEntityMovementSyncUpdate {
@@ -680,6 +687,16 @@ impl ServerEntityMovementSyncState {
                 .record_velocity_sync(update.entity_id, update.velocity)
         {
             result.packets.push(EntityMovementSyncPacket::from(packet));
+            if let Some(acceleration_power) = update.projectile_power {
+                result
+                    .packets
+                    .push(EntityMovementSyncPacket::ProjectilePower(
+                        CProjectilePower {
+                            id: update.entity_id,
+                            acceleration_power,
+                        },
+                    ));
+            }
         }
 
         if force_full || full_precision_required {
@@ -1114,6 +1131,9 @@ mod tests {
             needs_velocity_sync: false,
             has_dirty_entity_data: false,
             force_velocity_sync: false,
+            force_position_rotation: false,
+            requires_precise_position: false,
+            projectile_power: None,
         }
     }
 

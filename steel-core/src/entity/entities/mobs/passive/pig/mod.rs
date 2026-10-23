@@ -35,10 +35,10 @@ use crate::entity::ai::goal::{
 };
 use crate::entity::damage::DamageSource;
 use crate::entity::{
-    AgeableMob, AgeableMobBase, Animal, AnimalBase, Entity, EntityBase, EntityBaseLoad, EntityPose,
-    EntitySpawnReason, EntitySyncedData, ItemBasedSteering, ItemSteerable, LivingEntity,
-    LivingEntityBase, LivingEntitySyncedData, Mob, MobBase, MoveResult, PathfinderMob,
-    SharedEntity, SpawnGroupData,
+    AgeableMob, AgeableMobBase, Animal, AnimalBase, ConversionParams, Entity, EntityBase,
+    EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData, ItemBasedSteering,
+    ItemSteerable, LivingEntity, LivingEntityBase, LivingEntitySyncedData, Mob, MobBase,
+    MoveResult, PathfinderMob, SharedEntity, SpawnGroupData,
 };
 use crate::inventory::equipment::EquipmentSlot;
 use crate::player::Player;
@@ -240,7 +240,7 @@ impl Entity for PigEntity {
         if world.difficulty() != steel_utils::types::Difficulty::Peaceful {
             let converted = self.convert_to(
                 &steel_registry::vanilla_entities::ZOMBIFIED_PIGLIN,
-                crate::entity::ConversionParams::single(false, true),
+                ConversionParams::single(false, true),
                 Some(&move |mob| {
                     mob.set_persistence_required();
                 }),

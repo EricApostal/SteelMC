@@ -395,10 +395,19 @@ async fn run_server(
     .map_err(|e| e.to_string())?;
 
     let server = Arc::clone(&steel.server);
+    let task_tracker = TaskTracker::new();
 
     // Vanilla runs `stopServer` from a `finally`, so an unexpected panic still
     // saves player and world data before the process exits.
-    let run_result = AssertUnwindSafe(run_started_server(&mut steel)).catch_unwind().await;
+    let run_result = AssertUnwindSafe(run_started_server(&mut steel, &task_tracker))
+        .catch_unwind()
+        .await;
+
+    // Either way, stop accepting work and drain the tracker before saving:
+    // `save_and_shutdown` requires packet processing to have stopped.
+    log::info!("Waiting for pending tasks...");
+    task_tracker.close();
+    task_tracker.wait().await;
 
     server.save_and_shutdown().await;
 
@@ -414,11 +423,11 @@ async fn run_server(
     }
 }
 
-/// Runs the accept loop until shutdown, then drains the pending tasks.
+/// Runs the accept loop until shutdown.
 ///
-/// Split out of [`run_server`] so the caller can save data even when this
-/// unwinds.
-async fn run_started_server(steel: &mut SteelServer) {
+/// Split out of [`run_server`] so the caller can drain spawned tasks and save
+/// data even when this unwinds.
+async fn run_started_server(steel: &mut SteelServer, task_tracker: &TaskTracker) {
     let server = Arc::clone(&steel.server);
 
     if !server.prepare_spawn_area().await {
@@ -427,14 +436,7 @@ async fn run_started_server(steel: &mut SteelServer) {
 
     SERVER.set(Arc::clone(&steel.server)).ok();
 
-    let task_tracker = TaskTracker::new();
-
     steel.start(task_tracker.clone()).await;
-
-    log::info!("Waiting for pending tasks...");
-
-    task_tracker.close();
-    task_tracker.wait().await;
 }
 
 /// Applies the command-line overrides vanilla's launcher exposes.
@@ -456,7 +458,10 @@ fn apply_startup_overrides(
         }
     }
     if let Some(universe) = &args.universe {
-        steel_config.worlds.save_path = universe.to_string_lossy().into_owned();
+        // Vanilla resolves `--universe` against the working directory. Steel
+        // rejects `.`/`..` components in `save_path`, so normalize first.
+        let resolved = absolute(universe).unwrap_or_else(|_| universe.clone());
+        steel_config.worlds.save_path = resolved.to_string_lossy().into_owned();
     }
     if let Some(world) = &args.world {
         steel_config.select_default_domain(world)?;

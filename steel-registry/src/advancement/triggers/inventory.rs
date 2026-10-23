@@ -890,12 +890,7 @@ impl EnchantedItemTriggerInstance {
     /// Vanilla `TriggerInstance.matches(stack, levels)`.
     #[must_use]
     pub fn matches(&self, event: &TriggerEvent<'_>) -> bool {
-        let TriggerEvent::EnchantedItem {
-            base,
-            item,
-            levels,
-        } = *event
-        else {
+        let TriggerEvent::EnchantedItem { base, item, levels } = *event else {
             return false;
         };
         self.player.matches(&base.context(Some(item)))

@@ -16,6 +16,7 @@ use steel_registry::blocks::properties::{BlockStateProperties, VaultState};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::loot_table::LootContext;
 use steel_registry::sound_events;
+use steel_registry::stat::vanilla_stat_types;
 use steel_registry::vanilla_level_events;
 use steel_registry::{REGISTRY, RegistryExt as _, vanilla_block_entity_types, vanilla_items};
 use steel_utils::uuid_ext::UuidExt as _;
@@ -276,6 +277,9 @@ impl VaultBlockEntity {
         if items.is_empty() {
             return false;
         }
+        // Vanilla `Server.tryInsertKey` awards `Stats.ITEM_USED` for the key item after the
+        // eject list resolves and before the key is consumed.
+        player.award_stat(&vanilla_stat_types::ITEM_USED, inserted.item());
         inv.with_item(|item| item.shrink(needs_reward.key_item.count()));
 
         {

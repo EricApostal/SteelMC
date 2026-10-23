@@ -9,6 +9,7 @@ use super::harvest_farmland::{is_crop, is_mature_crop};
 use super::utils;
 use super::villager;
 use crate::behavior::BLOCK_BEHAVIORS;
+use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::ai::brain::memory::{MemoryModuleTypeRef, MemoryStatus};
@@ -69,7 +70,7 @@ impl UseBonemeal {
     }
 
     /// Vanilla `UseBonemeal.pickNextTarget`.
-    fn pick_next_target(level: &World, body: &crate::entity::SharedEntity) -> Option<BlockPos> {
+    fn pick_next_target(level: &World, body: &SharedEntity) -> Option<BlockPos> {
         let base = body.block_position();
         let mut result = None;
         let mut count = 0;
@@ -127,7 +128,7 @@ impl UseBonemeal {
     }
 
     /// Vanilla `SimpleContainer.countItem(Items.BONE_MEAL)`.
-    fn count_bone_meal(body: &crate::entity::SharedEntity) -> i32 {
+    fn count_bone_meal(body: &SharedEntity) -> i32 {
         let Some(villager) = villager::as_villager(body) else {
             return 0;
         };

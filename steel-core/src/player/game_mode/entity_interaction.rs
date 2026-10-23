@@ -13,6 +13,7 @@ use super::{
 use crate::player::food_data::food_constants;
 use std::ops::Add;
 use steel_registry::particle_type::ParticleData;
+use steel_registry::stat::vanilla_stat_types;
 use steel_registry::{vanilla_custom_stats, vanilla_particle_types};
 
 const fn sound_holder_ref(holder: &SoundEventHolder) -> Option<SoundEventRef> {
@@ -489,6 +490,12 @@ impl Player {
                 (source_item, stack.get_weapon().is_some())
             })
         };
+
+        // Vanilla `ItemStack.hurtEnemy`: attacking with a `WEAPON`-flagged item awards the
+        // `used` stat for that item. Vanilla does this before the post-attack effects run.
+        if item_hurt_enemy {
+            self.award_stat(&vanilla_stat_types::ITEM_USED, source_item.item());
+        }
 
         if apply_to_target {
             let world = self.get_world();

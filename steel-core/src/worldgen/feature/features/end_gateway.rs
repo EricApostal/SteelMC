@@ -19,7 +19,15 @@ impl FeatureDecorationRunner {
                         let state = vanilla_blocks::END_GATEWAY.default_state();
                         let _ = region.set_block_state(pos, state, UpdateFlags::UPDATE_ALL);
                         let exit = config.exit.map(BlockPos);
-                        Self::set_end_gateway_block_entity(region, pos, state, exit, config.exact);
+                        // Vanilla only calls `setExitPosition` when an exit is configured, so
+                        // `ExactTeleport` is never written for a delayed exit search.
+                        Self::set_end_gateway_block_entity(
+                            region,
+                            pos,
+                            state,
+                            exit,
+                            config.exact && exit.is_some(),
+                        );
                     } else if same_y {
                         let _ = region.set_block_state(
                             pos,

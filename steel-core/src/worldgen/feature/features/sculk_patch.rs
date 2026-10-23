@@ -283,10 +283,8 @@ impl FeatureDecorationRunner {
                 Some(faces) if !faces.is_empty() => {
                     // Vanilla `!state.getFluidState().is(Fluids.WATER)` only accepts
                     // the source water fluid type.
-                    if !state.is_air()
-                        && !get_fluid_state_from_block(state)
-                            .is_source_of_type(&vanilla_fluids::WATER)
-                    {
+                    let state_fluid = get_fluid_state_from_block(state);
+                    if !state.is_air() && !state_fluid.is_source_of_type(&vanilla_fluids::WATER) {
                         return false;
                     }
                     Self::sculk_vein_regrow(region, pos, state, faces)
@@ -850,12 +848,12 @@ impl FeatureDecorationRunner {
 
     fn sculk_can_place_growth(region: &WorldGenRegion<'_>, pos: BlockPos) -> bool {
         let state_above = region.block_state(pos.above());
+        let fluid_above = get_fluid_state_from_block(state_above);
         // Vanilla: `stateAbove.isAir() || stateAbove.is(WATER) && stateAbove.getFluidState().is(Fluids.WATER)`,
         // where `is(Fluid)` matches the source fluid type only (flowing water fails).
         let can_grow_above = state_above.is_air()
             || (state_above.get_block() == &vanilla_blocks::WATER
-                && get_fluid_state_from_block(state_above)
-                    .is_source_of_type(&vanilla_fluids::WATER));
+                && fluid_above.is_source_of_type(&vanilla_fluids::WATER));
         if !can_grow_above {
             return false;
         }

@@ -338,6 +338,9 @@ impl World {
             EntityMovementSyncPacket::Velocity(packet) => {
                 EncodedPacket::from_bare(packet, self.compression, ConnectionProtocol::Play)
             }
+            EntityMovementSyncPacket::ProjectilePower(packet) => {
+                EncodedPacket::from_bare(packet, self.compression, ConnectionProtocol::Play)
+            }
         };
         encoded.ok()
     }

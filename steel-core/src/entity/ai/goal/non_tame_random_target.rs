@@ -1,7 +1,8 @@
 //! Vanilla `NonTameRandomTargetGoal` (`goal/target/NonTameRandomTargetGoal.java`): like the
 //! base nearest-attackable target goal, except a tamed mob never uses it.
 
-use crate::entity::PathfinderMob;
+use crate::entity::{LivingEntity, PathfinderMob, SharedEntity};
+use crate::world::World;
 
 use super::nearest_attackable_target::NearestAttackableTargetGoal;
 use super::selector::{Goal, GoalControls};
@@ -18,10 +19,7 @@ impl NonTameRandomTargetGoal {
     #[must_use]
     pub fn new(
         must_see: bool,
-        selector: impl Fn(&dyn crate::entity::LivingEntity, &crate::world::World) -> bool
-        + Send
-        + Sync
-        + 'static,
+        selector: impl Fn(&dyn LivingEntity, &World) -> bool + Send + Sync + 'static,
     ) -> Self {
         Self {
             inner: NearestAttackableTargetGoal::new_with_interval(10, must_see, false, selector),
@@ -29,7 +27,7 @@ impl NonTameRandomTargetGoal {
     }
 
     /// Vanilla `NonTameRandomTargetGoal.setTarget`.
-    pub fn set_target(&mut self, target: Option<crate::entity::SharedEntity>) {
+    pub fn set_target(&mut self, target: Option<SharedEntity>) {
         self.inner.set_target(target);
     }
 }

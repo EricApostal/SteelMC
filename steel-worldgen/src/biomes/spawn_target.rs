@@ -13,6 +13,8 @@
 //! datapack (`<dimension>::SPAWN_TARGETS`), so this module only owns the
 //! algorithm and the per-entry fitness rule.
 
+use std::f32::consts::TAU;
+
 use steel_utils::BlockPos;
 use steel_utils::climate::{Parameter, TargetPoint};
 
@@ -112,7 +114,7 @@ fn radial_search(
         }
 
         angle += radius_increment / radius;
-        if angle > std::f32::consts::TAU {
+        if angle > TAU {
             angle = 0.0;
             radius += radius_increment;
         }
@@ -174,7 +176,7 @@ mod tests {
     #[test]
     fn empty_targets_use_the_world_origin() {
         assert_eq!(
-            find_spawn_position(&[] as &[()], |_, _| 0, |_, _| point()),
+            find_spawn_position(&[] as &[()], |(), _| 0, |_, _| point()),
             BlockPos::new(0, 0, 0)
         );
     }
@@ -183,7 +185,7 @@ mod tests {
     fn perfect_fit_prefers_the_world_origin() {
         // Every candidate fits equally, so the distance bias keeps (0, 0).
         assert_eq!(
-            find_spawn_position(&[()], |_, _| 0, |_, _| point()),
+            find_spawn_position(&[()], |(), _| 0, |_, _| point()),
             BlockPos::new(0, 0, 0)
         );
     }

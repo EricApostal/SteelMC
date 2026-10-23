@@ -7,7 +7,7 @@ use steel_utils::BlockPos;
 
 use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
-use crate::entity::ai::brain::memory::{MemoryModuleType, module_type as mem};
+use crate::entity::ai::brain::memory::{MemoryModuleType, MemoryModuleTypeRef, module_type as mem};
 use crate::entity::ai::brain::tracker::{BlockPosTracker, WalkTarget};
 use crate::entity::ai::goal::default_random_pos_away;
 
@@ -67,7 +67,7 @@ impl SetWalkTargetAwayFrom {
         desired_distance: i32,
         interrupt_current_walk: bool,
     ) -> OneShot<Self> {
-        let required: Vec<crate::entity::ai::brain::memory::MemoryModuleTypeRef> = match memory {
+        let required: Vec<MemoryModuleTypeRef> = match memory {
             WalkAwayFrom::Pos(memory) => vec![&mem::WALK_TARGET, memory],
             WalkAwayFrom::Entity(memory) => vec![&mem::WALK_TARGET, memory],
         };

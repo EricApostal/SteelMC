@@ -1,5 +1,6 @@
 //! Vanilla Mooshroom (`MushroomCow`) entity with variant, shearing, and stew-feeding parity.
 
+use std::ptr;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -347,7 +348,7 @@ impl MushroomCowEntity {
         particle_type: steel_registry::particle_type::ParticleTypeRef,
         count: i32,
     ) {
-        let particle = if std::ptr::eq(particle_type, &vanilla_particle_types::EFFECT) {
+        let particle = if ptr::eq(particle_type, &vanilla_particle_types::EFFECT) {
             ParticleData::new(
                 particle_type,
                 steel_registry::particle_type::SpellParticleOption::new(
@@ -370,7 +371,7 @@ impl MushroomCowEntity {
             count,
             DVec3::new(0.5, 0.0, 0.5),
             DVec3::new(0.0, 0.2, 0.0),
-            crate::world::RandomizationType::AlternativeWithSpeed,
+            steel_protocol::packets::game::RandomizationType::AlternativeWithSpeed,
         );
     }
 

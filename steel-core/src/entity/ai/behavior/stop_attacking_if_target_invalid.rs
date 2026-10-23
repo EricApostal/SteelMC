@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
 use crate::entity::ai::brain::memory::module_type as mem;
+use crate::entity::{Mob, SharedEntity};
 
 /// Vanilla `StopAttackingIfTargetInvalid.TIMEOUT_TO_GET_WITHIN_ATTACK_RANGE`.
 const TIMEOUT_TO_GET_WITHIN_ATTACK_RANGE: i64 = 200;
@@ -88,7 +88,7 @@ impl Trigger for StopAttackingIfTargetInvalid {
         let can_attack = target.as_living_entity().is_some_and(|living| {
             ctx.body
                 .as_mob()
-                .is_some_and(|mob| crate::entity::Mob::can_attack(mob, living))
+                .is_some_and(|mob| Mob::can_attack(mob, living))
         });
 
         let still_valid = can_attack

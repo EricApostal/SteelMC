@@ -34,10 +34,11 @@ use crate::entity::ai::goal::{
     HurtByTargetGoal, NearestAttackableTargetGoal, ResetUniversalAngerTargetGoal,
     WaterAvoidingRandomStrollGoal, ZombieAttackGoal,
 };
+use crate::entity::ai::path::PathType;
 use crate::entity::attribute::{AttributeModifier, AttributeModifierOperation};
 use crate::entity::damage::DamageSource;
-use crate::entity::neutral_mob::{NeutralMob, PersistentAnger};
 use crate::entity::entities::mobs::zombie::zombie;
+use crate::entity::neutral_mob::{NeutralMob, PersistentAnger};
 use crate::entity::{
     AgeableMobGroupData, Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason,
     EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase, Monster, PathfinderMob,
@@ -148,10 +149,7 @@ impl ZombifiedPiglinEntity {
         living_base.initialize_synced_data(&mut entity_data);
 
         // Vanilla `ZombifiedPiglin` constructor: lava is traversable at a cost.
-        mob_base
-            .pathfinding_malus()
-            .lock()
-            .set(crate::entity::ai::path::PathType::Lava, 8.0);
+        mob_base.pathfinding_malus().lock().set(PathType::Lava, 8.0);
 
         {
             // Vanilla `ZombifiedPiglin.addBehaviourGoals` + `addTargetingGoals`.
@@ -636,7 +634,6 @@ impl Mob for ZombifiedPiglinEntity {
 
         self.finalize_spawn_mob_base(world, spawn_reason, group_data)
     }
-
 }
 
 impl Monster for ZombifiedPiglinEntity {}

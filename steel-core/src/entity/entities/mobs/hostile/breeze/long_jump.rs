@@ -15,7 +15,7 @@ use steel_utils::BlockPos;
 use crate::entity::ai::behavior::long_jump_util::calculate_jump_vector_for_angle;
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::{MemoryStatus, module_type as mem};
-use crate::entity::{LivingEntity, SharedEntity};
+use crate::entity::{EntityAnchor, LivingEntity, Mob, SharedEntity};
 use crate::world::World;
 use crate::world::{ClipBlockShape, ClipFluid};
 
@@ -168,7 +168,7 @@ impl Behavior for LongJump {
             .play_sound(&sound_events::ENTITY_BREEZE_CHARGE, 1.0, 1.0);
         if let Some(target_pos) = ctx.get_memory(&mem::BREEZE_JUMP_TARGET) {
             ctx.body
-                .look_at(crate::entity::EntityAnchor::Eyes, block_center(target_pos));
+                .look_at(EntityAnchor::Eyes, block_center(target_pos));
         }
     }
 
@@ -301,7 +301,7 @@ fn can_jump_from_current_position(world: &World, body: &SharedEntity) -> bool {
 /// the body has it.
 fn calculate_optimal_jump_vector(
     entity: &SharedEntity,
-    _mob: &dyn crate::entity::Mob,
+    _mob: &dyn Mob,
     target_pos: BlockPos,
 ) -> Option<DVec3> {
     let follow_range = entity
@@ -362,7 +362,7 @@ pub(super) fn block_center(pos: BlockPos) -> DVec3 {
 pub(super) fn random_point_behind_target(target: &SharedEntity) -> DVec3 {
     let head_yaw = target
         .as_living_entity()
-        .map_or(0.0, crate::entity::LivingEntity::y_head_rot);
+        .map_or(0.0, LivingEntity::y_head_rot);
     let spread = BEHIND_TARGET_SPREAD_DEGREES / 2.0;
     let view_angle = head_yaw + 180.0 + (rand::random::<f32>() * 2.0 - 1.0) * spread;
     let radius = BEHIND_TARGET_MIN_RADIUS

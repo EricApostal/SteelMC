@@ -14,12 +14,6 @@ use steel_utils::random::{Random, RandomSource, legacy_random::LegacyRandom};
 use steel_utils::{BlockPos, BlockStateId, Direction};
 use steel_worldgen::noise::NormalNoise;
 
-/// Vanilla's `NoiseBasedStateProvider.getNoiseValue` multiplies the integer
-/// block coordinate by the provider's `float` scale **in double precision**
-/// (`pos.getX() * scale` where `scale` is the `double` parameter). Scaling in
-/// `f32` first would round differently, so callers widen the stored `f32`
-/// scale before calling [`BlockStateProviderEvaluator::noise_value`].
-
 impl BlockStateProviderEvaluator {
     pub(crate) fn sample_block_state_provider_optional(
         level: &dyn LevelReader,
@@ -252,7 +246,7 @@ impl BlockStateProviderEvaluator {
         pos: BlockPos,
     ) -> BlockStateId {
         let slow_noise = Self::normal_noise(&provider.slow_noise, provider.seed);
-        let variety_noise = Self::noise_value(&slow_noise, pos, f64::from(provider.slow_scale));
+        let variety_noise = Self::slow_noise_value(&slow_noise, pos, provider.slow_scale);
         let local_variety = map_clamped(
             variety_noise,
             -1.0,
@@ -271,7 +265,7 @@ impl BlockStateProviderEvaluator {
         let mut possible_states = SmallVec::<[BlockStateId; 8]>::with_capacity(capacity);
         for i in 0..local_variety {
             let offset_pos = pos.offset(i * 54_545, 0, i * 34_234);
-            let slow_value = Self::noise_value(&slow_noise, offset_pos, f64::from(provider.slow_scale));
+            let slow_value = Self::slow_noise_value(&slow_noise, offset_pos, provider.slow_scale);
             possible_states.push(Self::noise_state_by_value(
                 registry,
                 &provider.states,
@@ -296,11 +290,24 @@ impl BlockStateProviderEvaluator {
         )
     }
 
+    /// Vanilla's `NoiseBasedStateProvider.getNoiseValue`, which multiplies the
+    /// integer block coordinate by a `double` scale. Providers store the scale
+    /// as `f32`, so callers widen it before calling this.
     pub(crate) fn noise_value(noise: &NormalNoise, pos: BlockPos, scale: f64) -> f64 {
         f64::from(noise.get_value(
             f64::from(pos.x()) * scale,
             f64::from(pos.y()) * scale,
             f64::from(pos.z()) * scale,
+        ))
+    }
+
+    /// Vanilla's `DualNoiseProvider.getSlowNoiseValue`, which multiplies by the
+    /// `float` slow scale in **single** precision before widening the result.
+    pub(crate) fn slow_noise_value(noise: &NormalNoise, pos: BlockPos, slow_scale: f32) -> f64 {
+        f64::from(noise.get_value(
+            f64::from(pos.x() as f32 * slow_scale),
+            f64::from(pos.y() as f32 * slow_scale),
+            f64::from(pos.z() as f32 * slow_scale),
         ))
     }
 

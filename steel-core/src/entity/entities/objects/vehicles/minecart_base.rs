@@ -34,8 +34,9 @@ use steel_utils::{BlockPos, BlockStateId, Downcast as _};
 use crate::block_entity::block_state_nbt;
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::mobs::golem::IronGolemEntity;
-use crate::entity::{Entity, RemovalReason};
+use crate::entity::{Entity, RemovalReason, reset_forward_direction_of_relative_portal_position};
 use crate::physics::MoverType;
+use crate::portal::portal_shape::PortalShape;
 use crate::world::{LevelReader as _, SignalGetter, World};
 
 use super::command_block_minecart::CommandBlockMinecartEntity;
@@ -850,12 +851,10 @@ pub(super) fn minecart_relative_portal_position(
     axis: steel_utils::axis::Axis,
     portal_area: steel_utils::block_util::FoundRectangle,
 ) -> DVec3 {
-    crate::entity::reset_forward_direction_of_relative_portal_position(
-        crate::portal::portal_shape::PortalShape::get_relative_position(
-            portal_area,
-            axis,
-            entity.position(),
-            entity.dimensions_for_pose(entity.pose()),
-        ),
-    )
+    reset_forward_direction_of_relative_portal_position(PortalShape::get_relative_position(
+        portal_area,
+        axis,
+        entity.position(),
+        entity.dimensions_for_pose(entity.pose()),
+    ))
 }

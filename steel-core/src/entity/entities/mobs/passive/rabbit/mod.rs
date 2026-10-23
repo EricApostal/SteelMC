@@ -18,6 +18,8 @@
 //! - `Rabbit.aiStep`'s `jumpTicks`/`jumpDuration` counters are kept because
 //!   `startJumping` gates the living jump flag on them; only the client animation states
 //!   are missing (see the GAP below).
+//! - Vanilla `Rabbit.registerGoals` in this version has **no** `RandomLookAroundGoal` (its
+//!   goal 11 is `LookAtPlayerGoal` only), so none is registered here.
 //!
 //! ## GAPs
 //!
@@ -31,6 +33,7 @@
 //! - GAP(rabbit-leash-offset): `Entity` exposes no `getLeashOffset` hook; vanilla returns
 //!   `(0.0, 0.6 * eyeHeight, width * 0.4)`.
 
+use std::iter;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
@@ -75,9 +78,9 @@ use crate::entity::ai::goal::{
 use crate::entity::attribute::{AttributeModifier, AttributeModifierOperation};
 use crate::entity::damage::DamageSource;
 use crate::entity::{
-    AgeableMob, AgeableMobBase, Animal, AnimalBase, Entity, EntityBase, EntityBaseLoad, EntityPose,
-    EntitySpawnReason, EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase, PathfinderMob,
-    SharedEntity, SpawnGroupData,
+    AgeableMob, AgeableMobBase, AgeableMobGroupData, Animal, AnimalBase, Entity, EntityBase,
+    EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData, LivingEntity,
+    LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity, SpawnGroupData,
 };
 use crate::physics::MoveResult;
 use crate::player::Player;
@@ -224,9 +227,7 @@ impl RabbitEntity {
         AnimalBase::initialize_pathfinding_malus(&mob_base);
         let mut entity_data = RabbitEntityData::new();
         living_base.initialize_synced_data(&mut entity_data);
-        entity_data
-            .variant_type
-            .set(RabbitVariant::default().id());
+        entity_data.variant_type.set(RabbitVariant::default().id());
 
         {
             // Vanilla `Rabbit.registerGoals`, same priorities and speeds.
@@ -258,15 +259,21 @@ impl RabbitEntity {
             );
             goal_selector.add_goal(
                 4,
-                RabbitAvoidEntityGoal::new(10.0, FLEE_SPEED_MOD, FLEE_SPEED_MOD, |target, _world| {
-                    target.entity_type() == &vanilla_entities::WOLF
-                }),
+                RabbitAvoidEntityGoal::new(
+                    10.0,
+                    FLEE_SPEED_MOD,
+                    FLEE_SPEED_MOD,
+                    |target, _world| target.entity_type() == &vanilla_entities::WOLF,
+                ),
             );
             goal_selector.add_goal(
                 4,
-                RabbitAvoidEntityGoal::new(4.0, FLEE_SPEED_MOD, FLEE_SPEED_MOD, |target, _world| {
-                    target.as_monster().is_some()
-                }),
+                RabbitAvoidEntityGoal::new(
+                    4.0,
+                    FLEE_SPEED_MOD,
+                    FLEE_SPEED_MOD,
+                    |target, _world| target.as_monster().is_some(),
+                ),
             );
             goal_selector.add_goal(5, RaidGardenGoal::new());
             goal_selector.add_goal(6, WaterAvoidingRandomStrollGoal::new(STROLL_SPEED_MOD));
@@ -306,10 +313,8 @@ impl RabbitEntity {
             }
             {
                 let mut target_selector = self.mob_base().target_selector().lock();
-                target_selector.add_goal(
-                    1,
-                    HurtByTargetGoal::new().set_alert_others(std::iter::empty()),
-                );
+                target_selector
+                    .add_goal(1, HurtByTargetGoal::new().set_alert_others(iter::empty()));
                 target_selector.add_goal(
                     2,
                     NearestAttackableTargetGoal::new_for_players(true, |_, _| true),
@@ -331,14 +336,18 @@ impl RabbitEntity {
                 false,
             );
             if self.custom_name().is_none() {
-                self.set_custom_name(Some(TextComponent::translated(
-                    TranslatedMessage::new(KILLER_BUNNY_TRANSLATION_KEY, None),
-                )));
+                self.set_custom_name(Some(TextComponent::translated(TranslatedMessage::new(
+                    KILLER_BUNNY_TRANSLATION_KEY,
+                    None,
+                ))));
             }
+            // A freshly evil rabbit attacks immediately instead of waiting out the hop delay.
+            self.state.lock().jump_delay_ticks = 0;
         } else {
-            self.attributes()
-                .lock()
-                .remove_modifier(vanilla_attributes::ATTACK_DAMAGE, &EVIL_ATTACK_POWER_MODIFIER);
+            self.attributes().lock().remove_modifier(
+                vanilla_attributes::ATTACK_DAMAGE,
+                &EVIL_ATTACK_POWER_MODIFIER,
+            );
         }
 
         self.entity_data.lock().variant_type.set(variant.id());
@@ -418,22 +427,38 @@ impl RabbitEntity {
     /// Vanilla `Rabbit.setSpeedModifier`: keeps the navigation and move-control speeds in
     /// step, routing through the rabbit's move-control override.
     fn set_speed_modifier(&self, speed: f64) {
-        self.mob_base().navigation().lock().set_speed_modifier(speed);
-        let wanted_position = self.mob_base().controls().lock().move_control.wanted_position();
+        self.mob_base()
+            .navigation()
+            .lock()
+            .set_speed_modifier(speed);
+        let wanted_position = self
+            .mob_base()
+            .controls()
+            .lock()
+            .move_control
+            .wanted_position();
         self.set_wanted_position(wanted_position, speed);
     }
 
     /// Vanilla `Rabbit.facePoint`: turns the body (yaw only) toward a point.
     fn face_point(&self, face_x: f64, face_z: f64) {
         let position = self.position();
-        let yaw = (face_z - position.z).atan2(face_x - position.x).to_degrees() as f32 - 90.0;
+        let yaw = (face_z - position.z)
+            .atan2(face_x - position.x)
+            .to_degrees() as f32
+            - 90.0;
         let (_, pitch) = self.rotation();
         self.set_rotation((yaw, pitch));
     }
 
     /// Vanilla `Rabbit.RabbitMoveControl.setLandingDelay`.
     fn set_landing_delay(&self) {
-        let speed_modifier = self.mob_base().controls().lock().move_control.speed_modifier();
+        let speed_modifier = self
+            .mob_base()
+            .controls()
+            .lock()
+            .move_control
+            .speed_modifier();
         self.state.lock().jump_delay_ticks = if speed_modifier < FLEE_SPEED_MOD {
             JUMP_DELAY_TICKS
         } else {
@@ -449,8 +474,7 @@ impl RabbitEntity {
 
     /// Vanilla `MoveControl.hasWanted`.
     fn move_control_has_wanted(&self) -> bool {
-        self.mob_base().controls().lock().move_control.operation()
-            == MoveControlOperation::MoveTo
+        self.mob_base().controls().lock().move_control.operation() == MoveControlOperation::MoveTo
     }
 
     /// Vanilla `Path.getNextEntityPos`: the center of the path's next node.
@@ -639,12 +663,7 @@ impl RaidGardenGoal {
                 RAID_SPEED_MOD,
                 RAID_SEARCH_RANGE,
                 move |level, pos| {
-                    is_valid_raid_target(
-                        level,
-                        pos,
-                        &predicate_wants_to_raid,
-                        &predicate_can_raid,
-                    )
+                    is_valid_raid_target(level, pos, &predicate_wants_to_raid, &predicate_can_raid)
                 },
             ),
             wants_to_raid,
@@ -657,7 +676,8 @@ impl RaidGardenGoal {
         let crops_pos = self.move_to_block.block_pos().above();
         let block_state = world.get_block_state(crops_pos);
 
-        if self.can_raid.load(Ordering::Relaxed) && block_state.get_block() == &vanilla_blocks::CARROTS
+        if self.can_raid.load(Ordering::Relaxed)
+            && block_state.get_block() == &vanilla_blocks::CARROTS
         {
             let carrot_age = block_state.get_value(&BlockStateProperties::AGE_7);
             if carrot_age == 0 {
@@ -679,7 +699,7 @@ impl RaidGardenGoal {
                     &GameEventContext::new(Some(rabbit), None),
                 );
                 world.level_event(
-                    level_events::PARTICLES_DESTROY_BLOCK,
+                    level_events::PARTICLES_AND_SOUND_DESTROY_BLOCK,
                     crops_pos,
                     level_events::encode_block_state_data(u32::from(block_state.0)),
                     None,
@@ -690,7 +710,8 @@ impl RaidGardenGoal {
         }
 
         self.can_raid.store(false, Ordering::Relaxed);
-        self.move_to_block.set_next_start_tick(RAID_RETRY_DELAY_TICKS);
+        self.move_to_block
+            .set_next_start_tick(RAID_RETRY_DELAY_TICKS);
     }
 }
 
@@ -763,11 +784,11 @@ impl Goal for RaidGardenGoal {
             f64::from(block_pos.z()) + 0.5,
         );
         let max_head_x_rot = mob.max_head_x_rot();
-        mob.mob_base()
-            .controls()
-            .lock()
-            .look_control
-            .set_look_at(look_target, RAID_LOOK_SPEED, max_head_x_rot);
+        mob.mob_base().controls().lock().look_control.set_look_at(
+            look_target,
+            RAID_LOOK_SPEED,
+            max_head_x_rot,
+        );
 
         if !self.move_to_block.is_reached_target() {
             return;
@@ -880,7 +901,12 @@ impl LivingEntity for RabbitEntity {
     /// Vanilla `Rabbit.getJumpPower`: hop power grows with the move-control speed and
     /// whenever the rabbit has to climb.
     fn get_jump_power(&self) -> f32 {
-        let speed_modifier = self.mob_base().controls().lock().move_control.speed_modifier();
+        let speed_modifier = self
+            .mob_base()
+            .controls()
+            .lock()
+            .move_control
+            .speed_modifier();
         let mut base_jump_power = if speed_modifier <= SLOW_JUMP_SPEED_THRESHOLD {
             SLOW_JUMP_POWER
         } else {
@@ -894,7 +920,13 @@ impl LivingEntity for RabbitEntity {
             base_jump_power = RAISED_JUMP_POWER;
         }
 
-        let wanted_y = self.mob_base().controls().lock().move_control.wanted_position().y;
+        let wanted_y = self
+            .mob_base()
+            .controls()
+            .lock()
+            .move_control
+            .wanted_position()
+            .y;
         if self.horizontal_collision() || self.is_jumping() && wanted_y > self.position().y + 0.5 {
             base_jump_power = RAISED_JUMP_POWER;
         }
@@ -907,7 +939,12 @@ impl LivingEntity for RabbitEntity {
     fn jump_from_ground(&self) {
         self.default_jump_from_ground();
 
-        let speed_modifier = self.mob_base().controls().lock().move_control.speed_modifier();
+        let speed_modifier = self
+            .mob_base()
+            .controls()
+            .lock()
+            .move_control
+            .speed_modifier();
         if speed_modifier > 0.0 {
             let velocity = self.velocity();
             if velocity.x.mul_add(velocity.x, velocity.z * velocity.z)
@@ -931,13 +968,6 @@ impl LivingEntity for RabbitEntity {
         if jumping {
             let pitch = (rand::random::<f32>() - rand::random::<f32>()) * 0.2 + 1.0;
             self.play_sound(self.jump_sound(), self.sound_volume(), pitch * 0.8);
-        }
-    }
-
-    fn play_attack_sound(&self) {
-        if self.variant() == RabbitVariant::Evil {
-            let pitch = (rand::random::<f32>() - rand::random::<f32>()) * 0.2 + 1.0;
-            self.play_sound(&sound_events::ENTITY_RABBIT_ATTACK, 1.0, pitch);
         }
     }
 
@@ -982,27 +1012,23 @@ impl AgeableMob for RabbitEntity {
 
     /// Vanilla `Rabbit.getBreedOffspring`: a fresh biome roll, unless the 1-in-20 mutation
     /// roll fails, in which case one parent's variant is inherited.
-    fn get_breed_offspring(
-        &self,
-        world: &Arc<World>,
-        partner: &dyn AgeableMob,
-    ) -> Option<SharedEntity> {
-        let offspring = self.create_breed_offspring(world)?;
-        let offspring_rabbit = offspring.downcast_ref::<RabbitEntity>()?;
+    fn initialize_breed_offspring(&self, partner: &dyn AgeableMob, offspring: &dyn AgeableMob) {
+        let Some(offspring) = offspring.downcast_ref::<RabbitEntity>() else {
+            return;
+        };
 
-        let mut variant = Self::random_rabbit_variant(world, self.block_position());
+        let mut variant = self.level().map_or_else(
+            || self.variant(),
+            |world| Self::random_rabbit_variant(&world, self.block_position()),
+        );
         if rand::random_range(0..20) != 0 {
-            let partner_rabbit = partner
-                .as_entity_event_source()
-                .downcast_ref::<RabbitEntity>();
-            variant = match partner_rabbit {
+            variant = match partner.downcast_ref::<RabbitEntity>() {
                 Some(partner_rabbit) if rand::random::<bool>() => partner_rabbit.variant(),
                 _ => self.variant(),
             };
         }
 
-        offspring_rabbit.set_variant(variant);
-        Some(offspring)
+        offspring.set_variant(variant);
     }
 }
 
@@ -1062,8 +1088,12 @@ impl Mob for RabbitEntity {
                 let target_position = target.position();
                 if self.distance_to_sqr(target_position) < EVIL_JUMP_ATTACK_RANGE_SQR {
                     self.face_point(target_position.x, target_position.z);
-                    let speed_modifier =
-                        self.mob_base().controls().lock().move_control.speed_modifier();
+                    let speed_modifier = self
+                        .mob_base()
+                        .controls()
+                        .lock()
+                        .move_control
+                        .speed_modifier();
                     self.set_wanted_position(target_position, speed_modifier);
                     self.start_jumping();
                     self.state.lock().was_on_ground = true;
@@ -1079,8 +1109,12 @@ impl Mob for RabbitEntity {
                     self.state.lock().can_jump = true;
                 }
             } else if self.move_control_has_wanted() && jump_delay_ticks == 0 {
-                let wanted_position =
-                    self.mob_base().controls().lock().move_control.wanted_position();
+                let wanted_position = self
+                    .mob_base()
+                    .controls()
+                    .lock()
+                    .move_control
+                    .wanted_position();
                 let face_position = self.next_path_node_entity_pos().unwrap_or(wanted_position);
                 self.face_point(face_position.x, face_position.z);
                 self.start_jumping();
@@ -1108,6 +1142,13 @@ impl Mob for RabbitEntity {
         // has no such payload, so each rabbit rolls its own.
         let variant = Self::random_rabbit_variant(world, self.block_position());
         self.set_variant(variant);
+        // Vanilla `new RabbitGroupData(variant)` passes `super(1.0F)`, so every rabbit
+        // after the group's first spawns as a baby.
+        let group_data = group_data.or_else(|| {
+            Some(SpawnGroupData::AgeableMob(
+                AgeableMobGroupData::with_baby_spawn_chance(1.0),
+            ))
+        });
         self.finalize_spawn_ageable_mob(world, spawn_reason, group_data)
     }
 
@@ -1115,8 +1156,19 @@ impl Mob for RabbitEntity {
         Animal::mob_interact_animal(self, player, hand)
     }
 
+    /// Vanilla `Rabbit.playAttackSound`: only killer bunnies vocalize their attack.
+    fn play_attack_sound(&self) {
+        if self.variant() == RabbitVariant::Evil {
+            let pitch = (rand::random::<f32>() - rand::random::<f32>()) * 0.2 + 1.0;
+            self.play_sound(&sound_events::ENTITY_RABBIT_ATTACK, 1.0, pitch);
+        }
+    }
+
     /// Vanilla `Rabbit.RabbitMoveControl.setWantedPosition`: hops faster in water and
     /// remembers the last real speed for the hop.
+    ///
+    /// `Mob::set_wanted_position`'s controlled-vehicle forwarding is not repeated: a rabbit
+    /// can never be a controlled mob vehicle.
     fn set_wanted_position(&self, position: DVec3, speed_modifier: f64) {
         let speed_modifier = if self.is_in_water() {
             WATER_SPEED_MODIFIER
@@ -1161,3 +1213,6 @@ impl Mob for RabbitEntity {
 }
 
 impl PathfinderMob for RabbitEntity {}
+
+#[cfg(test)]
+mod tests;

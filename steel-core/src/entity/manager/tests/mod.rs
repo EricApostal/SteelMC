@@ -8,7 +8,9 @@ use steel_registry::vanilla_entities;
 use steel_utils::locks::SyncMutex;
 use uuid::Uuid;
 
-use crate::entity::{Entity, EntityBase, EntityLevelCallback, InactiveEntityCallback};
+use crate::entity::{
+    Entity, EntityBase, EntityLevelCallback, InactiveEntityCallback, impl_test_downcast_type,
+};
 
 use super::*;
 
@@ -107,7 +109,7 @@ impl MovingTickTestEntity {
     }
 }
 
-crate::entity::impl_test_downcast_type!(MovingTickTestEntity);
+impl_test_downcast_type!(MovingTickTestEntity);
 
 impl Entity for MovingTickTestEntity {
     fn base(&self) -> &EntityBase {
@@ -155,7 +157,7 @@ impl AddDuringTickTestEntity {
     }
 }
 
-crate::entity::impl_test_downcast_type!(AddDuringTickTestEntity);
+impl_test_downcast_type!(AddDuringTickTestEntity);
 
 impl Entity for AddDuringTickTestEntity {
     fn base(&self) -> &EntityBase {
@@ -198,7 +200,7 @@ impl DespawnOnCheckTestEntity {
     }
 }
 
-crate::entity::impl_test_downcast_type!(DespawnOnCheckTestEntity);
+impl_test_downcast_type!(DespawnOnCheckTestEntity);
 
 impl Entity for DespawnOnCheckTestEntity {
     fn base(&self) -> &EntityBase {
@@ -214,7 +216,7 @@ impl Entity for DespawnOnCheckTestEntity {
     }
 }
 
-crate::entity::impl_test_downcast_type!(ManagerTestEntity);
+impl_test_downcast_type!(ManagerTestEntity);
 
 impl Entity for ManagerTestEntity {
     fn base(&self) -> &EntityBase {

@@ -36,6 +36,7 @@ use steel_utils::{BlockPos, BlockStateId, Downcast, DowncastType, DowncastTypeKe
 
 use crate::behavior::InteractionResult;
 use crate::entity::ai::brain::Brain;
+use crate::entity::ai::brain::memory::MemoryModuleTypeRef;
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::ai::goal::{
     BreedGoal, FloatGoal, FollowParentGoal, Goal, GoalControls, LookAtPlayerGoal, PanicGoal,
@@ -92,7 +93,7 @@ const RISING_TICKS: i32 = 40;
 
 /// Memory types registered by vanilla `Sniffer.BRAIN_PROVIDER`'s sensors and
 /// behavior entry conditions.
-fn sniffer_memory_types() -> [crate::entity::ai::brain::memory::MemoryModuleTypeRef; 7] {
+fn sniffer_memory_types() -> [MemoryModuleTypeRef; 7] {
     [
         &mem::SNIFFER_EXPLORED_POSITIONS,
         &mem::SNIFFER_SNIFFING_TARGET,

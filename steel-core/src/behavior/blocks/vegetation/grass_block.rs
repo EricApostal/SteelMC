@@ -29,9 +29,9 @@ use steel_utils::{BlockPos, BlockStateId, Direction};
 use super::bonemealable::{BonemealAction, Bonemealable};
 use super::snowy_block::{snowy_placement_state, update_snowy_shape};
 use super::spreading_grass_block::SpreadingGrassBlock;
+use crate::behavior::BLOCK_BEHAVIORS;
 use crate::behavior::block::BlockBehavior;
 use crate::behavior::context::BlockPlaceContext;
-use crate::behavior::BLOCK_BEHAVIORS;
 use crate::block_state_provider::BlockStateProviderEvaluator;
 use crate::world::spawn::placement::is_collision_shape_full_block;
 use crate::world::{LevelReader, ScheduledTickAccess, World};
@@ -90,12 +90,7 @@ impl GrassBlock {
             let index = rng.random_range(0..features.len());
             Self::place_simple_block_feature(world, rng, features[index], pos);
         } else {
-            Self::place_simple_block_feature(
-                world,
-                rng,
-                &*vanilla_configured_features::GRASS,
-                pos,
-            );
+            Self::place_simple_block_feature(world, rng, &*vanilla_configured_features::GRASS, pos);
         }
     }
 
@@ -248,7 +243,7 @@ impl Bonemealable for GrassBlock {
 #[cfg(test)]
 mod tests {
     use steel_registry::blocks::BlockRef;
-use steel_registry::blocks::block_state_ext::BlockStateExt;
+    use steel_registry::blocks::block_state_ext::BlockStateExt;
     use steel_registry::blocks::properties::BlockStateProperties;
     use steel_registry::{init_vanilla_registry, vanilla_blocks};
     use steel_utils::{BlockPos, Direction};

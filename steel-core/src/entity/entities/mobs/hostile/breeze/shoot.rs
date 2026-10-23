@@ -8,6 +8,8 @@
 //! bolt on the arrow factory: the charge/aim/recover state machine below is
 //! complete and only the projectile release is gated.
 
+use std::sync::Arc;
+
 use glam::DVec3;
 use steel_registry::entity_data::EntityPose;
 use steel_registry::item_stack::ItemStack;
@@ -158,7 +160,7 @@ impl Behavior for Shoot {
             next_entity_id(),
             origin,
             direction,
-            std::sync::Arc::downgrade(&world),
+            Arc::downgrade(&world),
         );
         let mut item_stack = ItemStack::empty();
         spawn_projectile_using_shoot(

@@ -1,7 +1,17 @@
 use std::collections::BTreeSet;
+use std::io::Cursor;
 
 use super::*;
+use crate::entity::ai::goal::{
+    AbstractHorse, CaravanLlama, CreeperLike, Feline, RangedAttackMob, SchoolingFish,
+    ShoulderRiding, Tameable,
+};
+use crate::entity::entities::objects::HurtingProjectile;
 use crate::entity::leash::Leashable;
+use crate::entity::npc::Npc;
+use crate::entity::npc::gossip::ReputationEventHandler;
+use crate::entity::npc::trading::Merchant;
+use crate::entity::raid::Raider;
 use steel_math::DEGREE_90;
 
 /// Vanilla `Entity.refreshDimensions` small-entity limit: only entities at most
@@ -1470,6 +1480,15 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
         try_as_dyn::<Self, dyn Projectile>(self)
     }
 
+    /// Returns this entity as an `AbstractHurtingProjectile` when it accelerates
+    /// along its direction of travel.
+    ///
+    /// Vanilla sends `ClientboundProjectilePowerPacket` alongside the velocity
+    /// sync of these projectiles so client-side prediction matches the server.
+    fn as_hurting_projectile(&self) -> Option<&dyn HurtingProjectile> {
+        try_as_dyn::<Self, dyn HurtingProjectile>(self)
+    }
+
     /// Returns this entity as a living entity when it has living behavior.
     fn as_living_entity(&self) -> Option<&dyn LivingEntity> {
         try_as_dyn::<Self, dyn LivingEntity>(self)
@@ -1516,9 +1535,7 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
 
     /// Returns this entity as a reputation event handler when it has one,
     /// equivalent to vanilla's `instanceof ReputationEventHandler` test.
-    fn as_reputation_event_handler(
-        &self,
-    ) -> Option<&dyn crate::entity::npc::gossip::ReputationEventHandler> {
+    fn as_reputation_event_handler(&self) -> Option<&dyn ReputationEventHandler> {
         self.as_mob().and_then(Mob::as_reputation_event_handler)
     }
 
@@ -1558,43 +1575,48 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
     }
 
     /// Returns this entity as a tameable animal when it has that behavior.
-    fn as_tameable(&self) -> Option<&dyn crate::entity::ai::goal::Tameable> {
-        try_as_dyn::<Self, dyn crate::entity::ai::goal::Tameable>(self)
+    fn as_tameable(&self) -> Option<&dyn Tameable> {
+        try_as_dyn::<Self, dyn Tameable>(self)
     }
 
     /// Returns this entity as a ranged-attack mob when it can shoot projectiles.
-    fn as_ranged_attack_mob(&self) -> Option<&dyn crate::entity::ai::goal::RangedAttackMob> {
-        try_as_dyn::<Self, dyn crate::entity::ai::goal::RangedAttackMob>(self)
+    fn as_ranged_attack_mob(&self) -> Option<&dyn RangedAttackMob> {
+        try_as_dyn::<Self, dyn RangedAttackMob>(self)
     }
 
     /// Returns this entity as a schooling fish when it follows a flock leader.
-    fn as_schooling_fish(&self) -> Option<&dyn crate::entity::ai::goal::SchoolingFish> {
-        try_as_dyn::<Self, dyn crate::entity::ai::goal::SchoolingFish>(self)
+    fn as_schooling_fish(&self) -> Option<&dyn SchoolingFish> {
+        try_as_dyn::<Self, dyn SchoolingFish>(self)
     }
 
     /// Returns this entity as a creeper when it can swell before exploding.
-    fn as_creeper(&self) -> Option<&dyn crate::entity::ai::goal::CreeperLike> {
-        try_as_dyn::<Self, dyn crate::entity::ai::goal::CreeperLike>(self)
+    fn as_creeper(&self) -> Option<&dyn CreeperLike> {
+        try_as_dyn::<Self, dyn CreeperLike>(self)
     }
 
     /// Returns this entity as a feline when it can sit or lie on blocks.
-    fn as_feline(&self) -> Option<&dyn crate::entity::ai::goal::Feline> {
-        try_as_dyn::<Self, dyn crate::entity::ai::goal::Feline>(self)
+    fn as_feline(&self) -> Option<&dyn Feline> {
+        try_as_dyn::<Self, dyn Feline>(self)
     }
 
     /// Returns this entity as an abstract horse when it has equine AI state.
-    fn as_abstract_horse(&self) -> Option<&dyn crate::entity::ai::goal::AbstractHorse> {
-        try_as_dyn::<Self, dyn crate::entity::ai::goal::AbstractHorse>(self)
+    fn as_abstract_horse(&self) -> Option<&dyn AbstractHorse> {
+        try_as_dyn::<Self, dyn AbstractHorse>(self)
     }
 
     /// Returns this entity as a caravan llama when it can join a caravan.
-    fn as_caravan_llama(&self) -> Option<&dyn crate::entity::ai::goal::CaravanLlama> {
-        try_as_dyn::<Self, dyn crate::entity::ai::goal::CaravanLlama>(self)
+    fn as_caravan_llama(&self) -> Option<&dyn CaravanLlama> {
+        try_as_dyn::<Self, dyn CaravanLlama>(self)
     }
 
     /// Returns this entity as a shoulder-riding mob when it can sit on a shoulder.
-    fn as_shoulder_riding(&self) -> Option<&dyn crate::entity::ai::goal::ShoulderRiding> {
-        try_as_dyn::<Self, dyn crate::entity::ai::goal::ShoulderRiding>(self)
+    fn as_shoulder_riding(&self) -> Option<&dyn ShoulderRiding> {
+        try_as_dyn::<Self, dyn ShoulderRiding>(self)
+    }
+
+    /// Returns this entity as a merchant when it can trade.
+    fn as_merchant(&self) -> Option<&dyn Merchant> {
+        try_as_dyn::<Self, dyn Merchant>(self)
     }
 
     /// Returns true for entities that implement vanilla `Npc` behavior.
@@ -1603,8 +1625,8 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
     }
 
     /// Returns the `Npc` capability, equivalent to vanilla's `instanceof Npc`.
-    fn as_npc(&self) -> Option<&dyn crate::entity::npc::Npc> {
-        try_as_dyn::<Self, dyn crate::entity::npc::Npc>(self)
+    fn as_npc(&self) -> Option<&dyn Npc> {
+        try_as_dyn::<Self, dyn Npc>(self)
     }
 
     /// Returns true for entities that implement vanilla raid-mob behavior.
@@ -1613,8 +1635,8 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
     }
 
     /// Returns the `Raider` capability, equivalent to vanilla's `instanceof Raider`.
-    fn as_raider(&self) -> Option<&dyn crate::entity::raid::Raider> {
-        try_as_dyn::<Self, dyn crate::entity::raid::Raider>(self)
+    fn as_raider(&self) -> Option<&dyn Raider> {
+        try_as_dyn::<Self, dyn Raider>(self)
     }
 
     /// Returns true for entities that implement vanilla `NeutralMob` behavior.
@@ -3744,8 +3766,7 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
     fn load_with_owned_components(&self, nbt: &NbtCompound) -> Result<(), simdnbt::Error> {
         let mut encoded = Vec::new();
         nbt.write(&mut encoded);
-        let borrowed =
-            simdnbt::borrow::read_compound(&mut std::io::Cursor::new(encoded.as_slice()))?;
+        let borrowed = simdnbt::borrow::read_compound(&mut Cursor::new(encoded.as_slice()))?;
         let view: BorrowedNbtCompoundView<'_, '_> = (&borrowed).into();
         self.apply_spawn_data(view);
         self.load_additional(view);

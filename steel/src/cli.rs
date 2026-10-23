@@ -19,7 +19,6 @@
 //! error instead of being silently ignored.
 
 use std::ffi::OsString;
-use std::iter::Peekable;
 use std::path::PathBuf;
 
 /// Parsed command-line options.
@@ -41,12 +40,12 @@ impl CliArgs {
     /// Parses the process arguments (vanilla `Main#main` option handling).
     ///
     /// # Errors
-    /// Returns a message for the usage text when `--help`/`-h` is passed, when
+    /// Returns a message for the usage text when `--help` is passed, when
     /// an unknown option is passed, or when a Steel-unsupported vanilla option
     /// is passed.
     pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Self, String> {
         let mut parsed = Self::default();
-        let mut args = args.into_iter().peekable();
+        let mut args = args.into_iter();
         // Skip the executable name, mirroring `args[0]`.
         args.next();
         while let Some(arg) = args.next() {
@@ -125,7 +124,7 @@ fn reject_value(name: &str, inline_value: Option<String>) -> Result<(), String> 
 fn parse_string(
     name: &str,
     inline_value: Option<String>,
-    args: &mut Peekable<impl Iterator<Item = OsString>>,
+    args: &mut impl Iterator<Item = OsString>,
 ) -> Result<String, String> {
     if let Some(value) = inline_value {
         return Ok(value);
@@ -138,7 +137,7 @@ fn parse_string(
 fn parse_value(
     name: &str,
     inline_value: Option<String>,
-    args: &mut Peekable<impl Iterator<Item = OsString>>,
+    args: &mut impl Iterator<Item = OsString>,
 ) -> Result<i64, String> {
     let text = parse_string(name, inline_value, args)?;
     text.parse::<i64>()

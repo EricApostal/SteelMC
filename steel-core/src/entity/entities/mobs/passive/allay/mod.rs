@@ -41,7 +41,7 @@ use crate::entity::entities::objects::items::ItemEntity;
 use crate::entity::npc::inventory_carrier::InventoryCarrier;
 use crate::entity::{
     ENTITIES, Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySyncedData, LivingEntity,
-    LivingEntityBase, Mob, MobBase, PathfinderMob, RemovalReason, SharedEntity,
+    LivingEntityBase, Mob, MobBase, PathfinderMob, RemovalReason, SharedEntity, next_entity_id,
 };
 use crate::inventory::container::Container as _;
 use crate::physics::MoveResult;
@@ -287,7 +287,7 @@ impl AllayEntity {
 
         let Some(allay) = ENTITIES.create(
             &vanilla_entities::ALLAY,
-            crate::entity::next_entity_id(),
+            next_entity_id(),
             self.position(),
             Arc::downgrade(&world),
         ) else {

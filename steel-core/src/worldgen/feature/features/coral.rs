@@ -106,18 +106,26 @@ impl FeatureDecorationRunner {
         };
 
         let state = coral.default_state();
-        let height = random.next_i32_bounded(3) + 3;
-        let width = random.next_i32_bounded(3) + 3;
-        let length = random.next_i32_bounded(3) + 3;
+        // Vanilla `CoralMushroomFeature` samples the extents in x, y, z order and
+        // then the sink offset; each extent is 3..=5 and the sink is 1..=3.
+        let x_extent = random.next_i32_bounded(3) + 3;
+        let y_extent = random.next_i32_bounded(3) + 3;
+        let z_extent = random.next_i32_bounded(3) + 3;
         let sink_value = random.next_i32_bounded(3) + 1;
 
-        for x in 0..=width {
-            for y in 0..=height {
-                for z in 0..=length {
+        for x in 0..=x_extent {
+            for y in 0..=y_extent {
+                for z in 0..=z_extent {
                     let pos = origin.offset(x, y - sink_value, z);
-                    if (y != 0 && y != height || x != 0 && x != width && z != 0 && z != length)
-                        && ((x != 0 && x != width) || (z != 0 && z != length))
-                        && (x == 0 || x == width || y == 0 || y == height || z == 0 || z == length)
+                    if (y != 0 && y != y_extent
+                        || x != 0 && x != x_extent && z != 0 && z != z_extent)
+                        && ((x != 0 && x != x_extent) || (z != 0 && z != z_extent))
+                        && (x == 0
+                            || x == x_extent
+                            || y == 0
+                            || y == y_extent
+                            || z == 0
+                            || z == z_extent)
                         && random.next_f32() >= 0.1
                     {
                         let _ = Self::place_coral_block(region, registry, random, pos, state);

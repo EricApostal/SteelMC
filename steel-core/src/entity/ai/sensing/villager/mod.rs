@@ -17,12 +17,12 @@ pub(crate) mod villager_hostiles;
 use steel_registry::vanilla_attributes;
 use steel_utils::{BlockPos, BlockStateId};
 
-use crate::entity::SharedEntity;
 use crate::entity::ai::brain::memory::MemoryStore;
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::ai::brain::memory::nearest_visible::NearestVisibleLivingEntities;
 use crate::entity::ai::brain::sensor::SensorType;
 use crate::entity::ai::targeting::TargetingConditions;
+use crate::entity::{LivingEntity, SharedEntity};
 use crate::world::World;
 
 /// Vanilla `SensorType.NEAREST_LIVING_ENTITIES`.
@@ -128,10 +128,7 @@ pub(crate) fn is_entity_attackable(
 }
 
 /// Vanilla `body.getBrain().isMemoryValue(ATTACK_TARGET, entity)`.
-fn is_memory_target(
-    target: &dyn crate::entity::LivingEntity,
-    attack_target: Option<&SharedEntity>,
-) -> bool {
+fn is_memory_target(target: &dyn LivingEntity, attack_target: Option<&SharedEntity>) -> bool {
     attack_target.is_some_and(|attack_target| attack_target.id() == target.id())
 }
 

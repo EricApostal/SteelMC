@@ -23,8 +23,9 @@ use crate::{
     entity::{Entity, InsideBlockEffectCollector, InsideBlockEffectType},
     inventory::equipment::EquipmentSlot,
     player::Player,
-    world::{ConditionalBlockSetResult, LevelReader, RandomizationType, World},
+    world::{ConditionalBlockSetResult, LevelReader, World},
 };
+use steel_protocol::packets::game::RandomizationType;
 
 const IN_BLOCK_SPEED_MULTIPLIER: DVec3 = DVec3::new(0.9, 1.5, 0.9);
 const NUM_BLOCKS_TO_FALL_INTO_BLOCK: f64 = 2.5;

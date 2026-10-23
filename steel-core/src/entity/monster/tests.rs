@@ -23,7 +23,8 @@ use crate::entity::entities::PigEntity;
 use crate::entity::mob::{Mob, MobBase};
 use crate::entity::{
     Entity, EntityBase, EntitySpawnReason, LivingEntity, LivingEntityBase, Monster, PathfinderMob,
-    RemovalReason, SharedEntity, entities::mobs::hostile::EndermiteEntity, next_entity_id,
+    RemovalReason, SharedEntity, entities::mobs::hostile::EndermiteEntity, impl_test_downcast_type,
+    next_entity_id,
 };
 use crate::test_support::{
     TestPlayerBuilder, fresh_test_world, fresh_test_world_with_dimension_type,
@@ -67,7 +68,7 @@ impl TestMonster {
     }
 }
 
-crate::entity::impl_test_downcast_type!(TestMonster);
+impl_test_downcast_type!(TestMonster);
 
 impl Entity for TestMonster {
     fn base(&self) -> &EntityBase {

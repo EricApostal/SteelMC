@@ -652,8 +652,8 @@ impl SmoothSwimmingMoveControl {
                 output.x_rot = rotate_towards(input.x_rot, x_rot_d, 5.0);
             }
 
-            let cos = (output.x_rot * std::f32::consts::PI / 180.0).cos();
-            let sin = (output.x_rot * std::f32::consts::PI / 180.0).sin();
+            let cos = (output.x_rot * f32::consts::PI / 180.0).cos();
+            let sin = (output.x_rot * f32::consts::PI / 180.0).sin();
             output.zza = cos * speed;
             output.yya = -sin * speed;
         } else {

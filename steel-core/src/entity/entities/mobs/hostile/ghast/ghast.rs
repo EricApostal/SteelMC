@@ -22,6 +22,7 @@ use steel_utils::random::RandomSource;
 use steel_utils::types::Difficulty;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
+use crate::entity::ai::control::MoveControlOperation;
 use crate::entity::ai::goal::{Goal, GoalControls, NearestAttackableTargetGoal};
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::objects::projectiles::LargeFireballEntity;
@@ -203,7 +204,7 @@ impl GhastEntity {
             .move_control
             .wanted_position();
         if self.mob_base().controls().lock().move_control.operation()
-            != crate::entity::ai::control::MoveControlOperation::MoveTo
+            != MoveControlOperation::MoveTo
         {
             return;
         }

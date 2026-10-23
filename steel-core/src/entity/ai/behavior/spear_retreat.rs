@@ -58,7 +58,7 @@ impl SpearRetreat {
         let distance = ctx.body.position().distance(target_pos);
         let min_dxz = (f64::from(MIN_COOLDOWN_DISTANCE) + mount_distance - distance).max(0.0);
         let max_dxz = (f64::from(MAX_COOLDOWN_DISTANCE) + mount_distance - distance).max(1.0);
-        let angle = rand::random_range(0.0..std::f64::consts::TAU);
+        let angle = rand::random_range(0.0..f64::consts::TAU);
         let radius = rand::random_range(min_dxz..max_dxz.max(min_dxz + 0.01));
         Some(DVec3::new(
             target_pos.x + angle.cos() * radius,

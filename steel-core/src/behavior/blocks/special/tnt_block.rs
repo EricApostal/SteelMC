@@ -91,7 +91,7 @@ impl TntBlock {
         if !world.get_game_rule(&TNT_EXPLODES) || !ENTITIES.has_factory(&vanilla_entities::TNT) {
             return false;
         }
-        if let Some(player) = source.and_then(Entity::as_player)
+        if let Some(player) = source.and_then(|source| source.as_player())
             && player.game_mode() == GameType::Adventure
             && !can_break_block_in_adventure_mode(item_stack, world, pos)
         {
@@ -216,7 +216,9 @@ impl BlockBehavior for TntBlock {
             // Vanilla `TntBlock.useItemOn`: only the disabled game rule reports
             // back to the player; an adventure-mode refusal stays silent.
             if !world.get_game_rule(&TNT_EXPLODES) {
-                player.send_overlay_message(&translations::BLOCK_MINECRAFT_TNT_DISABLED.msg());
+                player.send_overlay_message(
+                    &translations::BLOCK_MINECRAFT_TNT_DISABLED.msg().component(),
+                );
             }
             return InteractionResult::Pass;
         }

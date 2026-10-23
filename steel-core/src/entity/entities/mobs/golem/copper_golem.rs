@@ -54,6 +54,7 @@ use crate::entity::ai::brain::SensorType;
 use crate::entity::ai::brain::activity::Activity;
 use crate::entity::ai::brain::behavior::builder::BehaviorBuilder;
 use crate::entity::ai::brain::behavior::gate::RunOne;
+use crate::entity::ai::brain::memory::MemoryStatus;
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::ai::brain::{ActivityData, Brain};
 use crate::entity::ai::path::PathType;
@@ -760,13 +761,10 @@ fn idle_activity() -> ActivityData {
             )),
             BehaviorBuilder::boxed(RunOne::with_entry_condition(
                 vec![
-                    (
-                        mem::WALK_TARGET,
-                        crate::entity::ai::brain::memory::MemoryStatus::ValueAbsent,
-                    ),
+                    (mem::WALK_TARGET, MemoryStatus::ValueAbsent),
                     (
                         mem::TRANSPORT_ITEMS_COOLDOWN_TICKS,
-                        crate::entity::ai::brain::memory::MemoryStatus::ValuePresent,
+                        MemoryStatus::ValuePresent,
                     ),
                 ],
                 vec![

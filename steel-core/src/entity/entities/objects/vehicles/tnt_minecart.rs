@@ -27,7 +27,7 @@ use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
 use crate::entity::damage::DamageSource;
-use crate::entity::{Entity, EntityBase, EntityBaseLoad, EntitySyncedData};
+use crate::entity::{Entity, EntityBase, EntityBaseLoad, EntitySyncedData, RemovalReason};
 use crate::world::{LevelReader as _, World};
 
 use super::minecart_base::{self, Minecart, MinecartState};
@@ -194,7 +194,7 @@ impl TntMinecartEntity {
 
         if !world.get_game_rule(&vanilla_game_rules::TNT_EXPLODES) {
             if self.is_primed() {
-                self.set_removed(crate::entity::RemovalReason::Discarded);
+                self.set_removed(RemovalReason::Discarded);
             }
             return;
         }
@@ -206,7 +206,7 @@ impl TntMinecartEntity {
         let _ = source;
 
         // MISSING API: `World::explode` is the only call this method still needs.
-        self.set_removed(crate::entity::RemovalReason::Discarded);
+        self.set_removed(RemovalReason::Discarded);
     }
 
     /// Vanilla `damageSourceIgnitesTnt`.

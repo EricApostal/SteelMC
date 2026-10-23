@@ -7,7 +7,7 @@ use glam::DVec3;
 use steel_registry::{entity_type::EntityTypeRef, vanilla_damage_types, vanilla_entities};
 
 use super::{DamageHistory, DamageSource};
-use crate::entity::{Entity, EntityBase, SharedEntity};
+use crate::entity::{Entity, EntityBase, SharedEntity, impl_test_downcast_type};
 use crate::test_support::{TestEntity, advance_test_game_time_to, fresh_test_world};
 
 struct ReentrantSourceEntity {
@@ -16,7 +16,7 @@ struct ReentrantSourceEntity {
     dropped: Arc<AtomicBool>,
 }
 
-crate::entity::impl_test_downcast_type!(ReentrantSourceEntity);
+impl_test_downcast_type!(ReentrantSourceEntity);
 
 impl Entity for ReentrantSourceEntity {
     fn base(&self) -> &EntityBase {

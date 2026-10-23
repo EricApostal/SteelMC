@@ -6,11 +6,14 @@
 //! `RangedAttackMob` bound; a crossbow mob that does not implement that capability (e.g. a
 //! pillager without `CrossbowAttackMob`) simply has nothing to release.
 
+use std::ptr;
+
 use steel_registry::vanilla_items;
 use steel_utils::Downcast as _;
 use steel_utils::types::InteractionHand;
 
 use super::selector::{Goal, GoalControls};
+use crate::entity::entities::mobs::illager::PillagerEntity;
 use crate::entity::{PathfinderMob, SharedEntity};
 
 /// Vanilla `RangedCrossbowAttackGoal` look speed while charging.
@@ -61,7 +64,7 @@ impl RangedCrossbowAttackGoal {
 
     /// Vanilla `RangedCrossbowAttackGoal.isHoldingCrossbow`.
     fn is_holding_crossbow(mob: &dyn PathfinderMob) -> bool {
-        mob.is_holding(&mut |stack| std::ptr::eq(stack.item(), &*vanilla_items::CROSSBOW))
+        mob.is_holding(&mut |stack| ptr::eq(stack.item(), &*vanilla_items::CROSSBOW))
     }
 
     /// Vanilla `RangedCrossbowAttackGoal.isValidTarget`.
@@ -72,9 +75,7 @@ impl RangedCrossbowAttackGoal {
     /// Vanilla `CrossbowAttackMob.setChargingCrossbow` for the pillar of this goal: only
     /// pillagers are `CrossbowAttackMob`s, so the concrete capability is reached by key.
     fn set_charging_crossbow(mob: &dyn PathfinderMob, charging: bool) {
-        if let Some(pillager) =
-            mob.downcast_ref::<crate::entity::entities::mobs::illager::PillagerEntity>()
-        {
+        if let Some(pillager) = mob.downcast_ref::<PillagerEntity>() {
             pillager.set_charging_crossbow(charging);
         }
     }

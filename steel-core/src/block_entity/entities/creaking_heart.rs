@@ -433,7 +433,8 @@ impl CreakingHeartBlockEntity {
                 f64::from(pos.z()) + 0.5,
             );
             let progress = 0.2 + 0.8 * f64::from(HURT_CALL_TOTAL_TICKS - emitter) / 100.0;
-            let sound_location = heart_position.subtract(target).scale(progress) + target;
+            // Vanilla `heartPosition.subtract(target).scale(progress).add(target)`.
+            let sound_location = target + (heart_position - target) * progress;
             let volume = emitter as f32 / 2.0 / 100.0 + 0.5;
             world.play_block_sound(
                 &sound_events::BLOCK_CREAKING_HEART_HURT,

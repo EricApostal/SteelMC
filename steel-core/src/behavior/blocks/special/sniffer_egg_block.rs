@@ -19,7 +19,7 @@ use steel_utils::{BlockPos, BlockStateId};
 
 use crate::behavior::{BlockBehavior, BlockPlaceContext};
 use crate::entity::ai::path::PathComputationType;
-use crate::entity::{AgeableMob, add_spawned_entity, create_entity_instance};
+use crate::entity::{add_spawned_entity, create_entity_instance};
 use crate::world::{LevelReader, World};
 
 /// Vanilla `SnifferEggBlock.MAX_HATCH_LEVEL`.

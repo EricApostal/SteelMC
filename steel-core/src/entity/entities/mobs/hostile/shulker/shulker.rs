@@ -573,7 +573,7 @@ impl Mob for ShulkerEntity {
     /// previous-position snapshot before `Mob`'s spawn rolls.
     fn finalize_spawn(
         &self,
-        world: &Arc<crate::world::World>,
+        world: &Arc<World>,
         spawn_reason: EntitySpawnReason,
         group_data: Option<SpawnGroupData>,
     ) -> Option<SpawnGroupData> {

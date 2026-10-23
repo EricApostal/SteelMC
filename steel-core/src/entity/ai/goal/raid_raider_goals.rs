@@ -19,7 +19,9 @@ use super::reduced_tick_delay;
 use super::selector::{Goal, GoalControls};
 use crate::entity::ai::path::Path;
 use crate::entity::entities::objects::items::ItemEntity;
+use crate::entity::raid::Raid;
 use crate::entity::{Entity, ItemStack, LivingEntity, PathfinderMob, SharedEntity};
+use crate::poi::OccupationStatus;
 use crate::world::World;
 use crate::world::village::poi::is_village_poi;
 
@@ -64,7 +66,7 @@ impl RaiderObtainLeaderBannerGoal {
         }
 
         let head = raider.equipment_in_slot(steel_registry::equipment::EquipmentSlot::Head);
-        if ItemStack::matches(&head, &crate::entity::raid::Raid::ominous_banner_instance()) {
+        if ItemStack::matches(&head, &Raid::ominous_banner_instance()) {
             return true;
         }
 
@@ -124,10 +126,7 @@ impl Goal for RaiderObtainLeaderBannerGoal {
             entity.downcast_ref::<ItemEntity>().is_some_and(|item| {
                 !item.is_removed()
                     && item.get_pickup_delay() == 0
-                    && ItemStack::matches(
-                        &item.get_item(),
-                        &crate::entity::raid::Raid::ominous_banner_instance(),
-                    )
+                    && ItemStack::matches(&item.get_item(), &Raid::ominous_banner_instance())
             })
         });
 
@@ -301,7 +300,7 @@ impl RaiderMoveThroughVillageGoal {
             &|candidate| !visited.contains(&candidate),
             pos,
             48,
-            crate::poi::OccupationStatus::Any,
+            OccupationStatus::Any,
             &mut random,
         );
 
@@ -454,10 +453,7 @@ impl Goal for RaiderOpenDoorGoal {
 /// Vanilla `Raider.ALLOWED_ITEMS` check used by the banner goal and `pickUpItem`.
 #[must_use]
 pub fn is_ominous_banner(item_stack: &ItemStack) -> bool {
-    ItemStack::matches(
-        item_stack,
-        &crate::entity::raid::Raid::ominous_banner_instance(),
-    )
+    ItemStack::matches(item_stack, &Raid::ominous_banner_instance())
 }
 
 /// The village POI predicate the raider move-through-village goal uses for homes.

@@ -10,8 +10,8 @@
 //! `animateTick` idle sound is not implemented: the block trait has no client
 //! animation hook (owner: `behavior/block`).
 
-use std::sync::Arc;
 use std::str::FromStr as _;
+use std::sync::Arc;
 
 use glam::DVec3;
 use rand::{Rng, RngExt};
@@ -20,7 +20,7 @@ use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::BlockStateProperties;
 use steel_registry::particle_type::{ParticleData, TrailParticleOption};
 use steel_registry::sound_event::SoundEventRef;
-use steel_registry::timeline::{Ease, KeyframeValue, Track, TimelineRef};
+use steel_registry::timeline::{Ease, KeyframeValue, TimelineRef, Track};
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::{
     REGISTRY, RegistryExt as _, TaggedRegistryExt as _, sound_events, vanilla_blocks,
@@ -30,8 +30,8 @@ use steel_utils::types::{Difficulty, UpdateFlags};
 use steel_utils::{BlockPos, BlockStateId, Direction, Identifier, RgbColor};
 
 use crate::behavior::block::BlockBehavior;
-use crate::behavior::blocks::vegetation::vegetation_block::survival_update_shape;
 use crate::behavior::blocks::vegetation::Vegetation;
+use crate::behavior::blocks::vegetation::vegetation_block::survival_update_shape;
 use crate::behavior::context::BlockPlaceContext;
 use crate::entity::{Entity, InsideBlockEffectCollector, LivingEntity, MobEffectInstance};
 use crate::world::game_event::GameEventContext;
@@ -40,7 +40,7 @@ use crate::world::{LevelReader, ScheduledTickAccess, World};
 use super::{BlockRef, default_surviving_state, survives_on_tag};
 
 /// Vanilla `EnvironmentAttributes.EYEBLOSSOM_OPEN` key.
-pub(crate) const EYEBLOSSOM_OPEN_ATTRIBUTE: &str = "minecraft:gameplay/eyeblossom_open";
+pub const EYEBLOSSOM_OPEN_ATTRIBUTE: &str = "minecraft:gameplay/eyeblossom_open";
 
 #[derive(Clone, Copy)]
 /// Vanilla open/closed eyeblossom type from `classes.json`.
@@ -109,16 +109,15 @@ impl EyeblossomType {
     /// Vanilla `Type.particleColor`.
     #[must_use]
     pub const fn particle_color(self) -> i32 {
-        if self.is_open() { 16_545_810 } else { 6_250_335 }
+        if self.is_open() {
+            16_545_810
+        } else {
+            6_250_335
+        }
     }
 
     /// Vanilla `Type.spawnTransformParticle`.
-    pub fn spawn_transform_particle(
-        self,
-        world: &Arc<World>,
-        pos: BlockPos,
-        rng: &mut dyn Rng,
-    ) {
+    pub fn spawn_transform_particle(self, world: &Arc<World>, pos: BlockPos, rng: &mut dyn Rng) {
         let start = DVec3::new(
             f64::from(pos.x()) + 0.5,
             f64::from(pos.y()) + 0.5,
@@ -190,9 +189,7 @@ impl EyeblossomBlock {
         );
         new_type.spawn_transform_particle(world, pos, rng);
 
-        for nearby_pos in
-            BlockPos::between_closed(pos.offset(-3, -2, -3), pos.offset(3, 2, 3))
-        {
+        for nearby_pos in BlockPos::between_closed(pos.offset(-3, -2, -3), pos.offset(3, 2, 3)) {
             if world.get_block_state(nearby_pos) != state {
                 continue;
             }
@@ -315,14 +312,10 @@ fn attracts_bees(state: BlockStateId) -> bool {
 /// (`world::environment` currently exposes only sky light, sun angle and
 /// monsters-burn, owner: `world/environment`).
 #[must_use]
-pub(crate) fn bool_attribute(world: &World, attribute: &str, default: bool) -> bool {
+pub fn bool_attribute(world: &World, attribute: &str, default: bool) -> bool {
     let mut value = default;
     for_each_timeline(world, |timeline| {
-        let Some(track) = timeline
-            .tracks
-            .iter()
-            .find(|track| track.name == attribute)
-        else {
+        let Some(track) = timeline.tracks.iter().find(|track| track.name == attribute) else {
             return;
         };
         let Some(total_ticks) = world.clock_total_ticks(timeline.clock) else {
@@ -348,14 +341,10 @@ pub(crate) fn bool_attribute(world: &World, attribute: &str, default: bool) -> b
 /// Deviation: placeholder for a public environment-attribute getter on `World`
 /// (owner: `world/environment`); unknown named easings are treated as stepped.
 #[must_use]
-pub(crate) fn float_attribute(world: &World, attribute: &str, default: f32) -> f32 {
+pub fn float_attribute(world: &World, attribute: &str, default: f32) -> f32 {
     let mut value = default;
     for_each_timeline(world, |timeline| {
-        let Some(track) = timeline
-            .tracks
-            .iter()
-            .find(|track| track.name == attribute)
-        else {
+        let Some(track) = timeline.tracks.iter().find(|track| track.name == attribute) else {
             return;
         };
         let Some(total_ticks) = world.clock_total_ticks(timeline.clock) else {
@@ -591,7 +580,10 @@ mod tests {
         assert_eq!(EyeblossomType::from_boolean(true), EyeblossomType::Open);
         assert_eq!(EyeblossomType::Open.transform(), EyeblossomType::Closed);
         assert_eq!(EyeblossomType::Closed.transform(), EyeblossomType::Open);
-        assert_eq!(EyeblossomType::Open.block(), &vanilla_blocks::OPEN_EYEBLOSSOM);
+        assert_eq!(
+            EyeblossomType::Open.block(),
+            &vanilla_blocks::OPEN_EYEBLOSSOM
+        );
         assert_eq!(
             EyeblossomType::Closed.block(),
             &vanilla_blocks::CLOSED_EYEBLOSSOM

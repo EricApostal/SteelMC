@@ -8,13 +8,13 @@
 use super::reduced_tick_delay;
 use super::selector::{Goal, GoalControls};
 use crate::entity::ai::control::{DEFAULT_LOOK_X_MAX_ROT_ANGLE, DEFAULT_LOOK_Y_MAX_ROT_SPEED};
-use crate::entity::{PathfinderMob, SharedEntity};
+use crate::entity::{Entity, PathfinderMob, SharedEntity};
 
 /// Vanilla `LookAtPlayerGoal(..., 8.0F)` look distance used by `LookAtTradingPlayerGoal`.
 const TRADING_LOOK_DISTANCE: f64 = 8.0;
 
 /// Resolves the player a merchant body is currently trading with.
-pub(crate) type TradingPlayerProvider = fn(&dyn crate::entity::Entity) -> Option<SharedEntity>;
+pub(crate) type TradingPlayerProvider = fn(&dyn Entity) -> Option<SharedEntity>;
 
 pub(crate) struct LookAtTradingPlayerGoal {
     look_at: Option<SharedEntity>,

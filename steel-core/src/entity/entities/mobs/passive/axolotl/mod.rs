@@ -46,6 +46,7 @@ use crate::behavior::InteractionResult;
 use crate::entity::ai::brain::Brain;
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::damage::DamageSource;
+use crate::entity::entities::mobs::water::abstract_fish::check_water_animal_spawn_obstruction;
 use crate::entity::{
     AgeableMob, AgeableMobBase, AgeableMobGroupData, Animal, AnimalBase, Entity, EntityBase,
     EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData, LivingEntity,
@@ -746,6 +747,12 @@ impl Mob for AxolotlEntity {
     /// Vanilla `Axolotl.removeWhenFarAway`.
     fn remove_when_far_away(&self, _dist_sqr: f64) -> bool {
         !self.from_bucket() && self.custom_name().is_none()
+    }
+
+    /// Vanilla `Axolotl.checkSpawnObstruction` is `level.isUnobstructed(this)`; the
+    /// shared `Mob` default would reject the water the axolotl spawns in.
+    fn check_spawn_obstruction(&self, world: &Arc<World>) -> bool {
+        check_water_animal_spawn_obstruction(world, self)
     }
 
     /// Vanilla `Axolotl.finalizeSpawn`.

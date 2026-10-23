@@ -287,13 +287,20 @@ pub(crate) fn tick(server: &Arc<Server>) {
     };
     let source = game_loop_source(server);
 
-    // Vanilla `ServerLevel.tickTime`: `server.getScheduledEvents().tick(server, time)`.
-    let due = manager
-        .schedules
-        .write()
-        .take_due(server.overworld().game_time());
-    for entry in due {
-        run_callback(&source, entry.callback);
+    // Vanilla `TimerQueue.tick` re-peeks the queue after every callback, so a function
+    // that schedules another function for the current game time runs it in this same
+    // drain. The schedule lock is released before any callback executes.
+    loop {
+        let due = manager
+            .schedules
+            .write()
+            .take_due(server.overworld().game_time());
+        if due.is_empty() {
+            break;
+        }
+        for entry in due {
+            run_callback(&source, entry.callback);
+        }
     }
 }
 

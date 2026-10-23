@@ -5,7 +5,7 @@
 //! expresses them as free functions over `World::poi_storage` so the behavior
 //! library never needs entity-side POI state.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use steel_registry::poi::PoiTypeRef;
 use steel_registry::registry::TaggedRegistryExt as _;
@@ -89,8 +89,8 @@ pub fn profession_held_job_site(profession: VillagerProfessionRef) -> PoiPredica
 }
 
 /// Vanilla `VillagerProfession.ALL_ACQUIRABLE_JOBS`' `#minecraft:acquirable_job_site`.
-static ACQUIRABLE_JOB_SITE_TAG: std::sync::LazyLock<Identifier> =
-    std::sync::LazyLock::new(|| steel_registry::vanilla_poi_type_tags::PoiTag::ACQUIRABLE_JOB_SITE);
+static ACQUIRABLE_JOB_SITE_TAG: LazyLock<Identifier> =
+    LazyLock::new(|| steel_registry::vanilla_poi_type_tags::PoiTag::ACQUIRABLE_JOB_SITE);
 
 /// Vanilla `VillagerProfession.acquirableJobSite()`.
 ///

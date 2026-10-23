@@ -29,7 +29,8 @@ use crate::entity::leash::{LEASH_ELASTIC_DISTANCE, LEASH_SNAP_DISTANCE, Leashabl
 use crate::entity::mob::pathfinder::LEASH_CLOSE_RANGE_WANTED_DISTANCE;
 use crate::entity::mob::{Mob, MobBase};
 use crate::entity::{
-    Entity, EntityBase, LivingEntity, LivingEntityBase, PathfinderMob, SharedEntity, next_entity_id,
+    Entity, EntityBase, LivingEntity, LivingEntityBase, PathfinderMob, SharedEntity,
+    impl_test_downcast_type, next_entity_id,
 };
 use crate::inventory::equipment::EquipmentSlot;
 use crate::test_support::{
@@ -189,7 +190,7 @@ impl DespawnTestMob {
     }
 }
 
-crate::entity::impl_test_downcast_type!(DespawnTestMob);
+impl_test_downcast_type!(DespawnTestMob);
 
 impl Entity for DespawnTestMob {
     fn base(&self) -> &EntityBase {
@@ -244,7 +245,7 @@ impl HiddenTarget {
     }
 }
 
-crate::entity::impl_test_downcast_type!(HiddenTarget);
+impl_test_downcast_type!(HiddenTarget);
 
 impl Entity for HiddenTarget {
     fn base(&self) -> &EntityBase {
@@ -320,7 +321,7 @@ impl MobControlVehicleEntity {
     }
 }
 
-crate::entity::impl_test_downcast_type!(MobControlVehicleEntity);
+impl_test_downcast_type!(MobControlVehicleEntity);
 
 impl Entity for MobControlVehicleEntity {
     fn base(&self) -> &EntityBase {

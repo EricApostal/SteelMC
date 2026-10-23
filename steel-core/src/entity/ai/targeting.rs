@@ -139,7 +139,9 @@ mod tests {
 
     use super::*;
     use crate::behavior::init_behaviors;
-    use crate::entity::{Entity, EntityBase, LivingEntityBase, Mob, MobBase};
+    use crate::entity::{
+        Entity, EntityBase, LivingEntityBase, Mob, MobBase, impl_test_downcast_type,
+    };
     use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
     use crate::world::World;
 
@@ -164,7 +166,7 @@ mod tests {
         }
     }
 
-    crate::entity::impl_test_downcast_type!(HoveringTestMob);
+    impl_test_downcast_type!(HoveringTestMob);
 
     impl Entity for HoveringTestMob {
         fn base(&self) -> &EntityBase {

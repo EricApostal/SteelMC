@@ -357,6 +357,7 @@ fn parse_pose(value: &str) -> Option<EntityPose> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     /// Re-borrows owned NBT the way entity loading does from disk.
     fn with_reborrow<R>(
@@ -366,7 +367,7 @@ mod tests {
         use simdnbt::borrow::read_compound;
         let mut bytes = Vec::new();
         nbt.write(&mut bytes);
-        let mut cursor = std::io::Cursor::new(bytes.as_slice());
+        let mut cursor = Cursor::new(bytes.as_slice());
         let base = read_compound(&mut cursor).expect("entity NBT should reborrow");
         let borrowed: simdnbt::borrow::NbtCompound<'_, '_> = (&base).into();
         visitor(borrowed)

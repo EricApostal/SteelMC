@@ -19,13 +19,13 @@ use steel_utils::locks::SyncMutex;
 use steel_utils::types::{InteractionHand, UpdateFlags};
 use steel_utils::{BlockPos, BlockStateId, Direction, Identifier};
 
+use crate::behavior::blocks::vegetation::{
+    EYEBLOSSOM_OPEN_ATTRIBUTE, EyeblossomType, bool_attribute,
+};
 use crate::behavior::{BlockBehavior, BlockPlaceContext, InteractionResult, InventoryAccess};
 use crate::block_entity::SharedBlockEntity;
 use crate::entity::ai::path::PathComputationType;
 use crate::player::Player;
-use crate::behavior::blocks::vegetation::{
-    EyeblossomType, EYEBLOSSOM_OPEN_ATTRIBUTE, bool_attribute,
-};
 use crate::world::game_event::GameEventContext;
 use crate::world::{ScheduledTickAccess, World};
 

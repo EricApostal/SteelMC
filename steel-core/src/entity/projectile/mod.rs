@@ -1013,7 +1013,7 @@ mod tests {
     use crate::{
         behavior::init_behaviors,
         block_entity::init_block_entities,
-        entity::{EntityBase, entities::FireworkRocketEntity},
+        entity::{EntityBase, entities::FireworkRocketEntity, impl_test_downcast_type},
         test_support::{TestPlayerBuilder, test_world, world_border_projectile_test_world},
     };
 
@@ -1036,7 +1036,7 @@ mod tests {
         }
     }
 
-    crate::entity::impl_test_downcast_type!(OwnerCollisionProjectile);
+    impl_test_downcast_type!(OwnerCollisionProjectile);
 
     impl Entity for OwnerCollisionProjectile {
         fn base(&self) -> &EntityBase {
@@ -1084,7 +1084,7 @@ mod tests {
         }
     }
 
-    crate::entity::impl_test_downcast_type!(OwnerCollisionTestEntity);
+    impl_test_downcast_type!(OwnerCollisionTestEntity);
 
     impl Entity for OwnerCollisionTestEntity {
         fn base(&self) -> &EntityBase {

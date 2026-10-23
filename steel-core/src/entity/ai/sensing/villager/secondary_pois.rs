@@ -1,5 +1,7 @@
 //! Vanilla `SecondaryPoiSensor`.
 
+use std::ptr;
+
 use steel_registry::REGISTRY;
 use steel_utils::GlobalPos;
 
@@ -58,7 +60,7 @@ impl BrainSensor for SecondaryPoiSensor {
                     if profession
                         .secondary_poi
                         .iter()
-                        .any(|secondary| std::ptr::eq(*secondary, block))
+                        .any(|secondary| ptr::eq(*secondary, block))
                     {
                         job_sites.push(GlobalPos::new(dimension.clone(), test_pos));
                     }

@@ -26,12 +26,12 @@ use steel_utils::{BlockPos, BlockStateId, Direction};
 use steel_worldgen::biomes::obfuscate_biome_seed;
 
 use crate::behavior::block::BlockBehavior;
+use crate::behavior::blocks::vegetation::Vegetation;
 use crate::behavior::blocks::vegetation::bonemealable::Bonemealable;
 use crate::behavior::blocks::vegetation::vegetation_block::survival_update_shape;
-use crate::behavior::blocks::vegetation::Vegetation;
 use crate::behavior::context::BlockPlaceContext;
-use crate::worldgen::feature::{FeatureDecorationRunner, no_nested_features};
 use crate::world::{LevelReader, ScheduledTickAccess, World};
+use crate::worldgen::feature::{FeatureDecorationRunner, no_nested_features};
 
 use super::{BlockRef, default_surviving_state, survives_on_tag};
 
@@ -49,10 +49,7 @@ struct WeightedTree {
     weight: i32,
 }
 
-const fn tree(
-    feature: &'static LazyLock<ConfiguredFeature>,
-    weight: i32,
-) -> WeightedTree {
+const fn tree(feature: &'static LazyLock<ConfiguredFeature>, weight: i32) -> WeightedTree {
     WeightedTree { feature, weight }
 }
 
@@ -81,24 +78,19 @@ const SPRUCE_MEGA: &[WeightedTree] = &[
 ];
 /// Vanilla `TreeGrowers.BIRCH`.
 const BIRCH_TREES: &[WeightedTree] = &[tree(&vanilla_configured_features::BIRCH, 1)];
-const BIRCH_FLOWERS: &[WeightedTree] =
-    &[tree(&vanilla_configured_features::BIRCH_BEES_005, 1)];
+const BIRCH_FLOWERS: &[WeightedTree] = &[tree(&vanilla_configured_features::BIRCH_BEES_005, 1)];
 /// Vanilla `TreeGrowers.JUNGLE`.
-const JUNGLE_TREES: &[WeightedTree] =
-    &[tree(&vanilla_configured_features::JUNGLE_TREE_NO_VINE, 1)];
-const JUNGLE_MEGA: &[WeightedTree] =
-    &[tree(&vanilla_configured_features::MEGA_JUNGLE_TREE, 1)];
+const JUNGLE_TREES: &[WeightedTree] = &[tree(&vanilla_configured_features::JUNGLE_TREE_NO_VINE, 1)];
+const JUNGLE_MEGA: &[WeightedTree] = &[tree(&vanilla_configured_features::MEGA_JUNGLE_TREE, 1)];
 /// Vanilla `TreeGrowers.ACACIA`.
 const ACACIA_TREES: &[WeightedTree] = &[tree(&vanilla_configured_features::ACACIA, 1)];
 /// Vanilla `TreeGrowers.CHERRY`.
 const CHERRY_TREES: &[WeightedTree] = &[tree(&vanilla_configured_features::CHERRY, 1)];
-const CHERRY_FLOWERS: &[WeightedTree] =
-    &[tree(&vanilla_configured_features::CHERRY_BEES_005, 1)];
+const CHERRY_FLOWERS: &[WeightedTree] = &[tree(&vanilla_configured_features::CHERRY_BEES_005, 1)];
 /// Vanilla `TreeGrowers.DARK_OAK`.
 const DARK_OAK_MEGA: &[WeightedTree] = &[tree(&vanilla_configured_features::DARK_OAK, 1)];
 /// Vanilla `TreeGrowers.PALE_OAK`.
-const PALE_OAK_MEGA: &[WeightedTree] =
-    &[tree(&vanilla_configured_features::PALE_OAK_BONEMEAL, 1)];
+const PALE_OAK_MEGA: &[WeightedTree] = &[tree(&vanilla_configured_features::PALE_OAK_BONEMEAL, 1)];
 /// Vanilla `TreeGrowers.POPLAR`.
 const POPLAR_TREES: &[WeightedTree] = &[
     tree(&vanilla_configured_features::RED_POPLAR, 1),
@@ -202,7 +194,10 @@ impl SaplingBlock {
     }
 
     /// Vanilla `WeightedList.getRandom`: weighted pick that consumes one roll.
-    fn pick(entries: &'static [WeightedTree], rng: &mut dyn Rng) -> Option<&'static ConfiguredFeature> {
+    fn pick(
+        entries: &'static [WeightedTree],
+        rng: &mut dyn Rng,
+    ) -> Option<&'static ConfiguredFeature> {
         let total_weight: i32 = entries.iter().map(|entry| entry.weight).sum();
         if total_weight <= 0 {
             return None;
@@ -353,7 +348,13 @@ impl SaplingBlock {
     }
 
     /// Vanilla `SaplingBlock.advanceTree`.
-    fn advance_tree(&self, world: &Arc<World>, pos: BlockPos, state: BlockStateId, rng: &mut dyn Rng) {
+    fn advance_tree(
+        &self,
+        world: &Arc<World>,
+        pos: BlockPos,
+        state: BlockStateId,
+        rng: &mut dyn Rng,
+    ) {
         if state.get_value(STAGE) == 0 {
             world.set_block(pos, state.set_value(STAGE, 1), UpdateFlags::UPDATE_NONE);
         } else {
@@ -490,7 +491,8 @@ mod tests {
         let state = vanilla_blocks::OAK_SAPLING.default_state();
         let pos = BlockPos::new(0, 64, 0);
 
-        let dirt = TestLevel::default().with_block(pos.below(), vanilla_blocks::DIRT.default_state());
+        let dirt =
+            TestLevel::default().with_block(pos.below(), vanilla_blocks::DIRT.default_state());
         assert!(behavior.can_survive(state, &dirt, pos));
 
         let air = TestLevel::default().with_block(pos.below(), vanilla_blocks::AIR.default_state());

@@ -1,5 +1,6 @@
 //! Vanilla `Vindicator` (vanilla `net.minecraft.world.entity.monster.illager.Vindicator`).
 
+use std::iter;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -17,15 +18,19 @@ use text_components::TextComponent;
 
 use super::abstract_illager::{IllagerArmPose, RaiderKeys};
 use crate::entity::ai::goal::{
-    AvoidEntityGoal, FloatGoal, HurtByTargetGoal, LookAtPlayerGoal, MeleeAttackGoal,
-    NearestAttackableTargetGoal, RandomStrollGoal,
+    AvoidEntityGoal, FloatGoal, Goal, GoalControls, HurtByTargetGoal, LookAtPlayerGoal,
+    MeleeAttackGoal, NearestAttackableTargetGoal, RaiderOpenDoorGoal, RandomStrollGoal,
+    VindicatorBreakDoorGoal,
 };
 use crate::entity::damage::DamageSource;
+use crate::entity::entities::mobs::spawn_equipment;
 use crate::entity::raid::RaidSnapshot;
 use crate::entity::raid::raider::{Raider, RaiderBase};
+use crate::entity::raid::vindicator_raid_enchant_provider;
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySyncedData, LivingEntity,
-    LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity,
+    ENTITIES, Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
+    LivingEntity, LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, SharedEntity,
+    SpawnGroupData,
 };
 use crate::physics::MoveResult;
 use crate::world::World;
@@ -83,7 +88,7 @@ impl VindicatorEntity {
             goals.add_goal(0, FloatGoal::new(&mob_base));
             // Vanilla goal 1 avoids `Creaking`; Steel has no creaking factory yet, so the
             // avoidance is registered against the creaking entity type only if it exists.
-            if crate::entity::ENTITIES.has_factory(&vanilla_entities::CREAKING) {
+            if ENTITIES.has_factory(&vanilla_entities::CREAKING) {
                 goals.add_goal(
                     1,
                     AvoidEntityGoal::with_selector(8.0, 1.0, 1.2, |target, _| {
@@ -93,8 +98,8 @@ impl VindicatorEntity {
             }
             // Vanilla goal 2 `VindicatorBreakDoorGoal` breaks doors while raiding on normal
             // or hard difficulty; goal 3 `RaiderOpenDoorGoal` opens doors while raiding.
-            goals.add_goal(2, crate::entity::ai::goal::VindicatorBreakDoorGoal::new());
-            goals.add_goal(3, crate::entity::ai::goal::RaiderOpenDoorGoal::new());
+            goals.add_goal(2, VindicatorBreakDoorGoal::new());
+            goals.add_goal(3, RaiderOpenDoorGoal::new());
             goals.add_goal(4, super::raider_goals::hold_ground_attack(10.0));
             goals.add_goal(5, MeleeAttackGoal::new(1.0, false));
             goals.add_goal(8, RandomStrollGoal::new(0.6));
@@ -109,7 +114,7 @@ impl VindicatorEntity {
                 1,
                 HurtByTargetGoal::new()
                     .with_ignored_damage_types(RaiderKeys::ALL)
-                    .set_alert_others(std::iter::empty()),
+                    .set_alert_others(iter::empty()),
             );
             targets.add_goal(
                 2,
@@ -288,7 +293,7 @@ impl LivingEntity for VindicatorEntity {
 
     fn ai_step(&self, entity: &SharedEntity) -> Option<MoveResult> {
         Raider::raider_ai_step(self, entity);
-        crate::entity::Monster::monster_ai_step(self, entity)
+        Monster::monster_ai_step(self, entity)
     }
 
     fn on_death(&self, source: &DamageSource) {
@@ -345,9 +350,9 @@ impl Mob for VindicatorEntity {
     fn finalize_spawn(
         &self,
         world: &Arc<World>,
-        spawn_reason: crate::entity::EntitySpawnReason,
-        group_data: Option<crate::entity::SpawnGroupData>,
-    ) -> Option<crate::entity::SpawnGroupData> {
+        spawn_reason: EntitySpawnReason,
+        group_data: Option<SpawnGroupData>,
+    ) -> Option<SpawnGroupData> {
         let group_data = self.finalize_spawn_mob_base(world, spawn_reason, group_data);
         self.mob_base().navigation().lock().set_can_open_doors(true);
         let mut random = LegacyRandom::from_seed(rand::random());
@@ -362,7 +367,7 @@ impl Mob for VindicatorEntity {
                 ItemStack::new(&vanilla_items::IRON_AXE),
             );
         }
-        crate::entity::entities::mobs::spawn_equipment::populate_default_equipment_enchantments(
+        spawn_equipment::populate_default_equipment_enchantments(
             self,
             &mut random,
             difficulty_modifier,
@@ -379,7 +384,7 @@ impl Mob for VindicatorEntity {
     }
 }
 
-impl crate::entity::Monster for VindicatorEntity {}
+impl Monster for VindicatorEntity {}
 
 impl PathfinderMob for VindicatorEntity {}
 
@@ -412,7 +417,7 @@ impl Raider for VindicatorEntity {
         // the raid enchant roll succeeds.
         let mut axe = ItemStack::new(&vanilla_items::IRON_AXE);
         if rand::random::<f32>() <= raid.enchant_odds {
-            let provider = crate::entity::raid::vindicator_raid_enchant_provider(wave);
+            let provider = vindicator_raid_enchant_provider(wave);
             provider.enchant(
                 &mut axe,
                 world
@@ -448,9 +453,9 @@ impl VindicatorJohnnyAttackGoal {
     }
 }
 
-impl crate::entity::ai::goal::Goal for VindicatorJohnnyAttackGoal {
-    fn controls(&self) -> crate::entity::ai::goal::GoalControls {
-        crate::entity::ai::goal::GoalControls::TARGET
+impl Goal for VindicatorJohnnyAttackGoal {
+    fn controls(&self) -> GoalControls {
+        GoalControls::TARGET
     }
 
     fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {

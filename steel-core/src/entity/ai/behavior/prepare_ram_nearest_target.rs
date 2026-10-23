@@ -1,16 +1,19 @@
 //! Vanilla `PrepareRamNearestTarget`: pick a target, walk to a ramming start
 //! position, wait, then set `RAM_TARGET`.
 
+use std::cmp::Ordering;
+use std::sync::Arc;
+
 use glam::DVec3;
 use steel_utils::BlockPos;
 use steel_utils::direction::Direction;
 use steel_utils::entity_events::EntityStatus;
 
-use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::{MemoryModuleTypeRef, MemoryStatus, module_type as mem};
 use crate::entity::ai::brain::tracker::{EntityTracker, WalkTarget};
 use crate::entity::ai::targeting::TargetingConditions;
+use crate::entity::{PathfinderMob, SharedEntity};
 
 /// Vanilla `PrepareRamNearestTarget.TIME_OUT_DURATION`.
 pub const TIME_OUT_DURATION: i32 = 160;
@@ -143,7 +146,7 @@ impl PrepareRamNearestTarget {
         possible_ram_positions.sort_by(|a, b| {
             dist_sqr(*a, body_pos)
                 .partial_cmp(&dist_sqr(*b, body_pos))
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .unwrap_or(Ordering::Equal)
         });
 
         possible_ram_positions.into_iter().find(|pos| {
@@ -167,7 +170,7 @@ impl PrepareRamNearestTarget {
 }
 
 /// Vanilla `isWalkableBlock`: stable destination with zero pathfinding malus.
-fn is_walkable_block(mob: &dyn crate::entity::PathfinderMob, target_pos: BlockPos) -> bool {
+fn is_walkable_block(mob: &dyn PathfinderMob, target_pos: BlockPos) -> bool {
     use crate::entity::ai::path::PathfindingContext;
     use crate::entity::mob::Mob as _;
 
@@ -251,7 +254,7 @@ impl Behavior for PrepareRamNearestTarget {
         );
         ctx.set_memory(
             &mem::LOOK_TARGET,
-            std::sync::Arc::new(EntityTracker::new(candidate.target().clone(), true)),
+            Arc::new(EntityTracker::new(candidate.target().clone(), true)),
         );
 
         let did_target_move = candidate.target().block_position() != candidate.target_position();

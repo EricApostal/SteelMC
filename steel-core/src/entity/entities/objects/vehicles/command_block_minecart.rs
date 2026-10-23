@@ -167,13 +167,16 @@ impl CommandBlockMinecartEntity {
 
     /// Vanilla `BaseCommandBlock.performCommand`.
     ///
-    /// The command string and its four-tick activation gate are stored exactly as
-    /// vanilla; only the dispatch into the command dispatcher is unavailable (see
-    /// the module docs). `LastOutput` therefore stays at its previous value until
-    /// the dispatch API lands.
-    fn perform_command(&self, _world: &World) {
+    /// The command string, its four-tick activation gate and the
+    /// `command_blocks_work` rule check are stored exactly as vanilla; only the
+    /// dispatch into the command dispatcher is unavailable (see the module
+    /// docs). `LastOutput` therefore stays at its previous value until the
+    /// dispatch API lands.
+    fn perform_command(&self, world: &World) {
         let command = self.command();
-        if command.trim().is_empty() {
+        // Vanilla `BaseCommandBlock.performCommand`: a disabled command block
+        // resets its success count and never runs the command.
+        if !world.is_command_block_enabled() || command.trim().is_empty() {
             return;
         }
 

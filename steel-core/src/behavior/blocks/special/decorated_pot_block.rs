@@ -9,6 +9,9 @@
 //! Deviation: vanilla's loot table emits the dynamic `minecraft:sherds` entry; Steel lacks a
 //! `LootEntry::Dynamic` implementation (owner: `steel-registry/src/loot_table/entries.rs`), so
 //! [`DecoratedPotBlock::get_drops`] supplies the sherds itself.
+//!
+//! Vanilla `DecoratedPotBlock.rotate`/`mirror` have no `BlockBehavior` counterpart; Steel rotates
+//! `HORIZONTAL_FACING` generically in `StructureTemplate::transform_state`.
 
 use std::sync::{Arc, Weak};
 
@@ -174,7 +177,7 @@ impl BlockBehavior for DecoratedPotBlock {
             0.7 + 0.5 * pitch_bend,
             None,
         );
-        let (center_x, center_y, center_z) = pos.get_center();
+        let (center_x, _, center_z) = pos.get_center();
         world.send_particles(
             ParticleData::simple(&vanilla_particle_types::DUST_PLUME),
             DVec3::new(center_x, f64::from(pos.y()) + 1.2, center_z),
@@ -270,9 +273,15 @@ impl BlockBehavior for DecoratedPotBlock {
         }
         // Destruction paths that drop loot before removing the block (for example
         // `World::destroy_block`) do not hand the block entity to the loot context.
-        let block_entity = context.world().get_block_entity(context.pos())?;
-        let pot = block_entity.downcast_ref::<DecoratedPotBlockEntity>()?;
-        Some(sherd_drops(pot))
+        // Vanilla's `alternatives` entry picks the dynamic `sherds` drop for a cracked pot
+        // regardless, so a missing block entity yields no items rather than the pot item.
+        Some(
+            context
+                .world()
+                .get_block_entity(context.pos())
+                .and_then(|block_entity| block_entity.downcast_ref::<DecoratedPotBlockEntity>())
+                .map_or_else(Vec::new, sherd_drops),
+        )
     }
 
     fn on_projectile_hit(

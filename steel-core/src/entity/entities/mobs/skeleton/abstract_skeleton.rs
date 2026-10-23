@@ -252,11 +252,7 @@ pub trait AbstractSkeleton: Monster + RangedAttackMob {
     }
 
     /// Vanilla `AbstractSkeleton.populateDefaultEquipmentSlots`.
-    fn populate_default_equipment_slots(
-        &self,
-        random: &mut impl Random,
-        difficulty_modifier: f32,
-    ) {
+    fn populate_default_equipment_slots(&self, random: &mut impl Random, difficulty_modifier: f32) {
         // Vanilla calls `Mob.populateDefaultEquipmentSlots` first, then forces a bow.
         crate::entity::entities::mobs::spawn_equipment::populate_default_equipment_slots(
             self,

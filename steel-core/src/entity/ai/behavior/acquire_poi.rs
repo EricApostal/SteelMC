@@ -1,6 +1,7 @@
 //! Vanilla `AcquirePoi`.
 
 use std::cell::RefCell;
+use std::mem;
 
 use rustc_hash::FxHashMap;
 use steel_registry::poi::PoiTypeRef;
@@ -141,7 +142,7 @@ impl Trigger for AcquirePoi {
             ctx.timestamp + RATE + i64::from(rand::random_range(0..RATE as i32));
 
         let timestamp = ctx.timestamp;
-        let mut cache = std::mem::take(&mut self.batch_cache);
+        let mut cache = mem::take(&mut self.batch_cache);
         cache.retain(|_, retry| retry.is_still_valid(timestamp));
 
         let center = ctx.body.block_position();

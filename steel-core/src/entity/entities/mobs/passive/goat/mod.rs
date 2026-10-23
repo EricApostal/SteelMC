@@ -54,6 +54,7 @@ use steel_utils::{BlockPos, BlockStateId, Downcast as _, DowncastType, DowncastT
 
 use crate::behavior::InteractionResult;
 use crate::entity::ai::brain::Brain;
+use crate::entity::ai::brain::memory::module_type;
 use crate::entity::ai::path::PathType;
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::objects::items::ItemEntity;
@@ -313,7 +314,7 @@ impl GoatEntity {
         };
         let lower_head_tick =
             f32::from(i16::try_from(self.state.lock().lower_head_tick).unwrap_or(0));
-        lower_head_tick / 20.0 * max_ramming_x_head_rot * (std::f32::consts::PI / 180.0)
+        lower_head_tick / 20.0 * max_ramming_x_head_rot * (f32::consts::PI / 180.0)
     }
 
     /// Vanilla `Goat.handleEntityEvent(58)`: start lowering the head.
@@ -346,13 +347,10 @@ impl GoatEntity {
 
         let mut brain = self.brain.lock();
         brain.set_memory(
-            &crate::entity::ai::brain::memory::module_type::LONG_JUMP_COOLDOWN_TICKS,
+            &module_type::LONG_JUMP_COOLDOWN_TICKS,
             Some(long_jump_cooldown),
         );
-        brain.set_memory(
-            &crate::entity::ai::brain::memory::module_type::RAM_COOLDOWN_TICKS,
-            Some(ram_cooldown),
-        );
+        brain.set_memory(&module_type::RAM_COOLDOWN_TICKS, Some(ram_cooldown));
     }
 
     fn update_dirty_mob_effect_entity_data(&self) {

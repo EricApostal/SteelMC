@@ -5,6 +5,8 @@
 //! `mod`/`pub use` lines in `entity/ai/goal/mod.rs` are owned by the iron-golem slice and
 //! are reported rather than added here.
 
+use std::sync::Arc;
+
 use glam::DVec3;
 
 use super::random_pos::{HALF_PI, default_random_pos_towards};
@@ -120,7 +122,7 @@ impl Goal for PathfindToRaidGoal {
 
 /// Vanilla `PathfindToRaidGoal.recruitNearby`.
 fn recruit_nearby(
-    world: &std::sync::Arc<World>,
+    world: &Arc<World>,
     raid: RaidSnapshot,
     mob: &dyn PathfinderMob,
     _entity: &SharedEntity,

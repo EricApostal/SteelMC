@@ -78,7 +78,7 @@ impl BiomeSourceKind {
     ///
     /// Mirrors vanilla `FixedBiomeSource`.
     #[must_use]
-    pub fn fixed(biome: BiomeRef) -> Self {
+    pub const fn fixed(biome: BiomeRef) -> Self {
         Self::Fixed(FixedBiomeSource::new(biome))
     }
 
@@ -528,7 +528,7 @@ impl FixedBiomeSource {
         self.biome
     }
 
-    fn chunk_sampler(&self) -> ChunkBiomeSampler<'_> {
+    const fn chunk_sampler(&self) -> ChunkBiomeSampler<'_> {
         ChunkBiomeSampler::Fixed(FixedChunkBiomeSampler { biome: self.biome })
     }
 }
@@ -539,7 +539,7 @@ pub struct FixedChunkBiomeSampler {
 }
 
 impl FixedChunkBiomeSampler {
-    fn sample(&mut self) -> BiomeRef {
+    const fn sample(&mut self) -> BiomeRef {
         self.biome
     }
 }
@@ -603,7 +603,7 @@ impl CheckerboardColumnBiomeSource {
         self.biomes[index]
     }
 
-    fn chunk_sampler(&self) -> ChunkBiomeSampler<'_> {
+    const fn chunk_sampler(&self) -> ChunkBiomeSampler<'_> {
         ChunkBiomeSampler::Checkerboard(CheckerboardChunkBiomeSampler { source: self })
     }
 }

@@ -6,6 +6,8 @@
 //! filter, and keeps the interested flag on the mob through
 //! [`Tameable::set_is_interested`](crate::entity::ai::goal::Tameable::set_is_interested).
 
+use std::ptr;
+
 use steel_registry::equipment::EquipmentSlot;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_items;
@@ -56,8 +58,8 @@ impl BegGoal {
         let holds_interesting = |slot: EquipmentSlot| {
             let mut holds = false;
             player.with_equipment_slot(slot, &mut |item_stack| {
-                holds = (self.is_food)(item_stack)
-                    || std::ptr::eq(item_stack.item(), &*vanilla_items::BONE);
+                holds =
+                    (self.is_food)(item_stack) || ptr::eq(item_stack.item(), &*vanilla_items::BONE);
             });
             holds
         };

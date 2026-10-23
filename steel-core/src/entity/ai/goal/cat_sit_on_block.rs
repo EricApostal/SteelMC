@@ -9,6 +9,8 @@
 //! block entity's [`ContainerViewers`] capability, which is what `getOpenCount` reports, so
 //! the goal needs no chest-specific downcast.
 
+use std::ptr;
+
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{BedPart, BlockStateProperties};
 use steel_registry::vanilla_block_tags::BlockTag;
@@ -50,7 +52,7 @@ fn is_valid_target(level: &dyn LevelReader, pos: BlockPos) -> bool {
         return false;
     }
 
-    if std::ptr::eq(block, &vanilla_blocks::CHEST) {
+    if ptr::eq(block, &vanilla_blocks::CHEST) {
         let Some(block_entity) = level.get_block_entity(pos) else {
             return true;
         };
@@ -59,7 +61,7 @@ fn is_valid_target(level: &dyn LevelReader, pos: BlockPos) -> bool {
             .is_none_or(|viewers| viewers.open_count() < 1);
     }
 
-    if std::ptr::eq(block, &vanilla_blocks::FURNACE) {
+    if ptr::eq(block, &vanilla_blocks::FURNACE) {
         return block_state.get_value(&BlockStateProperties::LIT);
     }
 

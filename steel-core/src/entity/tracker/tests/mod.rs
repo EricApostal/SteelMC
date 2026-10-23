@@ -14,6 +14,7 @@ use super::*;
 use crate::entity::{
     EntityBase, LivingEntity, LivingEntityBase,
     entities::{LeashFenceKnotEntity, PigEntity},
+    impl_test_downcast_type,
 };
 use crate::inventory::equipment::EquipmentSlot;
 
@@ -81,7 +82,7 @@ impl PairingTestEntity {
     }
 }
 
-crate::entity::impl_test_downcast_type!(PairingTestEntity);
+impl_test_downcast_type!(PairingTestEntity);
 
 impl Entity for PairingTestEntity {
     fn base(&self) -> &EntityBase {
@@ -157,7 +158,6 @@ fn track_entity_for_player(tracker: &EntityTracker, entity: &SharedEntity, playe
         tracking_range: EntityTrackingRange::from_client_chunk_range(
             entity.entity_type().client_tracking_range,
         ),
-        registered_chunk: ChunkPos::from_entity_pos(pos),
         seen_by: SyncRwLock::new(seen_by),
     };
     assert!(

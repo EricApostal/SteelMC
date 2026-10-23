@@ -41,6 +41,8 @@ fn is_command_block(block: steel_registry::blocks::BlockRef) -> bool {
 /// Vanilla `BaseCommandBlock` + `CommandBlockEntity` state.
 struct CommandBlockState {
     command: String,
+    /// Vanilla `CommandBlockEntity.getMode`, derived from and kept in sync with the block kind.
+    mode: CommandBlockMode,
     /// Vanilla `BaseCommandBlock.successCount`.
     success_count: i32,
     /// Vanilla `BaseCommandBlock.lastOutput`.
@@ -53,7 +55,7 @@ struct CommandBlockState {
     last_execution: i64,
     /// Whether the last redstone state was powered.
     powered: bool,
-    /// Whether the block executes automatically (`repeating_command_block`).
+    /// Whether the block executes automatically (`chain_command_block`).
     auto: bool,
     /// Vanilla `conditionMet`.
     condition_met: bool,
@@ -234,14 +236,13 @@ impl CommandBlockEntity {
     }
 
     /// Vanilla `CommandBlockEntity.onModeSwitch`.
-    pub fn on_mode_switch(&self, world: &std::sync::Arc<World>) {
+    pub fn on_mode_switch(&self, _world: &std::sync::Arc<World>) {
         let (mode, powered, auto) = {
             let state = self.state.lock();
             (state.mode, state.powered, state.auto)
         };
         if mode == CommandBlockMode::Auto && (powered || auto) {
             self.schedule_tick();
-            let _ = world;
         }
     }
 

@@ -24,7 +24,7 @@ use crate::{
         blocks::{CakeBlock, CandleBlock},
     },
     block_entity::SharedBlockEntity,
-    entity::{Entity, projectile::Projectile},
+    entity::projectile::Projectile,
     player::Player,
     world::{ClipHitResult, LevelReader, ScheduledTickAccess, World, game_event::GameEventContext},
 };

@@ -25,6 +25,7 @@ use steel_registry::{vanilla_custom_stats, vanilla_entities, vanilla_mob_effects
 use steel_utils::types::GameType;
 use steel_utils::{TICKS_PER_SECOND, translations};
 
+use crate::entity::entities::mobs::passive::equine::open_vehicle_inventory;
 use crate::entity::{
     AcceptedClientMovement, AcceptedClientMovementOutcome, Entity, EntityMoveError, LivingEntity,
 };
@@ -317,7 +318,6 @@ impl Player {
             }
             self.set_rotation((target_yaw, target_pitch));
             world.chunk_map.update_player_status(self);
-            world.locator_bar_player_moved(self);
             return;
         }
 
@@ -485,7 +485,6 @@ impl Player {
 
         self.check_movement_statistics(client_delta);
         world.chunk_map.update_player_status(self);
-        world.locator_bar_player_moved(self);
 
         if let Some((player_stands_on_something, y_dist)) = floating_check {
             self.record_client_floating(
@@ -685,7 +684,6 @@ impl Player {
         self.handle_player_known_movement(client_delta);
         self.check_movement_statistics(client_delta);
         world.chunk_map.update_player_status(self);
-        world.locator_bar_player_moved(self);
         self.record_client_vehicle_floating(
             &world,
             vehicle.as_ref(),
@@ -881,7 +879,6 @@ impl Player {
         self.try_set_position(pos)?;
         if world.entity_manager().get_by_id(self.id()).is_some() {
             world.chunk_map.update_player_status(self);
-            world.locator_bar_player_moved(self);
         }
         self.set_velocity(velocity);
 
@@ -1017,10 +1014,15 @@ impl Player {
                     self.stop_sleep_in_bed(false, true);
                 }
             }
-            PlayerCommandAction::StartRidingJump
-            | PlayerCommandAction::StopRidingJump
-            | PlayerCommandAction::OpenVehicleInventory => {
-                // TODO: Implement once controlled vehicle jumping and vehicle inventory interfaces exist.
+            PlayerCommandAction::OpenVehicleInventory => {
+                // Vanilla `ServerGamePacketListenerImpl.handlePlayerCommand`:
+                // the inventory key opens the ridden mount's custom screen.
+                if let Some(vehicle) = self.vehicle() {
+                    open_vehicle_inventory(vehicle.as_ref(), self);
+                }
+            }
+            PlayerCommandAction::StartRidingJump | PlayerCommandAction::StopRidingJump => {
+                // TODO: Implement once the controlled-vehicle jump hook exists.
             }
         }
 

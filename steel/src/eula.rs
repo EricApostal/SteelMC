@@ -2,7 +2,8 @@
 //!
 //! Vanilla reads `eula.txt` from the working directory and refuses to boot
 //! until the operator sets `eula=true`. A missing or unreadable file is
-//! replaced with commented-out `eula=false` defaults and counts as rejected.
+//! replaced with an `eula=false` default plus the EULA comment, and counts as
+//! rejected.
 
 use std::fs;
 use std::path::Path;

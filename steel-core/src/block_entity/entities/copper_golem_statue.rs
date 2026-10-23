@@ -5,11 +5,6 @@
 //! block entity's data components, and `createStatue`/`removeStatue` convert between a live
 //! `CopperGolem` and the statue. Steel keeps the custom-name component through the standard
 //! component map, so the entity only needs the golem conversion hooks.
-//!
-//! Deviation: vanilla `CopperGolemStatueBlockEntity.createStatue` writes the golem's custom name
-//! into the block entity's component map (`BlockEntity.setComponents`). Steel's
-//! `BlockEntityBase` exposes only `stored_components()` (a clone), so there is no way to write a
-//! single component yet; owner: `steel-core/src/block_entity/mod.rs`.
 
 use std::sync::Weak;
 
@@ -49,6 +44,15 @@ impl CopperGolemStatueBlockEntity {
                 state,
             ),
         }
+    }
+
+    /// Vanilla `CopperGolemStatueBlockEntity.createStatue`: stores the golem's custom name in
+    /// the block entity's component map and marks the entity changed.
+    pub fn create_statue(&self, golem: &dyn Entity) {
+        let mut components = self.stored_components();
+        components.set(CUSTOM_NAME, golem.custom_name());
+        self.set_components(components);
+        self.set_changed();
     }
 
     /// Vanilla `CopperGolemStatueBlockEntity.removeStatue` + `initCopperGolem`: builds the live

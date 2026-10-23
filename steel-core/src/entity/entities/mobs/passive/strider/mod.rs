@@ -87,21 +87,22 @@ use crate::entity::ai::goal::{
 use crate::entity::ai::path::{PathComputationType, PathType};
 use crate::entity::attribute::{AttributeModifier, AttributeModifierOperation};
 use crate::entity::damage::DamageSource;
+use crate::entity::dismount_helper::find_safe_dismount_location;
 use crate::entity::entities::mobs::hostile::piglin::ZombifiedPiglinEntity;
 use crate::entity::entities::mobs::zombie::ZombieEntity;
 use crate::entity::registry::ENTITIES;
 use crate::entity::{
     AgeableMob, AgeableMobBase, AgeableMobGroupData, Animal, AnimalBase, Entity, EntityBase,
     EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData, ItemBasedSteering,
-    ItemSteerable, LivingEntity, LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity,
-    SpawnGroupData, next_entity_id,
+    ItemSteerable, LivingEntity, LivingEntityBase, LivingEntitySyncedData, Mob, MobBase,
+    PathfinderMob, SharedEntity, SpawnGroupData, next_entity_id,
 };
 use crate::fluid::FluidStateExt as _;
 use crate::inventory::equipment::EquipmentSlot;
 use crate::physics::MoveResult;
 use crate::player::Player;
+use crate::world::World;
 use crate::world::game_event::GameEventContext;
-use crate::world::{LevelReader, World};
 
 /// Vanilla `Strider.SUFFOCATING_MODIFIER_ID`.
 const SUFFOCATING_MODIFIER_ID: Identifier = Identifier::vanilla_static("suffocating");
@@ -464,9 +465,9 @@ impl StriderEntity {
                 continue;
             }
 
-            if let Some(location) = crate::entity::dismount_helper::find_safe_dismount_location(
-                &world, passenger, target_pos, false,
-            ) {
+            if let Some(location) =
+                find_safe_dismount_location(&world, passenger, target_pos, false)
+            {
                 return location;
             }
         }
@@ -513,7 +514,7 @@ fn collision_horizontal_escape_vector(
     direction_degrees: f32,
 ) -> DVec3 {
     let distance = (collider_width + colliding_width + 1.0e-5) / 2.0;
-    let radians = direction_degrees * (std::f32::consts::PI / 180.0);
+    let radians = direction_degrees * (f32::consts::PI / 180.0);
     let direction_x = -f64::from(radians.sin());
     let direction_z = f64::from(radians.cos());
     let scale = direction_x.abs().max(direction_z.abs());
@@ -683,19 +684,6 @@ impl Entity for StriderEntity {
         self.reset_fall_distance();
     }
 
-    /// Vanilla `Strider.checkSpawnObstruction` is `level.isUnobstructed(this)`,
-    /// which skips the default `Entity` liquid check.
-    fn check_spawn_obstruction(&self, world: &Arc<World>) -> bool {
-        let aabb = self.bounding_box();
-        !world.has_entity_in_aabb_matching(&aabb, |entity| {
-            entity.id() != self.id()
-                && !entity.is_removed()
-                && !entity.is_spectator()
-                && entity.blocks_building()
-                && !entity.is_passenger_of_same_vehicle(self.as_entity_event_source())
-        })
-    }
-
     fn save_additional(&self, nbt: &mut NbtCompound) {
         self.save_mob(nbt);
         self.save_ageable_mob(nbt);
@@ -712,6 +700,10 @@ impl Entity for StriderEntity {
 impl LivingEntity for StriderEntity {
     fn living_base(&self) -> &LivingEntityBase {
         &self.living_base
+    }
+
+    fn living_synced_data(&self) -> Option<&dyn LivingEntitySyncedData> {
+        Some(&self.entity_data)
     }
 
     fn get_health(&self) -> f32 {
@@ -858,6 +850,19 @@ impl ItemSteerable for StriderEntity {
 impl Mob for StriderEntity {
     fn mob_base(&self) -> &MobBase {
         &self.mob_base
+    }
+
+    /// Vanilla `Strider.checkSpawnObstruction` is `level.isUnobstructed(this)`,
+    /// which skips the default `Entity` liquid check.
+    fn check_spawn_obstruction(&self, world: &Arc<World>) -> bool {
+        let aabb = self.bounding_box();
+        !world.has_entity_in_aabb_matching(&aabb, |entity| {
+            entity.id() != self.id()
+                && !entity.is_removed()
+                && !entity.is_spectator()
+                && entity.blocks_building()
+                && !entity.is_passenger_of_same_vehicle(self.as_entity_event_source())
+        })
     }
 
     fn tick_goal_selectors(&self, entity: &SharedEntity) {
@@ -1061,6 +1066,20 @@ impl StriderGoToLavaGoal {
             .with_recalculate_path_interval(LAVA_GOAL_RECALCULATE_PATH_INTERVAL),
         }
     }
+
+    /// Vanilla `StriderGoToLavaGoal.isValidTarget`, re-evaluated on the stored
+    /// target block because `canContinueToUse` is fully overridden in vanilla.
+    fn is_valid_target(&self, mob: &dyn PathfinderMob) -> bool {
+        let Some(world) = mob.level() else {
+            return false;
+        };
+
+        let pos = self.move_to_block.block_pos();
+        world.get_block_state(pos).get_block() == &vanilla_blocks::LAVA
+            && world
+                .get_block_state(pos.above())
+                .is_pathfindable(PathComputationType::Land)
+    }
 }
 
 impl Goal for StriderGoToLavaGoal {
@@ -1073,7 +1092,7 @@ impl Goal for StriderGoToLavaGoal {
     }
 
     fn can_continue_to_use(&mut self, mob: &dyn PathfinderMob) -> bool {
-        !mob.is_in_lava() && self.move_to_block.can_continue_to_use(mob)
+        !mob.is_in_lava() && self.is_valid_target(mob)
     }
 
     fn requires_update_every_tick(&self) -> bool {

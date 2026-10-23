@@ -1,5 +1,6 @@
 //! Vanilla `Cat` entity: tameable, collared, variant-driven sounds and cat-only AI.
 
+use std::cmp;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
@@ -44,6 +45,7 @@ use crate::entity::ai::goal::{
     SitWhenOrderedToGoal, Tameable, WaterAvoidingRandomStrollGoal,
 };
 use crate::entity::damage::DamageSource;
+use crate::entity::entities::mobs::passive::SheepEntity;
 use crate::entity::leash::Leashable;
 use crate::entity::{
     AgeableMob, AgeableMobBase, Animal, AnimalBase, Entity, EntityBase, EntityBaseLoad, EntityPose,
@@ -903,7 +905,7 @@ impl AgeableMob for CatEntity {
 fn mix_collar_color(first: DyeColor, second: DyeColor) -> DyeColor {
     // The same vanilla helper already backs sheep breeding, so reuse it rather than
     // duplicating the 2x1 crafting lookup.
-    crate::entity::entities::mobs::passive::SheepEntity::get_mixed_color(first, second)
+    SheepEntity::get_mixed_color(first, second)
 }
 
 impl Animal for CatEntity {
@@ -1127,13 +1129,13 @@ fn pick_spawn_conditioned_cat_variant(
             }
 
             match entry.priority.cmp(&highest_priority) {
-                std::cmp::Ordering::Greater => {
+                cmp::Ordering::Greater => {
                     selected.clear();
                     selected.push(variant);
                     highest_priority = entry.priority;
                 }
-                std::cmp::Ordering::Equal => selected.push(variant),
-                std::cmp::Ordering::Less => {}
+                cmp::Ordering::Equal => selected.push(variant),
+                cmp::Ordering::Less => {}
             }
         }
     }

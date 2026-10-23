@@ -1,5 +1,6 @@
 //! Vanilla `Ravager` (vanilla `net.minecraft.world.entity.monster.Ravager`).
 
+use std::iter;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -32,7 +33,7 @@ use crate::entity::raid::RaidSnapshot;
 use crate::entity::raid::raider::{Raider, RaiderBase};
 use crate::entity::{
     Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySyncedData, LivingEntity,
-    LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity,
+    LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, SharedEntity, aabb_contains_any_liquid,
 };
 use crate::physics::MoveResult;
 use crate::world::World;
@@ -125,7 +126,7 @@ impl RavagerEntity {
                 2,
                 HurtByTargetGoal::new()
                     .with_ignored_damage_types(RaiderKeys::ALL)
-                    .set_alert_others(std::iter::empty()),
+                    .set_alert_others(iter::empty()),
             );
             targets.add_goal(
                 3,
@@ -533,7 +534,7 @@ impl LivingEntity for RavagerEntity {
 
     fn ai_step(&self, entity: &SharedEntity) -> Option<MoveResult> {
         Raider::raider_ai_step(self, entity);
-        let result = crate::entity::Monster::monster_ai_step(self, entity);
+        let result = Monster::monster_ai_step(self, entity);
         self.ravager_ai_tick();
         result
     }
@@ -600,7 +601,7 @@ impl Mob for RavagerEntity {
 
     /// Vanilla `Ravager.checkSpawnObstruction`: only the liquid test.
     fn check_spawn_obstruction(&self, world: &Arc<World>) -> bool {
-        !crate::entity::aabb_contains_any_liquid(world, self.bounding_box())
+        !aabb_contains_any_liquid(world, self.bounding_box())
     }
 
     /// Vanilla `Ravager.doHurtTarget`: start the attack animation, then attack normally.
@@ -619,7 +620,7 @@ impl Mob for RavagerEntity {
     }
 }
 
-impl crate::entity::Monster for RavagerEntity {}
+impl Monster for RavagerEntity {}
 
 impl PathfinderMob for RavagerEntity {}
 

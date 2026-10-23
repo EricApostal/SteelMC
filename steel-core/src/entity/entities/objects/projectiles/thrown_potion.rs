@@ -39,6 +39,7 @@ use steel_registry::{REGISTRY, TaggedRegistryExt, vanilla_entities};
 use steel_utils::BlockPos;
 use steel_utils::types::UpdateFlags;
 
+use crate::behavior::MOB_EFFECT_BEHAVIORS;
 use crate::entity::damage::DamageSource;
 use crate::entity::{
     Entity, Projectile, ProjectileHit, RemovalReason, SharedEntity, ThrowableItemProjectile,
@@ -211,7 +212,7 @@ pub fn potion_has_effects(contents: &PotionContents) -> bool {
 #[must_use]
 pub fn potion_has_instant_effects(contents: &PotionContents) -> bool {
     contents.all_effects().iter().any(|effect| {
-        crate::behavior::MOB_EFFECT_BEHAVIORS
+        MOB_EFFECT_BEHAVIORS
             .get_behavior(effect.effect())
             .as_instantaneous()
             .is_some()

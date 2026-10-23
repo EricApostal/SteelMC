@@ -117,7 +117,7 @@ impl PrimedTntEntity {
         world: Weak<World>,
         owner: Option<&SharedEntity>,
     ) -> Self {
-        let rotation = rand::random::<f64>() * std::f64::consts::TAU;
+        let rotation = rand::random::<f64>() * f64::consts::TAU;
         let velocity = DVec3::new(-rotation.sin() * 0.02, 0.2, -rotation.cos() * 0.02);
 
         let mut state = PrimedTntState::new();

@@ -1542,7 +1542,7 @@ mod tests {
         let templates = FxHashMap::default();
         let alias_map = FxHashMap::default();
         let mut config = JigsawConfig {
-            start_pool: pool_key.clone(),
+            start_pool: pool_key,
             max_depth: 0,
             use_expansion_hack: false,
             project_start_to_heightmap: None,

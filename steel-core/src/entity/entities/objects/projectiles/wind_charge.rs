@@ -26,7 +26,7 @@ use crate::entity::entities::objects::projectiles::hurting::{
     ExplosionInteraction, ExplosionSpec, HurtingProjectile, HurtingProjectileState, explode,
 };
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityEventSource as _, EntitySyncedData,
+    Entity, EntityBase, EntityBaseLoad, EntityEventSource as _, EntityReference, EntitySyncedData,
     LivingEntity as _, Projectile, ProjectileBase, ProjectileDeflection, ProjectileHit,
     RemovalReason, SharedEntity,
 };
@@ -268,7 +268,7 @@ impl Projectile for WindChargeEntity {
         &self,
         deflection: ProjectileDeflection,
         deflecting_entity: Option<&dyn Entity>,
-        new_owner: Option<crate::entity::EntityReference>,
+        new_owner: Option<EntityReference>,
         by_attack: bool,
     ) -> bool {
         // Vanilla `WindCharge.deflect`: refuse deflection during the first ticks.

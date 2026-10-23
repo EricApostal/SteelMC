@@ -16,6 +16,7 @@
 //!   (`movement_speed` 0.5, `follow_range` 18.0, `max_health` 32.0), matching vanilla
 //!   `Illusioner.createAttributes`.
 
+use std::iter;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -39,8 +40,9 @@ use crate::entity::damage::DamageSource;
 use crate::entity::raid::RaidSnapshot;
 use crate::entity::raid::raider::{Raider, RaiderBase};
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySyncedData, LivingEntity,
-    LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity,
+    ENTITIES, Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
+    LivingEntity, LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, SharedEntity,
+    SpawnGroupData,
 };
 use crate::physics::MoveResult;
 use crate::world::World;
@@ -111,7 +113,7 @@ impl IllusionerEntity {
             goals.add_goal(1, SpellcasterCastingSpellGoal);
             // Vanilla goal 3 avoids `Creaking`; Steel only registers the avoidance once a
             // creaking factory exists (same guard as vindicator).
-            if crate::entity::ENTITIES.has_factory(&vanilla_entities::CREAKING) {
+            if ENTITIES.has_factory(&vanilla_entities::CREAKING) {
                 goals.add_goal(
                     3,
                     AvoidEntityGoal::with_selector(8.0, 1.0, 1.2, |target, _| {
@@ -137,7 +139,7 @@ impl IllusionerEntity {
                 1,
                 HurtByTargetGoal::new()
                     .with_ignored_damage_types(RaiderKeys::ALL)
-                    .set_alert_others(std::iter::empty()),
+                    .set_alert_others(iter::empty()),
             );
             targets.add_goal(
                 2,
@@ -376,7 +378,7 @@ impl LivingEntity for IllusionerEntity {
 
     fn ai_step(&self, entity: &SharedEntity) -> Option<MoveResult> {
         Raider::raider_ai_step(self, entity);
-        let result = crate::entity::Monster::monster_ai_step(self, entity);
+        let result = Monster::monster_ai_step(self, entity);
         self.tick_mirror_offsets();
         result
     }
@@ -437,9 +439,9 @@ impl Mob for IllusionerEntity {
     fn finalize_spawn(
         &self,
         world: &Arc<World>,
-        spawn_reason: crate::entity::EntitySpawnReason,
-        group_data: Option<crate::entity::SpawnGroupData>,
-    ) -> Option<crate::entity::SpawnGroupData> {
+        spawn_reason: EntitySpawnReason,
+        group_data: Option<SpawnGroupData>,
+    ) -> Option<SpawnGroupData> {
         self.living_base
             .equipment()
             .lock()
@@ -456,7 +458,7 @@ impl Mob for IllusionerEntity {
     }
 }
 
-impl crate::entity::Monster for IllusionerEntity {}
+impl Monster for IllusionerEntity {}
 
 impl PathfinderMob for IllusionerEntity {}
 

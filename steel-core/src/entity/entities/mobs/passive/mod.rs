@@ -35,6 +35,7 @@ pub use cow::CowEntity;
 pub use equine::{DonkeyEntity, HorseEntity, MuleEntity, SkeletonHorseEntity, ZombieHorseEntity};
 pub use frog::FrogEntity;
 pub use goat::GoatEntity;
+pub use happy_ghast::HappyGhastEntity;
 pub use llama::{LlamaEntity, TraderLlamaEntity};
 pub use mooshroom::MushroomCowEntity;
 pub use ocelot::OcelotEntity;

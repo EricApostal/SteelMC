@@ -5,6 +5,8 @@
 //! [`CaravanLlama`](crate::entity::ai::goal::CaravanLlama), exactly as
 //! `FollowFlockLeaderGoal` does for schooling fish.
 
+use std::ptr;
+
 use super::reduced_tick_delay;
 use super::selector::{Goal, GoalControls};
 use crate::entity::{Entity, PathfinderMob, SharedEntity};
@@ -41,8 +43,8 @@ impl LlamaFollowCaravanGoal {
     /// `e.is(EntityTypes.LLAMA) || e.is(EntityTypes.TRADER_LLAMA)`.
     fn is_llama(entity: &dyn Entity) -> bool {
         let entity_type = entity.entity_type();
-        std::ptr::eq(entity_type, &steel_registry::vanilla_entities::LLAMA)
-            || std::ptr::eq(entity_type, &steel_registry::vanilla_entities::TRADER_LLAMA)
+        ptr::eq(entity_type, &steel_registry::vanilla_entities::LLAMA)
+            || ptr::eq(entity_type, &steel_registry::vanilla_entities::TRADER_LLAMA)
     }
 
     /// The closest candidate matching `predicate` by squared distance to `mob`.
@@ -203,7 +205,7 @@ impl Goal for LlamaFollowCaravanGoal {
         // fence knot stays put instead of chasing the caravan head.
         let tied_to_fence_knot = mob.as_leashable().is_some_and(|leashable| {
             leashable.leash_holder().is_some_and(|holder| {
-                std::ptr::eq(
+                ptr::eq(
                     holder.entity_type(),
                     &steel_registry::vanilla_entities::LEASH_KNOT,
                 )

@@ -28,7 +28,7 @@ use steel_utils::{BlockPos, BlockStateId};
 use crate::behavior::block::place_simple_waterlogged_liquid;
 use crate::behavior::{BlockBehavior, BlockPlaceContext, PlacementSource};
 use crate::entity::ai::path::PathComputationType;
-use crate::entity::{AgeableMob, ENTITIES, add_spawned_entity, create_entity_instance};
+use crate::entity::{ENTITIES, add_spawned_entity, create_entity_instance};
 use crate::world::{LevelAccessor, ScheduledTickAccess, World};
 
 /// Vanilla `DriedGhastBlock.MAX_HYDRATION_LEVEL`.

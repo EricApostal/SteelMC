@@ -7,3 +7,4 @@ pub mod sulfur_cube;
 
 pub use magma_cube::MagmaCubeEntity;
 pub use slime::SlimeEntity;
+pub use sulfur_cube::SulfurCubeEntity;

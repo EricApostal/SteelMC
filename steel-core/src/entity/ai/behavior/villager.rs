@@ -9,6 +9,7 @@ use steel_registry::villager_profession::VillagerProfessionRef;
 
 use crate::entity::entities::mobs::npc::villager::VillagerEntity;
 use crate::entity::{LivingEntity, SharedEntity};
+use crate::world::World;
 use steel_utils::Downcast as _;
 
 /// The villager behind a behavior body, or `None` for any other entity.
@@ -24,10 +25,7 @@ pub fn as_villager(body: &SharedEntity) -> Option<&VillagerEntity> {
 
 /// [`as_villager`] for call sites that also have the world at hand.
 #[must_use]
-pub fn villager<'a>(
-    _level: &crate::world::World,
-    body: &'a SharedEntity,
-) -> Option<&'a VillagerEntity> {
+pub fn villager<'a>(_level: &World, body: &'a SharedEntity) -> Option<&'a VillagerEntity> {
     as_villager(body)
 }
 

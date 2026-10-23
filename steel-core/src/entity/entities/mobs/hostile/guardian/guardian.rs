@@ -657,7 +657,7 @@ pub(super) fn tick_guardian_move_control<M: Mob + ?Sized>(mob: &M) -> bool {
 
     let tick_phase = (mob.tick_count() + mob.id()) as f64 * 0.5;
     let push = tick_phase.sin() * GUARDIAN_PUSH;
-    let yaw_radians = f64::from(new_yaw) * (std::f64::consts::PI / 180.0);
+    let yaw_radians = f64::from(new_yaw) * (f64::consts::PI / 180.0);
     let (sin_yaw, cos_yaw) = yaw_radians.sin_cos();
     let y_push = ((mob.tick_count() + mob.id()) as f64 * 0.75).sin() * GUARDIAN_PUSH;
     mob.set_velocity(

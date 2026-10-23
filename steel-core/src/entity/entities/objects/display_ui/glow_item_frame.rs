@@ -17,6 +17,7 @@
 //!   `get_clone_item_stack`), so vanilla `ItemFrame.getPickResult` has nowhere
 //!   to land.
 
+use std::ptr;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -478,7 +479,7 @@ fn can_coexist(
             return false;
         }
         let intersects_same_type =
-            !allow_intersecting_same_type && std::ptr::eq(entity.entity_type(), self_type);
+            !allow_intersecting_same_type && ptr::eq(entity.entity_type(), self_type);
         intersects_same_type || hanging_direction(entity) == Some(direction)
     })
 }
@@ -735,6 +736,7 @@ const fn direction_2d_data_value(direction: Direction) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
     use std::string::ToString;
     use steel_registry::{vanilla_entities, vanilla_items};
 
@@ -834,7 +836,7 @@ mod tests {
 
         let mut bytes = Vec::new();
         nbt.write(&mut bytes);
-        let mut cursor = std::io::Cursor::new(bytes.as_slice());
+        let mut cursor = Cursor::new(bytes.as_slice());
         let borrowed = simdnbt::borrow::read_compound(&mut cursor)
             .expect("saved glow item frame data should reborrow");
         let view: BorrowedNbtCompoundView<'_, '_> = (&borrowed).into();

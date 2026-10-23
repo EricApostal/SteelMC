@@ -23,8 +23,8 @@ use crate::behavior::InteractionResult;
 use crate::entity::ai::goal::SchoolingFish;
 use crate::entity::damage::DamageSource;
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
-    LivingEntity, LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity,
+    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySyncedData, LivingEntity,
+    LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity,
 };
 use crate::physics::MoveResult;
 use crate::player::Player;
@@ -37,8 +37,6 @@ use super::abstract_fish::{self, SchoolingState};
 pub(super) const MAX_SCHOOL_SIZE: i32 = 8;
 /// Vanilla `Mob` default step height used when the attribute is missing.
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
-/// Vanilla `LivingEntity.getSoundVolume` for fish.
-const SOUND_VOLUME: f32 = 0.4;
 
 #[entity_behavior(class = "Cod")]
 /// Vanilla cod: a schooling bucketable fish.
@@ -238,15 +236,6 @@ impl Entity for CodEntity {
         self.set_from_bucket(nbt.byte("FromBucket").is_some_and(|value| value != 0));
     }
 
-    fn mob_interact(&self, player: &Player, hand: InteractionHand) -> InteractionResult {
-        // Vanilla `AbstractFish.mobInteract`: bucket pickup, else `super.mobInteract`
-        // (`Mob` default is `PASS`).
-        if self.try_bucket_pickup(player, hand) {
-            return InteractionResult::Success;
-        }
-        InteractionResult::Pass
-    }
-
     fn as_schooling_fish(&self) -> Option<&dyn SchoolingFish> {
         Some(self)
     }
@@ -269,10 +258,6 @@ impl LivingEntity for CodEntity {
             .living_entity_mut()
             .health
             .set(clamped);
-    }
-
-    fn sound_volume(&self) -> f32 {
-        SOUND_VOLUME
     }
 
     fn hurt_sound(&self, _source: &DamageSource) -> Option<SoundEventRef> {
@@ -305,13 +290,29 @@ impl LivingEntity for CodEntity {
 }
 
 impl Mob for CodEntity {
+    fn mob_interact(&self, player: &Player, hand: InteractionHand) -> InteractionResult {
+        // Vanilla `AbstractFish.mobInteract`: bucket pickup, else `super.mobInteract`
+        // (`Mob` default is `PASS`).
+        if self.try_bucket_pickup(player, hand) {
+            return InteractionResult::Success;
+        }
+        InteractionResult::Pass
+    }
     fn mob_base(&self) -> &MobBase {
         &self.mob_base
     }
 
+    fn tick_goal_selectors(&self, entity: &SharedEntity) {
+        PathfinderMob::tick_pathfinder_goal_selectors(self, entity);
+    }
+
+    fn tick_path_navigation(&self) {
+        PathfinderMob::tick_pathfinder_path_navigation(self);
+    }
+
     /// Vanilla `AbstractSchoolingFish.getMaxSpawnClusterSize` = `getMaxSchoolSize`.
     fn max_spawn_cluster_size(&self) -> i32 {
-        abstract_fish::max_spawn_cluster_size(MAX_SCHOOL_SIZE)
+        MAX_SCHOOL_SIZE
     }
 
     fn ambient_sound(&self) -> Option<SoundEventRef> {

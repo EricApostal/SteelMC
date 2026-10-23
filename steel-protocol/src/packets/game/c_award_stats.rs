@@ -49,7 +49,9 @@ impl WriteTo for CAwardStats {
 #[cfg(test)]
 mod tests {
     use steel_registry::stat::vanilla_stat_types;
-    use steel_registry::{RegistryEntry, init_vanilla_registry, vanilla_custom_stats, vanilla_items};
+    use steel_registry::{
+        RegistryEntry, init_vanilla_registry, vanilla_custom_stats, vanilla_items,
+    };
     use steel_utils::codec::VarInt;
     use steel_utils::serial::WriteTo;
 

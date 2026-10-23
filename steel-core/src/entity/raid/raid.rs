@@ -33,14 +33,21 @@ use text_components::translation::TranslatedMessage;
 use text_components::{Modifier as _, TextComponent};
 use uuid::Uuid;
 
+use crate::behavior::BLOCK_BEHAVIORS;
+use crate::chunk::heightmap::HeightmapType;
 use crate::entity::spawn::create_entity_instance;
 use crate::entity::{
     Entity, EntitySpawnReason, LivingEntity, MobEffectInstance, Player, SharedEntity,
 };
+use crate::player::advancement::triggers::{
+    WorldLevelView, raise_hero_of_the_village, raise_voluntary_exile,
+};
+use crate::poi::OccupationStatus;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 
+use crate::world::SignalQueryContext;
 use crate::world::World;
-use crate::world::village::{find_section_closest_to_village, poi::is_village_poi};
+use crate::world::village::{find_section_closest_to_village, poi::is_village_poi, section_center};
 
 use super::raids::RaidSnapshot;
 
@@ -756,11 +763,8 @@ impl Raid {
             // Vanilla `Raid.absorbRaidOmen`: `CriteriaTriggers.RAID_OMEN.trigger(player)`.
             let origin = player.block_position();
             if let Some(world) = player.level() {
-                let level =
-                    crate::player::advancement::triggers::WorldLevelView::new(&world, origin);
-                crate::player::advancement::triggers::raise_voluntary_exile(
-                    player, &level, origin,
-                );
+                let level = WorldLevelView::new(&world, origin);
+                raise_voluntary_exile(player, &level, origin);
             }
         }
         true
@@ -969,7 +973,7 @@ impl Raid {
             SECTION_RADIUS_FOR_FINDING_NEW_VILLAGE_CENTER,
         );
         if world.is_village_section(section) {
-            self.center = crate::world::village::section_center(section);
+            self.center = section_center(section);
         }
     }
 
@@ -1002,7 +1006,7 @@ impl Raid {
 
                 let no_action_time = raider
                     .as_living_entity()
-                    .map_or(0, crate::entity::LivingEntity::no_action_time);
+                    .map_or(0, LivingEntity::no_action_time);
                 if !world.is_village(raider_pos) && no_action_time > MAX_NO_ACTION_TIME {
                     raider_mob.set_ticks_outside_raid(raider_mob.ticks_outside_raid() + 1);
                 }
@@ -1272,21 +1276,18 @@ impl Raid {
     fn find_random_spawn_pos(&mut self, world: &Arc<World>, max_tries: i32) -> Option<BlockPos> {
         let seconds_remaining = self.raid_cooldown_ticks / 20;
         let how_far = 0.22 * seconds_remaining as f32 - 0.24;
-        let start_angle = self.random.next_f32() * std::f32::consts::TAU;
+        let start_angle = self.random.next_f32() * f32::consts::TAU;
 
         for i in 0..max_tries {
-            let angle = start_angle + std::f32::consts::PI * i as f32 / 8.0;
+            let angle = start_angle + f32::consts::PI * i as f32 / 8.0;
             let spawn_x = self.center.x()
                 + (angle.cos() * 32.0 * how_far).floor() as i32
                 + self.random.next_i32_bounded(3) * how_far.floor() as i32;
             let spawn_z = self.center.z()
                 + (angle.sin() * 32.0 * how_far).floor() as i32
                 + self.random.next_i32_bounded(3) * how_far.floor() as i32;
-            let Some(spawn_y) = world.height_at(
-                crate::chunk::heightmap::HeightmapType::WorldSurface,
-                spawn_x,
-                spawn_z,
-            ) else {
+            let Some(spawn_y) = world.height_at(HeightmapType::WorldSurface, spawn_x, spawn_z)
+            else {
                 continue;
             };
 
@@ -1346,11 +1347,8 @@ impl Raid {
                 player.award_custom_stat(&steel_registry::vanilla_custom_stats::RAID_WIN);
                 // Vanilla `Raid`: `CriteriaTriggers.RAID_WIN.trigger(playerHero)`.
                 let origin = player.block_position();
-                let level =
-                    crate::player::advancement::triggers::WorldLevelView::new(world, origin);
-                crate::player::advancement::triggers::raise_hero_of_the_village(
-                    player, &level, origin,
-                );
+                let level = WorldLevelView::new(world, origin);
+                raise_hero_of_the_village(player, &level, origin);
             }
         }
     }
@@ -1425,7 +1423,7 @@ pub fn ravager_spawn_position_ok(world: &World, pos: BlockPos) -> bool {
 
     let below = pos.below();
     let below_state = world.get_block_state(below);
-    let below_ok = crate::behavior::BLOCK_BEHAVIORS
+    let below_ok = BLOCK_BEHAVIORS
         .get_behavior(below_state.get_block())
         .is_valid_spawn(below_state, world, below, &vanilla_entities::RAVAGER);
 
@@ -1449,9 +1447,9 @@ pub(crate) fn is_valid_empty_spawn_block(world: &World, pos: BlockPos) -> bool {
     if is_shape_full_block(state.get_static_collision_shape()) {
         return false;
     }
-    if crate::behavior::BLOCK_BEHAVIORS
+    if BLOCK_BEHAVIORS
         .get_behavior(state.get_block())
-        .is_signal_source(state, crate::world::SignalQueryContext::DEFAULT)
+        .is_signal_source(state, SignalQueryContext::DEFAULT)
     {
         return false;
     }
@@ -1470,7 +1468,7 @@ pub fn village_raid_center(world: &World, raid_position: BlockPos) -> BlockPos {
         &is_village_poi,
         raid_position,
         VILLAGE_SEARCH_RADIUS,
-        crate::poi::OccupationStatus::Occupied,
+        OccupationStatus::Occupied,
     );
 
     if pois.is_empty() {

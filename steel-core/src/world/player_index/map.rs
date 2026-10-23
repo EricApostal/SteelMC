@@ -7,7 +7,6 @@ use scc::HashMap;
 use steel_utils::locks::SyncMutex;
 use uuid::Uuid;
 
-use super::waypoints::{LocatorBar, SharedLocatorBar};
 use crate::{entity::Entity, player::Player};
 
 struct PlayerSlot {
@@ -63,8 +62,6 @@ pub struct PlayerMap {
     order: SyncMutex<Vec<Uuid>>,
     /// Serializes changes to the indexes and their shared slots.
     mutations: SyncMutex<()>,
-    /// Locator-bar waypoint connections (vanilla `ServerWaypointManager`).
-    locator_bar: SharedLocatorBar,
 }
 
 impl Default for PlayerMap {
@@ -82,13 +79,7 @@ impl PlayerMap {
             by_entity_id: HashMap::new(),
             order: SyncMutex::new(Vec::new()),
             mutations: SyncMutex::new(()),
-            locator_bar: SyncMutex::new(LocatorBar::default()),
         }
-    }
-
-    /// The world's locator-bar connection state.
-    pub(crate) fn locator_bar(&self) -> &SharedLocatorBar {
-        &self.locator_bar
     }
 
     /// Inserts a player into both maps.

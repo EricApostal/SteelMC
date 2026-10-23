@@ -50,7 +50,7 @@ use crate::entity::ai::brain::{ActivityData, Brain};
 use crate::entity::ai::sensing::adult::NEAREST_ADULT;
 use crate::entity::ai::sensing::hoglin_specific::HOGLIN_SPECIFIC_SENSOR;
 use crate::entity::ai::sensing::villager::{
-    NEAREST_LIVING_ENTITIES, NEAREST_PLAYERS, is_entity_attackable,
+    NEAREST_LIVING_ENTITIES, NEAREST_PLAYERS, follow_range, is_entity_attackable,
 };
 use crate::world::World;
 
@@ -441,7 +441,7 @@ fn zoglin_nearest_valid_attack_target(
     ctx: &BehaviorContext<'_>,
     body: &SharedEntity,
 ) -> Option<SharedEntity> {
-    let Some(follow_range) = crate::entity::ai::sensing::villager::follow_range(body) else {
+    let Some(follow_range) = follow_range(body) else {
         return None;
     };
     let attack_target = ctx.get_memory(&mem::ATTACK_TARGET);

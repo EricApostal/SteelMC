@@ -13,9 +13,9 @@
 //!   [`BeehiveBlock::get_state_for_placement`] applies the honey level itself.
 //! - Vanilla's `minecraft:blocks/beehive` loot table copies `minecraft:bees` and
 //!   `honey_level` for silk touch through `minecraft:copy_components` /
-//!   `minecraft:copy_state`; Steel's `LootFunction` implementations for those are
-//!   still stubs (owner: `steel-registry/src/item_stack.rs`), so `get_drops`
-//!   supplies the silk-touch item directly.
+//!   `minecraft:copy_state`; Steel's `ItemStack::copy_components` and
+//!   `ItemStack::copy_block_state` are no-ops (owner: `steel-registry/src/item_stack.rs`),
+//!   so `get_drops` supplies the silk-touch item directly.
 //! - Vanilla `BeehiveBlock.onExplosionHit` calls `angerNearbyBees`; Steel routes
 //!   explosion drops through `BlockBehavior::get_drops`, which performs the
 //!   vanilla `getDrops` explosion release, so the angering side effect is not
@@ -39,8 +39,8 @@ use steel_registry::item_stack::ItemStack;
 use steel_registry::items::item::BlockHitResult;
 use steel_registry::stat::vanilla_stat_types;
 use steel_registry::{
-    REGISTRY, RegistryExt, sound_events, vanilla_block_entity_types, vanilla_game_events,
-    vanilla_items, vanilla_loot_tables,
+    REGISTRY, RegistryExt, TaggedRegistryExt, sound_events, vanilla_block_entity_types,
+    vanilla_game_events, vanilla_items, vanilla_loot_tables,
 };
 use steel_utils::types::{InteractionHand, UpdateFlags};
 use steel_utils::{BlockPos, BlockStateId, Downcast, Identifier, WorldAabb};
@@ -128,20 +128,21 @@ impl BeehiveBlock {
     }
 
     /// Vanilla `BeehiveBlock.releaseBeesAndResetHoneyLevel`.
+    ///
+    /// Vanilla only calls this with `BeeReleaseStatus.EMERGENCY`.
     fn release_bees_and_reset_honey_level(
         &self,
         world: &Arc<World>,
         state: BlockStateId,
         pos: BlockPos,
         player: Option<&Player>,
-        status: crate::block_entity::entities::BeeReleaseStatus,
     ) {
         self.reset_honey_level(world, state, pos);
         if let Some(hive) = world
             .get_block_entity(pos)
             .and_then(|entity| entity.downcast_ref::<BeehiveBlockEntity>())
         {
-            hive.empty_all_living_from_hive(player, state, status);
+            hive.empty_all_living_from_hive(player, state, BeehiveBlockEntity::EMERGENCY);
         }
     }
 
@@ -240,7 +241,7 @@ impl BlockBehavior for BeehiveBlock {
             let glass_bottle = inv.with_item(|stack| stack.is(&vanilla_items::GLASS_BOTTLE));
 
             if shears {
-                let tool = inv.with_item(ItemStack::clone);
+                let tool = inv.with_item(|stack| stack.clone());
                 Self::drop_honeycomb(world, state, pos, player, &tool);
                 world.play_sound_at(
                     &sound_events::BLOCK_BEEHIVE_SHEAR,
@@ -304,13 +305,7 @@ impl BlockBehavior for BeehiveBlock {
             if Self::hive_contains_bees(world, pos) {
                 Self::anger_nearby_bees(world, pos);
             }
-            self.release_bees_and_reset_honey_level(
-                world,
-                state,
-                pos,
-                Some(player),
-                crate::block_entity::entities::BeeReleaseStatus::Emergency,
-            );
+            self.release_bees_and_reset_honey_level(world, state, pos, Some(player));
         } else {
             self.reset_honey_level(world, state, pos);
         }
@@ -334,11 +329,7 @@ impl BlockBehavior for BeehiveBlock {
         };
 
         if !prevents_bee_spawns_when_mining(tool) {
-            hive.empty_all_living_from_hive(
-                Some(player),
-                state,
-                crate::block_entity::entities::BeeReleaseStatus::Emergency,
-            );
+            hive.empty_all_living_from_hive(Some(player), state, BeehiveBlockEntity::EMERGENCY);
             world.update_neighbor_shapes_at(state, pos, UpdateFlags::UPDATE_ALL, 512);
             Self::anger_nearby_bees(world, pos);
         }
@@ -404,15 +395,11 @@ impl BlockBehavior for BeehiveBlock {
                 .get_block_entity(pos)
                 .and_then(|block_entity| block_entity.downcast_ref::<BeehiveBlockEntity>())
         {
-            hive.empty_all_living_from_hive(
-                None,
-                state,
-                crate::block_entity::entities::BeeReleaseStatus::Emergency,
-            );
+            hive.empty_all_living_from_hive(None, state, BeehiveBlockEntity::EMERGENCY);
         }
 
         // Vanilla's loot table is `beehive` with a silk-touch branch that copies
-        // the bees and honey level; Steel's loot copy functions are stubs (see
+        // the bees and honey level; Steel's loot copy functions are no-ops (see
         // the module docs), so the silk-touch branch is built here.
         let silk_touch = context.tool().is_some_and(prevents_bee_spawns_when_mining);
         if !silk_touch {
@@ -466,11 +453,7 @@ impl BlockBehavior for BeehiveBlock {
                 .get_block_entity(pos)
                 .and_then(|block_entity| block_entity.downcast_ref::<BeehiveBlockEntity>())
         {
-            hive.empty_all_living_from_hive(
-                None,
-                state,
-                crate::block_entity::entities::BeeReleaseStatus::Emergency,
-            );
+            hive.empty_all_living_from_hive(None, state, BeehiveBlockEntity::EMERGENCY);
         }
 
         state
@@ -527,10 +510,3 @@ fn is_destroying_explosive(entity: &dyn Entity) -> bool {
         || std::ptr::eq(entity_type, &vanilla_entities::WITHER)
         || std::ptr::eq(entity_type, &vanilla_entities::TNT_MINECART)
 }
-
-// Keeps the unused-import lint honest for the sound aliases used above.
-#[expect(
-    unused_imports,
-    reason = "`beehive_sounds` mirrors the vanilla constant names for greppability"
-)]
-use beehive_sounds as _;

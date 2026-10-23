@@ -709,9 +709,8 @@ impl<'de> Deserialize<'de> for FeatureNoiseParameters {
         }
 
         let raw = Raw::deserialize(deserializer)?;
-        if !raw.amplitude_modifiers.is_empty()
-            && raw.amplitude_modifiers.len() != raw.octave_count.max(0) as usize
-        {
+        let amplitude_count = i32::try_from(raw.amplitude_modifiers.len()).unwrap_or(i32::MAX);
+        if !raw.amplitude_modifiers.is_empty() && amplitude_count != raw.octave_count {
             return Err(D::Error::custom(format!(
                 "amplitude_modifiers had size {}, but octave_count was {}",
                 raw.amplitude_modifiers.len(),
@@ -1349,7 +1348,7 @@ pub struct MultifaceGrowthConfiguration {
     pub can_place_on_wall: bool,
     #[serde(default = "default_multiface_chance_of_spreading")]
     pub chance_of_spreading: f32,
-    pub can_be_placed_on: Vec<Identifier>,
+    pub can_be_placed_on: BlockHolderSet,
 }
 
 const fn default_multiface_search_range() -> i32 {
@@ -1973,8 +1972,7 @@ pub struct UnderwaterMagmaConfiguration {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VegetationPatchConfiguration {
-    #[serde(deserialize_with = "deserialize_tag_identifier")]
-    pub replaceable: Identifier,
+    pub replaceable: BlockHolderSet,
     pub ground_state: BlockStateProviderKind,
     pub vegetation_feature: PlacedFeatureRef,
     pub surface: VerticalSurface,

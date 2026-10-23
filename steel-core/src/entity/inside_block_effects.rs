@@ -147,7 +147,7 @@ mod tests {
     use steel_registry::vanilla_entities;
     use steel_utils::locks::SyncMutex;
 
-    use crate::entity::{Entity, EntityBase};
+    use crate::entity::{Entity, EntityBase, impl_test_downcast_type};
 
     use super::{InsideBlockEffectCollector, InsideBlockEffectType};
 
@@ -175,7 +175,7 @@ mod tests {
         }
     }
 
-    crate::entity::impl_test_downcast_type!(EffectTestEntity);
+    impl_test_downcast_type!(EffectTestEntity);
 
     impl Entity for EffectTestEntity {
         fn base(&self) -> &EntityBase {

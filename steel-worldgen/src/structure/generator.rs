@@ -473,6 +473,59 @@ pub fn squared_distance(a: BlockPos, b: BlockPos) -> i64 {
     dx * dx + dy * dy + dz * dz
 }
 
+/// The indices of structure sets this biome provider can place, plus, per
+/// structure, the sets that record a placement for it.
+///
+/// Vanilla `ChunkGeneratorStructureState.hasBiomesForStructureSet`: a set is
+/// possible when any of its structures has at least one biome the source can
+/// produce. `generatePositions` applies the same test per structure when
+/// recording placements, so structures outside the filter get no placement and
+/// `/locate` reports "not found".
+fn possible_sets_and_placements(
+    structure_sets: &[(Identifier, StructureSet)],
+    structure_data: &FxHashMap<Identifier, StructureRef>,
+    biome_provider: &(impl StructureBiomeProvider + Sync),
+) -> (Vec<usize>, FxHashMap<Identifier, Vec<usize>>) {
+    let possible_biomes = biome_provider.possible_biomes();
+    let can_place = |structure: &Identifier| {
+        structure_data.get(structure).is_some_and(|structure| {
+            structure
+                .allowed_biomes
+                .iter()
+                .any(|biome| possible_biomes.contains(biome))
+        })
+    };
+
+    let possible_structure_sets: Vec<usize> = structure_sets
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (_, set))| {
+            let possible = set
+                .structures
+                .iter()
+                .any(|entry| can_place(&entry.structure));
+            possible.then_some(index)
+        })
+        .collect();
+
+    let mut placements_for_structure: FxHashMap<Identifier, Vec<usize>> = FxHashMap::default();
+    for &set_index in &possible_structure_sets {
+        for entry in &structure_sets[set_index].1.structures {
+            if !can_place(&entry.structure) {
+                continue;
+            }
+            let indices = placements_for_structure
+                .entry(entry.structure.clone())
+                .or_default();
+            if !indices.contains(&set_index) {
+                indices.push(set_index);
+            }
+        }
+    }
+
+    (possible_structure_sets, placements_for_structure)
+}
+
 fn validate_structure_sets(structure_sets: &[(Identifier, StructureSet)]) {
     for (set_key, set) in structure_sets {
         assert!(
@@ -696,7 +749,7 @@ impl StructureGenerator {
         structure_sets: Vec<(Identifier, StructureSet)>,
         thread_pool: &rayon::ThreadPool,
     ) -> Self {
-        Self::with_assets_for_origin_and_ring_seed(
+        Self::with_assets(
             seed,
             ring_position_seed,
             biome_provider.dimension_origin(),
@@ -721,7 +774,7 @@ impl StructureGenerator {
         structure_sets: Vec<(Identifier, StructureSet)>,
         thread_pool: &rayon::ThreadPool,
     ) -> Self {
-        Self::with_assets_for_origin_and_ring_seed(
+        Self::with_assets(
             seed,
             VANILLA_FLAT_RING_POSITION_SEED,
             ChunkPos::new(0, 0),
@@ -739,30 +792,12 @@ impl StructureGenerator {
     /// `ChunkGeneratorStructureState` fields: flat generators use ring seed `0`
     /// and the zero origin; noise generators use the level seed and the chunk
     /// containing their spawn search result.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors vanilla ChunkGeneratorStructureState's seed, origin, biome source, and asset inputs"
+    )]
     #[must_use]
     pub fn with_assets(
-        seed: i64,
-        ring_position_seed: i64,
-        dimension_origin: ChunkPos,
-        world_path: Option<&Path>,
-        biome_provider: &(impl StructureBiomeProvider + Sync),
-        structure_sets: Vec<(Identifier, StructureSet)>,
-        assets: StructureGeneratorAssets,
-        thread_pool: &rayon::ThreadPool,
-    ) -> Self {
-        Self::with_assets_for_origin_and_ring_seed(
-            seed,
-            ring_position_seed,
-            dimension_origin,
-            world_path,
-            biome_provider,
-            structure_sets,
-            assets,
-            thread_pool,
-        )
-    }
-
-    fn with_assets_for_origin_and_ring_seed(
         seed: i64,
         ring_position_seed: i64,
         dimension_origin: ChunkPos,
@@ -781,60 +816,14 @@ impl StructureGenerator {
             .collect();
         validate_structure_assets(&structure_sets, &structure_data, &assets.structure_impls);
 
-        let possible_biomes = biome_provider.possible_biomes();
-        // Vanilla `ChunkGeneratorStructureState.hasBiomesForStructureSet`: a set
-        // is possible when any of its structures has at least one biome the
-        // source can produce. `generatePositions` applies the same test per
-        // structure when recording placements.
-        let possible_structure_sets: Vec<usize> = structure_sets
-            .iter()
-            .enumerate()
-            .filter_map(|(index, (_, set))| {
-                let possible = set.structures.iter().any(|entry| {
-                    structure_data
-                        .get(&entry.structure)
-                        .is_some_and(|structure| {
-                            structure
-                                .allowed_biomes
-                                .iter()
-                                .any(|biome| possible_biomes.contains(biome))
-                        })
-                });
-                possible.then_some(index)
-            })
-            .collect();
+        let (possible_structure_sets, placements_for_structure) =
+            possible_sets_and_placements(&structure_sets, &structure_data, biome_provider);
 
         let structure_set_indices: FxHashMap<Identifier, usize> = structure_sets
             .iter()
             .enumerate()
             .map(|(index, (key, _))| (key.clone(), index))
             .collect();
-
-        // Vanilla `generatePositions`: record a placement for every structure of
-        // a possible set whose own biomes the provider can produce. Structures
-        // outside that filter get no placement, so `/locate` reports "not found".
-        let mut placements_for_structure: FxHashMap<Identifier, Vec<usize>> = FxHashMap::default();
-        for &set_index in &possible_structure_sets {
-            for entry in &structure_sets[set_index].1.structures {
-                let placeable = structure_data
-                    .get(&entry.structure)
-                    .is_some_and(|structure| {
-                        structure
-                            .allowed_biomes
-                            .iter()
-                            .any(|biome| possible_biomes.contains(biome))
-                    });
-                if !placeable {
-                    continue;
-                }
-                let indices = placements_for_structure
-                    .entry(entry.structure.clone())
-                    .or_default();
-                if !indices.contains(&set_index) {
-                    indices.push(set_index);
-                }
-            }
-        }
 
         let data_manager = SavedDataManager::new(world_path);
         let has_ring_placement = possible_structure_sets.iter().any(|&index| {

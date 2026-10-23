@@ -27,7 +27,7 @@ use crate::entity::{
     MobEffectInstance, Monster, PathfinderMob, SharedEntity, SpawnGroupData,
 };
 use crate::physics::MoveResult;
-use crate::world::World;
+use crate::world::{LevelReader, World};
 
 use super::brain;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
@@ -429,7 +429,7 @@ impl Mob for HoglinEntity {
     /// Vanilla `Hoglin.checkHoglinSpawnRules`: never above nether wart blocks.
     fn check_mob_spawn_rules(
         _entity_type: EntityTypeRef,
-        level: &dyn crate::world::LevelReader,
+        level: &dyn LevelReader,
         spawn_reason: EntitySpawnReason,
         pos: BlockPos,
     ) -> bool

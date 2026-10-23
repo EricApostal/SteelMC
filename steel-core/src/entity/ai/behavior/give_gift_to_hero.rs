@@ -1,5 +1,6 @@
 //! Vanilla `GiveGiftToHero`.
 
+use std::array;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
@@ -17,7 +18,7 @@ use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorStat
 use crate::entity::ai::brain::memory::MemoryStatus;
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::entities::mobs::npc::villager::VillagerEntity;
-use crate::entity::{Entity as _, SharedEntity};
+use crate::entity::{Entity, LivingEntity, SharedEntity, next_entity_id};
 
 /// Vanilla `GiveGiftToHero.THROW_GIFT_AT_DISTANCE`, `closerThan(..., 5.0)`.
 const THROW_GIFT_DISTANCE_SQR: f64 = 25.0;
@@ -188,7 +189,7 @@ fn time_until_next_gift() -> i32 {
 /// `entity_loot_ref`/`living_loot_equipment` are `pub(crate)`, so the thrower
 /// reference is built inline from the public `Entity`/`LivingEntity` accessors.
 fn roll_gift(ctx: &BehaviorContext<'_>, villager: &VillagerEntity) -> Vec<ItemStack> {
-    let equipment: [ItemStack; EquipmentSlot::ALL.len()] = std::array::from_fn(|index| {
+    let equipment: [ItemStack; EquipmentSlot::ALL.len()] = array::from_fn(|index| {
         let mut stack = ItemStack::empty();
         ctx.body.as_living_entity().map(|living| {
             living.with_equipment_slot(EquipmentSlot::ALL[index], &mut |slot| {
@@ -198,7 +199,7 @@ fn roll_gift(ctx: &BehaviorContext<'_>, villager: &VillagerEntity) -> Vec<ItemSt
         stack
     });
 
-    let body: &dyn crate::entity::Entity = ctx.body.as_ref();
+    let body: &dyn Entity = ctx.body.as_ref();
     let entity_ref = EntityRef {
         entity_type: Some(&body.entity_type().key),
         flags: EntityRefFlags {
@@ -206,11 +207,9 @@ fn roll_gift(ctx: &BehaviorContext<'_>, villager: &VillagerEntity) -> Vec<ItemSt
             is_sneaking: body.is_crouching(),
             is_sprinting: body
                 .as_living_entity()
-                .is_some_and(crate::entity::LivingEntity::is_sprinting),
+                .is_some_and(LivingEntity::is_sprinting),
             is_swimming: body.is_swimming(),
-            is_baby: body
-                .as_living_entity()
-                .is_some_and(crate::entity::LivingEntity::is_baby),
+            is_baby: body.as_living_entity().is_some_and(LivingEntity::is_baby),
         },
         equipment: Some(EntityEquipmentRef::new(&equipment)),
         custom_name: None,
@@ -224,9 +223,8 @@ fn roll_gift(ctx: &BehaviorContext<'_>, villager: &VillagerEntity) -> Vec<ItemSt
     // has no per-level RNG visible from a behavior (`LegacyRandom` reseeds on
     // every `EntityBase` from the wall clock), so this seeds a throwaway from
     // the OS just like the seedable-path fallback in the loot pipeline.
-    let mut rng = rand::rngs::StdRng::try_from_rng(&mut rand::rngs::SysRng).unwrap_or_else(|_| {
-        rand::rngs::StdRng::seed_from_u64(crate::entity::next_entity_id() as u64)
-    });
+    let mut rng = rand::rngs::StdRng::try_from_rng(&mut rand::rngs::SysRng)
+        .unwrap_or_else(|_| rand::rngs::StdRng::seed_from_u64(next_entity_id() as u64));
     let mut context = LootContext::new(&mut rng)
         .with_origin(position.x, position.y, position.z)
         .with_this_entity(entity_ref);

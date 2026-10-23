@@ -50,6 +50,9 @@ use crate::{
 /// `EnvironmentAttributes.RESPAWN_ANCHOR_WORKS` per position; Steel lacks an environment-attribute
 /// system and reads the dimension type's `respawn_anchor_works` flag instead (owner:
 /// `steel-core/src/world` environment attributes).
+///
+/// Vanilla `RespawnAnchorBlock` does not override `isSignalSource`, `getSignal`, `getDirectSignal`
+/// or `getOwnSignal`, so the `BlockBehavior` defaults (`false`/`0`) are used, as in vanilla.
 #[block_behavior]
 pub struct RespawnAnchorBlock {
     block: BlockRef,

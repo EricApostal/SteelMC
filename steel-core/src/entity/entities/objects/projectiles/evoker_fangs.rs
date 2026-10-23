@@ -11,6 +11,7 @@
 //! `handleEntityEvent`/client `tick`. Steel has no client, so only the server half runs and
 //! the attack sound is left to the client-side event handler.
 
+use std::mem;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -214,7 +215,7 @@ impl EvokerFangsEntity {
 
         let already_sent = {
             let mut sent = self.sent_spike_event.lock();
-            std::mem::replace(&mut *sent, true)
+            mem::replace(&mut *sent, true)
         };
         if !already_sent {
             // Vanilla `level().broadcastEntityEvent(this, (byte) 4)`; Steel's shared

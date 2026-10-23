@@ -7,12 +7,12 @@ use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 
 use super::random_pos;
 use crate::behavior::BlockStateBehaviorExt as _;
-use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
 use crate::entity::ai::brain::memory::MemoryStatus;
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::ai::brain::tracker::{BlockPosTracker, WalkTarget};
 use crate::entity::ai::path::PathComputationType;
+use crate::entity::{PathfinderMob, SharedEntity};
 
 /// Vanilla `RandomStroll.MAX_XZ_DIST`.
 const MAX_XZ_DIST: i32 = 10;
@@ -131,7 +131,7 @@ impl RandomStroll {
                     MAX_XZ_DIST,
                     MAX_Y_DIST,
                     body_pos + DVec3::new(view.x, 0.0, view.z) * 10.0,
-                    std::f64::consts::FRAC_PI_2,
+                    f64::consts::FRAC_PI_2,
                 )
                 // Vanilla `AirAndWaterRandomPos.getPos(..., -2, x, z, PI/2)`:
                 // `-2` is an extra downward offset for the landing-height search
@@ -186,7 +186,7 @@ impl RandomStroll {
 /// Vanilla `BehaviorUtils.getRandomSwimmablePos`: retry a random position until
 /// its block state is water-pathfindable, at most `RANDOM_SWIMMABLE_POS_RETRIES`.
 fn random_swimmable_pos(
-    mob: &dyn crate::entity::PathfinderMob,
+    mob: &dyn PathfinderMob,
     horizontal_dist: i32,
     vertical_dist: i32,
 ) -> Option<DVec3> {

@@ -62,7 +62,7 @@ fn rand_position(
                 let base = delta.z.atan2(delta.x);
                 base + rand::random_range(-max_radians..max_radians)
             }
-            None => rand::random_range(0.0..std::f64::consts::TAU),
+            None => rand::random_range(0.0..f64::consts::TAU),
         };
         let radius = rand::random::<f64>() * f64::from(horizontal_dist);
         let dy = rand::random_range(-vertical_dist..=vertical_dist);

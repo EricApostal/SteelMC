@@ -328,6 +328,10 @@ pub(crate) fn json_to_nbt_tag(value: &serde_json::Value) -> Result<NbtTag, Strin
 
 /// Mirrors `JsonOps`' numeric narrowing: whole numbers become the narrowest of
 /// byte/short/int/long, fractional numbers the narrowest of float/double.
+#[expect(
+    clippy::float_cmp,
+    reason = "vanilla's `JsonOps` picks Float only when the f64 round-trips exactly through f32"
+)]
 fn json_number_to_nbt_tag(number: &serde_json::Number) -> NbtTag {
     if let Some(value) = number.as_i64() {
         return narrow_integer(value);

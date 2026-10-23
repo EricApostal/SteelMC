@@ -42,6 +42,7 @@ use crate::entity::ai::behavior::set_walk_target_from_look_target::SetWalkTarget
 use crate::entity::ai::behavior::swim::Swim;
 use crate::entity::ai::brain::SensorType;
 use crate::entity::ai::brain::activity::Activity;
+use crate::entity::ai::brain::behavior::BehaviorControl;
 use crate::entity::ai::brain::behavior::builder::BehaviorBuilder;
 use crate::entity::ai::brain::behavior::gate::RunOne;
 use crate::entity::ai::brain::memory::MemoryStatus;
@@ -316,7 +317,7 @@ pub(crate) fn update_activity(brain: &mut Brain, _body: &SharedEntity) {
 
 /// Vanilla `SetEntityLookTargetSometimes.create(EntityTypes.PLAYER, 6.0F,
 /// UniformInt.of(30, 60))`.
-fn look_at_players() -> Box<dyn crate::entity::ai::brain::behavior::BehaviorControl> {
+fn look_at_players() -> Box<dyn BehaviorControl> {
     BehaviorBuilder::boxed(SetEntityLookTargetSometimes::for_type(
         &vanilla_entities::PLAYER,
         LOOK_DISTANCE,

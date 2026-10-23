@@ -8,6 +8,7 @@
 //! run only outside the brain tick (item pickup, interaction, hurt handling) lock
 //! the brain themselves and are documented as such.
 
+use std::array;
 use std::sync::Arc;
 
 use glam::DVec3;
@@ -27,6 +28,7 @@ use steel_utils::value_providers::UniformIntProvider;
 use steel_utils::{ChunkPos, Downcast as _};
 
 use crate::behavior::InteractionResult;
+use crate::entity::ai::behavior::random_pos::land_random_pos;
 use crate::entity::ai::brain::Brain;
 use crate::entity::ai::brain::activity::Activity;
 use crate::entity::ai::brain::behavior::BehaviorContext;
@@ -410,16 +412,14 @@ fn throw_item(thrower: &dyn Entity, item: ItemStack, target_pos: DVec3) {
 /// Vanilla `PiglinAi.getRandomNearbyPos` (`LandRandomPos.getPos(body, 4, 2)`).
 fn get_random_nearby_pos(_world: &World, body: &dyn Entity) -> DVec3 {
     body.as_pathfinder_mob()
-        .and_then(|pathfinder| {
-            crate::entity::ai::behavior::random_pos::land_random_pos(pathfinder, 4, 2)
-        })
+        .and_then(|pathfinder| land_random_pos(pathfinder, 4, 2))
         .unwrap_or_else(|| body.position())
 }
 
 /// Vanilla `PiglinAi.getBarterResponseItems`: rolls the `piglin_bartering` loot table
 /// with this entity as `this_entity`.
 pub(crate) fn get_barter_response_items(body: &dyn Entity) -> Vec<ItemStack> {
-    let equipment: [ItemStack; EquipmentSlot::ALL.len()] = std::array::from_fn(|index| {
+    let equipment: [ItemStack; EquipmentSlot::ALL.len()] = array::from_fn(|index| {
         let mut stack = ItemStack::empty();
         if let Some(living) = body.as_living_entity() {
             living.with_equipment_slot(EquipmentSlot::ALL[index], &mut |slot| {

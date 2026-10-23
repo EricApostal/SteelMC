@@ -6,11 +6,11 @@ use std::sync::Arc;
 use steel_utils::value_providers::UniformIntProvider;
 
 use super::utils;
-use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::ai::brain::memory::{MemoryModuleType, MemoryModuleTypeRef};
 use crate::entity::ai::brain::tracker::{EntityTracker, WalkTarget};
+use crate::entity::{LivingEntity, SharedEntity};
 
 /// Vanilla `Function<LivingEntity, Float>` speed source.
 #[derive(Clone, Copy)]
@@ -93,10 +93,7 @@ impl BabyFollowAdult {
 impl Trigger for BabyFollowAdult {
     fn trigger(&mut self, ctx: &mut BehaviorContext<'_>) -> bool {
         let body = ctx.body;
-        if !body
-            .as_living_entity()
-            .is_some_and(crate::entity::LivingEntity::is_baby)
-        {
+        if !body.as_living_entity().is_some_and(LivingEntity::is_baby) {
             return false;
         }
 

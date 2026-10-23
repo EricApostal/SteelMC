@@ -354,7 +354,7 @@ impl CamelEntity {
     /// The camel is always tamed and vanilla does not gate on riding, so this
     /// opens unconditionally (`getInventoryColumns` stays the `AbstractHorse`
     /// default of 0: saddle only, no chest storage).
-    fn open_custom_inventory_screen(&self, player: &Player) {
+    pub fn open_custom_inventory_screen(&self, player: &Player) {
         open_mount_inventory(self, &self.parts, player, 0);
     }
 

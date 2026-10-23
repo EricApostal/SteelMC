@@ -709,7 +709,7 @@ pub struct MultifaceGrowthConfiguration {
     pub can_place_on_ceiling: bool,
     pub can_place_on_wall: bool,
     pub chance_of_spreading: f32,
-    pub can_be_placed_on: Vec<BlockRef>,
+    pub can_be_placed_on: BlockHolderSet,
 }
 
 #[derive(Debug, Clone)]
@@ -1145,7 +1145,7 @@ pub struct UnderwaterMagmaConfiguration {
 
 #[derive(Debug, Clone)]
 pub struct VegetationPatchConfiguration {
-    pub replaceable: Identifier,
+    pub replaceable: BlockHolderSet,
     pub ground_state: BlockStateProviderKind,
     pub vegetation_feature: PlacedFeatureRef,
     pub surface: VerticalSurface,

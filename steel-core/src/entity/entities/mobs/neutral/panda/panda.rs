@@ -21,9 +21,9 @@ use crate::entity::ai::goal::{
 };
 use crate::entity::damage::DamageSource;
 use crate::entity::{
-    AgeableMob, AgeableMobBase, Animal, AnimalBase, Entity, EntityBase, EntityBaseLoad, EntityPose,
-    EntitySpawnReason, EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase,
-    PathfinderMob, SharedEntity, SpawnGroupData,
+    AgeableMob, AgeableMobBase, AgeableMobGroupData, Animal, AnimalBase, Entity, EntityBase,
+    EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData, LivingEntity,
+    LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity, SpawnGroupData,
 };
 use crate::physics::MoveResult;
 use crate::world::World;
@@ -469,7 +469,7 @@ impl Mob for PandaEntity {
         self.apply_gene_attributes();
         let group_data = group_data.or_else(|| {
             Some(SpawnGroupData::AgeableMob(
-                crate::entity::AgeableMobGroupData::with_baby_spawn_chance(PANDA_BABY_CHANCE),
+                AgeableMobGroupData::with_baby_spawn_chance(PANDA_BABY_CHANCE),
             ))
         });
         self.finalize_spawn_ageable_mob(world, spawn_reason, group_data)

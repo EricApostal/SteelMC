@@ -583,6 +583,7 @@ mod tests {
     use steel_utils::BlockPos;
 
     use super::*;
+    use crate::entity::damage::DamageSource;
     use crate::entity::entities::PigEntity;
     use crate::test_support::fresh_test_world;
 
@@ -716,9 +717,7 @@ mod tests {
         brain.set_active_activity_if_possible(Activity::Panic);
         assert_eq!(brain.get_active_non_core_activity(), Some(Activity::Idle));
 
-        let source = crate::entity::damage::DamageSource::environment(
-            &steel_registry::vanilla_damage_types::GENERIC,
-        );
+        let source = DamageSource::environment(&steel_registry::vanilla_damage_types::GENERIC);
         brain.set_memory(&module_type::HURT_BY, Some(source));
         brain.set_active_activity_if_possible(Activity::Panic);
         assert_eq!(brain.get_active_non_core_activity(), Some(Activity::Panic));

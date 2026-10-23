@@ -7,6 +7,7 @@
 //! tick expiry and clear erased slots.
 
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use glam::DVec3;
 use rustc_hash::FxHashMap;
@@ -14,6 +15,7 @@ use steel_utils::{BlockPos, GlobalPos, Identifier};
 use uuid::Uuid;
 
 use crate::entity::SharedEntity;
+use crate::entity::ai::behavior::spear_attack::SpearStatus;
 use crate::entity::ai::path::Path;
 use crate::entity::damage::DamageSource;
 
@@ -81,13 +83,13 @@ pub enum MemoryValue {
     Vec3(DVec3),
     Uuid(Uuid),
     UuidList(Vec<Uuid>),
-    SpearStatus(crate::entity::ai::behavior::spear_attack::SpearStatus),
+    SpearStatus(SpearStatus),
     Entity(SharedEntity),
     EntityList(Vec<SharedEntity>),
     DamageSource(DamageSource),
     Path(Path),
     WalkTarget(WalkTarget),
-    PositionTracker(std::sync::Arc<dyn super::tracker::PositionTracker>),
+    PositionTracker(Arc<dyn super::tracker::PositionTracker>),
     NearestVisibleLivingEntities(NearestVisibleLivingEntities),
 }
 
@@ -192,7 +194,7 @@ impl MemoryValueType for Vec<Uuid> {
     }
 }
 
-impl MemoryValueType for crate::entity::ai::behavior::spear_attack::SpearStatus {
+impl MemoryValueType for SpearStatus {
     fn into_memory_value(self) -> MemoryValue {
         MemoryValue::SpearStatus(self)
     }
@@ -218,7 +220,7 @@ impl MemoryValueType for DamageSource {
     }
 }
 
-impl MemoryValueType for std::sync::Arc<dyn super::tracker::PositionTracker> {
+impl MemoryValueType for Arc<dyn super::tracker::PositionTracker> {
     fn into_memory_value(self) -> MemoryValue {
         MemoryValue::PositionTracker(self)
     }

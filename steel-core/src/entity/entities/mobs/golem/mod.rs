@@ -3,7 +3,7 @@
 //! Parent `AbstractGolem` returns no ambient/hurt/death sound of its own and never despawns; the
 //! iron golem adds crackiness, the poppy offer, the player-created flag and persistent anger.
 
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 
 use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
@@ -492,7 +492,7 @@ impl Mob for IronGolemEntity {
 
     fn finalize_spawn(
         &self,
-        world: &std::sync::Arc<World>,
+        world: &Arc<World>,
         spawn_reason: EntitySpawnReason,
         group_data: Option<SpawnGroupData>,
     ) -> Option<SpawnGroupData> {
@@ -505,7 +505,7 @@ impl Mob for IronGolemEntity {
         self.finalize_spawn_mob_base(world, spawn_reason, group_data)
     }
 
-    fn check_spawn_obstruction(&self, world: &std::sync::Arc<World>) -> bool {
+    fn check_spawn_obstruction(&self, world: &Arc<World>) -> bool {
         // Vanilla `IronGolem.checkSpawnObstruction`: the block below must be standable and the
         // golem's own column plus two blocks above it must be unobstructed. Steel has no
         // `NaturalSpawner.isValidEmptySpawnBlock`, so the column test uses the solid predicate.

@@ -23,6 +23,7 @@ use steel_registry::vanilla_entities;
 use steel_utils::Downcast as _;
 use steel_utils::value_providers::{IntProvider, UniformIntProvider};
 
+use crate::entity::AgeableMob;
 use crate::entity::SharedEntity;
 use crate::entity::ai::behavior::animal_make_love::AnimalMakeLove;
 use crate::entity::ai::behavior::animal_panic::AnimalPanic;
@@ -226,10 +227,7 @@ fn follow_temptation() -> FollowTemptation {
     FollowTemptation::create_full(
         |_body: &SharedEntity| SPEED_MULTIPLIER_WHEN_TEMPTED,
         |body: &SharedEntity| {
-            if body
-                .as_ageable_mob()
-                .is_some_and(crate::entity::AgeableMob::is_baby)
-            {
+            if body.as_ageable_mob().is_some_and(AgeableMob::is_baby) {
                 2.5
             } else {
                 3.5

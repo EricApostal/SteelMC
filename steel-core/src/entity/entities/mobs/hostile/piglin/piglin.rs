@@ -28,9 +28,12 @@ use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identif
 use crate::behavior::InteractionResult;
 use crate::entity::ai::behavior::piglin::ai;
 use crate::entity::ai::brain::Brain;
+use crate::entity::ai::brain::memory::module_type;
+use crate::entity::ai::path::PathType;
 use crate::entity::attribute::{AttributeModifier, AttributeModifierOperation};
 use crate::entity::conversion::ConversionParams;
 use crate::entity::damage::DamageSource;
+use crate::entity::entities::{HoglinEntity, ItemEntity};
 use crate::entity::npc::inventory_carrier::InventoryCarrier;
 use crate::entity::{
     Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
@@ -154,8 +157,8 @@ impl PiglinEntity {
         mob_base.navigation().lock().set_can_open_doors(true);
         {
             let mut malus = mob_base.pathfinding_malus().lock();
-            malus.set(crate::entity::ai::path::PathType::FireInNeighbor, 16.0);
-            malus.set(crate::entity::ai::path::PathType::Fire, -1.0);
+            malus.set(PathType::FireInNeighbor, 16.0);
+            malus.set(PathType::Fire, -1.0);
         }
 
         let mut entity_data = PiglinEntityData::new();
@@ -653,9 +656,7 @@ impl Mob for PiglinEntity {
             brain::tick_piglin(&mut brain, &world, entity);
             let update = brain::update_piglin_activity(&mut brain);
             *self.pickup_blocked.lock() = ai::is_admiring_disabled(brain.memories())
-                && brain.has_memory_value(
-                    &crate::entity::ai::brain::memory::module_type::ATTACK_TARGET,
-                );
+                && brain.has_memory_value(&module_type::ATTACK_TARGET);
             update
         };
 
@@ -725,7 +726,7 @@ impl Mob for PiglinEntity {
     }
 
     /// Vanilla `Piglin.pickUpItem`.
-    fn pick_up_item(&self, world: &Arc<World>, item_entity: &crate::entity::entities::ItemEntity) {
+    fn pick_up_item(&self, world: &Arc<World>, item_entity: &ItemEntity) {
         ai::pick_up_item(world, self.as_entity_event_source(), item_entity);
     }
 
@@ -849,9 +850,7 @@ impl PiglinEntity {
             .as_living_entity()
             .is_some_and(LivingEntity::is_baby);
         let rideable = vehicle.downcast_ref::<PiglinEntity>().is_some()
-            || vehicle
-                .downcast_ref::<crate::entity::entities::HoglinEntity>()
-                .is_some();
+            || vehicle.downcast_ref::<HoglinEntity>().is_some();
         rideable && is_baby_vehicle
     }
 }

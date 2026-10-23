@@ -465,11 +465,9 @@ mod tests {
 
         // Vanilla `LoomMenu` leaves `canTakeItemForPickAll` at its permissive
         // default; only the result slot's own `mayPickup` gates collection.
-        assert!(
-            menu.can_take_item_for_pick_all(
-                &ItemStack::new(&vanilla_items::WHITE_BANNER),
-                RESULT_SLOT
-            )
-        );
+        assert!(menu.can_take_item_for_pick_all(
+            &ItemStack::new(&vanilla_items::WHITE_BANNER),
+            RESULT_SLOT
+        ));
     }
 }

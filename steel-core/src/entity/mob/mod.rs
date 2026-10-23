@@ -53,6 +53,7 @@ use crate::entity::attribute::{AttributeModifier, AttributeModifierOperation};
 use crate::entity::conversion::{AfterConversion, convert_to as convert_mob};
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::objects::items::ItemEntity;
+use crate::entity::loot::drop_mob_equipment;
 use crate::entity::npc::gossip::ReputationEventHandler;
 use crate::entity::{
     ConversionParams, Entity, EntitySpawnReason, LivingEntity, LivingTravelInput, RemovalReason,
@@ -1062,57 +1063,8 @@ pub trait Mob: LivingEntity + Leashable {
         }
     }
 
-    fn drop_custom_death_loot_mob(&self, _source: &DamageSource, killed_by_player: bool) {
-        if self.level().is_none() {
-            return;
-        }
-
-        for slot in EquipmentSlot::ALL {
-            let drop_chance = self.equipment_drop_chance(slot);
-            let preserve = self.is_equipment_drop_preserved(slot);
-            if !can_attempt_equipment_drop(drop_chance, preserve, killed_by_player) {
-                continue;
-            }
-
-            let can_drop_item = {
-                let equipment = self.living_base().equipment().lock();
-                let item_stack = equipment.get_ref(slot);
-                !item_stack.is_empty()
-                    && !item_stack
-                        .has_enchantment_effect(EnchantmentEffectComponent::PreventEquipmentDrop)
-            };
-            if !can_drop_item {
-                continue;
-            }
-
-            // TODO: Apply EquipmentDrops enchantment value effects once damage
-            // sources can resolve their living attacker context.
-            let random_roll = rand::random::<f32>();
-            if random_roll >= drop_chance {
-                continue;
-            }
-
-            let mut item_stack = {
-                let mut equipment = self.living_base().equipment().lock();
-                let item_stack = equipment.get_ref(slot);
-                if item_stack.is_empty()
-                    || item_stack
-                        .has_enchantment_effect(EnchantmentEffectComponent::PreventEquipmentDrop)
-                {
-                    continue;
-                }
-
-                equipment.take(slot)
-            };
-            if !preserve && item_stack.is_damageable_item() {
-                let max_damage = item_stack.get_max_damage();
-                let inner = rand::random_range(0..(max_damage - 3).max(1));
-                let damage = max_damage - rand::random_range(0..=inner);
-                item_stack.set_damage_value(damage);
-            }
-
-            self.spawn_at_location(item_stack, 0.0);
-        }
+    fn drop_custom_death_loot_mob(&self, source: &DamageSource, killed_by_player: bool) {
+        drop_mob_equipment(self, source, killed_by_player);
     }
 
     fn save_mob(&self, nbt: &mut NbtCompound) {

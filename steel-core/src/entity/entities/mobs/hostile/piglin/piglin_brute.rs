@@ -21,6 +21,8 @@ use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
 use crate::entity::ai::behavior::piglin::ai;
 use crate::entity::ai::brain::Brain;
+use crate::entity::ai::brain::activity::Activity;
+use crate::entity::ai::path::PathType;
 use crate::entity::conversion::ConversionParams;
 use crate::entity::damage::DamageSource;
 use crate::entity::{
@@ -87,8 +89,8 @@ impl PiglinBruteEntity {
         mob_base.navigation().lock().set_can_open_doors(true);
         {
             let mut malus = mob_base.pathfinding_malus().lock();
-            malus.set(crate::entity::ai::path::PathType::FireInNeighbor, 16.0);
-            malus.set(crate::entity::ai::path::PathType::Fire, -1.0);
+            malus.set(PathType::FireInNeighbor, 16.0);
+            malus.set(PathType::Fire, -1.0);
         }
 
         let mut entity_data = PiglinBruteEntityData::new();
@@ -356,9 +358,7 @@ impl Mob for PiglinBruteEntity {
                 .brain
                 .lock()
                 .get_active_non_core_activity()
-                .is_some_and(|activity| {
-                    activity == crate::entity::ai::brain::activity::Activity::Fight
-                })
+                .is_some_and(|activity| activity == Activity::Fight)
         {
             self.play_angry_sound();
         }

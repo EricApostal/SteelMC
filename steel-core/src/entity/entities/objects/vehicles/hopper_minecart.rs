@@ -29,9 +29,11 @@ use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::objects::items::ItemEntity;
-use crate::entity::{Entity, EntityBase, EntityBaseLoad, EntitySyncedData};
-use crate::inventory::container::{Container, SimpleContainer};
-use crate::inventory::lock::ContainerRef;
+use crate::entity::{Entity, EntityBase, EntityBaseLoad, EntitySyncedData, RemovalReason};
+use crate::inventory::container::{
+    Container, SimpleContainer, calculate_redstone_signal_from_container,
+};
+use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
 use crate::world::{LevelReader as _, World};
 
 use super::minecart_base::{self, Minecart, MinecartState};
@@ -141,7 +143,7 @@ impl HopperMinecartEntity {
             }
 
             if remaining == 0 {
-                item_entity.set_removed(crate::entity::RemovalReason::Discarded);
+                item_entity.set_removed(RemovalReason::Discarded);
             } else {
                 item_entity.set_item(stack.copy_with_count(remaining));
             }
@@ -169,7 +171,7 @@ impl HopperMinecartEntity {
                 continue;
             }
 
-            let mut guard = crate::inventory::lock::ContainerLockGuard::lock_all(&[&target]);
+            let mut guard = ContainerLockGuard::lock_all(&[&target]);
             if let Some(target_container) = guard.get_mut(target.container_id())
                 && target_container.add(&mut stack)
             {
@@ -277,10 +279,7 @@ impl Minecart for HopperMinecartEntity {
     fn apply_natural_slowdown(&self, movement: DVec3) -> DVec3 {
         // Vanilla `AbstractMinecartContainer.applyNaturalSlowdown`.
         let mut keep = 0.98_f64;
-        let emptiness = 15
-            - crate::inventory::container::calculate_redstone_signal_from_container(
-                &*self.inventory.lock(),
-            );
+        let emptiness = 15 - calculate_redstone_signal_from_container(&*self.inventory.lock());
         keep += f64::from(emptiness) * 0.001;
         if self.is_in_water() {
             keep *= 0.95;

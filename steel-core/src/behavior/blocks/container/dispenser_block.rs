@@ -9,6 +9,7 @@ use std::sync::{Arc, Weak};
 
 use glam::DVec3;
 use steel_macros::block_behavior;
+use steel_math::convert_to_rotation_segment;
 use steel_registry::RegistryReference;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
@@ -33,6 +34,7 @@ use steel_utils::{BlockPos, BlockStateId, WorldAabb, translations};
 use text_components::TextComponent;
 
 use crate::behavior::block::{BlockBehavior, BlockEntityCreation};
+use crate::behavior::blocks::decoration::skull::WitherSkullBlock;
 use crate::behavior::blocks::portal::FireBlock;
 use crate::behavior::blocks::special::TntBlock;
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
@@ -229,6 +231,8 @@ enum DispenseMethod {
     Tnt,
     /// Vanilla carved-pumpkin entry.
     CarvedPumpkin,
+    /// Vanilla wither-skeleton-skull entry.
+    WitherSkull,
     /// Vanilla `ShulkerBoxDispenseBehavior`.
     ShulkerBox,
     /// Vanilla empty-bucket entry.
@@ -264,7 +268,6 @@ macro_rules! is_any_of {
 /// * minecarts — only the chest minecart entity exists,
 /// * filled buckets — no position-based `DispensibleContainerItem.emptyContents`,
 /// * chest — no chested-horse chest slot,
-/// * wither skeleton skull — no `WitherSkullBlock.canSpawnMob`/`checkSpawn`,
 /// * shears — no `Shearable` entity capability or beehive shearing,
 /// * glowstone — `RespawnAnchorBlock::charge` is private to its module.
 fn dispense_method(stack: &ItemStack) -> DispenseMethod {
@@ -303,6 +306,9 @@ fn dispense_method(stack: &ItemStack) -> DispenseMethod {
     }
     if std::ptr::eq(item, &*vanilla_items::CARVED_PUMPKIN) {
         return DispenseMethod::CarvedPumpkin;
+    }
+    if std::ptr::eq(item, &*vanilla_items::WITHER_SKELETON_SKULL) {
+        return DispenseMethod::WitherSkull;
     }
     if is_shulker_box(item) {
         return DispenseMethod::ShulkerBox;
@@ -375,6 +381,7 @@ fn dispense(source: &DispenseSource<'_>, stack: ItemStack) -> ItemStack {
         DispenseMethod::BoneMeal => dispense_bone_meal(source, stack),
         DispenseMethod::Tnt => dispense_tnt(source, stack),
         DispenseMethod::CarvedPumpkin => dispense_carved_pumpkin(source, stack),
+        DispenseMethod::WitherSkull => dispense_wither_skull(source, stack),
         DispenseMethod::ShulkerBox => dispense_shulker_box(source, stack),
         DispenseMethod::EmptyBucket => dispense_empty_bucket(source, stack),
         DispenseMethod::GlassBottle => dispense_glass_bottle(source, stack),
@@ -697,6 +704,39 @@ fn dispense_carved_pumpkin(
             target,
             &GameEventContext::new(None, None),
         );
+        stack.shrink(1);
+        (stack, DispenseFeedback::Optional(true))
+    } else {
+        let equipped = dispense_equipment(source, stack);
+        (equipped, DispenseFeedback::Optional(false))
+    }
+}
+
+/// Vanilla wither-skeleton-skull entry: places the skull when the target can
+/// complete a wither build pattern, then runs the pattern check.
+fn dispense_wither_skull(
+    source: &DispenseSource<'_>,
+    mut stack: ItemStack,
+) -> (ItemStack, DispenseFeedback) {
+    let direction = source.facing();
+    let target = source.target();
+    if source.world.get_block_state(target).is_air()
+        && WitherSkullBlock::can_spawn_mob(source.world, target, &stack)
+    {
+        let rotation = convert_to_rotation_segment(direction.to_yaw());
+        source.world.set_block(
+            target,
+            vanilla_blocks::WITHER_SKELETON_SKULL
+                .default_state()
+                .set_value(&BlockStateProperties::ROTATION_16, rotation),
+            UpdateFlags::UPDATE_ALL,
+        );
+        source.world.game_event(
+            &vanilla_game_events::BLOCK_PLACE,
+            target,
+            &GameEventContext::new(None, None),
+        );
+        WitherSkullBlock::check_spawn(source.world, target);
         stack.shrink(1);
         (stack, DispenseFeedback::Optional(true))
     } else {

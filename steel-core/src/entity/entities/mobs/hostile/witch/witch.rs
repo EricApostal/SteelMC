@@ -11,6 +11,7 @@
 //! the main hand and the effect application, so this file starts that pipeline with the
 //! vanilla-selected potion and clears the hand when the pipeline finishes.
 
+use std::iter::empty;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -30,6 +31,7 @@ use steel_utils::locks::SyncMutex;
 use steel_utils::types::InteractionHand;
 use steel_utils::{DowncastType, DowncastTypeKey, Identifier};
 
+use crate::enchantment_helper::get_damage_protection;
 use crate::entity::ai::goal::{
     FloatGoal, HurtByTargetGoal, LookAtPlayerGoal, NearestAttackableWitchTargetGoal,
     NearestHealableRaiderTargetGoal, PathfindToRaidGoal, RaiderCelebrationGoal,
@@ -37,14 +39,16 @@ use crate::entity::ai::goal::{
     RangedAttackGoal, RangedAttackMob, WaterAvoidingRandomStrollGoal, WitchTargetState,
 };
 use crate::entity::attribute::{AttributeModifier, AttributeModifierOperation};
+use crate::entity::combat_rules::get_damage_after_magic_absorb;
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::mobs::illager::abstract_illager::RaiderKeys;
 use crate::entity::entities::objects::projectiles::ThrownSplashPotionEntity;
+use crate::entity::projectile::spawn_projectile;
 use crate::entity::raid::RaidSnapshot;
 use crate::entity::raid::raider::{Raider, RaiderBase};
 use crate::entity::{
     Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySyncedData, LivingEntity,
-    LivingEntityBase, Mob, MobBase, PathfinderMob, Projectile as _, SharedEntity,
+    LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, Projectile as _, SharedEntity,
 };
 use crate::physics::MoveResult;
 use crate::world::World;
@@ -143,7 +147,7 @@ impl WitchEntity {
                 1,
                 HurtByTargetGoal::new()
                     .with_ignored_damage_types(RaiderKeys::ALL)
-                    .set_alert_others(std::iter::empty()),
+                    .set_alert_others(empty()),
             );
             targets.add_goal(
                 2,
@@ -433,10 +437,9 @@ fn base_damage_after_magic_absorb(
         return damage;
     }
 
-    let enchantment_armor = crate::enchantment_helper::get_damage_protection(entity, source);
+    let enchantment_armor = get_damage_protection(entity, source);
     if enchantment_armor > 0.0 {
-        damage =
-            crate::entity::combat_rules::get_damage_after_magic_absorb(damage, enchantment_armor);
+        damage = get_damage_after_magic_absorb(damage, enchantment_armor);
     }
     damage
 }
@@ -513,7 +516,7 @@ impl LivingEntity for WitchEntity {
             }
         }
         Raider::raider_ai_step(self, entity);
-        crate::entity::Monster::monster_ai_step(self, entity)
+        Monster::monster_ai_step(self, entity)
     }
 
     fn on_death(&self, source: &DamageSource) {
@@ -560,7 +563,7 @@ impl Mob for WitchEntity {
     }
 }
 
-impl crate::entity::Monster for WitchEntity {}
+impl Monster for WitchEntity {}
 
 impl PathfinderMob for WitchEntity {}
 
@@ -594,14 +597,13 @@ impl RangedAttackMob for WitchEntity {
         } else {
             FAR_THROW_VELOCITY
         };
-        let spawned =
-            crate::entity::projectile::spawn_projectile(&world, entity, &mut stack, |projectile| {
-                projectile.shoot(
-                    DVec3::new(xd, yd + dist * 0.2, zd),
-                    velocity,
-                    RANGED_ATTACK_UNCERTAINTY,
-                );
-            });
+        let spawned = spawn_projectile(&world, entity, &mut stack, |projectile| {
+            projectile.shoot(
+                DVec3::new(xd, yd + dist * 0.2, zd),
+                velocity,
+                RANGED_ATTACK_UNCERTAINTY,
+            );
+        });
 
         self.play_sound(
             &sound_events::ENTITY_WITCH_THROW,

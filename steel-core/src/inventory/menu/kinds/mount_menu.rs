@@ -37,7 +37,7 @@ use steel_utils::{DowncastType, DowncastTypeKey};
 use crate::entity::{Entity, LivingEntity as _, Mob as _, SharedEntity, WeakEntity};
 use crate::inventory::prelude::*;
 use crate::inventory::slots::SlotStorage;
-use crate::player::player_inventory::{PlayerInventory, Prediction};
+use crate::player::player_inventory::PlayerInventory;
 
 /// Vanilla `AbstractMountInventoryMenu.SLOT_SADDLE`.
 pub const SLOT_SADDLE: usize = 0;
@@ -264,22 +264,16 @@ impl MountInventoryMenuKind {
         }
 
         living.with_equipment_slot_mut(slot, &mut |current| *current = item.clone());
-        if let Some(sound) = living.equip_sound(slot, &item) {
+        // Vanilla `LivingEntity.onEquipItem` plays a sound only when the new
+        // stack has an `equippable` component for this slot, so removing an
+        // item stays silent.
+        if item.is_equippable_in_slot(slot)
+            && let Some(sound) = living.equip_sound(slot, &item)
+        {
             mount.play_sound(sound, 1.0, 1.0);
         }
         if let Some(mob) = mount.as_mob() {
             mob.set_guaranteed_drop(slot);
-        }
-    }
-
-    /// Hands mirror contents back to the player when the mount is gone, so a
-    /// menu open across the mount's death cannot swallow items.
-    fn return_mirrors_to(&self, player: &Player) {
-        for mirror in [&self.saddle, &self.armor] {
-            let item = mirror.lock().get_item(0).clone();
-            if !item.is_empty() {
-                player.add_item_or_drop(item, Prediction::ServerOnly);
-            }
         }
     }
 }
@@ -294,15 +288,16 @@ impl MenuKind for MountInventoryMenuKind {
         }
     }
 
-    fn removed(&mut self, _behavior: &mut MenuBehavior, player: &Player) {
+    /// Vanilla `AbstractMountInventoryMenu.removed` only runs `stopOpen`; the
+    /// equipment slots are live views of the entity, so nothing is returned to
+    /// the player. Steel publishes its mirrors first so the entity ends up with
+    /// exactly what the menu shows.
+    fn removed(&mut self, _behavior: &mut MenuBehavior, _player: &Player) {
         let Some(mount) = self.mount.upgrade() else {
-            self.return_mirrors_to(player);
             return;
         };
         if mount.is_alive() {
             self.publish_equipment(&mount);
-        } else {
-            self.return_mirrors_to(player);
         }
     }
 

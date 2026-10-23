@@ -761,21 +761,21 @@ impl EnderDragonEntity {
             let node_x;
             let node_z;
             if index < 12 {
-                let angle = 2.0_f32
-                    * (-std::f32::consts::PI + (std::f32::consts::PI / 12.0) * multiplier as f32);
+                let angle =
+                    2.0_f32 * (-f32::consts::PI + (f32::consts::PI / 12.0) * multiplier as f32);
                 node_x = (60.0_f32 * angle.cos()).floor() as i32;
                 node_z = (60.0_f32 * angle.sin()).floor() as i32;
             } else if index < 20 {
                 multiplier -= 12;
-                let angle = 2.0_f32
-                    * (-std::f32::consts::PI + (std::f32::consts::PI / 8.0) * multiplier as f32);
+                let angle =
+                    2.0_f32 * (-f32::consts::PI + (f32::consts::PI / 8.0) * multiplier as f32);
                 node_x = (40.0_f32 * angle.cos()).floor() as i32;
                 node_z = (40.0_f32 * angle.sin()).floor() as i32;
                 y_adjustment += 10;
             } else {
                 multiplier -= 20;
-                let angle = 2.0_f32
-                    * (-std::f32::consts::PI + (std::f32::consts::PI / 4.0) * multiplier as f32);
+                let angle =
+                    2.0_f32 * (-f32::consts::PI + (f32::consts::PI / 4.0) * multiplier as f32);
                 node_x = (20.0_f32 * angle.cos()).floor() as i32;
                 node_z = (20.0_f32 * angle.sin()).floor() as i32;
             }
@@ -1203,13 +1203,13 @@ impl EnderDragonEntity {
             target.y - position.y,
             target.z - position.z,
         ));
-        let yaw_rad = f64::from(yaw) * std::f64::consts::PI / 180.0;
+        let yaw_rad = f64::from(yaw) * f64::consts::PI / 180.0;
         let dir = normalize_vec(DVec3::new(yaw_rad.sin(), self.velocity().y, -yaw_rad.cos()));
         let dot = ((dir.dot(aim) as f32 + 0.5) / 1.5).max(0.0);
 
         if xdd.abs() > 1.0e-5 || zdd.abs() > 1.0e-5 {
             let y_rot_d =
-                wrap_degrees(180.0 - (xdd.atan2(zdd) as f32) * 180.0 / std::f32::consts::PI - yaw)
+                wrap_degrees(180.0 - (xdd.atan2(zdd) as f32) * 180.0 / f32::consts::PI - yaw)
                     .clamp(-50.0, 50.0);
             let mut y_rot_a = self.y_rot_a() * 0.8;
             y_rot_a += y_rot_d * self.phases.turn_speed(self);
@@ -1254,12 +1254,12 @@ impl EnderDragonEntity {
             let state = self.state.lock();
             (state.flight_history.get(5).y - state.flight_history.get(10).y) as f32
                 * 10.0
-                * std::f32::consts::PI
+                * f32::consts::PI
                 / 180.0
         };
         let cc_tilt = history_tilt.cos();
         let ss_tilt = history_tilt.sin();
-        let rot1 = yaw * std::f32::consts::PI / 180.0;
+        let rot1 = yaw * f32::consts::PI / 180.0;
         let ss1 = rot1.sin();
         let cc1 = rot1.cos();
         self.tick_part(
@@ -1312,7 +1312,7 @@ impl EnderDragonEntity {
         };
         for (index, part) in tails.into_iter().enumerate() {
             let p0 = samples[index];
-            let rot = rot1 + wrap_degrees(p0.y_rot - p1.y_rot) * std::f32::consts::PI / 180.0;
+            let rot = rot1 + wrap_degrees(p0.y_rot - p1.y_rot) * f32::consts::PI / 180.0;
             let ss = rot.sin();
             let cc = rot.cos();
             let dd = (index + 1) as f32 * 2.0;

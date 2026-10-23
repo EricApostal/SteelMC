@@ -93,16 +93,17 @@ impl SculkVeinBlock {
         for direction in Direction::ALL {
             let property = multiface_face_property(direction);
             if state.get_value(property)
-                && world
-                    .get_block_state(pos.relative(direction))
-                    .get_block()
+                && world.get_block_state(pos.relative(direction)).get_block()
                     == &vanilla_blocks::SCULK
             {
                 state = state.set_value(property, false);
             }
         }
 
-        if !Direction::ALL.iter().any(|dir| state.get_value(multiface_face_property(*dir))) {
+        if !Direction::ALL
+            .iter()
+            .any(|dir| state.get_value(multiface_face_property(*dir)))
+        {
             state = if world.get_block_state(pos).get_fluid_state().is_empty() {
                 vanilla_blocks::AIR.default_state()
             } else {
@@ -148,8 +149,7 @@ impl SculkVeinBlock {
                     continue;
                 }
 
-                let new_state =
-                    state.set_value(multiface_face_property(spread_direction), true);
+                let new_state = state.set_value(multiface_face_property(spread_direction), true);
                 if world.set_block_state(pos, new_state, UpdateFlags::UPDATE_CLIENTS) {
                     placed += 1;
                 }

@@ -8,7 +8,9 @@ use steel_registry::{
         properties::{BlockStateProperties, IntProperty},
     },
     items::item::BlockHitResult,
-    sound_events, vanilla_blocks, vanilla_custom_stats,
+    sound_events,
+    stat::vanilla_stat_types,
+    vanilla_blocks, vanilla_custom_stats,
     vanilla_item_tags::ItemTag,
 };
 use steel_utils::{
@@ -131,16 +133,16 @@ impl BlockBehavior for CakeBlock {
     ) -> InteractionResult {
         if state.get_value(BITES) == 0 {
             let has_infinite_materials = player.has_infinite_materials();
-            let candle_cake = inv.with_item(|item_stack| {
+            let placed = inv.with_item(|item_stack| {
                 let item = item_stack.item();
                 if !item.has_tag(&ItemTag::CANDLES) {
                     return None;
                 }
                 let candle_cake = candle_cakes::candle_to_candle_cake(item)?;
                 item_stack.consume_one(has_infinite_materials);
-                Some(candle_cake)
+                Some((candle_cake, item))
             });
-            let Some(candle_cake) = candle_cake else {
+            let Some((candle_cake, item)) = placed else {
                 return InteractionResult::TryEmptyHandInteraction;
             };
             world.play_block_sound(
@@ -151,6 +153,8 @@ impl BlockBehavior for CakeBlock {
                 Some(player.id()),
             );
             world.set_block(pos, candle_cake.default_state(), UpdateFlags::UPDATE_ALL);
+            // Vanilla `CakeBlock.useItemOn` awards `Stats.ITEM_USED` for the candle.
+            player.award_stat(&vanilla_stat_types::ITEM_USED, item);
             return InteractionResult::Success;
         }
         InteractionResult::TryEmptyHandInteraction

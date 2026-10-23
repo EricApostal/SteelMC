@@ -17,7 +17,9 @@ use steel_utils::locks::SyncMutex;
 use steel_utils::{Downcast as _, DowncastType, DowncastTypeKey};
 
 use crate::entity::damage::DamageSource;
-use crate::entity::{Entity, EntityBase, EntityPose, EntitySyncedData, SharedEntity};
+use crate::entity::{
+    Entity, EntityBase, EntityPose, EntitySyncedData, SharedEntity, next_entity_id,
+};
 use crate::world::World;
 
 use super::ender_dragon::EnderDragonEntity;
@@ -98,12 +100,7 @@ impl EnderDragonPartEntity {
     pub fn new(kind: EnderDragonPartKind, world: Weak<World>) -> Self {
         let entity_type: EntityTypeRef = &vanilla_entities::ENDER_DRAGON;
         Self {
-            base: EntityBase::new(
-                crate::entity::next_entity_id(),
-                DVec3::ZERO,
-                kind.dimensions(),
-                world,
-            ),
+            base: EntityBase::new(next_entity_id(), DVec3::ZERO, kind.dimensions(), world),
             entity_type,
             kind,
             parent: SyncMutex::new(Weak::<EnderDragonEntity>::new()),
@@ -207,7 +204,7 @@ mod tests {
     #[test]
     fn unbound_part_is_not_pickable_by_parent() {
         steel_registry::init_vanilla_registry();
-        let part = EnderDragonPartEntity::new(EnderDragonPartKind::Head, std::sync::Weak::new());
+        let part = EnderDragonPartEntity::new(EnderDragonPartKind::Head, Weak::new());
         assert!(part.parent().is_none());
         assert!(part.is_pickable());
     }

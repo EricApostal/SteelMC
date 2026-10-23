@@ -892,9 +892,9 @@ impl Goal for TurtleGoHomeGoal {
             f64::from(home_pos.y()),
             f64::from(home_pos.z()) + 0.5,
         );
-        let mut next_pos = random_pos_towards(mob, 16, 3, home_center, std::f64::consts::PI / 10.0);
+        let mut next_pos = random_pos_towards(mob, 16, 3, home_center, f64::consts::PI / 10.0);
         if next_pos.is_none() {
-            next_pos = random_pos_towards(mob, 8, 7, home_center, std::f64::consts::PI / 2.0);
+            next_pos = random_pos_towards(mob, 8, 7, home_center, f64::consts::PI / 2.0);
         }
 
         if let Some(pos) = next_pos
@@ -905,7 +905,7 @@ impl Goal for TurtleGoHomeGoal {
                 .get_fluid_state()
                 .is_water()
         {
-            next_pos = random_pos_towards(mob, 16, 5, home_center, std::f64::consts::PI / 2.0);
+            next_pos = random_pos_towards(mob, 16, 5, home_center, f64::consts::PI / 2.0);
         }
 
         let Some(next_pos) = next_pos else {
@@ -1314,10 +1314,9 @@ impl Goal for TurtleTravelGoal {
             f64::from(travel_pos.y()),
             f64::from(travel_pos.z()) + 0.5,
         );
-        let mut next_pos =
-            random_pos_towards(mob, 16, 3, target_center, std::f64::consts::PI / 10.0);
+        let mut next_pos = random_pos_towards(mob, 16, 3, target_center, f64::consts::PI / 10.0);
         if next_pos.is_none() {
-            next_pos = random_pos_towards(mob, 8, 7, target_center, std::f64::consts::PI / 2.0);
+            next_pos = random_pos_towards(mob, 8, 7, target_center, f64::consts::PI / 2.0);
         }
 
         // Vanilla rejects positions whose 34-block chunk neighborhood is unloaded.

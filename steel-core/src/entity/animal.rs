@@ -303,9 +303,7 @@ pub trait Animal: AgeableMob {
         // Vanilla `Animal.finalizeSpawnChildFromBreeding` awards `animals_bred` to the love
         // cause, falling back to the partner's love cause. The `bred_animals` advancement
         // trigger is a separate gap.
-        if let Some(love_cause) = self
-            .love_cause_uuid()
-            .or_else(|| partner.love_cause_uuid())
+        if let Some(love_cause) = self.love_cause_uuid().or_else(|| partner.love_cause_uuid())
             && let Some(player) = world.players.get_by_uuid(&love_cause)
         {
             player.award_custom_stat(&vanilla_custom_stats::ANIMALS_BRED);
