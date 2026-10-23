@@ -18,6 +18,7 @@ mod inventory_menu;
 mod lectern_menu;
 mod loom_menu;
 mod merchant_menu;
+mod mount_menu;
 mod shulker_box_menu;
 mod smithing_menu;
 mod stonecutter_menu;
@@ -40,6 +41,10 @@ pub use inventory_menu::{INVENTORY_MENU_CONTAINER_ID, InventoryKind, inventory_m
 pub use lectern_menu::{LecternKind, lectern};
 pub use loom_menu::{LoomKind, loom};
 pub use merchant_menu::{MerchantContainer, MerchantMenuKind, MerchantResultSlot, merchant_menu};
+pub use mount_menu::{
+    INVENTORY_ROWS as MOUNT_INVENTORY_ROWS, MountEquipmentSlot, MountInventoryMenuKind,
+    SLOT_BODY_ARMOR, SLOT_INVENTORY_START, SLOT_SADDLE, get_inventory_size, mount_inventory_menu,
+};
 pub use shulker_box_menu::{ShulkerBoxKind, shulker_box};
 pub use smithing_menu::{SmithingKind, smithing};
 pub use stonecutter_menu::{StonecutterKind, stonecutter};

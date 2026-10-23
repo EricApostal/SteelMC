@@ -959,6 +959,38 @@ impl StructureGenerator {
         })
     }
 
+    /// Generates one structure start for a specific structure in the context's chunk.
+    ///
+    /// This is vanilla `Structure.generate`: it runs the structure's own
+    /// generation-point search but skips the structure-set placement and
+    /// frequency checks, so `/place structure` can force a start at an
+    /// arbitrary position. Returns `None` when the structure is unknown, has no
+    /// registered implementation, or produces no pieces (vanilla
+    /// `StructureStart.isValid`).
+    pub fn generate_start_for_structure(
+        &self,
+        structure: &Identifier,
+        ctx: &mut dyn StructureGenerationContext,
+    ) -> Option<StructureStart> {
+        let data = self.structure_data.get(structure).copied()?;
+        let structure_impl = self.structure_impls.get(&data.structure_type)?;
+        // Vanilla `Structure.GenerationContext.makeRandom`: a fresh LCG seeded
+        // with `setLargeFeatureSeed(seed, chunkX, chunkZ)`.
+        let mut rng = LegacyRandom::from_seed(0);
+        rng.set_large_feature_seed(self.seed, ctx.chunk_x(), ctx.chunk_z());
+        let stub = structure_impl.find_generation_point(ctx, data, &mut rng)?;
+        if stub.pieces.is_empty() {
+            return None;
+        }
+
+        Some(StructureStart::new(
+            data.key.clone(),
+            ChunkPos::new(ctx.chunk_x(), ctx.chunk_z()),
+            stub.pieces,
+            data.terrain_adjustment,
+        ))
+    }
+
     /// Generates structure starts for one chunk.
     pub fn generate_starts_for_chunk(
         &self,

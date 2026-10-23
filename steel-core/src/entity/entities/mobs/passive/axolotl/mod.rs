@@ -1,5 +1,5 @@
-//! Vanilla `Axolotl`: a water-dwelling passive mob with five colour variants,
-//! bucket capture, a rare blue variant and the play-dead defence.
+//! Vanilla `Axolotl`: a water-dwelling passive mob with five color variants,
+//! bucket capture, a rare blue variant and the play-dead defense.
 //!
 //! Scope: the entity shell (variant/playing-dead/from-bucket synced state,
 //! bucket capture, breeding variant inheritance, dry-out air handling, sounds),
@@ -30,6 +30,7 @@ use steel_registry::entity_type::{
 use steel_registry::entity_variant::AxolotlVariant;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
+use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entity_data::AxolotlEntityData;
 use steel_registry::vanilla_item_tags::ItemTag;
 use steel_registry::{
@@ -37,6 +38,7 @@ use steel_registry::{
     vanilla_items,
 };
 use steel_utils::locks::SyncMutex;
+use steel_utils::random::RandomSource;
 use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier};
 
@@ -287,7 +289,7 @@ impl AxolotlEntity {
     ///
     /// `MobBucketItem` currently only applies generic item components, so the
     /// bucket's entity data is not fed back here yet (see the wave report).
-    #[allow(
+    #[expect(
         dead_code,
         reason = "vanilla Bucketable.loadFromBucketTag; the bucket item release path does not call it yet"
     )]
@@ -363,6 +365,25 @@ impl AxolotlEntity {
         self.entity_data.set_base_invisible_flag(display.invisible);
         self.entity_data
             .set_base_glowing_flag(self.has_glowing_tag() || display.glowing);
+    }
+
+    /// Vanilla `Axolotl.checkAxolotlSpawnRules`, the `SpawnPlacements` predicate for
+    /// `EntityType.AXOLOTL`.
+    ///
+    /// Vanilla ignores `entity_type`, `spawnReason` and `random`; the block below
+    /// must carry `#minecraft:axolotls_spawnable_on`.
+    #[must_use]
+    pub fn check_axolotl_spawn_rules(
+        _entity_type: EntityTypeRef,
+        level: &World,
+        _spawn_reason: EntitySpawnReason,
+        pos: BlockPos,
+        _random: &mut RandomSource,
+    ) -> bool {
+        level
+            .get_block_state(pos.below())
+            .get_block()
+            .has_tag(&BlockTag::AXOLOTLS_SPAWNABLE_ON)
     }
 }
 
@@ -473,7 +494,7 @@ impl Entity for AxolotlEntity {
     }
 
     /// Vanilla `Axolotl.hurtServer`: a hit in water can start the play-dead
-    /// defence, then the damage is applied normally.
+    /// defense, then the damage is applied normally.
     ///
     /// Steel hooks this on `Entity::hurt` rather than
     /// `LivingEntity::hurt_server`: that method has no `default_*` companion,
@@ -800,4 +821,9 @@ impl Mob for AxolotlEntity {
     }
 }
 
-impl PathfinderMob for AxolotlEntity {}
+impl PathfinderMob for AxolotlEntity {
+    /// Vanilla `Axolotl.getWalkTargetValue` treats every position as neutral.
+    fn get_walk_target_value(&self, _pos: BlockPos) -> f32 {
+        0.0
+    }
+}

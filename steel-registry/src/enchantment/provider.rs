@@ -26,7 +26,7 @@ use crate::{TaggedRegistryExt, vanilla_enchantments};
 ///
 /// Vanilla registers `ConstantInt`, `UniformInt`, `BiasedToBottomInt`,
 /// `ClampedInt`, `WeightedListInt` and `SumInt`; only the constant and uniform
-/// forms appear in vanilla provider data, so only those are modelled.
+/// forms appear in vanilla provider data, so only those are modeled.
 #[derive(Debug, Clone, Copy)]
 pub enum IntProvider {
     Constant(i32),

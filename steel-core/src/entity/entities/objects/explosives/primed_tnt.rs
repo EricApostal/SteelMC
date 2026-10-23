@@ -181,12 +181,12 @@ impl PrimedTntEntity {
         self.state.lock().explosion_power
     }
 
-    /// Marks that this entity travelled through a portal (vanilla `PrimedTnt.setUsedPortal`).
+    /// Marks that this entity traveled through a portal (vanilla `PrimedTnt.setUsedPortal`).
     pub fn set_used_portal(&self, used_portal: bool) {
         self.state.lock().used_portal = used_portal;
     }
 
-    /// Returns whether this entity travelled through a portal before detonating.
+    /// Returns whether this entity traveled through a portal before detonating.
     #[must_use]
     pub fn used_portal(&self) -> bool {
         self.state.lock().used_portal
@@ -214,7 +214,7 @@ impl PrimedTntEntity {
     /// Vanilla `PrimedTnt.explode`.
     ///
     /// Vanilla passes `Explosion.getDefaultDamageSource(level, this)` and, when the TNT
-    /// travelled through a portal, `USED_PORTAL_DAMAGE_CALCULATOR` (which exempts nether
+    /// traveled through a portal, `USED_PORTAL_DAMAGE_CALCULATOR` (which exempts nether
     /// portal blocks from the blast). Steel's [`World::explode_full`] derives the default
     /// damage source from the source entity, matching the first argument.
     ///

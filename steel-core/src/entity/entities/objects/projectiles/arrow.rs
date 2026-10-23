@@ -2,7 +2,7 @@
 //!
 //! Mirrors vanilla `Arrow` on top of the shared [`AbstractArrow`] behavior: the
 //! arrow carries potion contents in its pickup stack, exposes the resulting
-//! effect colour as synced data, and applies those effects to whatever it hits.
+//! effect color as synced data, and applies those effects to whatever it hits.
 //! A potion-tipped arrow that has been stuck in the ground for
 //! `EXPOSED_POTION_DECAY_TIME` ticks loses its contents and turns back into a
 //! plain arrow.
@@ -54,7 +54,7 @@ pub struct ArrowEntity {
     base: EntityBase,
     /// Vanilla entity type registered for this implementation.
     entity_type: EntityTypeRef,
-    /// Synced `AbstractArrow` data plus this arrow's effect colour.
+    /// Synced `AbstractArrow` data plus this arrow's effect color.
     entity_data: SyncMutex<ArrowEntityData>,
     /// Shared `Projectile` state (owner / left-owner / has-been-shot).
     projectile_base: ProjectileBase,
@@ -112,7 +112,7 @@ impl ArrowEntity {
     }
 
     /// Replaces the arrow's potion contents and refreshes the synced effect
-    /// colour (vanilla `setPotionContents`).
+    /// color (vanilla `setPotionContents`).
     pub fn set_potion_contents(&self, contents: PotionContents) {
         let mut stack = self.get_pickup_item_stack_origin();
         stack.set(POTION_CONTENTS, contents);
@@ -133,13 +133,13 @@ impl ArrowEntity {
         ));
     }
 
-    /// Returns the synced effect colour (vanilla `getColor`).
+    /// Returns the synced effect color (vanilla `getColor`).
     #[must_use]
     pub fn color(&self) -> i32 {
         *self.entity_data.lock().id_effect_color.get()
     }
 
-    /// Refreshes the synced effect colour from the pickup stack's potion
+    /// Refreshes the synced effect color from the pickup stack's potion
     /// contents (vanilla `updateColor`).
     fn update_effect_color(&self) {
         let contents = self.potion_contents();
@@ -162,7 +162,7 @@ impl ArrowEntity {
             return;
         }
 
-        // Vanilla broadcasts entity event 0 so clients puff the effect colour.
+        // Vanilla broadcasts entity event 0 so clients puff the effect color.
         self.broadcast_entity_event(EntityStatus::TippedArrow);
         self.set_pickup_item_stack(ItemStack::new(&vanilla_items::ARROW));
     }

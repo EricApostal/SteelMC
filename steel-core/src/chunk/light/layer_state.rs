@@ -28,7 +28,7 @@ const NEIGHBOR_COUNT_BITS: u8 = 31;
 /// Vanilla `LayerLightSectionStorage.SectionState` packed into one byte.
 ///
 /// Bit 5 marks that light data is stored for the section; bits 0..=4 hold the
-/// number of non-empty neighbours (0..=26).
+/// number of non-empty neighbors (0..=26).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SectionState(u8);
 
@@ -121,7 +121,7 @@ impl SectionType {
 
 /// Vanilla `LayerLightSectionStorage` state for one light layer.
 ///
-/// Keys are vanila section nodes (`SectionPos.asLong`) and zero nodes
+/// Keys are vanilla section nodes (`SectionPos.asLong`) and zero nodes
 /// (`SectionPos.getZeroNode`, vanilla `ChunkPos.asLong`).
 #[derive(Debug, Default)]
 pub struct LayerLightState {
@@ -287,7 +287,7 @@ impl LayerLightState {
 
     /// Vanilla `LayerLightSectionStorage.updateSectionStatus`.
     ///
-    /// Vanilla stores neighbour counts for all 26 neighbouring sections; Steel
+    /// Vanilla stores neighbour counts for all 26 neighboring sections; Steel
     /// keeps the same global section-state map, so the neighbour increments cross
     /// chunk boundaries exactly like vanilla.
     pub fn update_section_status(&mut self, section_node: i64, section_empty: bool) {

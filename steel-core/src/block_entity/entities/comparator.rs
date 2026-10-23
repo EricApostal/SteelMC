@@ -43,6 +43,10 @@ impl ComparatorBlockEntity {
     }
 
     /// Replaces the comparator's cached output signal.
+    ///
+    /// Vanilla `ComparatorBlockEntity.setOutputSignal` is a plain field write: it
+    /// does not mark the entity changed, because `ComparatorBlock.refreshOutputState`
+    /// always follows up with the block-state update that persists and syncs.
     pub fn set_output_signal(&self, output_signal: i32) {
         self.state.lock().output_signal = output_signal;
     }
@@ -60,6 +64,13 @@ impl BlockEntity for ComparatorBlockEntity {
 
     fn save_additional(&self, nbt: &mut NbtCompound) {
         nbt.insert("OutputSignal", self.output_signal());
+    }
+
+    fn get_update_tag(&self) -> Option<NbtCompound> {
+        // Vanilla `ComparatorBlockEntity` does not override `getUpdateTag`, so it
+        // sends the default empty compound; `None` is Steel's equivalent. The cached
+        // output reaches clients through the block state, not through the entity.
+        None
     }
 }
 

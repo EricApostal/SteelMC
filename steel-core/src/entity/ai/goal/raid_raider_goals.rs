@@ -6,32 +6,44 @@
 //! and are reported to the integrator rather than added here.
 
 use glam::DVec3;
+use rustc_hash::FxHashMap;
 use steel_registry::vanilla_entities;
 use steel_utils::BlockPos;
 use steel_utils::random::legacy_random::LegacyRandom;
 
 use steel_utils::Downcast as _;
 
-use super::random_pos::default_random_pos_towards;
+use super::open_door::OpenDoorGoal;
+use super::random_pos::{HALF_PI, TENTH_PI, default_random_pos_towards};
 use super::reduced_tick_delay;
 use super::selector::{Goal, GoalControls};
+use crate::entity::ai::path::Path;
 use crate::entity::entities::objects::items::ItemEntity;
-use crate::entity::{ItemStack, LivingEntity, PathfinderMob, SharedEntity};
+use crate::entity::{Entity, ItemStack, LivingEntity, PathfinderMob, SharedEntity};
+use crate::world::World;
 use crate::world::village::poi::is_village_poi;
+
+/// Vanilla `ObtainRaidLeaderBannerGoal` unreachable-banner retry delay (`gameTime + 600`).
+const UNREACHABLE_BANNER_RETRY_TICKS: i64 = 600;
+/// Vanilla `pursuedBannerItemEntity.closerThan(mob, 1.414)`.
+const BANNER_PICKUP_DISTANCE_SQR: f64 = 1.414 * 1.414;
 
 /// Vanilla `Raider.ObtainRaidLeaderBannerGoal`.
 pub struct RaiderObtainLeaderBannerGoal {
+    /// Vanilla `unreachableBannerCache`: entity id -> game time the banner may be retried.
+    unreachable_banner_cache: FxHashMap<i32, i64>,
+    path_to_banner: Option<Path>,
     pursued_banner: Option<SharedEntity>,
-    banner_pos: Option<BlockPos>,
 }
 
 impl RaiderObtainLeaderBannerGoal {
     /// Creates the goal.
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
+            unreachable_banner_cache: FxHashMap::default(),
+            path_to_banner: None,
             pursued_banner: None,
-            banner_pos: None,
         }
     }
 
@@ -46,7 +58,8 @@ impl RaiderObtainLeaderBannerGoal {
         let Some(raid) = raider.current_raid(&world) else {
             return true;
         };
-        if raid.is_over() || !raider.can_be_leader() {
+        // Vanilla `!hasActiveRaid() || getCurrentRaid().isOver()`.
+        if !raid.is_active() || raid.is_over() || !raider.can_be_leader() {
             return true;
         }
 
@@ -55,14 +68,26 @@ impl RaiderObtainLeaderBannerGoal {
             return true;
         }
 
-        raider.current_raid_id().is_some_and(|raid_id| {
+        // Vanilla `raid.getLeader(wave) != null && leader.isAlive()`.
+        let leader = raider.current_raid_id().and_then(|raid_id| {
             world
                 .raids()
                 .lock()
                 .get(raid_id)
-                .is_some_and(|raid| raid.get_leader(raider.wave()).is_some())
-        })
+                .and_then(|raid| raid.get_leader(raider.wave()))
+        });
+        leader.is_some_and(|leader_id| !is_entity_removed(&world, leader_id))
     }
+}
+
+/// Vanilla `leader != null && leader.isAlive()` for a raid leader kept only by UUID.
+///
+/// A leader that is not loaded cannot be shown to be dead, and vanilla keeps a live
+/// reference to it, so a missing lookup counts as alive.
+fn is_entity_removed(world: &World, uuid: uuid::Uuid) -> bool {
+    world
+        .get_entity_by_uuid(&uuid)
+        .is_some_and(|entity| entity.is_removed())
 }
 
 impl Default for RaiderObtainLeaderBannerGoal {
@@ -93,9 +118,12 @@ impl Goal for RaiderObtainLeaderBannerGoal {
             .bounding_box()
             .inflate_xyz(follow_range, 8.0, follow_range);
 
+        let game_time = world.game_time();
+        let mut temp_cache = FxHashMap::default();
         let banners = world.get_entities_in_aabb_matching(&area, |entity| {
             entity.downcast_ref::<ItemEntity>().is_some_and(|item| {
-                item.get_pickup_delay() == 0
+                !item.is_removed()
+                    && item.get_pickup_delay() == 0
                     && ItemStack::matches(
                         &item.get_item(),
                         &crate::entity::raid::Raid::ominous_banner_instance(),
@@ -103,52 +131,66 @@ impl Goal for RaiderObtainLeaderBannerGoal {
             })
         });
 
-        let Some(banner) = banners.first() else {
-            return false;
-        };
+        for banner in banners {
+            let unreachable_until = self
+                .unreachable_banner_cache
+                .get(&banner.id())
+                .copied()
+                .unwrap_or(i64::MIN);
+            if game_time < unreachable_until {
+                temp_cache.insert(banner.id(), unreachable_until);
+                continue;
+            }
 
-        self.pursued_banner = Some(SharedEntity::clone(banner));
-        self.banner_pos = Some(banner.block_position());
-        true
+            // Vanilla `navigation.createPath(banner, 1)` is the entity overload
+            // (`blockPosition`, radius 16, `above = true`); Steel's pathfinder has no
+            // radius-offset/above target, so this uses the plain block-position overload.
+            let path = mob.create_path_to(banner.block_position(), 1);
+            if let Some(path) = path
+                && path.can_reach()
+            {
+                self.path_to_banner = Some(path);
+                self.pursued_banner = Some(banner);
+                return true;
+            }
+
+            temp_cache.insert(banner.id(), game_time + UNREACHABLE_BANNER_RETRY_TICKS);
+        }
+
+        self.unreachable_banner_cache = temp_cache;
+        false
     }
 
     fn can_continue_to_use(&mut self, mob: &dyn PathfinderMob) -> bool {
         let Some(banner) = &self.pursued_banner else {
             return false;
         };
+        if self.path_to_banner.is_none() {
+            return false;
+        }
         if banner.is_removed() {
             return false;
         }
-        !Self::cannot_pick_up_banner(mob)
+        // Vanilla keeps the live `Path` instance and checks `pathToBanner.isDone()`; Steel's
+        // navigation owns the path after `start`, so "still pathfinding" is the equivalent.
+        mob.is_path_finding() && !Self::cannot_pick_up_banner(mob)
     }
 
     fn start(&mut self, mob: &dyn PathfinderMob) {
-        if let Some(pos) = self.banner_pos {
-            mob.move_to_pos(
-                DVec3::new(
-                    f64::from(pos.x()) + 0.5,
-                    f64::from(pos.y()),
-                    f64::from(pos.z()) + 0.5,
-                ),
-                1.15,
-            );
-        }
+        mob.move_to_path(self.path_to_banner.clone(), 1.15);
     }
 
     fn stop(&mut self, _mob: &dyn PathfinderMob) {
+        self.path_to_banner = None;
         self.pursued_banner = None;
-        self.banner_pos = None;
-    }
-
-    fn requires_update_every_tick(&self) -> bool {
-        true
     }
 
     fn tick(&mut self, mob: &dyn PathfinderMob, _entity: &SharedEntity) {
         let Some(banner) = &self.pursued_banner else {
             return;
         };
-        if banner.position().distance(mob.position()) > 1.414 {
+        // Vanilla `pursuedBannerItemEntity.closerThan(mob, 1.414)`.
+        if banner.position().distance_squared(mob.position()) >= BANNER_PICKUP_DISTANCE_SQR {
             return;
         }
         let Some(world) = mob.level() else {
@@ -215,7 +257,7 @@ impl Goal for RaiderCelebrationGoal {
         let Some(raider) = mob.as_raider() else {
             return;
         };
-        if rand::random_range(0..reduced_tick_delay(100)) == 0 {
+        if !mob.is_silent() && rand::random_range(0..reduced_tick_delay(100)) == 0 {
             mob.make_sound(Some(raider.celebrate_sound()));
         }
         if !mob.is_passenger() && rand::random_range(0..reduced_tick_delay(50)) == 0 {
@@ -295,12 +337,15 @@ impl Goal for RaiderMoveThroughVillageGoal {
     }
 
     fn can_continue_to_use(&mut self, mob: &dyn PathfinderMob) -> bool {
+        if !mob.is_path_finding() {
+            return false;
+        }
         let Some(poi) = self.poi_pos else {
             return false;
         };
-        mob.target().is_none()
-            && !self.stuck
-            && !poi.closer_to_center_than(mob.position(), f64::from(self.distance_to_poi))
+        // Vanilla `poiPos.closerToCenterThan(position, getBbWidth() + distanceToPoi)`.
+        let reach = mob.bounding_box().width() + f64::from(self.distance_to_poi);
+        mob.target().is_none() && !self.stuck && !poi.closer_to_center_than(mob.position(), reach)
     }
 
     fn start(&mut self, mob: &dyn PathfinderMob) {
@@ -326,12 +371,9 @@ impl Goal for RaiderMoveThroughVillageGoal {
         }
     }
 
-    fn requires_update_every_tick(&self) -> bool {
-        true
-    }
-
     fn tick(&mut self, mob: &dyn PathfinderMob, _entity: &SharedEntity) {
-        if !mob.is_path_finding() {
+        // Vanilla only re-picks a random position once the current path is finished.
+        if mob.is_path_finding() {
             return;
         }
         let Some(poi) = self.poi_pos else {
@@ -342,10 +384,8 @@ impl Goal for RaiderMoveThroughVillageGoal {
             f64::from(poi.y()),
             f64::from(poi.z()) + 0.5,
         );
-        let next = default_random_pos_towards(mob, 16, 7, towards, std::f64::consts::PI / 10.0)
-            .or_else(|| {
-                default_random_pos_towards(mob, 8, 7, towards, std::f64::consts::FRAC_PI_2)
-            });
+        let next = default_random_pos_towards(mob, 16, 7, towards, TENTH_PI)
+            .or_else(|| default_random_pos_towards(mob, 8, 7, towards, HALF_PI));
 
         let Some(next) = next else {
             self.stuck = true;
@@ -355,19 +395,19 @@ impl Goal for RaiderMoveThroughVillageGoal {
     }
 }
 
-/// Vanilla `AbstractIllager.RaiderOpenDoorGoal`: door opening only while raiding.
-///
-/// Steel's `OpenDoorGoal` lives in its own module and is not re-exported; this goal exists
-/// so illagers can express vanilla's extra "active raid" precondition on top of it.
+/// Vanilla `AbstractIllager.RaiderOpenDoorGoal`: `OpenDoorGoal(raider, false)` that only
+/// opens doors while the raider has an active raid.
 pub struct RaiderOpenDoorGoal {
-    _marker: (),
+    inner: OpenDoorGoal,
 }
 
 impl RaiderOpenDoorGoal {
     /// Creates the goal.
     #[must_use]
     pub const fn new() -> Self {
-        Self { _marker: () }
+        Self {
+            inner: OpenDoorGoal::new(false),
+        }
     }
 }
 
@@ -379,14 +419,35 @@ impl Default for RaiderOpenDoorGoal {
 
 impl Goal for RaiderOpenDoorGoal {
     fn controls(&self) -> GoalControls {
-        GoalControls::MOVE
+        self.inner.controls()
     }
 
     fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
-        mob.level().is_some_and(|world| {
-            mob.as_raider()
-                .is_some_and(|raider| raider.has_active_raid(&world))
-        })
+        self.inner.can_use(mob)
+            && mob.level().is_some_and(|world| {
+                mob.as_raider()
+                    .is_some_and(|raider| raider.has_active_raid(&world))
+            })
+    }
+
+    fn can_continue_to_use(&mut self, mob: &dyn PathfinderMob) -> bool {
+        self.inner.can_continue_to_use(mob)
+    }
+
+    fn start(&mut self, mob: &dyn PathfinderMob) {
+        self.inner.start(mob);
+    }
+
+    fn stop(&mut self, mob: &dyn PathfinderMob) {
+        self.inner.stop(mob);
+    }
+
+    fn requires_update_every_tick(&self) -> bool {
+        self.inner.requires_update_every_tick()
+    }
+
+    fn tick(&mut self, mob: &dyn PathfinderMob, entity: &SharedEntity) {
+        self.inner.tick(mob, entity);
     }
 }
 

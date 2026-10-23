@@ -311,7 +311,9 @@ mod tests {
         );
         assert_eq!(block_entity.get_block_pos(), pos);
         assert_eq!(block_entity.get_block_state(), state);
-        assert!(block_entity.get_update_tag().is_some());
+        // Vanilla `TheEndPortalBlockEntity` overrides neither `getUpdateTag` nor
+        // `getUpdatePacket`, so the chunk payload carries the empty-tag marker.
+        assert!(block_entity.get_update_tag().is_none());
     }
 
     #[test]

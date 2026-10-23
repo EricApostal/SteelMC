@@ -68,8 +68,9 @@ impl Default for FollowFlockLeaderGoal {
 }
 
 impl Goal for FollowFlockLeaderGoal {
+    /// Vanilla `FollowFlockLeaderGoal` never calls `setFlags`, so it claims no controls.
     fn controls(&self) -> GoalControls {
-        GoalControls::MOVE
+        GoalControls::EMPTY
     }
 
     fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
@@ -91,14 +92,17 @@ impl Goal for FollowFlockLeaderGoal {
         self.next_start_tick = Self::next_start_tick();
         let mates = Self::nearby_flock_mates(mob);
 
-        // Vanilla `DataFixUtils.orElse(leaders.findAny(), mob)`: the first fish that can be
-        // followed leads, otherwise this fish starts a flock of its own.
+        // Vanilla `leader.addFollowers(stream.filter(fish -> !fish.isFollower()))` over the
+        // nearby list, which `getEntitiesOfClass` already excludes this fish from; the
+        // receiving fish drops itself through `filter(f -> f != this)`.
+        let self_id = mob.id();
         let followers: Vec<SharedEntity> = mates
             .iter()
             .filter(|entity| {
-                !entity
-                    .as_schooling_fish()
-                    .is_some_and(|fish| fish.is_follower())
+                entity.id() != self_id
+                    && !entity
+                        .as_schooling_fish()
+                        .is_some_and(|fish| fish.is_follower())
             })
             .cloned()
             .collect();
@@ -113,8 +117,14 @@ impl Goal for FollowFlockLeaderGoal {
             .cloned();
         match leader {
             Some(leader) => {
+                let leader_id = leader.id();
                 if let Some(leader_fish) = leader.as_schooling_fish() {
-                    leader_fish.add_followers(followers);
+                    leader_fish.add_followers(
+                        followers
+                            .into_iter()
+                            .filter(|fish| fish.id() != leader_id)
+                            .collect(),
+                    );
                 }
             }
             None => self_fish.add_followers(followers),
@@ -156,10 +166,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn follow_flock_leader_goal_claims_only_the_move_control() {
+    fn follow_flock_leader_goal_claims_no_controls() {
         let goal = FollowFlockLeaderGoal::new();
 
-        assert_eq!(goal.controls(), GoalControls::MOVE);
+        assert_eq!(goal.controls(), GoalControls::EMPTY);
         assert!(!goal.requires_update_every_tick());
     }
 }

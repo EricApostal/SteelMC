@@ -6,9 +6,12 @@ use steel_registry::{
     REGISTRY, TaggedRegistryExt, damage_type::DamageScaling, damage_type::DamageType,
     vanilla_damage_type_tags,
 };
+use text_components::TextComponent;
 
-use crate::entity::SharedEntity;
+use crate::entity::{Entity, LivingEntity, SharedEntity, get_kill_credit};
 use crate::player::Player;
+
+use super::{death_message, has_custom_name, item_display_name, main_hand_item};
 
 /// Describes damage while retaining the exact direct and causing entity allocations.
 ///
@@ -135,7 +138,41 @@ impl DamageSource {
         false
     }
 
-    /// Whether this damage scales with difficulty for the retained causing entity.
+    /// Vanilla `DamageSource.getLocalizedDeathMessage`.
+    ///
+    /// Composes `death.attack.<msgId>` with vanilla's argument order:
+    /// victim only, victim plus attacker, or victim, attacker, and weapon when the
+    /// attacker's main-hand item has a custom name.
+    #[must_use]
+    pub fn get_localized_death_message(&self, victim: &dyn LivingEntity) -> TextComponent {
+        let death_key = format!("death.attack.{}", self.damage_type.message_id);
+        if self.causing_entity.is_none() && self.direct_entity.is_none() {
+            let kill_credit = victim
+                .level()
+                .and_then(|world| get_kill_credit(victim, world.as_ref()));
+            return match kill_credit {
+                Some(source) => death_message(
+                    format!("{death_key}.player"),
+                    vec![victim.display_name(), source.display_name()],
+                ),
+                None => death_message(death_key, vec![victim.display_name()]),
+            };
+        }
+
+        let attacker = self.causing_entity.as_ref().or(self.direct_entity.as_ref());
+        let name = attacker.map_or_else(TextComponent::new, |entity| entity.display_name());
+        let held = main_hand_item(self.causing_entity.as_ref());
+        if !held.is_empty() && has_custom_name(&held) {
+            death_message(
+                format!("{death_key}.item"),
+                vec![victim.display_name(), name, item_display_name(&held)],
+            )
+        } else {
+            death_message(death_key, vec![victim.display_name(), name])
+        }
+    }
+
+    /// Whether the damage scales with difficulty for the retained causing entity.
     #[must_use]
     pub fn scales_with_difficulty(&self) -> bool {
         let causing_entity = self.causing_entity();

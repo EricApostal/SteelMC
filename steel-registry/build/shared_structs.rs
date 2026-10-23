@@ -59,18 +59,6 @@ pub fn deserialize_tag_identifier<'de, D: Deserializer<'de>>(
     Identifier::from_str(tag).map_err(D::Error::custom)
 }
 
-pub fn deserialize_optional_tag_identifier<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<Identifier>, D::Error> {
-    let Some(value) = Option::<String>::deserialize(deserializer)? else {
-        return Ok(None);
-    };
-    let tag = value.strip_prefix('#').unwrap_or(&value);
-    Identifier::from_str(tag)
-        .map(Some)
-        .map_err(D::Error::custom)
-}
-
 #[derive(Deserialize, Debug)]
 pub struct SpawnConditionEntry {
     pub(crate) priority: i32,

@@ -9,6 +9,7 @@ use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as Nbt
 use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{BlockStateProperties, BoolProperty};
+use steel_registry::data_components::vanilla_components::CONTAINER;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::recipe::{SingleItemRecipeInput, vanilla_recipe_types};
 use steel_registry::{REGISTRY, vanilla_block_entity_types, vanilla_game_events};
@@ -86,8 +87,8 @@ impl CampfireBlockEntity {
             cooking.items[slot] = stack;
         }
 
-        self.set_changed();
         let Some(world) = self.get_level() else {
+            self.set_changed();
             return true;
         };
         world.game_event(
@@ -95,6 +96,9 @@ impl CampfireBlockEntity {
             self.get_block_pos(),
             &GameEventContext::new(Some(player as &dyn Entity), Some(self.get_block_state())),
         );
+        // Vanilla `CampfireBlockEntity.markUpdated`: `setChanged` first, then the
+        // same-state block update that ships the new update tag to clients.
+        self.set_changed();
         world.send_block_updated(self.get_block_pos());
         true
     }
@@ -189,6 +193,29 @@ impl BlockEntity for CampfireBlockEntity {
         };
         for item in items {
             world.drop_item_stack(pos, item);
+        }
+    }
+
+    fn apply_components_from_item(&self, item: &ItemStack) {
+        // Vanilla `CampfireBlockEntity.applyImplicitComponents`: the `CONTAINER`
+        // component of a campfire item is copied into the four cooking slots.
+        let Some(contents) = item.get(CONTAINER) else {
+            return;
+        };
+
+        let mut cooking = self.cooking.lock();
+        cooking.items.fill(ItemStack::empty());
+        for (slot, template) in contents.items().iter().enumerate() {
+            if slot >= CAMPFIRE_SLOTS {
+                break;
+            }
+            if let Some(template) = template {
+                cooking.items[slot] = ItemStack::with_count_and_patch(
+                    template.item(),
+                    template.count(),
+                    template.components().clone(),
+                );
+            }
         }
     }
 

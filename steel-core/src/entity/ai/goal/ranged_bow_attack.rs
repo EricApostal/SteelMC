@@ -1,27 +1,65 @@
 //! Vanilla `RangedBowAttackGoal` (vanilla `net.minecraft.world.entity.ai.goal.RangedBowAttackGoal`).
 //!
-//! **Dependency**: vanilla releases an `Arrow` through `RangedAttackMob.performRangedAttack`
-//! and `ProjectileUtil.getMobArrow`; Steel has no `arrow` entity factory yet, so the
-//! charge/strafe state machine below is complete and only the projectile release is gated on
-//! that factory, exactly like [`RangedCrossbowAttackGoal`](super::RangedCrossbowAttackGoal).
+//! The goal drives the bow draw/strafe state machine and releases the shot through
+//! [`RangedAttackMob::perform_ranged_attack`] — the Steel capability behind vanilla's
+//! `RangedAttackMob` bound — with `BowItem.getPowerForTime` as the power.
 //!
 //! This is the bow counterpart of the crossbow goal, not a duplicate of it: vanilla keeps
 //! `RangedBowAttackGoal` and `RangedCrossbowAttackGoal` as separate goals because the charge
 //! timing, strafing and item-use handling differ.
 
+use glam::DVec3;
+use steel_math::wrap_degrees;
 use steel_registry::vanilla_items;
-
 use steel_utils::types::InteractionHand;
 
 use super::selector::{Goal, GoalControls};
-use crate::entity::{PathfinderMob, SharedEntity};
+use crate::entity::{Mob, PathfinderMob, SharedEntity};
 
-/// Vanilla `RangedBowAttackGoal.SEE_TIME`.
+/// Vanilla `RangedBowAttackGoal` "has seen the target for this long" threshold.
 const SEE_TIME: i32 = 20;
 /// Vanilla `RangedBowAttackGoal` strafe refresh interval.
 const STRAFE_TIME: i32 = 20;
-/// Vanilla `BowItem.getPowerForTime` full-draw tick count.
+/// Vanilla `RangedBowAttackGoal` full-draw tick count (`BowItem.getPowerForTime(20) == 1.0`).
 const FULL_DRAW_TICKS: i32 = 20;
+/// Vanilla `RangedBowAttackGoal` aim speed used by `Mob.lookAt` / `LookControl.setLookAt`.
+const LOOK_Y_MAX_ROT_SPEED: f32 = 30.0;
+const LOOK_X_MAX_ROT_ANGLE: f32 = 30.0;
+
+/// Vanilla `BowItem.getPowerForTime`.
+fn get_power_for_time(time_held: i32) -> f32 {
+    let mut power = time_held as f32 / 20.0;
+    power = (power * power + power * 2.0) / 3.0;
+    power.min(1.0)
+}
+
+/// Vanilla `Mob.lookAt(Entity, float, float)`.
+fn look_at_entity(mob: &dyn Mob, target: &SharedEntity) {
+    let position = mob.position();
+    let xd = target.position().x - position.x;
+    let zd = target.position().z - position.z;
+    let yd = target.get_eye_y() - mob.get_eye_y();
+    let horizontal = (xd * xd + zd * zd).sqrt();
+
+    let yaw_delta = (zd.atan2(xd).to_degrees() - 90.0) as f32;
+    let pitch_delta = (-(yd.atan2(horizontal)).to_degrees()) as f32;
+    let (yaw, pitch) = mob.rotation();
+    let yaw =
+        yaw + wrap_degrees(yaw_delta - yaw).clamp(-LOOK_Y_MAX_ROT_SPEED, LOOK_Y_MAX_ROT_SPEED);
+    let pitch = pitch
+        + wrap_degrees(pitch_delta - pitch).clamp(-LOOK_X_MAX_ROT_ANGLE, LOOK_X_MAX_ROT_ANGLE);
+    mob.set_rotation((yaw, pitch));
+}
+
+/// Vanilla `LookControl.setLookAt(Entity, float, float)`.
+fn set_look_control_at(mob: &dyn PathfinderMob, target: &SharedEntity) {
+    let eye = DVec3::new(target.position().x, target.get_eye_y(), target.position().z);
+    mob.mob_base().controls().lock().look_control.set_look_at(
+        eye,
+        LOOK_Y_MAX_ROT_SPEED,
+        LOOK_X_MAX_ROT_ANGLE,
+    );
+}
 
 /// Vanilla `RangedBowAttackGoal`.
 pub(crate) struct RangedBowAttackGoal {
@@ -51,27 +89,27 @@ impl RangedBowAttackGoal {
         }
     }
 
+    /// Vanilla `RangedBowAttackGoal.setMinAttackInterval`.
+    pub(crate) const fn set_min_attack_interval(&mut self, ticks: i32) {
+        self.attack_interval_min = ticks;
+    }
+
     /// Vanilla `RangedBowAttackGoal.isHoldingBow`.
     fn is_holding_bow(mob: &dyn PathfinderMob) -> bool {
         mob.is_holding(&mut |stack| std::ptr::eq(stack.item(), &*vanilla_items::BOW))
     }
 
-    /// Vanilla `RangedAttackMob.performRangedAttack` projectile release.
-    ///
-    /// Gated on the missing `arrow` factory: without it there is nothing to shoot, so the
-    /// goal keeps the vanilla draw/strafe state instead of fabricating a projectile.
-    fn release_shot(_mob: &dyn PathfinderMob, _target: &SharedEntity) -> bool {
-        crate::entity::ENTITIES.has_factory(&steel_registry::vanilla_entities::ARROW)
-    }
-
-    /// Vanilla `Mob.lookAt(target, 30.0F, 30.0F)`.
-    fn look_at_target(mob: &dyn PathfinderMob, target: &SharedEntity) {
-        let eye = glam::DVec3::new(target.position().x, target.get_eye_y(), target.position().z);
-        mob.mob_base()
-            .controls()
-            .lock()
-            .look_control
-            .set_look_at(eye, 30.0, 30.0);
+    /// Vanilla `ProjectileUtil.getWeaponHoldingHand`: the main hand when it holds the bow,
+    /// otherwise the off hand.
+    fn weapon_holding_hand(mob: &dyn PathfinderMob) -> InteractionHand {
+        if mob
+            .get_item_in_hand(InteractionHand::MainHand)
+            .is(&vanilla_items::BOW)
+        {
+            InteractionHand::MainHand
+        } else {
+            InteractionHand::OffHand
+        }
     }
 }
 
@@ -150,9 +188,15 @@ impl Goal for RangedBowAttackGoal {
                 if self.strafing_backwards { -0.5 } else { 0.5 },
                 if self.strafing_clockwise { 0.5 } else { -0.5 },
             );
-            Self::look_at_target(mob, &target);
+            // Vanilla also turns the ridden `Mob` vehicle toward the target, then the rider.
+            if let Some(vehicle) = mob.controlled_vehicle()
+                && let Some(vehicle_mob) = vehicle.as_mob()
+            {
+                look_at_entity(vehicle_mob, &target);
+            }
+            look_at_entity(mob, &target);
         } else {
-            Self::look_at_target(mob, &target);
+            set_look_control_at(mob, &target);
         }
 
         if mob.is_using_item() {
@@ -162,15 +206,17 @@ impl Goal for RangedBowAttackGoal {
                 let pull_time = mob.get_tick_count_using_item();
                 if pull_time >= FULL_DRAW_TICKS {
                     mob.stop_using_item();
-                    if Self::release_shot(mob, &target) {
-                        self.attack_time = self.attack_interval_min;
+                    if let Some(ranged_attack_mob) = mob.as_ranged_attack_mob() {
+                        let _ = ranged_attack_mob
+                            .perform_ranged_attack(&target, get_power_for_time(pull_time));
                     }
+                    self.attack_time = self.attack_interval_min;
                 }
             }
         } else {
             self.attack_time -= 1;
             if self.attack_time <= 0 && self.see_time >= -60 {
-                mob.start_using_item(InteractionHand::MainHand);
+                mob.start_using_item(Self::weapon_holding_hand(mob));
             }
         }
     }

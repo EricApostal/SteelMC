@@ -11,6 +11,7 @@ use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::EndermiteEntityData;
 use steel_registry::{sound_events, vanilla_attributes};
 use steel_utils::locks::SyncMutex;
+use steel_utils::random::RandomSource;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
 use crate::entity::ai::goal::{
@@ -19,8 +20,9 @@ use crate::entity::ai::goal::{
 };
 use crate::entity::damage::DamageSource;
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySyncedData, LivingEntity,
-    LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, RemovalReason, SharedEntity,
+    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
+    LivingEntity, LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, RemovalReason,
+    SharedEntity,
 };
 use crate::physics::MoveResult;
 use crate::world::World;
@@ -135,6 +137,46 @@ impl EndermiteEntity {
         }
 
         self.entity_data.set_base_invisible_flag(display.invisible);
+    }
+
+    /// Vanilla `Endermite.checkEndermiteSpawnRules`, the `SpawnPlacements` predicate
+    /// for `EntityType.ENDERMITE`.
+    ///
+    /// Any-light monster rules apply first; spawner reasons bypass the player
+    /// exclusion, which hides endermites from players within five blocks.
+    #[must_use]
+    pub fn check_endermite_spawn_rules(
+        entity_type: EntityTypeRef,
+        level: &World,
+        spawn_reason: EntitySpawnReason,
+        pos: BlockPos,
+        _random: &mut RandomSource,
+    ) -> bool {
+        if !<Self as Monster>::check_any_light_monster_spawn_rules(
+            entity_type,
+            level,
+            spawn_reason,
+            pos,
+        ) {
+            return false;
+        }
+        if spawn_reason.is_spawner() {
+            return true;
+        }
+        level
+            .nearest_player(
+                DVec3::new(
+                    f64::from(pos.x()) + 0.5,
+                    f64::from(pos.y()) + 0.5,
+                    f64::from(pos.z()) + 0.5,
+                ),
+                5.0,
+                |player| {
+                    !player.is_spectator()
+                        && player.game_mode() != steel_utils::types::GameType::Creative
+                },
+            )
+            .is_none()
     }
 }
 

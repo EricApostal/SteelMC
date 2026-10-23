@@ -13,6 +13,7 @@ use crate::{
             vegetation_block::{survival_update_shape, vegetation_can_survive},
         },
     },
+    entity::ai::path::PathComputationType,
     world::{LevelReader, ScheduledTickAccess},
 };
 
@@ -55,5 +56,13 @@ impl BlockBehavior for AzaleaBlock {
 impl Vegetation for AzaleaBlock {
     fn may_place_on(&self, state: BlockStateId, _world: &dyn LevelReader, _pos: BlockPos) -> bool {
         state.get_block().has_tag(&BlockTag::SUPPORTS_AZALEA)
+    }
+    /// Vanilla `AzaleaBlock.isPathfindable`: azalea bushes are never pathfindable.
+    fn is_pathfindable(
+        &self,
+        _state: BlockStateId,
+        _computation_type: PathComputationType,
+    ) -> bool {
+        false
     }
 }

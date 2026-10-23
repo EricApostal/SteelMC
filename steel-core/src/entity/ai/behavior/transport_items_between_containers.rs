@@ -2,7 +2,7 @@
 //!
 //! Movement skeleton only: Steel has no container-IO surface on the behavior
 //! layer (no `Container`/`ChestBlock.getContainer` equivalent), so the target
-//! search and item transfer halves are absent. The travelling/queuing/interacting
+//! search and item transfer halves are absent. The traveling/queuing/interacting
 //! state machine, visited-position bookkeeping and cooldowns are complete.
 
 use std::sync::Arc;
@@ -39,7 +39,7 @@ pub enum ContainerInteractionState {
 /// Vanilla `TransportItemsBetweenContainers.TransportItemState`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TransportItemState {
-    Travelling,
+    Traveling,
     Queuing,
     Interacting,
 }
@@ -103,7 +103,7 @@ impl TransportItemsBetweenContainers {
             horizontal_search_distance,
             vertical_search_distance,
             target: None,
-            item_state: TransportItemState::Travelling,
+            item_state: TransportItemState::Traveling,
             interaction_state: None,
             ticks_since_reaching_target: 0,
             idle_until: 0,
@@ -209,7 +209,7 @@ impl Behavior for TransportItemsBetweenContainers {
     }
 
     fn start(&mut self, ctx: &mut BehaviorContext<'_>) {
-        self.item_state = TransportItemState::Travelling;
+        self.item_state = TransportItemState::Traveling;
         self.interaction_state = None;
         let _ = self.horizontal_search_distance;
         let _ = self.vertical_search_distance;
@@ -220,7 +220,7 @@ impl Behavior for TransportItemsBetweenContainers {
 
     fn tick(&mut self, ctx: &mut BehaviorContext<'_>) {
         match self.item_state {
-            TransportItemState::Travelling => {
+            TransportItemState::Traveling => {
                 let Some(target) = self.transport_target(ctx.body) else {
                     // No container IO: record the body's own block as unreachable so the
                     // skeleton still exercises the bookkeeping without looping forever.
@@ -250,8 +250,8 @@ impl Behavior for TransportItemsBetweenContainers {
             }
             TransportItemState::Queuing => {
                 // Vanilla waits for the other mob using the same container; without
-                // container IO there is nothing to queue for, so fall back to travelling.
-                self.item_state = TransportItemState::Travelling;
+                // container IO there is nothing to queue for, so fall back to traveling.
+                self.item_state = TransportItemState::Traveling;
             }
             TransportItemState::Interacting => {
                 self.ticks_since_reaching_target += 1;
@@ -260,7 +260,7 @@ impl Behavior for TransportItemsBetweenContainers {
                     // interaction completes as a no-op.
                     self.interaction_state = Some(ContainerInteractionState::PickupNoItem);
                     self.clear_memories_after_matching_target_found(ctx);
-                    self.item_state = TransportItemState::Travelling;
+                    self.item_state = TransportItemState::Traveling;
                     self.idle_until = ctx.timestamp + i64::from(IDLE_COOLDOWN);
                     let _ = self.idle_until;
                 }

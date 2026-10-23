@@ -19,10 +19,11 @@ pub struct AvoidEntityGoal {
 impl AvoidEntityGoal {
     #[must_use]
     pub(crate) fn new(max_dist: f32, walk_speed_modifier: f64, sprint_speed_modifier: f64) -> Self {
-        Self::with_selector(
+        Self::with_predicates(
             max_dist,
             walk_speed_modifier,
             sprint_speed_modifier,
+            |_, _| true,
             |target, _| no_creative_or_spectator(target),
         )
     }
@@ -34,6 +35,27 @@ impl AvoidEntityGoal {
         sprint_speed_modifier: f64,
         selector: impl Fn(&dyn LivingEntity, &World) -> bool + Send + Sync + 'static,
     ) -> Self {
+        Self::with_predicates(
+            max_dist,
+            walk_speed_modifier,
+            sprint_speed_modifier,
+            selector,
+            |target, _| no_creative_or_spectator(target),
+        )
+    }
+
+    /// Vanilla 7-argument `AvoidEntityGoal(mob, avoidClass, avoidPredicate, maxDist, walk,
+    /// sprint, predicateOnAvoidEntity)`: `avoid_predicate` is the class test, while
+    /// `predicate_on_avoid_entity` is the additional filter (vanilla's default is
+    /// `EntitySelector.NO_CREATIVE_OR_SPECTATOR`).
+    #[must_use]
+    pub(crate) fn with_predicates(
+        max_dist: f32,
+        walk_speed_modifier: f64,
+        sprint_speed_modifier: f64,
+        avoid_predicate: impl Fn(&dyn LivingEntity, &World) -> bool + Send + Sync + 'static,
+        predicate_on_avoid_entity: impl Fn(&dyn LivingEntity, &World) -> bool + Send + Sync + 'static,
+    ) -> Self {
         Self {
             to_avoid: None,
             path: None,
@@ -42,7 +64,9 @@ impl AvoidEntityGoal {
             sprint_speed_modifier,
             avoid_entity_targeting: TargetingConditions::for_combat()
                 .range(f64::from(max_dist))
-                .selector(selector),
+                .selector(move |target, world| {
+                    predicate_on_avoid_entity(target, world) && avoid_predicate(target, world)
+                }),
         }
     }
 }

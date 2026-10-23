@@ -15,7 +15,7 @@ use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::{AbstractHorseEntityData, ZombieHorseEntityData};
 use steel_registry::vanilla_item_tags::ItemTag;
 use steel_registry::{REGISTRY, TaggedRegistryExt as _, sound_events, vanilla_attributes};
-use steel_utils::locks::SyncMutex;
+use steel_utils::locks::{Shared, SyncMutex};
 use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
@@ -292,13 +292,15 @@ impl ZombieHorseEntity {
 
     /// Vanilla `AbstractHorse.inventory`.
     #[must_use]
-    pub fn carried_items(&self) -> &SyncMutex<InventoryCarrier> {
+    pub fn carried_items(&self) -> &Shared<InventoryCarrier> {
         self.parts.inventory()
     }
 
-    /// GAP: `HorseMenu` opening belongs to the Menus slice (see module docs).
+    /// Vanilla `AbstractHorse.openCustomInventoryScreen`.
     pub fn open_custom_inventory_screen(&self, player: &Player) {
-        open_custom_inventory_screen(self, player);
+        self.with_horse_data(|data| {
+            open_custom_inventory_screen(self, &self.parts, data, player, 0)
+        });
     }
 
     /// Vanilla `ZombieHorse.isMobControlled`: a mob rider controls the horse.
@@ -355,7 +357,7 @@ impl ZombieHorseEntity {
         }
 
         self.with_horse_data(|data| {
-            abstract_horse_mob_interact(self, &self.parts, data, player, hand)
+            abstract_horse_mob_interact(self, &self.parts, data, player, hand, 0)
         })
     }
 }
@@ -521,6 +523,11 @@ impl LivingEntity for ZombieHorseEntity {
     /// Vanilla `AbstractHorse.dropEquipment`: carried inventory stacks drop too.
     fn drop_custom_death_loot(&self, _source: &DamageSource, _killed_by_player: bool) {
         super::drop_carried_items(self, &self.parts);
+    }
+
+    /// Vanilla `AbstractHorse.getMaxSpawnClusterSize`.
+    fn max_spawn_cluster_size(&self) -> i32 {
+        6
     }
 
     fn is_immobile(&self) -> bool {

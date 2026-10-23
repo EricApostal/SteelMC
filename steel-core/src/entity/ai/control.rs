@@ -3,6 +3,8 @@
 use glam::DVec3;
 use steel_math::wrap_degrees;
 
+use crate::entity::{LivingEntity as _, LivingTravelInput, Mob};
+
 pub(crate) const DEFAULT_LOOK_Y_MAX_ROT_SPEED: f32 = 10.0;
 pub(crate) const DEFAULT_LOOK_X_MAX_ROT_ANGLE: f32 = 40.0;
 const HEAD_STABLE_ANGLE: f32 = 15.0;
@@ -628,6 +630,8 @@ impl SmoothSwimmingMoveControl {
 
         let delta = input.wanted_position - input.position;
         if delta.length_squared() < 2.500_000_3e-7 {
+            // Vanilla returns before the trailing `applyGravity` lift.
+            output.apply_gravity_lift = false;
             output.zza = 0.0;
             return output;
         }
@@ -660,5 +664,204 @@ impl SmoothSwimmingMoveControl {
         }
 
         output
+    }
+}
+
+/// Vanilla `SmoothSwimmingLookControl` input: the look state the control reads.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SmoothSwimmingLookControlInput {
+    /// Vanilla `LookControl.isLookingAtTarget`.
+    pub looking_at_target: bool,
+    /// Vanilla `wantedX/Y/Z`.
+    pub wanted_position: DVec3,
+    /// Vanilla `mob.getX/Y/Z()`.
+    pub position: DVec3,
+    /// Vanilla `mob.getEyeY()`.
+    pub eye_y: f64,
+    /// Vanilla `mob.yHeadRot`.
+    pub y_head_rot: f32,
+    /// Vanilla `mob.yBodyRot`.
+    pub y_body_rot: f32,
+    /// Vanilla `mob.getXRot()`.
+    pub x_rot: f32,
+    /// Vanilla `LookControl.yMaxRotSpeed`.
+    pub y_max_rot_speed: f32,
+    /// Vanilla `LookControl.xMaxRotAngle`.
+    pub x_max_rot_angle: f32,
+    /// Vanilla `mob.getNavigation().isDone()`.
+    pub navigation_done: bool,
+}
+
+/// Vanilla `SmoothSwimmingLookControl` output.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SmoothSwimmingLookControlOutput {
+    /// Vanilla `mob.yHeadRot`.
+    pub y_head_rot: f32,
+    /// Vanilla `mob.setXRot`.
+    pub x_rot: f32,
+    /// Vanilla `mob.yBodyRot`.
+    pub y_body_rot: f32,
+}
+
+/// Vanilla `SmoothSwimmingLookControl<T extends Mob>`: keeps the head level while
+/// swimming, offsets the pitch/yaw by the swim posture, and lets the body trail
+/// the head by at most `max_y_rot_from_center` degrees.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SmoothSwimmingLookControl {
+    max_y_rot_from_center: i32,
+}
+
+impl SmoothSwimmingLookControl {
+    /// Vanilla `SmoothSwimmingLookControl(mob, maxYRotFromCenter)`.
+    #[must_use]
+    pub const fn new(max_y_rot_from_center: i32) -> Self {
+        Self {
+            max_y_rot_from_center,
+        }
+    }
+
+    /// Vanilla `SmoothSwimmingLookControl.tick`.
+    #[must_use]
+    pub fn tick(&self, input: SmoothSwimmingLookControlInput) -> SmoothSwimmingLookControlOutput {
+        let mut output = SmoothSwimmingLookControlOutput {
+            y_head_rot: input.y_head_rot,
+            x_rot: input.x_rot,
+            y_body_rot: input.y_body_rot,
+        };
+
+        if input.looking_at_target {
+            // Vanilla adds the swim posture offsets: +20 yaw, +10 pitch.
+            if let Some(y_rot_d) = Self::y_rot_d(&input) {
+                output.y_head_rot =
+                    rotate_towards(input.y_head_rot, y_rot_d + 20.0, input.y_max_rot_speed);
+            }
+            if let Some(x_rot_d) = Self::x_rot_d(&input) {
+                output.x_rot = rotate_towards(input.x_rot, x_rot_d + 10.0, input.x_max_rot_angle);
+            }
+        } else {
+            if input.navigation_done {
+                output.x_rot = rotate_towards(input.x_rot, 0.0, 5.0);
+            }
+            output.y_head_rot =
+                rotate_towards(input.y_head_rot, input.y_body_rot, input.y_max_rot_speed);
+        }
+
+        let head_diff_body = wrap_degrees(output.y_head_rot - input.y_body_rot);
+        if head_diff_body < -(self.max_y_rot_from_center as f32) {
+            output.y_body_rot = input.y_body_rot - 4.0;
+        } else if head_diff_body > self.max_y_rot_from_center as f32 {
+            output.y_body_rot = input.y_body_rot + 4.0;
+        }
+
+        output
+    }
+
+    /// Vanilla `LookControl.getXRotD`.
+    fn x_rot_d(input: &SmoothSwimmingLookControlInput) -> Option<f32> {
+        let xd = input.wanted_position.x - input.position.x;
+        let yd = input.wanted_position.y - input.eye_y;
+        let zd = input.wanted_position.z - input.position.z;
+        let horizontal = xd.hypot(zd);
+        if yd.abs() > 1.0e-5 || horizontal.abs() > 1.0e-5 {
+            Some(-(yd.atan2(horizontal).to_degrees() as f32))
+        } else {
+            None
+        }
+    }
+
+    /// Vanilla `LookControl.getYRotD`.
+    fn y_rot_d(input: &SmoothSwimmingLookControlInput) -> Option<f32> {
+        let xd = input.wanted_position.x - input.position.x;
+        let zd = input.wanted_position.z - input.position.z;
+        if zd.abs() > 1.0e-5 || xd.abs() > 1.0e-5 {
+            Some(zd.atan2(xd).to_degrees() as f32 - 90.0)
+        } else {
+            None
+        }
+    }
+}
+
+/// Vanilla `SmoothSwimmingLookControl.tick` against a live mob.
+///
+/// Lives next to the control type so every water mob shares one implementation:
+/// vanilla installs `SmoothSwimmingLookControl` in the mob constructor and ticks
+/// it through `LookControl.tick`; Steel's `Mob` trait lets a mob override
+/// `tick_look_control`, which calls this.
+pub(crate) fn tick_smooth_swimming_look_control<M: Mob + ?Sized>(
+    mob: &M,
+    control: SmoothSwimmingLookControl,
+) {
+    let look_control = {
+        let mut controls = mob.mob_base().controls().lock();
+        let look_control = controls.look_control;
+        controls.look_control.tick_cooldown();
+        look_control
+    };
+
+    let output = control.tick(SmoothSwimmingLookControlInput {
+        looking_at_target: look_control.is_looking_at_target(),
+        wanted_position: look_control.wanted_position(),
+        position: mob.position(),
+        eye_y: mob.get_eye_y(),
+        y_head_rot: mob.y_head_rot(),
+        y_body_rot: mob.y_body_rot(),
+        x_rot: mob.rotation().1,
+        y_max_rot_speed: look_control.y_max_rot_speed(),
+        x_max_rot_angle: look_control.x_max_rot_angle(),
+        navigation_done: mob.mob_base().navigation().lock().is_done(),
+    });
+
+    let (yaw, _) = mob.rotation();
+    mob.set_rotation((yaw, output.x_rot));
+    mob.set_y_head_rot(output.y_head_rot);
+    mob.living_base().set_y_body_rot(output.y_body_rot);
+}
+
+/// Vanilla `SmoothSwimmingMoveControl.tick` against a live mob.
+///
+/// See [`tick_smooth_swimming_look_control`] for why this lives here.
+pub(crate) fn tick_smooth_swimming_move_control<M: Mob + ?Sized>(
+    mob: &M,
+    control: SmoothSwimmingMoveControl,
+) {
+    let move_control = {
+        let mut controls = mob.mob_base().controls().lock();
+        let move_control = controls.move_control;
+        if matches!(move_control.operation(), MoveControlOperation::MoveTo) {
+            controls.move_control.set_wait();
+        }
+        move_control
+    };
+
+    let movement_speed = mob
+        .attributes()
+        .lock()
+        .required_value(steel_registry::vanilla_attributes::MOVEMENT_SPEED);
+    let output = control.tick(SmoothSwimmingMoveControlInput {
+        operation: move_control.operation(),
+        navigation_done: mob.mob_base().navigation().lock().is_done(),
+        wanted_position: move_control.wanted_position(),
+        position: mob.position(),
+        y_rot: mob.rotation().0,
+        x_rot: mob.rotation().1,
+        in_water: mob.is_in_water(),
+        speed_modifier: move_control.speed_modifier(),
+        movement_speed,
+    });
+
+    mob.set_rotation((output.y_rot, output.x_rot));
+    if output.sync_body_and_head_rot {
+        mob.set_y_head_rot(output.y_rot);
+        mob.living_base().set_y_body_rot(output.y_rot);
+    }
+    mob.set_speed(output.speed);
+    let input = mob.travel_input();
+    mob.set_travel_input(LivingTravelInput::new(
+        input.sideways(),
+        output.yya,
+        output.zza,
+    ));
+    if output.apply_gravity_lift {
+        mob.set_velocity(mob.velocity() + DVec3::new(0.0, 0.005, 0.0));
     }
 }

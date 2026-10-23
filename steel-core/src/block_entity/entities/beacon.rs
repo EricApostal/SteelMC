@@ -300,7 +300,7 @@ impl BeaconBlockEntity {
         let aabb = WorldAabb::from_min_max(min, max);
 
         for entity in world.get_entities_in_aabb_matching(&aabb, |entity| {
-            entity.entity_type() == &vanilla_entities::PLAYER && !entity.is_spectator()
+            entity.entity_type() == &vanilla_entities::PLAYER
         }) {
             let Some(player) = entity.downcast_ref::<Player>() else {
                 continue;
@@ -358,14 +358,9 @@ impl BlockEntity for BeaconBlockEntity {
     }
 
     fn get_update_tag(&self) -> Option<NbtCompound> {
-        let mut nbt = NbtCompound::new();
-        {
-            let state = self.state.lock();
-            Self::store_effect(&mut nbt, "primary_effect", state.primary_power);
-            Self::store_effect(&mut nbt, "secondary_effect", state.secondary_power);
-            nbt.insert("Levels", state.levels);
-        }
-        Some(nbt)
+        // Vanilla `BeaconBlockEntity.getUpdateTag` returns `saveCustomOnly`, carrying
+        // `primary_effect`, `secondary_effect`, and `Levels`.
+        Some(self.save_custom_only())
     }
 
     fn tick(&self, world: &Arc<World>) {

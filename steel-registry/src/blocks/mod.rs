@@ -8,8 +8,11 @@
 
 pub mod behavior;
 pub mod block_state_ext;
+pub mod map_color;
 pub mod properties;
 pub mod shapes;
+
+pub use map_color::{Brightness as MapColorBrightness, MapColor};
 
 use std::{slice, sync::OnceLock};
 
@@ -76,6 +79,46 @@ impl StateBooleanData {
 
     #[must_use]
     pub fn value(self, offset: u16) -> bool {
+        self.overwrites
+            .iter()
+            .find(|overwrite| overwrite.offset == offset)
+            .map_or(self.default, |overwrite| overwrite.value)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct StateMapColorOverwrite {
+    pub offset: u16,
+    pub value: MapColor,
+}
+
+impl StateMapColorOverwrite {
+    #[must_use]
+    pub const fn new(offset: u16, value: MapColor) -> Self {
+        Self { offset, value }
+    }
+}
+
+/// Extracted `BlockState.getMapColor` palette ids indexed by block-local state offset.
+#[derive(Debug, Clone, Copy)]
+pub struct StateMapColorData {
+    pub default: MapColor,
+    pub overwrites: &'static [StateMapColorOverwrite],
+}
+
+impl StateMapColorData {
+    pub const NONE: Self = Self::new(MapColor::NONE, &[]);
+
+    #[must_use]
+    pub const fn new(default: MapColor, overwrites: &'static [StateMapColorOverwrite]) -> Self {
+        Self {
+            default,
+            overwrites,
+        }
+    }
+
+    #[must_use]
+    pub fn value(self, offset: u16) -> MapColor {
         self.overwrites
             .iter()
             .find(|overwrite| overwrite.offset == offset)
@@ -204,6 +247,8 @@ pub struct Block {
     pub fluid_state: StateFluidData,
     /// Vanilla `BlockState.isRandomlyTicking` values indexed by block-local state offset.
     pub randomly_ticking: StateBooleanData,
+    /// Extracted `BlockState.getMapColor` palette ids indexed by block-local state offset.
+    pub map_color: StateMapColorData,
     /// Extracted vanilla light properties indexed by block-local state offset.
     pub light_properties: LightPropertiesFn,
     /// Function to get collision shape for a state offset
@@ -265,6 +310,7 @@ impl Block {
             redstone_conductor: StateBooleanData::TRUE,
             fluid_state: StateFluidData::EMPTY,
             randomly_ticking,
+            map_color: StateMapColorData::NONE,
             light_properties: opaque_full_block_light_properties,
             collision_shape: full_block_shape,
             support_shape: full_block_shape,
@@ -317,6 +363,12 @@ impl Block {
     /// Sets the extracted per-state random-tick predicate.
     pub const fn with_randomly_ticking(mut self, randomly_ticking: StateBooleanData) -> Self {
         self.randomly_ticking = randomly_ticking;
+        self
+    }
+
+    /// Sets the extracted per-state map color palette ids.
+    pub const fn with_map_color(mut self, map_color: StateMapColorData) -> Self {
+        self.map_color = map_color;
         self
     }
 
@@ -991,6 +1043,17 @@ impl BlockRegistry {
     #[must_use]
     pub fn get_static_collision_shape(&self, state_id: BlockStateId) -> shapes::VoxelShape {
         self.static_shape_for_state(state_id, Block::get_collision_shape)
+    }
+
+    /// Returns the extracted `BlockState.getMapColor` palette entry.
+    ///
+    /// Dynamic behaviors may override this value using the live level and position.
+    #[must_use]
+    pub fn get_map_color(&self, state_id: BlockStateId) -> MapColor {
+        let Some((block, offset)) = self.block_and_state_offset(state_id) else {
+            return MapColor::NONE;
+        };
+        block.map_color.value(offset)
     }
 
     #[must_use]

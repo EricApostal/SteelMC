@@ -94,10 +94,6 @@ pub struct FluidState {
     pub falling: bool,
 }
 
-const LEGACY_SOURCE_LEVEL: u8 = 0;
-const LEGACY_MAX_LEVEL: u8 = 8;
-const LEGACY_FALLING_OFFSET: u8 = 8;
-
 impl FluidState {
     /// The empty fluid state.
     pub const EMPTY: Self = Self {
@@ -149,6 +145,16 @@ impl FluidState {
     #[must_use]
     pub const fn is_source(&self) -> bool {
         self.fluid_id.is_source
+    }
+
+    /// Vanilla `FluidState.isSourceOfType(Fluid)`: this state is owned by exactly
+    /// `fluid_type` and that owner reports itself as a source.
+    ///
+    /// Unlike [`Self::is_source`], a flowing state never matches — e.g. a falling
+    /// full water block is not a source of type `minecraft:water`.
+    #[must_use]
+    pub fn is_source_of_type(&self, fluid_type: FluidRef) -> bool {
+        self.fluid_id == fluid_type && self.fluid_id.is_source
     }
 
     /// Returns true if this fluid has vanilla's full amount (`8`).
@@ -209,24 +215,28 @@ impl FluidState {
         }
     }
 
+    /// Vanilla `FluidState.createLegacyBlock()`: the fluid's own block carrying
+    /// the legacy `LEVEL` property.
+    ///
+    /// The block comes from the fluid registry's `block` field, so water yields
+    /// `minecraft:water`, lava `minecraft:lava`, and the empty fluid air. Vanilla
+    /// builds this as `getBucketBlock().defaultBlockState().setValue(LEVEL, getLegacyLevel())`;
+    /// a fluid whose block has no `LEVEL` property is returned as its default state.
     pub fn create_legacy_block(self) -> BlockStateId {
-        vanilla_blocks::WATER
-            .default_state()
-            .set_value(&BlockStateProperties::LEVEL, Self::get_legacy_level(self))
-    }
-
-    const fn get_legacy_level(self) -> u8 {
-        if self.is_source() {
-            return LEGACY_SOURCE_LEVEL;
+        let air = || REGISTRY.blocks.get_default_state_id(&vanilla_blocks::AIR);
+        if self.fluid_id.is_empty {
+            return air();
         }
 
-        let falling_offset = if self.falling {
-            LEGACY_FALLING_OFFSET
-        } else {
-            0
+        let Some(block) = REGISTRY.blocks.by_key(&self.fluid_id.block) else {
+            return air();
         };
-
-        LEGACY_MAX_LEVEL - self.amount.min(LEGACY_MAX_LEVEL) + falling_offset
+        let base = REGISTRY.blocks.get_default_state_id(block);
+        if base.try_get_value(&BlockStateProperties::LEVEL).is_some() {
+            base.set_value(&BlockStateProperties::LEVEL, self.to_block_level())
+        } else {
+            base
+        }
     }
 }
 

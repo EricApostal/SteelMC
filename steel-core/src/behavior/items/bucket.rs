@@ -13,7 +13,7 @@ use crate::behavior::{
 };
 use crate::entity::Entity;
 use crate::fluid::FluidStateExt;
-use crate::world::RaytraceAction;
+use crate::world::{RandomizationType, RaytraceAction};
 use glam::DVec3;
 use steel_macros::item_behavior;
 use steel_registry::blocks::BlockRef;
@@ -272,12 +272,13 @@ pub(crate) fn use_filled_bucket(
                 // Vanilla `level.playSound(user, pos, ...)` excludes the placing player.
                 Some(context.player.id()),
             );
-            context.world.send_particles(
+            context.world.send_particles_with_randomization(
                 ParticleData::new(&vanilla_particle_types::LARGE_SMOKE, SimpleParticleOptions),
                 DVec3::new(f64::from(pos.x()), f64::from(pos.y()), f64::from(pos.z())),
                 8,
                 DVec3::new(1.0, 1.0, 1.0),
                 0.0,
+                RandomizationType::Alternative,
             );
             return true;
         }

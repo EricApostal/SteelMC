@@ -109,10 +109,10 @@ const DEFAULT_STEP_HEIGHT: f32 = 0.6;
 /// Vanilla `WitherBoss` initial synced alternative-target ids.
 const DEFAULT_TARGET_ID: i32 = 0;
 
-/// Vanilla `WitherBoss` powered-state particle colour `(0.7F, 0.7F, 0.5F)` packed the way
+/// Vanilla `WitherBoss` powered-state particle color `(0.7F, 0.7F, 0.5F)` packed the way
 /// `ARGB.colorFromFloat` does (`floor(channel * 255)`): `0xFFB2B27F`.
 const POWERED_EFFECT_COLOR: ArgbColor = ArgbColor::new(0xFFB2_B27F_u32 as i32);
-/// Vanilla `WitherBoss` spawn-invulnerability particle colour `(0.7F, 0.7F, 0.9F)` packed the
+/// Vanilla `WitherBoss` spawn-invulnerability particle color `(0.7F, 0.7F, 0.9F)` packed the
 /// same way: `0xFFB2B2E5`.
 const SPAWN_EFFECT_COLOR: ArgbColor = ArgbColor::new(0xFFB2_B2E5_u32 as i32);
 

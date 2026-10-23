@@ -2,6 +2,15 @@ use super::{CSetChunkCenter, ChunkMap, ChunkPos, Entity, Player, PlayerChunkView
 use crate::chunk::chunk_scheduler::PlayerTicketOperation;
 
 impl ChunkMap {
+    /// Vanilla `ChunkMap.skipPlayer`: a spectator is only a chunk-generation
+    /// source while the `spectators_generate_chunks` game rule is enabled. A
+    /// skipped player still tracks its chunk view, so it receives chunks other
+    /// players already loaded, but it owns no loading ticket of its own.
+    fn player_owns_loading_tickets(player: &Player, world: &crate::world::World) -> bool {
+        !player.is_spectator()
+            || world.get_game_rule(&steel_registry::vanilla_game_rules::SPECTATORS_GENERATE_CHUNKS)
+    }
+
     /// Updates the player's status in the chunk map.
     pub fn update_player_status(&self, player: &Player) {
         let current_chunk_pos = ChunkPos::from_entity_pos(player.position());
@@ -10,22 +19,29 @@ impl ChunkMap {
 
         let new_view = PlayerChunkView::new(current_chunk_pos, view_distance);
         let world = self.world_gen_context.world();
+        let owns_tickets = Self::player_owns_loading_tickets(player, world);
         let player_id = player.gameprofile.id();
         let mut last_view_guard = player.last_tracking_view.lock();
 
         if last_view_guard.as_ref() != Some(&new_view) {
             if let Some(last_view) = last_view_guard.as_ref() {
                 if last_view.center != new_view.center {
-                    let _ = self.scheduling.queue_player_ticket_operations([
-                        PlayerTicketOperation::Remove {
+                    // Vanilla removes the old distance-manager source
+                    // unconditionally and only adds the new one when the player
+                    // is not skipped, so a skipped spectator's stale ticket is
+                    // always released.
+                    self.scheduling
+                        .queue_player_ticket_operation(PlayerTicketOperation::Remove {
                             pos: last_view.center,
                             player_id,
-                        },
-                        PlayerTicketOperation::Add {
-                            pos: new_view.center,
-                            player_id,
-                        },
-                    ]);
+                        });
+                    if owns_tickets {
+                        self.scheduling
+                            .queue_player_ticket_operation(PlayerTicketOperation::Add {
+                                pos: new_view.center,
+                                player_id,
+                            });
+                    }
 
                     player.send_packet(CSetChunkCenter {
                         x: new_view.center.0.x,
@@ -62,11 +78,13 @@ impl ChunkMap {
                     &removed_chunks,
                 );
             } else {
-                self.scheduling
-                    .queue_player_ticket_operation(PlayerTicketOperation::Add {
-                        pos: new_view.center,
-                        player_id,
-                    });
+                if owns_tickets {
+                    self.scheduling
+                        .queue_player_ticket_operation(PlayerTicketOperation::Add {
+                            pos: new_view.center,
+                            player_id,
+                        });
+                }
 
                 // Send initial chunk cache center to client
                 player.send_packet(CSetChunkCenter {

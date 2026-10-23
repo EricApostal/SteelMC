@@ -43,7 +43,7 @@ use crate::entity::conversion::ConversionParams;
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::mobs::npc::VillagerEntity;
 use crate::entity::entities::mobs::npc::villager::VillagerDataHolder;
-use crate::entity::entities::mobs::zombie::zombie::zombie_effective_difficulty;
+use crate::entity::entities::mobs::zombie::zombie::{self, zombie_effective_difficulty};
 use crate::entity::npc::gossip::{GossipContainer, ReputationEventHandler, ReputationEventType};
 use crate::entity::npc::trading::{Merchant, MerchantOffers};
 use crate::entity::{
@@ -75,6 +75,12 @@ const CURE_NAUSEA_TICKS: i32 = 200;
 const BABY_XP_MULTIPLIER: f64 = 2.5;
 /// Vanilla `Zombie.doHurtTarget` ignition roll gain (`difficulty * 0.3F`).
 const IGNITE_DIFFICULTY_GAIN: f32 = 0.3;
+/// Vanilla `Zombie.finalizeSpawn`: `0.55F * difficulty.getSpecialMultiplier()`.
+const ZOMBIE_CAN_PICK_UP_LOOT_CHANCE: f32 = 0.55;
+/// Vanilla `Zombie.getSpawnAsBabyOdds`: `random.nextFloat() < 0.05F`.
+const ZOMBIE_SPAWN_AS_BABY_CHANCE: f32 = 0.05;
+/// Vanilla `Zombie.BREAK_DOOR_CHANCE`.
+const ZOMBIE_BREAK_DOOR_CHANCE: f32 = 0.1;
 const TICKS_PER_SECOND: i32 = 20;
 const SPEED_MODIFIER_BABY_ID: Identifier = Identifier::vanilla_static("baby");
 
@@ -454,8 +460,15 @@ impl ZombieVillagerEntity {
 
                 if let Some(starter) = *self.conversion_starter.lock() {
                     if let Some(player) = world.get_entity_by_uuid(&starter)
-                        && player.as_player().is_some()
+                        && let Some(player) = player.as_player()
                     {
+                        // Vanilla `ZombieVillager.finishConversion`:
+                        // `CriteriaTriggers.CURED_ZOMBIE_VILLAGER.trigger(player, this, villager)`.
+                        crate::player::advancement::triggers::raise_cured_zombie_villager(
+                            player,
+                            self,
+                            villager,
+                        );
                         villager.on_reputation_event_from(
                             ReputationEventType::ZOMBIE_VILLAGER_CURED,
                             player,
@@ -792,6 +805,9 @@ impl Mob for ZombieVillagerEntity {
         InteractionResult::SuccessServer
     }
 
+    /// Vanilla `ZombieVillager.finalizeSpawn` finalizes the villager type and then
+    /// runs `Zombie.finalizeSpawn`, whose spawn tail (loot pickup, baby odds,
+    /// equipment, `handleAttributes`) applies to zombie villagers too.
     fn finalize_spawn(
         &self,
         world: &Arc<World>,
@@ -800,19 +816,47 @@ impl Mob for ZombieVillagerEntity {
     ) -> Option<SpawnGroupData> {
         self.finalize_villager_type(world);
 
-        if group_data.is_none() {
-            let mut random = LegacyRandom::from_seed(rand::random());
-            let is_baby = random.next_f32() < 0.05;
-            let group_data = Some(SpawnGroupData::AgeableMob(AgeableMobGroupData::new(
-                is_baby,
+        let mut random = LegacyRandom::from_seed(rand::random());
+        let difficulty_modifier = world
+            .current_difficulty_at(self.block_position())
+            .special_multiplier();
+
+        if spawn_reason != EntitySpawnReason::Conversion {
+            self.set_can_pick_up_loot(
+                random.next_f32() < ZOMBIE_CAN_PICK_UP_LOOT_CHANCE * difficulty_modifier,
+            );
+        }
+
+        let group_data = group_data.or_else(|| {
+            Some(SpawnGroupData::AgeableMob(AgeableMobGroupData::new(
+                random.next_f32() < ZOMBIE_SPAWN_AS_BABY_CHANCE,
                 AgeableMobGroupData::DEFAULT_BABY_SPAWN_CHANCE,
-            )));
-            if is_baby {
+            )))
+        });
+
+        if let Some(SpawnGroupData::AgeableMob(data)) = group_data {
+            if data.should_spawn_baby() {
                 self.set_baby(true);
             }
-            self.set_can_break_doors(false);
-            return self.finalize_spawn_mob_base(world, spawn_reason, group_data);
+
+            self.set_can_break_doors(random.next_f32() < difficulty_modifier * ZOMBIE_BREAK_DOOR_CHANCE);
+            if spawn_reason != EntitySpawnReason::Conversion {
+                zombie::populate_zombie_equipment_slots(self, &mut random, difficulty_modifier);
+                zombie::populate_zombie_equipment_enchantments(
+                    self,
+                    &mut random,
+                    difficulty_modifier,
+                );
+            }
         }
+
+        zombie::handle_zombie_spawn_attributes(
+            self,
+            difficulty_modifier,
+            spawn_reason,
+            &mut random,
+            &|can_break_doors| self.set_can_break_doors(can_break_doors),
+        );
 
         self.finalize_spawn_mob_base(world, spawn_reason, group_data)
     }

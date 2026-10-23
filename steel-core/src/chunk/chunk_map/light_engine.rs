@@ -33,7 +33,7 @@ impl ChunkMap {
     ///
     /// Keeps queued section light for a column across `markNewInconsistencies`
     /// removal passes; used while persisted light is being handed to the engine
-    /// (`SerializableChunkData` calls `retainData(pos, true)` before queueing
+    /// (`SerializableChunkData` calls `retainData(pos, true)` before queuing
     /// each section and `retainData(pos, false)` after lighting).
     pub fn retain_light_data(&self, chunk_pos: ChunkPos, retain: bool) {
         self.light_engine.lock().retain_data(chunk_pos, retain);

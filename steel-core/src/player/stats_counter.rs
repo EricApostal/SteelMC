@@ -192,11 +192,14 @@ impl Player {
         self.stats.lock().mark_all_dirty();
     }
 
-    /// Sends all the dirty stats of this player to their client, and removes
-    /// the dirty flag from all of them.
+    /// Sends all the dirty stats of this player to their client in one
+    /// [`CAwardStats`] batch, and removes the dirty flag from all of them.
+    ///
+    /// Mirrors vanilla `ServerStatsCounter.sendStats`, which is called when the
+    /// client opens the statistics screen (`ClientCommandAction::RequestStats`).
     pub fn send_stats(&self) {
         let stats = self.stats.lock().get_dirty_and_clear();
-        self.send_packet(CAwardStats { stats });
+        self.send_packet(CAwardStats::new(stats));
     }
 
     /// Returns the player's currently tracked stats and their counters.

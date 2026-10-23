@@ -694,7 +694,7 @@ pub trait AbstractArrow: Projectile + Sized {
 
         if self.get_pierce_level() > 0 {
             if self.abstract_arrow_base().piercing_ignore_count()
-                >= usize::from(self.get_pierce_level().max(0) as u8) + 1
+                > usize::from(self.get_pierce_level().max(0) as u8)
             {
                 self.set_removed(RemovalReason::Discarded);
                 return;
@@ -996,7 +996,7 @@ pub fn piercing_count(weapon: &ItemStack) -> i32 {
 /// Vanilla returns an `AbstractArrow`. Every vanilla `getMobArrow` call site
 /// (skeleton, stray, bogged, illusioner) holds a plain or tipped arrow, so the
 /// arrow entity is returned directly; a spectral arrow item would produce a
-/// `SpectralArrow` in vanilla, which Steel logs instead of mis-typing.
+/// `SpectralArrow` in vanilla, which Steel logs instead of mistyping.
 #[must_use]
 pub fn get_mob_arrow(
     mob: &SharedEntity,

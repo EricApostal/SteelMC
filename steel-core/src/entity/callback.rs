@@ -158,15 +158,15 @@ impl EntityLevelCallback for PlayerEntityCallback {
                 );
             })?;
 
-        if update.section_changed() {
-            world.entity_tracker().on_entity_section_change(
-                self.entity_id,
-                update.old_chunk,
-                update.new_chunk,
-                |chunk| world.get_packet_tracking_players(chunk),
-                |player_id| world.players.get_by_entity_id(player_id),
-            );
+        // Vanilla `ChunkMap.move` refreshes the moved player's own pairing for
+        // every accepted movement packet, not only when the section changes.
+        world.entity_tracker().on_entity_section_change(
+            self.entity_id,
+            |chunk| world.get_packet_tracking_players(chunk),
+            |player_id| world.players.get_by_entity_id(player_id),
+        );
 
+        if update.section_changed() {
             if let Some(player) = world.players.get_by_entity_id(self.entity_id)
                 && let Some(view) = *player.last_tracking_view.lock()
             {
@@ -252,8 +252,6 @@ impl EntityLevelCallback for EntityChunkCallback {
             } else if update.new_accessible {
                 world.entity_tracker().on_entity_section_change(
                     self.entity_id,
-                    update.old_chunk,
-                    update.new_chunk,
                     |chunk| world.get_packet_tracking_players(chunk),
                     |player_id| world.players.get_by_entity_id(player_id),
                 );

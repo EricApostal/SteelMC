@@ -4,11 +4,12 @@ use glam::DVec3;
 use steel_macros::block_behavior;
 use steel_registry::blocks::{BlockRef, block_state_ext::BlockStateExt as _, shapes::VoxelShape};
 use steel_registry::item_stack::ItemStack;
+use steel_registry::particle_type::ParticleData;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_type_tags::EntityTypeTag;
 use steel_registry::{
     REGISTRY, TaggedRegistryExt, sound_events, vanilla_blocks, vanilla_entities,
-    vanilla_game_rules, vanilla_items,
+    vanilla_game_rules, vanilla_items, vanilla_particle_types,
 };
 use steel_utils::{BlockLocalAabb, BlockPos, BlockStateId, types::UpdateFlags};
 
@@ -22,7 +23,7 @@ use crate::{
     entity::{Entity, InsideBlockEffectCollector, InsideBlockEffectType},
     inventory::equipment::EquipmentSlot,
     player::Player,
-    world::{ConditionalBlockSetResult, LevelReader, World},
+    world::{ConditionalBlockSetResult, LevelReader, RandomizationType, World},
 };
 
 const IN_BLOCK_SPEED_MULTIPLIER: DVec3 = DVec3::new(0.9, 1.5, 0.9);
@@ -195,6 +196,25 @@ impl BlockBehavior for PowderSnowBlock {
     ) {
         if !entity.is_living_entity() || entity.in_block_state(world).get_block() == self.block {
             entity.make_stuck_in_block(state, IN_BLOCK_SPEED_MULTIPLIER);
+
+            // Vanilla `PowderSnowBlock.entityInside` snowflake burst.
+            let known_movement = entity.known_movement();
+            if (known_movement.x != 0.0 || known_movement.z != 0.0) && rand::random::<bool>() {
+                // Vanilla `Mth.randomBetween(random, -1.0F, 1.0F) * 0.083333336F`.
+                const VELOCITY_SCALE: f64 = 0.083_333_336;
+                let random_velocity = || (rand::random::<f64>() * 2.0 - 1.0) * VELOCITY_SCALE;
+                let entity_pos = entity.position();
+                world.send_particles_with_velocity(
+                    ParticleData::simple(&vanilla_particle_types::SNOWFLAKE),
+                    false,
+                    false,
+                    DVec3::new(entity_pos.x, f64::from(pos.y()) + 1.0, entity_pos.z),
+                    1,
+                    DVec3::ZERO,
+                    DVec3::new(random_velocity(), 0.05, random_velocity()),
+                    RandomizationType::Alternative,
+                );
+            }
         }
 
         let world = Arc::clone(world);

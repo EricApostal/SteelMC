@@ -1,3 +1,8 @@
+//! Vanilla `DragonEggBlock` behavior.
+//!
+//! Deviation: Vanilla `DragonEggBlock.getDustColor` is a client-side rendering
+//! hint for the falling entity; Steel has no server-side hook for it.
+
 use std::sync::Arc;
 
 use rand::random_range;
@@ -5,14 +10,17 @@ use steel_macros::block_behavior;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::Direction;
+use steel_registry::items::item::BlockHitResult;
+use steel_registry::level_events;
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId};
 
-use crate::behavior::{BlockBehavior, BlockPlaceContext, InteractionResult, InventoryAccess};
+use crate::behavior::{
+    BlockBehavior, BlockPlaceContext, Fallable, InteractionResult, InventoryAccess,
+};
 use crate::entity::ai::path::PathComputationType;
 use crate::player::Player;
 use crate::world::{LevelAccessor, ScheduledTickAccess, World};
-use steel_registry::items::item::BlockHitResult;
 
 use super::FallingBlock;
 
@@ -35,6 +43,22 @@ impl DragonEggBlock {
         Self {
             falling: FallingBlock::new(block),
         }
+    }
+
+    /// Vanilla `BlockUtil.packDifferenceInPosition`.
+    const fn pack_difference_in_position(
+        from: BlockPos,
+        to: BlockPos,
+        x_radius: i32,
+        y_radius: i32,
+        z_radius: i32,
+    ) -> i32 {
+        let x_diff = to.x() - from.x();
+        let y_diff = to.y() - from.y();
+        let z_diff = to.z() - from.z();
+        ((x_diff + x_radius) & 0xFF) << 16
+            | ((y_diff + y_radius) & 0xFF) << 8
+            | ((z_diff + z_radius) & 0xFF)
     }
 
     fn teleport(state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
@@ -61,6 +85,21 @@ impl DragonEggBlock {
                 continue;
             }
 
+            // Vanilla sends the teleport particles from the original position
+            // before moving the block.
+            let packed_diff = Self::pack_difference_in_position(
+                pos,
+                new_pos,
+                DRAGON_EGG_MAX_X,
+                DRAGON_EGG_MAX_Y,
+                DRAGON_EGG_MAX_Z,
+            );
+            world.level_event(
+                level_events::PARTICLES_DRAGON_EGG_TELEPORT,
+                pos,
+                packed_diff,
+                None,
+            );
             world.set_block_state(new_pos, state, UpdateFlags::UPDATE_CLIENTS);
             world.remove_block(pos, false);
             break;
@@ -124,5 +163,25 @@ impl BlockBehavior for DragonEggBlock {
         _computation_type: PathComputationType,
     ) -> bool {
         false
+    }
+
+    fn as_fallable(&self) -> Option<&dyn Fallable> {
+        Some(&self.falling)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packed_difference_matches_vanilla_bit_layout() {
+        let origin = BlockPos::new(10, 64, -5);
+        let target = BlockPos::new(13, 62, -8);
+
+        assert_eq!(
+            DragonEggBlock::pack_difference_in_position(origin, target, 16, 8, 16),
+            (19 << 16) | (6 << 8) | 13
+        );
     }
 }

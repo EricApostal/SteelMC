@@ -318,15 +318,60 @@ impl MushroomCowEntity {
         };
 
         if self.stew_effects.lock().is_some() {
+            // Vanilla `MushroomCow.mobInteract`: a brown mooshroom that already holds a stew
+            // effect puffs `SMOKE` instead of consuming another flower.
+            if let Some(world) = self.level() {
+                self.send_stew_particles(world.as_ref(), &vanilla_particle_types::SMOKE, 2);
+            }
             InteractionResult::Success
         } else {
             *self.stew_effects.lock() = Some(effects);
+            if let Some(world) = self.level() {
+                self.send_stew_particles(world.as_ref(), &vanilla_particle_types::EFFECT, 4);
+            }
             self.play_sound(&sound_events::ENTITY_MOOSHROOM_EAT, 2.0, 1.0);
             player.inventory.lock().mutate_item_in_hand(hand, |item| {
                 item.consume_one(player.has_infinite_materials());
             });
             InteractionResult::Success
         }
+    }
+
+    /// Vanilla `MushroomCow.mobInteract` particle burst.
+    ///
+    /// Vanilla sends `ALTERNATIVE_WITH_SPEED` with `ySpeed = 0.2`; the `EFFECT` variant uses
+    /// `SpellParticleOption.create(ParticleTypes.EFFECT, -1, 1.0F)`.
+    fn send_stew_particles(
+        &self,
+        world: &World,
+        particle_type: steel_registry::particle_type::ParticleTypeRef,
+        count: i32,
+    ) {
+        let particle = if std::ptr::eq(particle_type, &vanilla_particle_types::EFFECT) {
+            ParticleData::new(
+                particle_type,
+                steel_registry::particle_type::SpellParticleOption::new(
+                    steel_utils::RgbColor::new(-1),
+                    1.0,
+                ),
+            )
+        } else {
+            ParticleData::simple(particle_type)
+        };
+        world.send_particles_with_velocity(
+            particle,
+            false,
+            false,
+            DVec3::new(
+                self.position().x,
+                self.position().y + f64::from(self.base().dimensions().height) * 0.5,
+                self.position().z,
+            ),
+            count,
+            DVec3::new(0.5, 0.0, 0.5),
+            DVec3::new(0.0, 0.2, 0.0),
+            crate::world::RandomizationType::AlternativeWithSpeed,
+        );
     }
 
     fn try_interact_shears(&self, player: &Player, hand: InteractionHand) -> InteractionResult {

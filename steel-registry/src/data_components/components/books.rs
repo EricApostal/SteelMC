@@ -92,6 +92,12 @@ impl WritableBookContent {
         &self.pages
     }
 
+    /// Vanilla `WritableBookContent.withReplacedPages`.
+    #[must_use]
+    pub fn with_replaced_pages(&self, pages: Vec<Filterable<String>>) -> Self {
+        Self { pages }
+    }
+
     fn to_nbt_tag_ref(&self) -> NbtTag {
         let mut compound = NbtCompound::new();
         if !self.pages.is_empty() {
@@ -249,6 +255,32 @@ impl WrittenBookContent {
             title: self.title.clone(),
             author: self.author.clone(),
             generation: self.generation + 1,
+            pages: self.pages.clone(),
+            resolved: self.resolved,
+        }
+    }
+
+    /// Vanilla `WrittenBookContent.withReplacedPages`: keeps the cover and
+    /// resolution state while replacing every page.
+    #[must_use]
+    pub fn with_replaced_pages(&self, pages: Vec<Filterable<TextComponent>>) -> Self {
+        Self {
+            title: self.title.clone(),
+            author: self.author.clone(),
+            generation: self.generation,
+            pages,
+            resolved: self.resolved,
+        }
+    }
+
+    /// Vanilla `SetBookCoverFunction.apply`: replaces the cover fields and keeps
+    /// the existing pages and resolution state.
+    #[must_use]
+    pub fn with_cover(&self, title: Filterable<String>, author: String, generation: i32) -> Self {
+        Self {
+            title,
+            author,
+            generation,
             pages: self.pages.clone(),
             resolved: self.resolved,
         }

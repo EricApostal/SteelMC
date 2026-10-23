@@ -12,7 +12,7 @@ use text_components::{Modifier, TextComponent, format::Color};
 
 use crate::scoreboard::display::DisplaySlot;
 
-/// Vanilla `TeamColor`: the sixteen fixed team colours.
+/// Vanilla `TeamColor`: the sixteen fixed team colors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum TeamColor {
     #[serde(rename = "black")]
@@ -50,7 +50,7 @@ pub enum TeamColor {
 }
 
 impl TeamColor {
-    /// Every team colour in vanilla wire-id order.
+    /// Every team color in vanilla wire-id order.
     pub const ALL: [Self; 16] = [
         Self::Black,
         Self::DarkBlue,
@@ -122,7 +122,7 @@ impl TeamColor {
         Self::ALL.into_iter().find(|color| color.as_str() == name)
     }
 
-    /// Vanilla `ByIdMap` behaviour: unknown ids map to the first colour.
+    /// Vanilla `ByIdMap` behaviour: unknown ids map to the first color.
     #[must_use]
     pub const fn by_id(id: i32) -> Self {
         match id {
@@ -421,13 +421,13 @@ impl PlayerTeam {
         self.suffix = suffix;
     }
 
-    /// Returns the optional team colour.
+    /// Returns the optional team color.
     #[must_use]
     pub const fn color(&self) -> Option<TeamColor> {
         self.color
     }
 
-    /// Replaces the optional team colour.
+    /// Replaces the optional team color.
     pub fn set_color(&mut self, color: Option<TeamColor>) {
         self.color = color;
     }
@@ -503,7 +503,7 @@ impl PlayerTeam {
         self.players.remove(holder)
     }
 
-    /// Applies the team colour to a component, if one is set.
+    /// Applies the team color to a component, if one is set.
     #[must_use]
     pub fn apply_color(&self, component: TextComponent) -> TextComponent {
         match self.color {
@@ -512,7 +512,7 @@ impl PlayerTeam {
         }
     }
 
-    /// Vanilla `PlayerTeam.getFormattedName`: prefix + member + suffix, coloured.
+    /// Vanilla `PlayerTeam.getFormattedName`: prefix + member + suffix, colored.
     #[must_use]
     pub fn formatted_name(&self, member: TextComponent) -> TextComponent {
         let mut result = TextComponent::new();
@@ -522,7 +522,7 @@ impl PlayerTeam {
         self.apply_color(result)
     }
 
-    /// Vanilla `PlayerTeam.getFormattedDisplayName`: coloured bracketed display name.
+    /// Vanilla `PlayerTeam.getFormattedDisplayName`: colored bracketed display name.
     #[must_use]
     pub fn formatted_display_name(&self) -> TextComponent {
         let styled = self

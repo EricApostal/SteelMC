@@ -9,9 +9,9 @@
 //!
 //! `PoiManager.sectionsToVillage` is backed by the vanilla `DistanceTracker`, an
 //! incremental 26-neighbour graph whose fixed point is the hop distance to the closest
-//! *village centre* section (a section holding an occupied POI in the `village` tag),
+//! *village center* section (a section holding an occupied POI in the `village` tag),
 //! capped at `MAX_VILLAGE_DISTANCE` (sections at level 7 are simply untracked). Because
-//! the reported level only depends on village centres within `MAX_VILLAGE_DISTANCE`
+//! the reported level only depends on village centers within `MAX_VILLAGE_DISTANCE`
 //! sections, the distance field is recomputed on demand from those seeds instead of
 //! being updated incrementally.
 
@@ -41,7 +41,7 @@ pub type PoiTypePredicate<'a> = &'a dyn Fn(PoiTypeRef) -> bool;
 
 /// Returns whether `poi_type` belongs to the vanilla `village` POI tag.
 ///
-/// Village centres are sections holding an occupied POI of this tag.
+/// Village centers are sections holding an occupied POI of this tag.
 #[must_use]
 pub fn is_village_poi(poi_type: PoiTypeRef) -> bool {
     REGISTRY.poi_types.is_in_tag(poi_type, &PoiTag::VILLAGE)
@@ -235,7 +235,7 @@ impl PointOfInterestStorage {
 
     /// Returns the vanilla distance-tracker level of `section`
     /// (vanilla `PoiManager.sectionsToVillage`): the hop distance to the closest village
-    /// centre section, or [`MAX_VILLAGE_DISTANCE`] + 1 when no village is in range.
+    /// center section, or [`MAX_VILLAGE_DISTANCE`] + 1 when no village is in range.
     #[must_use]
     pub fn sections_to_village(&self, section: SectionPos) -> i32 {
         self.village_distance_levels(section, MAX_VILLAGE_DISTANCE)
@@ -247,9 +247,9 @@ impl PointOfInterestStorage {
     /// Computes the distance-tracker levels for every section within
     /// [`MAX_VILLAGE_DISTANCE`] of `section`.
     ///
-    /// `seed_radius` widens the village-centre scan beyond the BFS range, which is what
-    /// querying a whole neighbourhood needs: a section `d` further away can still be
-    /// within the BFS range of a centre that is `d` sections further out. Sections at
+    /// `seed_radius` widens the village-center scan beyond the BFS range, which is what
+    /// querying a whole neighborhood needs: a section `d` further away can still be
+    /// within the BFS range of a center that is `d` sections further out. Sections at
     /// level > [`MAX_VILLAGE_DISTANCE`] are absent, exactly like vanilla's tracker,
     /// which drops them from its map.
     fn village_distance_levels(
@@ -291,7 +291,7 @@ impl PointOfInterestStorage {
         levels
     }
 
-    /// Collects the village-centre sections within `radius` sections of `section`.
+    /// Collects the village-center sections within `radius` sections of `section`.
     fn village_center_sections_near(
         &self,
         section: SectionPos,
@@ -337,7 +337,7 @@ impl World {
         self.is_close_to_village(pos, 1)
     }
 
-    /// Returns whether this section's centre is in a village
+    /// Returns whether this section's center is in a village
     /// (vanilla `ServerLevel.isVillage(SectionPos)`).
     #[must_use]
     pub fn is_village_section(&self, section: SectionPos) -> bool {
@@ -364,7 +364,7 @@ impl World {
     }
 }
 
-/// Vanilla `SectionPos.center`: the block position at the centre of `section`.
+/// Vanilla `SectionPos.center`: the block position at the center of `section`.
 #[must_use]
 pub const fn section_center(section: SectionPos) -> BlockPos {
     BlockPos::new(

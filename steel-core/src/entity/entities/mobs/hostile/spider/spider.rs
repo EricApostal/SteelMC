@@ -173,6 +173,9 @@ impl SpiderEntity {
         spawn_reason: EntitySpawnReason,
         group_data: Option<SpawnGroupData>,
     ) -> Option<SpawnGroupData> {
+        // Vanilla calls `super.finalizeSpawn` before the jockey and effect rolls.
+        let group_data = self.finalize_spawn_mob_base(world, spawn_reason, group_data);
+
         if rand::random_range(0..SKELETON_JOCKEY_BOUND) == 0
             && let Some(skeleton) = crate::entity::ENTITIES.create(
                 &vanilla_entities::SKELETON,
@@ -180,9 +183,15 @@ impl SpiderEntity {
                 self.position(),
                 Arc::downgrade(world),
             )
-            && let Err(error) = world.try_add_entity(Arc::clone(&skeleton))
         {
-            log::warn!("could not spawn the spider's skeleton jockey: {error}");
+            if let Some(skeleton_mob) = skeleton.as_mob() {
+                skeleton_mob.snap_to(self.position(), self.rotation().0, 0.0);
+                skeleton_mob.finalize_spawn(world, spawn_reason, None);
+                self.start_riding(&skeleton);
+            }
+            if let Err(error) = world.try_add_entity(Arc::clone(&skeleton)) {
+                log::warn!("could not spawn the spider's skeleton jockey: {error}");
+            }
         }
 
         if world.difficulty() == Difficulty::Hard
@@ -197,7 +206,7 @@ impl SpiderEntity {
             self.add_mob_effect(MobEffectInstance::new(effect, 0));
         }
 
-        self.finalize_spawn_mob_base(world, spawn_reason, group_data)
+        group_data
     }
 }
 

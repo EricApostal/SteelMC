@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use super::{MenuBuilder, kinds::BasicKind};
+use super::{FillDirection, Menu, MenuBuilder, kinds::BasicKind};
 use crate::{
     behavior::init_behaviors,
     block_entity::init_block_entities,
     chunk::{Chunk, status::ChunkStatus},
     entity::{Entity as _, entities::ItemEntity},
     inventory::{
-        click::{Click, DragKind, QuickCraft, SwapTarget},
+        click::{Click, DragKind, MouseButton, QuickCraft, SwapTarget},
         container::{Container as _, SimpleContainer},
         lock::{ContainerLockGuard, ContainerRef},
         slots::{NormalSlot, Slot, SlotStorage},
@@ -17,8 +17,8 @@ use crate::{
 };
 use glam::DVec3;
 use steel_registry::{
-    init_vanilla_registry, item_stack::ItemStack, vanilla_blocks, vanilla_entities, vanilla_items,
-    vanilla_menu_types,
+    data_components::vanilla_components::MAX_STACK_SIZE, init_vanilla_registry,
+    item_stack::ItemStack, vanilla_blocks, vanilla_entities, vanilla_items, vanilla_menu_types,
 };
 use steel_utils::locks::{IntoShared as _, Shared};
 use steel_utils::types::{GameType, UpdateFlags};
@@ -276,4 +276,162 @@ fn partial_swap_overflow_is_discarded_in_creative() {
             )
             .is_empty()
     );
+}
+
+/// A menu over one plain container, with no player slots and no routes.
+fn plain_menu(container: Shared<SimpleContainer>) -> Menu {
+    let mut builder = MenuBuilder::new(None, 1);
+    builder.section_all(container);
+    builder.build(BasicKind {})
+}
+
+/// A detached player for click tests that never need a loaded world.
+fn click_player(key: &'static str) -> (TestWorld, Arc<Player>) {
+    init_vanilla_registry();
+    let world_fixture = fresh_test_world(key);
+    let player =
+        TestPlayerBuilder::new(Arc::clone(&world_fixture.world), "ClickTester", 1).build();
+    (world_fixture, player)
+}
+
+#[test]
+fn click_placement_uses_the_component_stack_size() {
+    let (_world, player) = click_player("menu_component_stack_size");
+    let container = SimpleContainer::new(1).into_shared();
+    let mut menu = plain_menu(Arc::clone(&container));
+
+    let mut stack = ItemStack::new(&vanilla_items::STONE);
+    stack.set(MAX_STACK_SIZE, 16);
+    stack.set_count(20);
+    *menu.behavior_mut().carried_mut() = stack;
+
+    menu.clicked(
+        Click::Pickup {
+            slot: 0,
+            button: MouseButton::Left,
+        },
+        &player,
+    );
+
+    // `Slot.safeInsert` caps the transfer at the item's own stack size.
+    assert_eq!(container.lock().get_item(0).count(), 16);
+    assert_eq!(menu.behavior().carried().count(), 4);
+}
+
+#[test]
+fn right_click_places_one_item_then_tops_the_slot_up() {
+    let (_world, player) = click_player("menu_right_click_placement");
+    let container = SimpleContainer::new(1).into_shared();
+    let mut menu = plain_menu(Arc::clone(&container));
+    *menu.behavior_mut().carried_mut() = ItemStack::with_count(&vanilla_items::STONE, 8);
+
+    menu.clicked(
+        Click::Pickup {
+            slot: 0,
+            button: MouseButton::Right,
+        },
+        &player,
+    );
+    assert_eq!(container.lock().get_item(0).count(), 1);
+    assert_eq!(menu.behavior().carried().count(), 7);
+
+    menu.clicked(
+        Click::Pickup {
+            slot: 0,
+            button: MouseButton::Right,
+        },
+        &player,
+    );
+    assert_eq!(container.lock().get_item(0).count(), 2);
+    assert_eq!(menu.behavior().carried().count(), 6);
+}
+
+#[test]
+fn double_click_collects_matching_stacks_in_both_directions() {
+    for (direction, key) in [
+        (FillDirection::Forward, "menu_pickup_all_forward"),
+        (FillDirection::Backward, "menu_pickup_all_backward"),
+    ] {
+        let (_world, player) = click_player(key);
+        let container = SimpleContainer::new(3).into_shared();
+        {
+            let mut guard = container.lock();
+            guard.set_item(0, ItemStack::with_count(&vanilla_items::STONE, 3));
+            guard.set_item(1, ItemStack::with_count(&vanilla_items::STONE, 2));
+        }
+        let mut menu = plain_menu(Arc::clone(&container));
+        *menu.behavior_mut().carried_mut() = ItemStack::with_count(&vanilla_items::STONE, 1);
+
+        // The double-clicked slot itself is empty, so collection runs over the
+        // whole menu in the requested direction.
+        menu.clicked(
+            Click::PickupAll {
+                slot: 2,
+                direction,
+            },
+            &player,
+        );
+
+        assert_eq!(menu.behavior().carried().count(), 6);
+        let guard = container.lock();
+        assert!(guard.get_item(0).is_empty());
+        assert!(guard.get_item(1).is_empty());
+    }
+}
+
+#[test]
+fn drag_distributes_the_carried_stack_by_kind() {
+    for (kind, per_slot, leftover) in [(DragKind::Left, 3, 0), (DragKind::Right, 1, 6)] {
+        let (_world, player) = click_player(match kind {
+            DragKind::Left => "menu_drag_left",
+            DragKind::Right => "menu_drag_right",
+            DragKind::Clone => unreachable!("only survival drags are exercised"),
+        });
+        let container = SimpleContainer::new(3).into_shared();
+        let mut menu = plain_menu(Arc::clone(&container));
+        *menu.behavior_mut().carried_mut() = ItemStack::with_count(&vanilla_items::STONE, 9);
+
+        menu.clicked(Click::QuickCraft(QuickCraft::Start { kind }), &player);
+        for slot in 0..3 {
+            menu.clicked(Click::QuickCraft(QuickCraft::AddSlot { slot }), &player);
+        }
+        menu.clicked(Click::QuickCraft(QuickCraft::End), &player);
+
+        let guard = container.lock();
+        for slot in 0..3 {
+            assert_eq!(guard.get_item(slot).count(), per_slot);
+        }
+        assert_eq!(menu.behavior().carried().count(), leftover);
+        assert_eq!(menu.behavior().quickcraft(), None);
+    }
+}
+
+#[test]
+fn a_non_drag_click_during_a_drag_only_cancels_the_drag() {
+    let (_world, player) = click_player("menu_drag_interrupt");
+    let container = SimpleContainer::new(1).into_shared();
+    let mut menu = plain_menu(Arc::clone(&container));
+    *menu.behavior_mut().carried_mut() = ItemStack::with_count(&vanilla_items::STONE, 4);
+
+    menu.clicked(
+        Click::QuickCraft(QuickCraft::Start {
+            kind: DragKind::Left,
+        }),
+        &player,
+    );
+    menu.clicked(Click::QuickCraft(QuickCraft::AddSlot { slot: 0 }), &player);
+    assert_eq!(menu.behavior().quickcraft(), Some(DragKind::Left));
+
+    menu.clicked(
+        Click::Pickup {
+            slot: 0,
+            button: MouseButton::Left,
+        },
+        &player,
+    );
+
+    // Vanilla resets the drag and never applies the interrupting click.
+    assert_eq!(menu.behavior().quickcraft(), None);
+    assert!(container.lock().get_item(0).is_empty());
+    assert_eq!(menu.behavior().carried().count(), 4);
 }

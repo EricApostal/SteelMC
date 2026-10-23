@@ -39,7 +39,9 @@ impl FeatureDecorationRunner {
                     0.0
                 })
             .sqrt();
-        let should_generate_crack = random.next_f32() < crack.generate_crack_chance as f32;
+        // Vanilla compares the sampled `float` against a `double` chance value.
+        let should_generate_crack =
+            f64::from(random.next_f32()) < crack.generate_crack_chance;
 
         let Some(points) =
             Self::geode_distribution_points(region, random, registry, config, origin, num_points)
@@ -102,7 +104,7 @@ impl FeatureDecorationRunner {
                     );
                 } else if dist_sum_shell >= innermost_block_layer {
                     let use_alternate_layer =
-                        random.next_f32() < config.use_alternate_layer0_chance as f32;
+                        f64::from(random.next_f32()) < config.use_alternate_layer0_chance;
                     let provider = if use_alternate_layer {
                         &blocks.alternate_inner_layer_provider
                     } else {
@@ -120,7 +122,8 @@ impl FeatureDecorationRunner {
                     );
 
                     if (!config.placements_require_layer0_alternate || use_alternate_layer)
-                        && random.next_f32() < config.use_potential_placements_chance as f32
+                        && f64::from(random.next_f32())
+                            < config.use_potential_placements_chance
                     {
                         potential_crystal_placements.push(pos);
                     }
@@ -333,8 +336,9 @@ impl FeatureDecorationRunner {
                     .try_get_value(&BlockStateProperties::WATERLOGGED)
                     .is_some()
                 {
-                    let waterlogged = place_state.get_block() == &vanilla_blocks::WATER
-                        && get_fluid_state_from_block(place_state).is_source();
+                    // Vanilla `placeState.getFluidState().isSource()`: any source fluid,
+                    // including the water in waterlogged blocks, counts.
+                    let waterlogged = get_fluid_state_from_block(place_state).is_source();
                     state = state.set_value(&BlockStateProperties::WATERLOGGED, waterlogged);
                 }
 

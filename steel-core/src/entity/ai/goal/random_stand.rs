@@ -18,10 +18,13 @@ pub struct RandomStandGoal {
 }
 
 impl RandomStandGoal {
-    /// Vanilla `new RandomStandGoal(horse)`; the interval is reset from the horse on start.
+    /// Vanilla `new RandomStandGoal(horse)`: the counter starts one interval below zero, so the
+    /// goal stays dormant for `ambient_stand_interval` ticks.
     #[must_use]
-    pub const fn new() -> Self {
-        Self { next_stand: 0 }
+    pub const fn new(ambient_stand_interval: i32) -> Self {
+        Self {
+            next_stand: -ambient_stand_interval,
+        }
     }
 
     /// Vanilla `RandomStandGoal.resetStandInterval`: `nextStand = -getAmbientStandInterval()`.
@@ -34,7 +37,7 @@ impl RandomStandGoal {
 
 impl Default for RandomStandGoal {
     fn default() -> Self {
-        Self::new()
+        Self::new(0)
     }
 }
 
@@ -67,7 +70,7 @@ impl Goal for RandomStandGoal {
         };
         horse.stand_if_possible();
         if let Some(sound) = horse.ambient_stand_sound() {
-            mob.play_sound(sound, 1.0, rand::random::<f32>() * 0.2 + 0.9);
+            mob.play_sound(sound, 1.0, 1.0);
         }
     }
 
@@ -82,7 +85,7 @@ mod tests {
 
     #[test]
     fn random_stand_goal_claims_no_controls() {
-        let goal = RandomStandGoal::new();
+        let goal = RandomStandGoal::new(180);
 
         assert_eq!(goal.controls(), GoalControls::EMPTY);
         assert!(goal.requires_update_every_tick());

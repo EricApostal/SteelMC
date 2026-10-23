@@ -1,33 +1,48 @@
 //! Vanilla `RangedCrossbowAttackGoal` (vanilla `RangedCrossbowAttackGoal` /
 //! `CrossbowAttackMob.performCrossbowAttack`).
 //!
-//! **Dependency**: vanilla fires an `Arrow` through `CrossbowItem.performShooting`; Steel has
-//! no `arrow` entity factory yet (`IllagerDependency::Arrow`), so the charge/aim state machine
-//! below is complete and the projectile release is gated on that factory. When the factory
-//! lands, `release_shot` only needs to create the arrow and set its motion.
+//! The charge/aim/ready state machine is the complete vanilla one. The shot itself goes
+//! through [`RangedAttackMob::perform_ranged_attack`], the Steel capability behind vanilla's
+//! `RangedAttackMob` bound; a crossbow mob that does not implement that capability (e.g. a
+//! pillager without `CrossbowAttackMob`) simply has nothing to release.
 
+use steel_registry::vanilla_items;
 use steel_utils::Downcast as _;
-
-use crate::entity::{PathfinderMob, SharedEntity};
+use steel_utils::types::InteractionHand;
 
 use super::selector::{Goal, GoalControls};
+use crate::entity::{PathfinderMob, SharedEntity};
 
-/// Vanilla `RangedCrossbowAttackGoal` charge ticks for a crossbow.
-const CROSSBOW_CHARGE_TICKS: i32 = 25;
-/// Vanilla `RangedCrossbowAttackGoal` "charge until shot" window.
-const CROSSBOW_SHOT_TICKS: i32 = 5;
-/// Vanilla `RangedCrossbowAttackGoal.SEE_TIME`.
-const SEE_TIME: i32 = 5;
+/// Vanilla `RangedCrossbowAttackGoal` look speed while charging.
+const PERFECT_LOOK_SPEED: f32 = 30.0;
+/// Vanilla `RangedCrossbowAttackGoal` pitch clamp while charging.
+const PERFECT_LOOK_ANGLE: f32 = 30.0;
+/// Vanilla `CrossbowItem.getChargeDuration` for a crossbow without quick-charge.
+const CROSSBOW_CHARGE_DURATION: i32 = 25;
+/// Vanilla `RangedCrossbowAttackGoal.PATHFINDING_DELAY_RANGE` (`TimeUtil.rangeOfSeconds(1, 2)`).
+const PATHFINDING_DELAY_MIN: i32 = 20;
+const PATHFINDING_DELAY_MAX: i32 = 40;
+/// Vanilla `RangedCrossbowAttackGoal` "wait after charging" range.
+const ATTACK_DELAY_MIN: i32 = 20;
+const ATTACK_DELAY_RANGE: i32 = 20;
+
+/// Vanilla `RangedCrossbowAttackGoal.CrossbowState`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CrossbowState {
+    Uncharged,
+    Charging,
+    Charged,
+    ReadyToAttack,
+}
 
 /// Vanilla `RangedCrossbowAttackGoal`.
 pub struct RangedCrossbowAttackGoal {
     speed_modifier: f64,
     attack_radius_sqr: f64,
-    attack_time: i32,
+    crossbow_state: CrossbowState,
     see_time: i32,
-    update_path_time: i32,
-    can_attack: bool,
-    charging: bool,
+    attack_delay: i32,
+    update_path_delay: i32,
 }
 
 impl RangedCrossbowAttackGoal {
@@ -37,19 +52,21 @@ impl RangedCrossbowAttackGoal {
         Self {
             speed_modifier,
             attack_radius_sqr: f64::from(attack_radius) * f64::from(attack_radius),
-            attack_time: -1,
-            see_time: -1,
-            update_path_time: 0,
-            can_attack: true,
-            charging: false,
+            crossbow_state: CrossbowState::Uncharged,
+            see_time: 0,
+            attack_delay: 0,
+            update_path_delay: 0,
         }
     }
 
     /// Vanilla `RangedCrossbowAttackGoal.isHoldingCrossbow`.
     fn is_holding_crossbow(mob: &dyn PathfinderMob) -> bool {
-        mob.is_holding(&mut |stack| {
-            std::ptr::eq(stack.item(), &*steel_registry::vanilla_items::CROSSBOW)
-        })
+        mob.is_holding(&mut |stack| std::ptr::eq(stack.item(), &*vanilla_items::CROSSBOW))
+    }
+
+    /// Vanilla `RangedCrossbowAttackGoal.isValidTarget`.
+    fn is_valid_target(mob: &dyn PathfinderMob) -> bool {
+        mob.target().is_some_and(|target| target.is_alive())
     }
 
     /// Vanilla `CrossbowAttackMob.setChargingCrossbow` for the pillar of this goal: only
@@ -62,26 +79,23 @@ impl RangedCrossbowAttackGoal {
         }
     }
 
-    /// Vanilla `RangedCrossbowAttackGoal.updatePath`.
-    fn update_path(&mut self, mob: &dyn PathfinderMob, target: &SharedEntity) {
-        let Some(world) = mob.level() else {
-            return;
-        };
-        if self.update_path_time <= 0 {
-            self.update_path_time = 20;
-            mob.move_to_pos(target.position(), self.speed_modifier);
-            let _ = world;
+    /// Vanilla `ProjectileUtil.getWeaponHoldingHand`: the main hand when it holds the
+    /// crossbow, otherwise the off hand.
+    fn weapon_holding_hand(mob: &dyn PathfinderMob) -> InteractionHand {
+        if mob
+            .get_item_in_hand(InteractionHand::MainHand)
+            .is(&vanilla_items::CROSSBOW)
+        {
+            InteractionHand::MainHand
         } else {
-            self.update_path_time -= 1;
+            InteractionHand::OffHand
         }
     }
 
-    /// Vanilla `CrossbowAttackMob.performCrossbowAttack` projectile release.
-    ///
-    /// Gated on the missing `arrow` factory: without it there is nothing to shoot, so the
-    /// goal keeps the vanilla charge/aim state instead of fabricating a projectile.
-    fn release_shot(_mob: &dyn PathfinderMob, _target: &SharedEntity) -> bool {
-        crate::entity::ENTITIES.has_factory(&steel_registry::vanilla_entities::ARROW)
+    /// Vanilla `RangedCrossbowAttackGoal.canRun`: only an uncharged crossbow is run with the
+    /// full speed modifier.
+    const fn can_run(&self) -> bool {
+        matches!(self.crossbow_state, CrossbowState::Uncharged)
     }
 }
 
@@ -91,28 +105,26 @@ impl Goal for RangedCrossbowAttackGoal {
     }
 
     fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
-        Self::is_holding_crossbow(mob) && mob.target().is_some()
+        Self::is_valid_target(mob) && Self::is_holding_crossbow(mob)
     }
 
     fn can_continue_to_use(&mut self, mob: &dyn PathfinderMob) -> bool {
-        let Some(target) = mob.target() else {
-            return false;
-        };
-        let in_range = mob.position().distance_squared(target.position()) <= self.attack_radius_sqr;
-        Self::is_holding_crossbow(mob) && (self.can_attack || in_range)
-    }
-
-    fn start(&mut self, mob: &dyn PathfinderMob) {
-        mob.set_aggressive(true);
-        self.can_attack = false;
+        Self::is_valid_target(mob)
+            && (self.can_use(mob) || !mob.mob_base().navigation().lock().is_done())
+            && Self::is_holding_crossbow(mob)
     }
 
     fn stop(&mut self, mob: &dyn PathfinderMob) {
         mob.set_aggressive(false);
-        Self::set_charging_crossbow(mob, false);
-        self.attack_time = -1;
-        self.see_time = -1;
-        self.update_path_time = 0;
+        let _ = mob.set_target(None);
+        self.see_time = 0;
+        if mob.is_using_item() {
+            mob.stop_using_item();
+            Self::set_charging_crossbow(mob, false);
+            // Vanilla also clears `DataComponents.CHARGED_PROJECTILES` on the use stack.
+            // Steel has no `CrossbowItem` behavior that loads projectiles, so the stack can
+            // never carry charged projectiles here; there is nothing to clear.
+        }
     }
 
     fn requires_update_every_tick(&self) -> bool {
@@ -124,67 +136,84 @@ impl Goal for RangedCrossbowAttackGoal {
             return;
         };
 
-        let squared = mob.position().distance_squared(target.position());
-        let can_see = mob.has_line_of_sight_cached(target.as_ref());
-        let in_range = squared <= self.attack_radius_sqr;
-
-        self.see_time = if can_see {
-            self.see_time + 1
-        } else {
-            self.see_time - 1
+        let has_line_of_sight = mob.has_line_of_sight_cached(target.as_ref());
+        let had_line_of_sight = self.see_time > 0;
+        if has_line_of_sight != had_line_of_sight {
+            self.see_time = 0;
         }
-        .clamp(0, SEE_TIME);
+        if has_line_of_sight {
+            self.see_time += 1;
+        } else {
+            self.see_time -= 1;
+        }
 
-        let aiming = self.see_time >= SEE_TIME;
-        mob.set_aggressive(aiming);
-
-        if in_range && self.see_time >= SEE_TIME {
-            if self.attack_time < 0 {
-                self.attack_time = CROSSBOW_CHARGE_TICKS + CROSSBOW_SHOT_TICKS;
-                Self::set_charging_crossbow(mob, true);
-            } else if self.attack_time > CROSSBOW_SHOT_TICKS {
-                self.attack_time -= 1;
-            } else if self.attack_time == CROSSBOW_SHOT_TICKS {
-                if Self::release_shot(mob, &target) {
-                    self.attack_time -= 1;
+        let distance_sqr = mob.position().distance_squared(target.position());
+        let needs_to_move =
+            (distance_sqr > self.attack_radius_sqr || self.see_time < 5) && self.attack_delay == 0;
+        if needs_to_move {
+            self.update_path_delay -= 1;
+            if self.update_path_delay <= 0 {
+                let speed_modifier = if self.can_run() {
+                    self.speed_modifier
                 } else {
-                    // Dependency gate: keep charging until a projectile layer exists.
-                    self.attack_time -= 1;
-                }
-            } else if self.attack_time > 0 {
-                self.attack_time -= 1;
-            } else {
-                self.attack_time = CROSSBOW_CHARGE_TICKS + CROSSBOW_SHOT_TICKS;
+                    self.speed_modifier * 0.5
+                };
+                mob.move_to_pos(target.position(), speed_modifier);
+                self.update_path_delay = PATHFINDING_DELAY_MIN
+                    + rand::random_range(0..=PATHFINDING_DELAY_MAX - PATHFINDING_DELAY_MIN);
             }
-            Self::set_charging_crossbow(mob, self.attack_time > CROSSBOW_SHOT_TICKS);
         } else {
-            self.charging = false;
-            self.attack_time = -1;
-            Self::set_charging_crossbow(mob, false);
-        }
-
-        if in_range {
-            let _ = (can_see, entity);
-        } else {
-            self.update_path(mob, &target);
+            self.update_path_delay = 0;
+            mob.mob_base().navigation().lock().stop();
         }
 
         let target_eye =
             glam::DVec3::new(target.position().x, target.get_eye_y(), target.position().z);
         mob.mob_base().controls().lock().look_control.set_look_at(
             target_eye,
-            perfect_look_speed(),
-            perfect_look_angle(),
+            PERFECT_LOOK_SPEED,
+            PERFECT_LOOK_ANGLE,
         );
+
+        match self.crossbow_state {
+            CrossbowState::Uncharged => {
+                if !needs_to_move {
+                    mob.start_using_item(Self::weapon_holding_hand(mob));
+                    self.crossbow_state = CrossbowState::Charging;
+                    Self::set_charging_crossbow(mob, true);
+                }
+            }
+            CrossbowState::Charging => {
+                if !mob.is_using_item() {
+                    self.crossbow_state = CrossbowState::Uncharged;
+                }
+
+                if mob.get_tick_count_using_item() >= CROSSBOW_CHARGE_DURATION {
+                    mob.release_using_item(entity);
+                    self.crossbow_state = CrossbowState::Charged;
+                    self.attack_delay =
+                        ATTACK_DELAY_MIN + rand::random_range(0..ATTACK_DELAY_RANGE);
+                    Self::set_charging_crossbow(mob, false);
+                }
+            }
+            CrossbowState::Charged => {
+                self.attack_delay -= 1;
+                if self.attack_delay == 0 {
+                    self.crossbow_state = CrossbowState::ReadyToAttack;
+                }
+            }
+            CrossbowState::ReadyToAttack => {
+                if has_line_of_sight {
+                    // Vanilla `CrossbowAttackMob.performCrossbowAttack` through
+                    // `Mob.performRangedAttack(target, 1.0F)`. The `RangedAttackMob` bound of
+                    // the vanilla goal is the capability Steel dispatches through; a mob
+                    // without it has no projectile to release.
+                    if let Some(ranged_attack_mob) = mob.as_ranged_attack_mob() {
+                        ranged_attack_mob.perform_ranged_attack(&target, 1.0);
+                    }
+                    self.crossbow_state = CrossbowState::Uncharged;
+                }
+            }
+        }
     }
-}
-
-/// Vanilla `RangedCrossbowAttackGoal` look speed while charging.
-const fn perfect_look_speed() -> f32 {
-    30.0
-}
-
-/// Vanilla `RangedCrossbowAttackGoal` pitch clamp while charging.
-const fn perfect_look_angle() -> f32 {
-    30.0
 }

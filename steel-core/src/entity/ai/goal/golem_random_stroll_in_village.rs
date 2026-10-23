@@ -7,7 +7,7 @@ use glam::DVec3;
 use steel_registry::vanilla_entities;
 use steel_utils::{BlockPos, SectionPos};
 
-use super::random_pos::{land_random_pos, land_random_pos_with_weight};
+use super::random_pos::{land_random_pos, land_random_pos_towards};
 use super::random_stroll::RandomStrollGoal;
 use super::selector::{Goal, GoalControls};
 use crate::entity::PathfinderMob;
@@ -55,10 +55,6 @@ impl GolemRandomStrollInVillageGoal {
     }
 
     /// Vanilla `getPositionTowardsVillagerWhoWantsGolem`.
-    ///
-    /// Deviation: vanilla scores candidates with `LandRandomPos.getPosTowards`; Steel's
-    /// `random_pos` only exposes the toward-variant of `DefaultRandomPos`, so the land search is
-    /// scored by distance to the villager instead.
     fn position_towards_villager_who_wants_golem(mob: &dyn PathfinderMob) -> Option<DVec3> {
         let world = mob.level()?;
         let game_time = world.game_time();
@@ -85,9 +81,7 @@ impl GolemRandomStrollInVillageGoal {
         }
 
         let target = villagers[rand::random_range(0..villagers.len())];
-        land_random_pos_with_weight(mob, RANDOM_POS_XY_DISTANCE, RANDOM_POS_Y_DISTANCE, |pos| {
-            -dist_sqr(pos, target) as f32
-        })
+        land_random_pos_towards(mob, RANDOM_POS_XY_DISTANCE, RANDOM_POS_Y_DISTANCE, target)
     }
 
     /// Vanilla `getPositionTowardsPoi`.
@@ -95,10 +89,12 @@ impl GolemRandomStrollInVillageGoal {
         let world = mob.level()?;
         let section = Self::random_village_section(mob, world.as_ref())?;
         let target = Self::random_poi_within_section(world.as_ref(), section)?;
-        let target = DVec3::from(target.get_bottom_center());
-        land_random_pos_with_weight(mob, RANDOM_POS_XY_DISTANCE, RANDOM_POS_Y_DISTANCE, |pos| {
-            -dist_sqr(pos, target) as f32
-        })
+        land_random_pos_towards(
+            mob,
+            RANDOM_POS_XY_DISTANCE,
+            RANDOM_POS_Y_DISTANCE,
+            DVec3::from(target.get_bottom_center()),
+        )
     }
 
     /// Vanilla `getRandomVillageSection`.
@@ -115,7 +111,7 @@ impl GolemRandomStrollInVillageGoal {
         Some(sections[rand::random_range(0..sections.len())])
     }
 
-    /// Vanilla `getRandomPoiWithinSection`: any occupied POI within 8 blocks of the section centre.
+    /// Vanilla `getRandomPoiWithinSection`: any occupied POI within 8 blocks of the section center.
     fn random_poi_within_section(world: &World, section: SectionPos) -> Option<BlockPos> {
         let pois = world.poi_storage.lock().get_in_range(
             &|_| true,
@@ -129,11 +125,6 @@ impl GolemRandomStrollInVillageGoal {
 
         Some(pois[rand::random_range(0..pois.len())].1)
     }
-}
-
-fn dist_sqr(pos: BlockPos, target: DVec3) -> f64 {
-    let (x, y, z) = pos.get_center();
-    DVec3::new(x, y, z).distance_squared(target)
 }
 
 impl Goal for GolemRandomStrollInVillageGoal {

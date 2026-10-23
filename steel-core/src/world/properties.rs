@@ -1,5 +1,7 @@
 use steel_utils::types::GameType;
 
+use steel_registry::vanilla_game_rules::{COMMAND_BLOCK_OUTPUT, COMMAND_BLOCKS_WORK, LOCATOR_BAR};
+
 use super::{
     ADVANCE_TIME, BlockPos, CChangeDifficulty, ChunkPos, Difficulty, Digest, ErasedGameRuleRef,
     GameRule, GameRuleValue, GameRuleValueType, LevelDataManager, OffsetVoxelShape, Ordering,
@@ -168,6 +170,22 @@ impl World {
         self.handling_tick.load(Ordering::Relaxed)
     }
 
+    /// Vanilla `ServerLevel.isCommandBlockEnabled`: the `command_blocks_work` rule.
+    ///
+    /// Command blocks neither execute nor accept edits while this is disabled.
+    #[must_use]
+    pub fn is_command_block_enabled(&self) -> bool {
+        self.get_game_rule(&COMMAND_BLOCKS_WORK)
+    }
+
+    /// Vanilla `BaseCommandBlock.CloseableCommandBlockSource.shouldInformAdmins`:
+    /// whether command-block output is broadcast to operators, gated by the
+    /// `command_block_output` rule.
+    #[must_use]
+    pub fn command_block_output_enabled(&self) -> bool {
+        self.get_game_rule(&COMMAND_BLOCK_OUTPUT)
+    }
+
     /// Gets the value of a game rule.
     /// WARNING: this function acquires a read lock on the level data.
     /// if you already have a write lock on level data, this will DEADLOCK
@@ -213,6 +231,9 @@ impl World {
         if updated && rule.key() == ADVANCE_TIME.key() {
             self.broadcast_time_sync();
         }
+        if updated && rule.key() == LOCATOR_BAR.key() {
+            self.locator_bar_rule_changed();
+        }
         updated
     }
 
@@ -240,6 +261,9 @@ impl World {
             .set_erased(rule, value, &REGISTRY.game_rules);
         if updated && rule.key() == ADVANCE_TIME.key() {
             self.broadcast_time_sync();
+        }
+        if updated && rule.key() == LOCATOR_BAR.key() {
+            self.locator_bar_rule_changed();
         }
         updated
     }

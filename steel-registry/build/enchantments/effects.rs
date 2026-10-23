@@ -829,7 +829,7 @@ pub(super) fn particle_type_ref_token(particle: &Identifier) -> TokenStream {
 pub(super) fn generate_particle_position_source(
     source: &ParticlePositionSourceJson,
 ) -> TokenStream {
-    // Vanilla serialises these with `StringRepresentable.fromEnum`, so the
+    // Vanilla serializes these with `StringRepresentable.fromEnum`, so the
     // resource location may or may not carry the `minecraft:` namespace.
     let source_type = match source
         .source_type
@@ -856,10 +856,10 @@ pub(super) fn generate_particle_velocity_source(
     source: &ParticleVelocitySourceJson,
 ) -> TokenStream {
     let movement_scale = source.movement_scale;
-    let base = match &source.base {
-        Some(base) => generate_float_provider(base),
-        None => quote! { FloatProvider::Constant(0.0) },
-    };
+    let base = source.base.as_ref().map_or_else(
+        || quote! { FloatProvider::Constant(0.0) },
+        generate_float_provider,
+    );
     quote! {
         ParticleVelocitySource {
             movement_scale: #movement_scale,

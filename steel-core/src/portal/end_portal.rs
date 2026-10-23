@@ -81,12 +81,12 @@ pub(crate) fn calculate_entity_return_transition(
     }
 }
 
-/// Calculates the currently supported End -> respawn-world transition for players.
+/// Builds the End -> respawn-world transition for a resolved player spawn position.
 ///
-/// Vanilla delegates to `ServerPlayer.findRespawnPositionAndUseSpawnBlock`.
-///
-/// TODO(respawn): replace this with the vanilla personal bed/anchor respawn path once Steel has
-/// that player respawn foundation. This currently covers only the default respawn branch.
+/// Vanilla reaches this through `ServerPlayer.findRespawnPositionAndUseSpawnBlock(false,
+/// TeleportTransition.DO_NOTHING)`: either a personal bed/anchor stand-up position (no
+/// charge consumed, since `consumeSpawnBlock` is false) or the shared-spawn fallback from
+/// [`calculate_player_shared_return_transition`]. Both use absolute rotation/position.
 #[must_use]
 pub(crate) fn calculate_player_return_transition(
     target_world: &Arc<World>,
@@ -104,6 +104,26 @@ pub(crate) fn calculate_player_return_transition(
         as_passenger: false,
         post_transition: TeleportPostTransition::do_nothing(),
     }
+}
+
+/// Calculates vanilla's shared-spawn End -> respawn-world transition for players.
+///
+/// Mirrors `TeleportTransition.createDefault` / `TeleportTransition.missingRespawnBlock`:
+/// the destination is the shared respawn position adjusted through
+/// `Entity.adjustSpawnLocation`, with the respawn data's rotation and no relative flags.
+#[must_use]
+pub(crate) fn calculate_player_shared_return_transition(
+    target_world: &Arc<World>,
+    entity: &dyn Entity,
+    respawn_data: &RespawnData,
+) -> TeleportTransition {
+    let spawn_pos = target_world.adjust_spawn_location(respawn_data.pos());
+    calculate_player_return_transition(
+        target_world,
+        entity,
+        block_bottom_center(spawn_pos),
+        (respawn_data.yaw, respawn_data.pitch),
+    )
 }
 
 const fn end_platform_origin() -> BlockPos {

@@ -14,6 +14,7 @@ use steel_registry::vanilla_entity_data::SilverfishEntityData;
 use steel_registry::{sound_events, vanilla_attributes, vanilla_game_rules};
 use steel_utils::entity_events::EntityStatus;
 use steel_utils::locks::SyncMutex;
+use steel_utils::random::RandomSource;
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId, Downcast as _, DowncastType, DowncastTypeKey};
 
@@ -24,8 +25,9 @@ use crate::entity::ai::goal::{
 };
 use crate::entity::damage::DamageSource;
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySyncedData, LivingEntity,
-    LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, RemovalReason, SharedEntity,
+    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
+    LivingEntity, LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, RemovalReason,
+    SharedEntity,
 };
 use crate::physics::MoveResult;
 use crate::world::World;
@@ -143,6 +145,46 @@ impl SilverfishEntity {
     fn sync_body_rotation(&self) {
         let (yaw, _pitch) = self.rotation();
         self.set_y_body_rot(yaw);
+    }
+
+    /// Vanilla `Silverfish.checkSilverfishSpawnRules`, the `SpawnPlacements` predicate
+    /// for `EntityType.SILVERFISH`.
+    ///
+    /// Any-light monster rules apply first; spawner reasons bypass the player
+    /// exclusion, which hides silverfish from players within five blocks.
+    #[must_use]
+    pub fn check_silverfish_spawn_rules(
+        entity_type: EntityTypeRef,
+        level: &World,
+        spawn_reason: EntitySpawnReason,
+        pos: BlockPos,
+        _random: &mut RandomSource,
+    ) -> bool {
+        if !<Self as Monster>::check_any_light_monster_spawn_rules(
+            entity_type,
+            level,
+            spawn_reason,
+            pos,
+        ) {
+            return false;
+        }
+        if spawn_reason.is_spawner() {
+            return true;
+        }
+        level
+            .nearest_player(
+                DVec3::new(
+                    f64::from(pos.x()) + 0.5,
+                    f64::from(pos.y()) + 0.5,
+                    f64::from(pos.z()) + 0.5,
+                ),
+                5.0,
+                |player| {
+                    !player.is_spectator()
+                        && player.game_mode() != steel_utils::types::GameType::Creative
+                },
+            )
+            .is_none()
     }
 }
 
@@ -391,8 +433,6 @@ impl Entity for SilverfishEntity {
         self.play_sound(&sound_events::ENTITY_SILVERFISH_STEP, 0.15, 1.0);
     }
 
-    /// Vanilla `Silverfish.getWalkTargetValue` favors infested-compatible host blocks below.
-
     fn save_additional(&self, nbt: &mut NbtCompound) {
         self.save_mob(nbt);
     }
@@ -475,12 +515,6 @@ impl Mob for SilverfishEntity {
         self.entity_data.lock().mob_mut().mob_flags.set(flags);
     }
 
-    // Vanilla `Silverfish.checkSilverfishSpawnRules` (any-light monster rules plus a 5-block
-    // player exclusion) is the entity type's natural-spawn hook, not `checkMobSpawnRules`;
-    // vanilla's `Silverfish` does not override that. It cannot be expressed through
-    // `Mob::check_mob_spawn_rules` here — the static signature only receives
-    // `&dyn LevelReader`, which has neither a player query nor `difficulty()` — so the shared
-    // surface rules from `Mob` apply. Reported gap: the 5-block player exclusion.
     fn ambient_sound_interval(&self) -> i32 {
         120
     }
@@ -489,6 +523,7 @@ impl Mob for SilverfishEntity {
 impl Monster for SilverfishEntity {}
 
 impl PathfinderMob for SilverfishEntity {
+    /// Vanilla `Silverfish.getWalkTargetValue` favors infested-compatible host blocks below.
     fn get_walk_target_value(&self, pos: BlockPos) -> f32 {
         if let Some(world) = self.level()
             && InfestedBlock::is_compatible_host_block(world.get_block_state(pos.offset(0, -1, 0)))

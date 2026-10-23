@@ -7,6 +7,7 @@ use steel_registry::blocks::properties::{
     BlockStateProperties, Direction, DoubleBlockHalf, EnumProperty,
 };
 use steel_registry::vanilla_block_tags::BlockTag;
+use steel_registry::vanilla_fluids;
 use steel_utils::{BlockPos, BlockStateId, types::UpdateFlags};
 
 use crate::behavior::block::{BlockBehavior, schedule_water_tick_if_waterlogged};
@@ -14,7 +15,7 @@ use crate::behavior::blocks::BigDripleafBlock;
 use crate::behavior::blocks::vegetation::Vegetation;
 use crate::behavior::blocks::vegetation::bonemealable::Bonemealable;
 use crate::behavior::context::{BlockPlaceContext, PlacementSource};
-use crate::fluid::{FluidStateExt, get_fluid_state_from_block};
+use crate::fluid::get_fluid_state_from_block;
 use crate::world::{LevelReader, ScheduledTickAccess, World};
 
 use super::{BlockRef, DoublePlantBlock};
@@ -41,8 +42,7 @@ impl SmallDripleafBlock {
         state
             .get_block()
             .has_tag(&BlockTag::SUPPORTS_SMALL_DRIPLEAF)
-            || (fluid.is_full()
-                && fluid.is_water()
+            || (fluid.is_source_of_type(&vanilla_fluids::WATER)
                 && <Self as Vegetation>::may_place_on(self, state, world, pos))
     }
 }

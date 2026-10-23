@@ -1,7 +1,7 @@
-//! Steel adaptation of vanilla's raid-status behaviours (`SetRaidStatus`,
+//! Steel adaptation of vanilla's raid-status behaviors (`SetRaidStatus`,
 //! `ResetRaidStatus`).
 //!
-//! Both are vanilla brain behaviours that mutate the villager's `Brain` from inside a
+//! Both are vanilla brain behaviors that mutate the villager's `Brain` from inside a
 //! behavior tick. Steel's [`BehaviorContext`](crate::entity::ai::brain::behavior::BehaviorContext)
 //! deliberately borrows only the memory store — the brain itself is locked by
 //! `Brain::tick` — so a behaviour cannot re-enter it. The mob's brain tick therefore calls

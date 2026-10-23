@@ -31,14 +31,17 @@ use crate::permission::PermissionSubjectIndex;
 use crate::permission::PermissionSubjectState;
 use crate::player::KnownPlayers;
 use crate::player::Player;
+use crate::player::advancement::{PersistentAdvancement, PersistentCriterion};
 use crate::player::player_data_storage::file_storage::FilePlayerDataStorage;
 use crate::player::player_data_storage::memory_storage::MemoryPlayerDataStorage;
+use crate::player::recipe_book::PackedRecipeBook;
+use steel_protocol::packets::game::{RecipeBookSettings, RecipeBookTypeSettings};
 use steel_registry::item_stack::ItemStack;
 use steel_utils::{BlockPos, Identifier};
 
 const PLAYER_MAGIC: [u8; 4] = *b"STLP";
 const GLOBAL_MAGIC: [u8; 4] = *b"STLG";
-const PLAYER_STORAGE_VERSION: u16 = 10;
+const PLAYER_STORAGE_VERSION: u16 = 12;
 const GLOBAL_STORAGE_VERSION: u16 = 1;
 const GLOBAL_PLAYER_DATA_VERSION: i32 = 1;
 
@@ -93,6 +96,39 @@ struct PlayerDataFile {
     respawn_config: Option<RespawnConfigFile>,
     ender_pearls: Vec<EnderPearlFile>,
     ender_items: Vec<SlotFile>,
+    advancements: Vec<AdvancementFile>,
+    recipe_book: RecipeBookFile,
+}
+
+/// Vanilla `ServerRecipeBook.Packed` in Steel's on-disk shape.
+///
+/// Identifiers are stored as strings because `wincode` has no `Identifier` impl;
+/// unparsable or unregistered ids are dropped on load, matching
+/// `ServerRecipeBook.loadUntrusted`.
+#[derive(SchemaWrite, SchemaRead, Default)]
+struct RecipeBookFile {
+    crafting_open: bool,
+    crafting_filtering: bool,
+    furnace_open: bool,
+    furnace_filtering: bool,
+    blast_furnace_open: bool,
+    blast_furnace_filtering: bool,
+    smoker_open: bool,
+    smoker_filtering: bool,
+    recipes: Vec<String>,
+    to_be_displayed: Vec<String>,
+}
+
+#[derive(SchemaWrite, SchemaRead)]
+struct AdvancementFile {
+    id: String,
+    criteria: Vec<CriterionFile>,
+}
+
+#[derive(SchemaWrite, SchemaRead)]
+struct CriterionFile {
+    criterion_id: String,
+    achieved_at_millis: Option<u64>,
 }
 
 #[derive(SchemaWrite, SchemaRead)]
@@ -371,6 +407,22 @@ impl PlayerDataFile {
                     item_nbt: item_to_nbt_bytes(&slot.item).unwrap_or_default(),
                 })
                 .collect(),
+            advancements: data
+                .advancements
+                .iter()
+                .map(|advancement| AdvancementFile {
+                    id: advancement.id.to_string(),
+                    criteria: advancement
+                        .criteria
+                        .iter()
+                        .map(|criterion| CriterionFile {
+                            criterion_id: criterion.criterion_id.clone(),
+                            achieved_at_millis: criterion.achieved_at_millis,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            recipe_book: RecipeBookFile::from_packed(&data.recipe_book),
         })
     }
 
@@ -390,6 +442,27 @@ impl PlayerDataFile {
             inventory.push(PersistentSlot {
                 slot: slot.slot,
                 item: item_from_nbt_bytes(&slot.item_nbt)?,
+            });
+        }
+
+        let mut advancements = Vec::with_capacity(self.advancements.len());
+        for advancement in self.advancements {
+            let id = advancement.id.parse::<Identifier>().map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("invalid advancement id {}", advancement.id),
+                )
+            })?;
+            advancements.push(PersistentAdvancement {
+                id,
+                criteria: advancement
+                    .criteria
+                    .into_iter()
+                    .map(|criterion| PersistentCriterion {
+                        criterion_id: criterion.criterion_id,
+                        achieved_at_millis: criterion.achieved_at_millis,
+                    })
+                    .collect(),
             });
         }
 
@@ -457,8 +530,68 @@ impl PlayerDataFile {
                 items
             },
             stats: Vec::new(),
+            advancements,
+            recipe_book: self.recipe_book.into_packed(),
         })
     }
+}
+
+impl RecipeBookFile {
+    fn from_packed(packed: &PackedRecipeBook) -> Self {
+        let settings = packed.settings;
+        Self {
+            crafting_open: settings.crafting.open,
+            crafting_filtering: settings.crafting.filtering,
+            furnace_open: settings.furnace.open,
+            furnace_filtering: settings.furnace.filtering,
+            blast_furnace_open: settings.blast_furnace.open,
+            blast_furnace_filtering: settings.blast_furnace.filtering,
+            smoker_open: settings.smoker.open,
+            smoker_filtering: settings.smoker.filtering,
+            recipes: packed.known.iter().map(ToString::to_string).collect(),
+            to_be_displayed: packed.highlight.iter().map(ToString::to_string).collect(),
+        }
+    }
+
+    fn into_packed(self) -> PackedRecipeBook {
+        let settings = RecipeBookSettings {
+            crafting: RecipeBookTypeSettings {
+                open: self.crafting_open,
+                filtering: self.crafting_filtering,
+            },
+            furnace: RecipeBookTypeSettings {
+                open: self.furnace_open,
+                filtering: self.furnace_filtering,
+            },
+            blast_furnace: RecipeBookTypeSettings {
+                open: self.blast_furnace_open,
+                filtering: self.blast_furnace_filtering,
+            },
+            smoker: RecipeBookTypeSettings {
+                open: self.smoker_open,
+                filtering: self.smoker_filtering,
+            },
+        };
+        PackedRecipeBook {
+            settings,
+            known: parse_recipe_ids(self.recipes),
+            highlight: parse_recipe_ids(self.to_be_displayed),
+        }
+    }
+}
+
+/// Parses stored recipe ids, dropping unparsable entries the way
+/// `ServerRecipeBook.loadUntrusted` drops unregistered ones.
+fn parse_recipe_ids(ids: Vec<String>) -> Vec<Identifier> {
+    ids.into_iter()
+        .filter_map(|raw| match raw.parse::<Identifier>() {
+            Ok(id) => Some(id),
+            Err(_) => {
+                log::error!("Tried to load unrecognized recipe: {raw}, removed now.");
+                None
+            }
+        })
+        .collect()
 }
 
 impl RespawnConfigFile {

@@ -94,7 +94,9 @@ impl ToTokens for AdvancementData {
         let const_ident = &self.const_ident;
         let name = &self.key;
         let parent = generate_option(&self.advancement.parent, generate_identifier);
-        let criteria = parse_criteria(&self.advancement.criteria);
+        let criteria = parse_criteria(const_ident, &self.advancement.criteria);
+        let criteria_items = &criteria.items;
+        let criteria_map = &criteria.map;
         let display = generate_option(&self.advancement.display, parse_display);
         let send_telemetry_event = self.advancement.sends_telemetry_event;
         let requirements = generate_vec(&self.advancement.requirements, |v| {
@@ -102,10 +104,11 @@ impl ToTokens for AdvancementData {
         });
         let rewards = &self.advancement.rewards;
         tokens.extend(quote! {
+             #criteria_items
              pub static #const_ident: LazyLock<Advancement> = LazyLock::new(|| Advancement {
                 key: Identifier::vanilla_static(#name),
                 parent: #parent,
-                criteria: #criteria,
+                criteria: #criteria_map,
                 display: #display,
                 send_telemetry_event: #send_telemetry_event,
                 requirements: AdvancementRequirement { requirements: #requirements },
@@ -128,7 +131,34 @@ pub(crate) fn build() -> TokenStream {
         use crate::advancement::display::{AdvancementType,DisplayInfo};
         use crate::advancement::{Advancement,AdvancementRewards,AdvancementRequirement};
         use crate::advancement::criterion::{Criterion,AnyCriterion,ImpossibleInstance,ImpossibleTrigger};
+        use crate::advancement::predicates::{
+            BlockPredicate, Condition, DamagePredicate, DamageSourcePredicate, DistancePredicate,
+            DoubleBounds, EnchantmentPredicate, EntityComponentsPredicate,
+            EntityEquipmentPredicate, EntityFlagsPredicate, EntityPredicate, ExactComponent,
+            HolderSet, IntBounds, ItemPredicate, LightningPredicate, LocationPredicate,
+            MobEffectPredicateData, MobEffectsPredicate, PlayerPredicate, PositionPredicate,
+            StatePropertiesPredicate,
+        };
+        use crate::advancement::triggers::{
+            BeeNestDestroyedTriggerInstance, BlockUseTriggerInstance, BredAnimalsTriggerInstance,
+            BrewedPotionTriggerInstance, ChangedDimensionTriggerInstance,
+            ChanneledLightningTriggerInstance, ConstructBeaconTriggerInstance,
+            CuredZombieVillagerTriggerInstance, DistanceTriggerInstance,
+            EffectsChangedTriggerInstance, EnchantedItemTriggerInstance, EnterBlockTriggerInstance,
+            EntityConditionTriggerInstance, EntityHurtPlayerTriggerInstance,
+            FallAfterExplosionTriggerInstance, FishingRodHookedTriggerInstance,
+            InventoryChangedSlots, InventoryChangedTriggerInstance,
+            ItemDurabilityChangedTriggerInstance, ItemTriggerInstance, ItemUsedOnBlockTriggerInstance,
+            KilledByArrowTriggerInstance, KilledTriggerInstance, LevitationTriggerInstance,
+            LightningStrikeTriggerInstance, LootTableTriggerInstance, PickedUpItemTriggerInstance,
+            PlayerCondition, PlayerHurtEntityTriggerInstance,
+            PlayerInteractedWithEntityTriggerInstance, PlayerTriggerInstance,
+            RecipeCraftedTriggerInstance, RecipeUnlockedTriggerInstance,
+            SlideDownBlockTriggerInstance, SpearMobsTriggerInstance, StartRidingTriggerInstance,
+            TargetHitTriggerInstance, TradeTriggerInstance, UsedEnderEyeTriggerInstance,
+        };
         use crate::advancement::registry::AdvancementRegistry;
+        use crate::loot_table::PropertyCheck;
         use crate::vanilla_items;
         use crate::vanilla_recipes;
         use crate::ItemStackTemplate;

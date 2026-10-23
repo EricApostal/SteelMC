@@ -1,8 +1,6 @@
-use std::f64::consts::FRAC_PI_2;
-
 use glam::DVec3;
 
-use super::random_pos::default_random_pos_towards;
+use super::random_pos::{HALF_PI, default_random_pos_towards};
 use super::selector::{Goal, GoalControls};
 use crate::entity::PathfinderMob;
 
@@ -32,7 +30,7 @@ impl Goal for MoveTowardsRestrictionGoal {
         }
 
         let (x, y, z) = mob.home_position().get_bottom_center();
-        let Some(position) = default_random_pos_towards(mob, 16, 7, DVec3::new(x, y, z), FRAC_PI_2)
+        let Some(position) = default_random_pos_towards(mob, 16, 7, DVec3::new(x, y, z), HALF_PI)
         else {
             return false;
         };

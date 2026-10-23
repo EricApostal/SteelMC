@@ -9,6 +9,7 @@ use steel_registry::blocks::{
     block_state_ext::BlockStateExt,
     properties::{BlockStateProperties, Direction},
 };
+use steel_registry::fluid::{FluidState, is_water_fluid};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::item::BlockHitResult;
 use steel_registry::{sound_events, vanilla_blocks, vanilla_game_events, vanilla_items};
@@ -18,20 +19,37 @@ use steel_utils::{
 };
 
 use crate::entity::dismount_helper;
+use crate::fluid::state::get_fluid_state;
 use crate::{
     behavior::blocks::redstone::MAX_REDSTONE_SIGNAL,
     behavior::{BlockBehavior, BlockPlaceContext, InteractionResult, InventoryAccess},
     entity::Entity,
+    entity::ai::path::PathComputationType,
     level_data::RespawnData,
     player::{Player, PlayerRespawnConfig},
-    world::{LevelReader, World, game_event::GameEventContext},
+    world::{
+        LevelReader, World,
+        explosion::{
+            ExplosionDamageCalculator, ExplosionInfo, ExplosionInteraction,
+            bad_respawn_point_damage_source, base_block_explosion_resistance,
+        },
+        game_event::GameEventContext,
+    },
 };
 
-/// Vanilla respawn anchor
+/// Vanilla respawn anchor.
 ///
-/// TODO: Implement vanilla invalid-dimension explosion once Steel has a strict
-/// `World::explode` foundation, including block removal, water-sensitive
-/// explosion resistance, and bad-respawn-point explosion damage source.
+/// Charging, spawn-point selection and the invalid-dimension explosion
+/// (`RespawnAnchorBlock.explode`: block removal, water-sensitive resistance and
+/// the `BAD_RESPAWN_POINT` damage source).
+///
+/// Deviation: vanilla `RespawnAnchorBlock.animateTick` emits a client-local ambient sound and
+/// `REVERSE_PORTAL` particle; Steel lacks a client block-animation tick hook (owner:
+/// `steel-core/src/world` block ticker pipeline).
+/// Deviation: vanilla `RespawnAnchorBlock.canSetSpawn` reads
+/// `EnvironmentAttributes.RESPAWN_ANCHOR_WORKS` per position; Steel lacks an environment-attribute
+/// system and reads the dimension type's `respawn_anchor_works` flag instead (owner:
+/// `steel-core/src/world` environment attributes).
 #[block_behavior]
 pub struct RespawnAnchorBlock {
     block: BlockRef,
@@ -110,6 +128,51 @@ impl RespawnAnchorBlock {
         !forced && consume_spawn_block && found_standup_position
     }
 
+    /// Vanilla `RespawnAnchorBlock.isWaterThatWouldFlow`.
+    fn is_water_that_would_flow(world: &Arc<World>, pos: BlockPos) -> bool {
+        let fluid = get_fluid_state(world, pos);
+        if !is_water_fluid(fluid.fluid_id) {
+            return false;
+        }
+        if fluid.is_source() {
+            return true;
+        }
+        if fluid.amount < 2 {
+            return false;
+        }
+        let below = get_fluid_state(world, pos.below());
+        !is_water_fluid(below.fluid_id)
+    }
+
+    /// Vanilla `RespawnAnchorBlock.explode`: removes the anchor, then detonates a
+    /// bad-respawn-point blast whose resistance at the anchor's own position is
+    /// water's when the anchor is flooded.
+    fn explode(world: &Arc<World>, pos: BlockPos) {
+        // Vanilla `Level.removeBlock(pos, false)`.
+        world.remove_block(pos, false);
+
+        let any_water_neighbors = Direction::HORIZONTAL
+            .into_iter()
+            .any(|direction| Self::is_water_that_would_flow(world, pos.relative(direction)));
+        let in_water =
+            any_water_neighbors || is_water_fluid(get_fluid_state(world, pos.above()).fluid_id);
+
+        let (boom_x, boom_y, boom_z) = pos.get_center();
+        let boom_pos = DVec3::new(boom_x, boom_y, boom_z);
+        let calculator = AnchorExplosionDamageCalculator { pos, in_water };
+        world.explode_full(
+            None,
+            Some(bad_respawn_point_damage_source(boom_pos)),
+            Some(&calculator),
+            boom_x,
+            boom_y,
+            boom_z,
+            5.0,
+            true,
+            ExplosionInteraction::Block,
+        );
+    }
+
     fn standup_candidates(pos: BlockPos) -> impl Iterator<Item = BlockPos> {
         [pos, pos.below(), pos.above()]
             .into_iter()
@@ -180,11 +243,40 @@ impl RespawnAnchorBlock {
     }
 }
 
+/// Vanilla `RespawnAnchorBlock.explode`'s anonymous `ExplosionDamageCalculator`:
+/// the anchor's own position resists like water when it is flooded, so the blast is
+/// damped exactly like vanilla.
+struct AnchorExplosionDamageCalculator {
+    /// The anchor position being removed.
+    pos: BlockPos,
+    /// Whether the anchor counts as submerged (water neighbour or water above).
+    in_water: bool,
+}
+
+impl ExplosionDamageCalculator for AnchorExplosionDamageCalculator {
+    fn block_explosion_resistance(
+        &self,
+        _explosion: &ExplosionInfo<'_>,
+        _world: &World,
+        test_pos: BlockPos,
+        state: BlockStateId,
+        fluid: FluidState,
+    ) -> Option<f32> {
+        if test_pos == self.pos && self.in_water {
+            return Some(vanilla_blocks::WATER.config.explosion_resistance);
+        }
+        base_block_explosion_resistance(state, fluid)
+    }
+}
+
 impl BlockBehavior for RespawnAnchorBlock {
+    /// Vanilla `RespawnAnchorBlock`'s default state: charge 0.
     fn get_state_for_placement(&self, _context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
         Some(self.block.default_state())
     }
 
+    /// Vanilla `RespawnAnchorBlock.useItemOn`: glowstone charges an uncharged anchor, and a
+    /// glowstone off-hand defers the interaction to the empty-hand path.
     fn use_item_on(
         &self,
         state: BlockStateId,
@@ -215,6 +307,12 @@ impl BlockBehavior for RespawnAnchorBlock {
         InteractionResult::TryEmptyHandInteraction
     }
 
+    /// Vanilla `RespawnAnchorBlock.useWithoutItem`: sets the respawn point, or detonates when the
+    /// dimension rejects anchors.
+    #[expect(
+        clippy::float_cmp,
+        reason = "vanilla `ServerPlayer.RespawnConfig.isSamePosition` compares yaw and pitch exactly"
+    )]
     fn use_without_item(
         &self,
         state: BlockStateId,
@@ -229,8 +327,9 @@ impl BlockBehavior for RespawnAnchorBlock {
         }
 
         if !Self::can_set_spawn(world, pos) {
-            // TODO: Once `World::explode` exist remove the anchor and use the
-            // watersensitive bad respawn point explosion behavior
+            // Vanilla `RespawnAnchorBlock.useWithoutItem`: an anchor that cannot set
+            // spawn in this dimension detonates instead of charging a respawn point.
+            Self::explode(world, pos);
             return InteractionResult::SuccessServer;
         }
 
@@ -238,8 +337,12 @@ impl BlockBehavior for RespawnAnchorBlock {
             respawn_data: RespawnData::of(world.key.clone(), pos, 0.0, 0.0),
             forced: false,
         };
+        // Vanilla `ServerPlayer.RespawnConfig.isSamePosition`: dimension, position, yaw and
+        // pitch must all match the anchor's 0/0 angles.
         let should_update_spawn = player.respawn_config().as_ref().is_none_or(|current| {
             current.respawn_data.global_pos != respawn_config.respawn_data.global_pos
+                || current.respawn_data.yaw != respawn_config.respawn_data.yaw
+                || current.respawn_data.pitch != respawn_config.respawn_data.pitch
         });
 
         if !should_update_spawn {
@@ -258,10 +361,12 @@ impl BlockBehavior for RespawnAnchorBlock {
         InteractionResult::SuccessServer
     }
 
+    /// Vanilla `RespawnAnchorBlock.hasAnalogOutputSignal`: always true.
     fn has_analog_output_signal(&self, _state: BlockStateId) -> bool {
         true
     }
 
+    /// Vanilla `RespawnAnchorBlock.getAnalogOutputSignal` / `getScaledChargeLevel(state, 15)`.
     fn get_analog_output_signal(
         &self,
         state: BlockStateId,
@@ -270,6 +375,15 @@ impl BlockBehavior for RespawnAnchorBlock {
         _direction: Direction,
     ) -> i32 {
         Self::analog_output_signal(state.get_value(CHARGES))
+    }
+
+    /// Vanilla `RespawnAnchorBlock.isPathfindable`: never pathfindable.
+    fn is_pathfindable(
+        &self,
+        _state: BlockStateId,
+        _computation_type: PathComputationType,
+    ) -> bool {
+        false
     }
 }
 

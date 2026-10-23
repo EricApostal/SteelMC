@@ -311,7 +311,7 @@ pub(super) fn parse_entity_effect_json(
 /// Parses vanilla `ParticleOptions` (`{"type":"minecraft:soul"}` and the
 /// option-carrying forms) down to the particle type id.
 ///
-/// Vanilla keeps the per-particle option payload (dust colour, block state, …)
+/// Vanilla keeps the per-particle option payload (dust color, block state, …)
 /// on the effect; enchantment data in the vanilla datapack only uses
 /// option-free particles, so only the `type` field is decoded here and the
 /// payload is documented as unsupported rather than silently dropped at runtime.

@@ -415,7 +415,7 @@ where
         self.typed_argument(name)
     }
 
-    /// Returns a parsed packed opaque ARGB colour.
+    /// Returns a parsed packed opaque ARGB color.
     pub(crate) fn hex_color(&self, name: &str) -> Result<i32, CommandSyntaxError> {
         self.typed_argument::<HexColorValue>(name)
             .map(|value| value.0)
@@ -475,7 +475,7 @@ where
         ))
     }
 
-    /// Returns a parsed team colour.
+    /// Returns a parsed team color.
     pub(crate) fn team_color(&self, name: &str) -> Result<TeamColor, CommandSyntaxError> {
         self.typed_argument::<TeamColorValue>(name)
             .map(|value| value.0)

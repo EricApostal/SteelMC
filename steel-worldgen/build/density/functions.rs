@@ -1028,17 +1028,16 @@ fn spawn_target_tokens(settings: &NoiseSettingsJson) -> TokenStream {
                 .iter()
                 .map(|parameter| {
                     let ident = Ident::new(parameter, Span::call_site());
-                    match spans.get(parameter) {
+                    if let Some([min, max]) = spans.get(parameter) {
                         // Quantized exactly like `steel_utils::climate::Parameter::span`,
                         // which is what vanilla's `Climate.Parameter.CODEC` does.
-                        Some([min, max]) => {
-                            let min = Literal::i64_suffixed((min * 10_000.0_f32) as i64);
-                            let max = Literal::i64_suffixed((max * 10_000.0_f32) as i64);
-                            quote! {
-                                #ident: Some(steel_utils::climate::Parameter::new(#min, #max))
-                            }
+                        let min = Literal::i64_suffixed((min * 10_000.0_f32) as i64);
+                        let max = Literal::i64_suffixed((max * 10_000.0_f32) as i64);
+                        quote! {
+                            #ident: Some(steel_utils::climate::Parameter::new(#min, #max))
                         }
-                        None => quote! { #ident: None },
+                    } else {
+                        quote! { #ident: None }
                     }
                 })
                 .collect();

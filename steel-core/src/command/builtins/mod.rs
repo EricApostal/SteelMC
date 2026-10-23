@@ -22,6 +22,7 @@ mod fill;
 mod fillbiome;
 mod fly;
 mod forceload;
+mod function;
 pub(crate) mod gamemode;
 mod gamerule;
 mod give;
@@ -49,6 +50,7 @@ mod ride;
 mod rotate;
 mod save;
 mod say;
+mod schedule;
 mod scoreboard;
 mod seed;
 mod setblock;
@@ -132,6 +134,7 @@ pub(crate) fn create_registered_dispatcher(
     builder.register(fillbiome::registration())?;
     builder.register(fly::registration())?;
     builder.register(forceload::registration())?;
+    builder.register(function::registration())?;
     builder.register(gamemode::registration()?)?;
     builder.register(gamerule::registration())?;
     builder.register(give::registration())?;
@@ -160,6 +163,7 @@ pub(crate) fn create_registered_dispatcher(
     builder.register(rotate::registration())?;
     builder.register(save::registration())?;
     builder.register(say::registration())?;
+    builder.register(schedule::registration())?;
     builder.register(scoreboard::registration())?;
     builder.register(seed::registration())?;
     builder.register(setblock::registration())?;
@@ -257,6 +261,7 @@ mod tests {
                 "fillbiome",
                 "fly",
                 "forceload",
+                "function",
                 "gamemode",
                 "gamerule",
                 "give",
@@ -287,6 +292,7 @@ mod tests {
                 "rotate",
                 "save-all",
                 "say",
+                "schedule",
                 "scoreboard",
                 "seed",
                 "setblock",

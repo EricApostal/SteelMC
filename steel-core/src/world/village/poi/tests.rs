@@ -175,7 +175,7 @@ fn world_village_queries_follow_the_distance_tracker() {
     );
 
     // One section east: still a village (vanilla `isVillage` allows one section), but the
-    // block position itself is no longer a village *centre* for the section lookup.
+    // block position itself is no longer a village *center* for the section lookup.
     let one_away = bed.offset(20, 0, 0);
     assert_eq!(
         world.sections_to_village(SectionPos::from_block_pos(one_away)),
@@ -192,7 +192,7 @@ fn world_village_queries_follow_the_distance_tracker() {
     assert!(!world.is_close_to_village(three_away, 2));
 
     // From a section outside the village, the closest section within the cube is the
-    // village centre; from the centre itself there is nothing closer.
+    // village center; from the center itself there is nothing closer.
     assert_eq!(
         find_section_closest_to_village(world, far_section, 3),
         village_section

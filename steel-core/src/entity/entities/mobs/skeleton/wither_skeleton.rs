@@ -333,11 +333,10 @@ impl AbstractSkeleton for WitherSkeletonEntity {
     fn populate_default_equipment_enchantments(
         &self,
         _world: &World,
-        _random: &mut impl Random,
+        _random: &mut (impl Random + steel_registry::enchantment::table::EnchantmentRandom),
         _difficulty_modifier: f32,
     ) {
-        // Vanilla `WitherSkeleton.populateDefaultEquipmentEnchantments` is empty; Steel's
-        // shared default has no enchantment pass to suppress.
+        // Vanilla `WitherSkeleton.populateDefaultEquipmentEnchantments` is empty.
     }
 
     fn get_arrow(

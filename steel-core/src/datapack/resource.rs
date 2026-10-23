@@ -33,7 +33,7 @@ pub(crate) struct MultiPackResourceManager {
 }
 
 impl MultiPackResourceManager {
-    /// Builds the overlay from the currently selected packs, honouring load order.
+    /// Builds the overlay from the currently selected packs, honoring load order.
     pub(crate) fn from_packs(packs: &[&Pack]) -> Self {
         Self {
             packs: packs.iter().map(|pack| pack.resources()).collect(),

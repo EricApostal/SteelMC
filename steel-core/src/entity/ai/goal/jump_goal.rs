@@ -106,7 +106,9 @@ impl Goal for DolphinJumpGoal {
     }
 
     fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
-        if rand::random_range(0..reduced_tick_delay(self.interval)) != 0 {
+        // Vanilla stores `reducedTickDelay(interval)` in the constructor and rolls
+        // `nextInt(this.interval)` against that stored value.
+        if rand::random_range(0..self.interval) != 0 {
             return false;
         }
 
@@ -165,7 +167,7 @@ impl Goal for DolphinJumpGoal {
         let (yaw, pitch) = mob.rotation();
         if y * y < PITCH_DAMP_LIMIT_SQR && pitch != 0.0 {
             mob.set_rotation((yaw, rot_lerp(ROTATION_LERP_RATE, pitch, 0.0)));
-        } else if velocity.length_squared() > 1.0e-5 {
+        } else if velocity.length() > 1.0e-5 {
             let horizontal = (velocity.x * velocity.x + velocity.z * velocity.z).sqrt();
             let rotation = (-velocity.y / horizontal).atan() * 180.0 / std::f64::consts::PI;
             mob.set_rotation((yaw, rotation as f32));

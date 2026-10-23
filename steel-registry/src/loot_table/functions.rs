@@ -264,6 +264,66 @@ pub enum ListOperation {
     Append,
 }
 
+impl ListOperation {
+    /// Vanilla `ListOperation#apply(original, replacement, maxSize)`.
+    ///
+    /// Out-of-bounds offsets and overflows keep the original list, matching
+    /// vanilla's log-and-ignore behaviour.
+    #[must_use]
+    pub fn apply<T: Clone>(self, original: &[T], replacement: &[T], max_size: usize) -> Vec<T> {
+        match self {
+            Self::ReplaceAll => replacement.to_vec(),
+            Self::Append => {
+                if original.len() + replacement.len() > max_size {
+                    return original.to_vec();
+                }
+                let mut result = original.to_vec();
+                result.extend_from_slice(replacement);
+                result
+            }
+            Self::InsertBefore { offset } | Self::InsertAfter { offset } => {
+                let insert_at = match self {
+                    Self::InsertAfter { .. } => offset.saturating_add(1),
+                    _ => offset,
+                };
+                let Ok(insert_at) = usize::try_from(insert_at) else {
+                    return original.to_vec();
+                };
+                if insert_at > original.len() || original.len() + replacement.len() > max_size {
+                    return original.to_vec();
+                }
+                let mut result = Vec::with_capacity(original.len() + replacement.len());
+                result.extend_from_slice(&original[..insert_at]);
+                result.extend_from_slice(replacement);
+                result.extend_from_slice(&original[insert_at..]);
+                result
+            }
+            Self::ReplaceSection { offset, size } => {
+                let Ok(offset) = usize::try_from(offset) else {
+                    return original.to_vec();
+                };
+                if offset > original.len() {
+                    return original.to_vec();
+                }
+                let resume = match size {
+                    Some(size) => offset.saturating_add(usize::try_from(size).unwrap_or(0)),
+                    None => offset.saturating_add(replacement.len()),
+                };
+                let mut result = Vec::with_capacity(original.len() + replacement.len());
+                result.extend_from_slice(&original[..offset]);
+                result.extend_from_slice(replacement);
+                if resume < original.len() {
+                    result.extend_from_slice(&original[resume..]);
+                }
+                if result.len() > max_size {
+                    return original.to_vec();
+                }
+                result
+            }
+        }
+    }
+}
+
 /// An attribute modifier for `SetAttributes` function.
 #[derive(Debug, Clone)]
 pub struct AttributeModifier {
@@ -453,15 +513,12 @@ impl LootFunction {
                 );
             }
             LootFunction::CopyComponents { source, include } => {
-                // TODO: Implement when block entity system is ready
                 item.copy_components(*source, include, ctx);
             }
             LootFunction::CopyState { block, properties } => {
-                // TODO: Implement block state copying
                 item.copy_block_state(block, properties, ctx);
             }
             LootFunction::SetComponents { components } => {
-                // TODO: Implement component setting from JSON
                 item.set_components_from_json(components);
             }
             LootFunction::SetCustomData { tag } => {
@@ -475,13 +532,18 @@ impl LootFunction {
                 decoration,
                 zoom,
                 skip_existing_chunks,
-                search_radius: _,
+                search_radius,
             } => {
-                // TODO: Implement radius handling (vanilla `ExplorationMapFunction.searchRadius`)
-                item.create_exploration_map(destination, decoration, *zoom, *skip_existing_chunks);
+                item.create_exploration_map(
+                    destination,
+                    decoration,
+                    *zoom,
+                    *search_radius,
+                    *skip_existing_chunks,
+                    ctx,
+                );
             }
             LootFunction::SetName { name, target } => {
-                // TODO: Implement name setting
                 item.set_name(name, *target);
             }
             LootFunction::SetOminousBottleAmplifier { amplifier } => {

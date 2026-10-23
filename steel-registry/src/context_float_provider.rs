@@ -193,7 +193,7 @@ impl ContextFloatProvider {
     /// The constant value of a `minecraft:constant` provider.
     ///
     /// Vanilla data uses constant providers where no loot context exists (for
-    /// example brewing-fuel `speed`); this avoids synthesising a throwaway
+    /// example brewing-fuel `speed`); this avoids synthesizing a throwaway
     /// `LootContext` for a value that cannot vary.
     #[must_use]
     pub const fn as_constant(&self) -> Option<f32> {

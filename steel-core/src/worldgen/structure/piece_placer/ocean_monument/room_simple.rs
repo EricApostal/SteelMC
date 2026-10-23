@@ -4,8 +4,10 @@ use super::{
     lamp, open, vanilla_blocks,
 };
 
-pub(super) fn place_simple_room(
-    placer: &mut ScatteredFeaturePlacer<'_, '_>,
+use crate::worldgen::template::TemplateLevelAccess;
+
+pub(super) fn place_simple_room<L: TemplateLevelAccess>(
+    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
     random: &mut WorldgenRandom,
     room: OceanMonumentRoomData,
     main_design: i32,
@@ -37,8 +39,8 @@ pub(super) fn place_simple_room(
     }
 }
 
-fn place_simple_room_design0(
-    placer: &mut ScatteredFeaturePlacer<'_, '_>,
+fn place_simple_room_design0<L: TemplateLevelAccess>(
+    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
     room: OceanMonumentRoomData,
 ) {
     for (x0, z0) in [(0, 0), (5, 0), (0, 5), (5, 5)] {
@@ -111,8 +113,8 @@ fn place_simple_room_design0(
     }
 }
 
-fn place_simple_room_design1(
-    placer: &mut ScatteredFeaturePlacer<'_, '_>,
+fn place_simple_room_design1<L: TemplateLevelAccess>(
+    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
     room: OceanMonumentRoomData,
 ) {
     for (x, z) in [(2, 2), (2, 5), (5, 5), (5, 2)] {
@@ -158,8 +160,8 @@ fn place_simple_room_design1(
     }
 }
 
-fn place_simple_room_design2(
-    placer: &mut ScatteredFeaturePlacer<'_, '_>,
+fn place_simple_room_design2<L: TemplateLevelAccess>(
+    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
     room: OceanMonumentRoomData,
 ) {
     placer.generate_box(0, 1, 0, 0, 1, 7, base_light(), base_light(), false);
@@ -193,8 +195,8 @@ fn place_simple_room_design2(
     }
 }
 
-pub(super) fn place_simple_top_room(
-    placer: &mut ScatteredFeaturePlacer<'_, '_>,
+pub(super) fn place_simple_top_room<L: TemplateLevelAccess>(
+    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
     random: &mut WorldgenRandom,
     room: OceanMonumentRoomData,
 ) {

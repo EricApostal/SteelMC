@@ -1,4 +1,6 @@
 use super::*;
+use crate::world::{LevelAccessor as _, LevelReader as _};
+use crate::worldgen::template::TemplateLevelAccess;
 use steel_math::{DEGREE_90, DEGREE_180, DEGREE_270, wrap_degrees};
 
 impl StructureTemplate {
@@ -145,9 +147,9 @@ impl StructureTemplate {
         clippy::too_many_lines,
         reason = "template placement follows vanilla's single-pass block placement flow"
     )]
-    pub(crate) fn place_in_world(
+    pub(crate) fn place_in_world<L: TemplateLevelAccess>(
         &self,
-        region: &mut WorldGenRegion<'_>,
+        region: &mut L,
         registry: &Registry,
         position: BlockPos,
         reference_pos: BlockPos,
@@ -311,7 +313,7 @@ impl StructureTemplate {
             let placed_update_flags =
                 (flags & !UpdateFlags::UPDATE_NEIGHBORS) | UpdateFlags::UPDATE_KNOWN_SHAPE;
             for pos in placed_positions {
-                let state = region.block_state(pos);
+                let state = region.get_block_state(pos);
                 let new_state = Self::update_from_neighbor_shapes(region, state, pos);
                 if state != new_state {
                     let _ = region.set_block_state(pos, new_state, placed_update_flags);
@@ -324,9 +326,9 @@ impl StructureTemplate {
         true
     }
 
-    pub(super) fn place_entities(
+    pub(super) fn place_entities<L: TemplateLevelAccess>(
         &self,
-        region: &mut WorldGenRegion<'_>,
+        region: &mut L,
         position: BlockPos,
         settings: &StructurePlaceSettings<'_>,
     ) {
@@ -396,9 +398,9 @@ impl StructureTemplate {
         }
     }
 
-    pub(crate) fn replace_jigsaw_final_states(
+    pub(crate) fn replace_jigsaw_final_states<L: TemplateLevelAccess>(
         &self,
-        region: &mut WorldGenRegion<'_>,
+        region: &mut L,
         registry: &Registry,
         position: BlockPos,
         settings: &StructurePlaceSettings<'_>,
@@ -468,8 +470,8 @@ impl StructureTemplate {
         markers
     }
 
-    pub(super) fn update_shape_at_edge(
-        region: &WorldGenRegion<'_>,
+    pub(super) fn update_shape_at_edge<L: TemplateLevelAccess>(
+        region: &L,
         flags: UpdateFlags,
         placed_positions: &[BlockPos],
         min: BlockPos,
@@ -492,8 +494,8 @@ impl StructureTemplate {
             |direction, x, y, z| {
                 let pos = min.offset(x, y, z);
                 let neighbor_pos = pos.relative(direction);
-                let state = region.block_state(pos);
-                let neighbor_state = region.block_state(neighbor_pos);
+                let state = region.get_block_state(pos);
+                let neighbor_state = region.get_block_state(neighbor_pos);
                 let new_state = BLOCK_BEHAVIORS
                     .get_behavior(state.get_block())
                     .update_shape(state, region, pos, direction, neighbor_pos, neighbor_state);
@@ -518,15 +520,15 @@ impl StructureTemplate {
         );
     }
 
-    pub(super) fn update_from_neighbor_shapes(
-        region: &WorldGenRegion<'_>,
+    pub(super) fn update_from_neighbor_shapes<L: TemplateLevelAccess>(
+        region: &L,
         state: BlockStateId,
         pos: BlockPos,
     ) -> BlockStateId {
         let mut updated = state;
         for direction in Direction::UPDATE_SHAPE_ORDER {
             let neighbor_pos = pos.relative(direction);
-            let neighbor_state = region.block_state(neighbor_pos);
+            let neighbor_state = region.get_block_state(neighbor_pos);
             updated = BLOCK_BEHAVIORS
                 .get_behavior(updated.get_block())
                 .update_shape(
@@ -541,8 +543,8 @@ impl StructureTemplate {
         updated
     }
 
-    pub(super) fn fill_neighbor_source_liquids(
-        region: &WorldGenRegion<'_>,
+    pub(super) fn fill_neighbor_source_liquids<L: TemplateLevelAccess>(
+        region: &L,
         to_fill: &mut Vec<BlockPos>,
         locked_fluids: &[BlockPos],
     ) {
@@ -573,7 +575,7 @@ impl StructureTemplate {
                 }
 
                 if to_place.is_source() {
-                    let state = region.block_state(pos);
+                    let state = region.get_block_state(pos);
                     if Self::is_liquid_block_container(state) {
                         let _ = Self::place_liquid(region, pos, state, to_place);
                         filled = true;
@@ -587,8 +589,8 @@ impl StructureTemplate {
         }
     }
 
-    pub(super) fn fluid_state_at(region: &WorldGenRegion<'_>, pos: BlockPos) -> FluidState {
-        Self::fluid_state_for_block(region.block_state(pos))
+    pub(super) fn fluid_state_at<L: TemplateLevelAccess>(region: &L, pos: BlockPos) -> FluidState {
+        Self::fluid_state_for_block(region.get_block_state(pos))
     }
 
     pub(super) fn fluid_state_for_block(state: BlockStateId) -> FluidState {
@@ -601,8 +603,8 @@ impl StructureTemplate {
             .is_liquid_container(state)
     }
 
-    pub(super) fn place_liquid(
-        region: &WorldGenRegion<'_>,
+    pub(super) fn place_liquid<L: TemplateLevelAccess>(
+        region: &L,
         pos: BlockPos,
         state: BlockStateId,
         fluid_state: FluidState,
@@ -692,8 +694,8 @@ impl StructureTemplate {
         Some(&self.palettes[index as usize])
     }
 
-    pub(super) fn place_block_entity(
-        region: &mut WorldGenRegion<'_>,
+    pub(super) fn place_block_entity<L: TemplateLevelAccess>(
+        region: &mut L,
         pos: BlockPos,
         state: BlockStateId,
         block_entity_type: Option<BlockEntityTypeRef>,

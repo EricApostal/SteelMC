@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::map_decoration_type::MapDecorationTypeRef;
 use steel_registry::{DyeColor, REGISTRY, RegistryExt as _, vanilla_map_decoration_types};
-use steel_utils::{BlockPos, Identifier};
+use steel_utils::{BlockPos, Downcast as _, Identifier};
 use text_components::TextComponent;
 
+use crate::block_entity::entities::banner::BannerBlockEntity;
 use crate::entity::Entity as _;
 use crate::world::level_reader::LevelReader;
 
@@ -62,15 +63,19 @@ impl MapBanner {
         Self { pos, color, name }
     }
 
-    /// Vanilla `MapBanner.fromWorld`: reads a banner block at `pos`.
+    /// Vanilla `MapBanner.fromWorld`: reads the banner block entity at `pos`.
     ///
-    /// The hover name comes from the banner block entity's custom name. Steel's
-    /// banner block entity is not implemented yet, so the name is always absent;
-    /// the marker's position and colour are complete.
+    /// Vanilla requires the `BannerBlockEntity` itself, because the base color
+    /// and the custom name both live on it. Steel derives the color from the
+    /// banner block's registry key (one block per color) and reads the custom
+    /// name from [`BannerBlockEntity`]; a banner without its block entity is
+    /// skipped, matching vanilla's `instanceof` check.
     #[must_use]
     pub fn from_world(level: &dyn LevelReader, pos: BlockPos) -> Option<Self> {
         let color = banner_color(level.get_block_state(pos).get_block())?;
-        Some(Self::new(pos, color, None))
+        let banner = level.get_block_entity(pos)?;
+        let name = banner.downcast_ref::<BannerBlockEntity>()?.custom_name();
+        Some(Self::new(pos, color, name))
     }
 
     /// Returns the banner position.
@@ -79,7 +84,7 @@ impl MapBanner {
         self.pos
     }
 
-    /// Returns the banner's base colour.
+    /// Returns the banner's base color.
     #[must_use]
     pub const fn color(&self) -> DyeColor {
         self.color
@@ -91,7 +96,7 @@ impl MapBanner {
         self.name.as_ref()
     }
 
-    /// Vanilla `MapBanner.getDecoration`: the per-colour banner decoration type.
+    /// Vanilla `MapBanner.getDecoration`: the per-color banner decoration type.
     #[must_use]
     pub const fn decoration_type(&self) -> MapDecorationTypeRef {
         banner_decoration_type(self.color)
@@ -160,7 +165,7 @@ pub fn frame_id(pos: BlockPos) -> String {
     format!("frame-{},{},{}", pos.x(), pos.y(), pos.z())
 }
 
-/// Vanilla `MapBanner.getDecoration` colour mapping.
+/// Vanilla `MapBanner.getDecoration` color mapping.
 #[must_use]
 pub const fn banner_decoration_type(color: DyeColor) -> MapDecorationTypeRef {
     match color {
@@ -183,10 +188,10 @@ pub const fn banner_decoration_type(color: DyeColor) -> MapDecorationTypeRef {
     }
 }
 
-/// Returns the banner colour of a banner block, or `None` for other blocks.
+/// Returns the banner color of a banner block, or `None` for other blocks.
 ///
 /// Vanilla stores this on the per-instance `BannerBlock.color` field; Steel's
-/// banner blocks are one registry entry per colour, so the colour is read from
+/// banner blocks are one registry entry per color, so the color is read from
 /// the registry key (`white_banner`, `white_wall_banner`, ...).
 #[must_use]
 pub fn banner_color(block: &steel_registry::blocks::Block) -> Option<DyeColor> {
@@ -236,7 +241,7 @@ struct BannerWire {
     name: Option<TextComponent>,
 }
 
-/// Serialises [`DyeColor`] using vanilla's serialized colour names.
+/// Serializes [`DyeColor`] using vanilla's serialized color names.
 mod dye_color_serde {
     use serde::{Deserialize as _, Deserializer, Serializer};
 
@@ -254,7 +259,7 @@ mod dye_color_serde {
     ) -> Result<DyeColor, D::Error> {
         let name = String::deserialize(deserializer)?;
         DyeColor::from_serialized_name(&name)
-            .ok_or_else(|| serde::de::Error::custom(format!("unknown dye colour: {name}")))
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown dye color: {name}")))
     }
 }
 
@@ -315,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn banner_decoration_types_cover_every_colour() {
+    fn banner_decoration_types_cover_every_color() {
         for color in DyeColor::VALUES {
             let decoration = banner_decoration_type(color);
             assert_eq!(

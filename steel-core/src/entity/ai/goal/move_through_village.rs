@@ -7,7 +7,7 @@ use glam::DVec3;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_utils::BlockPos;
 
-use super::random_pos::{default_random_pos_towards, land_random_pos_with_weight};
+use super::random_pos::{HALF_PI, default_random_pos_towards, land_random_pos_with_weight};
 use super::selector::{Goal, GoalControls};
 use crate::behavior::BLOCK_BEHAVIORS;
 use crate::entity::PathfinderMob;
@@ -60,35 +60,35 @@ impl MoveThroughVillageGoal {
         }
     }
 
-    /// Vanilla `MoveThroughVillageGoal.canUse`'s POI search around each candidate position.
+    /// Vanilla `MoveThroughVillageGoal.canUse`'s POI search around each candidate position
+    /// (vanilla `PoiManager.find`, i.e. the first matching record in range order).
     fn find_unvisited_poi(
         storage: &PointOfInterestStorage,
         center: BlockPos,
         has_not_visited: &dyn Fn(BlockPos) -> bool,
     ) -> Option<BlockPos> {
-        let pois = storage.get_in_range(
-            &is_village_poi,
-            center,
-            POI_SEARCH_RADIUS,
-            OccupationStatus::Occupied,
-        );
-        let candidates: Vec<BlockPos> = pois
+        storage
+            .get_in_range(
+                &is_village_poi,
+                center,
+                POI_SEARCH_RADIUS,
+                OccupationStatus::Occupied,
+            )
             .into_iter()
             .map(|(_, pos)| pos)
-            .filter(|pos| has_not_visited(*pos))
-            .collect();
-        if candidates.is_empty() {
-            return None;
-        }
-
-        Some(candidates[rand::random_range(0..candidates.len())])
+            .find(|pos| has_not_visited(*pos))
     }
 }
 
+/// Vanilla `BlockPos.distSqr` (`distToLowCornerSqr`): squared distance between low corners.
 fn dist_sqr(a: BlockPos, b: BlockPos) -> f64 {
-    let (ax, ay, az) = a.get_center();
-    let (bx, by, bz) = b.get_center();
-    DVec3::new(ax, ay, az).distance_squared(DVec3::new(bx, by, bz))
+    let (ax, ay, az) = (a.x(), a.y(), a.z());
+    let (bx, by, bz) = (b.x(), b.y(), b.z());
+    DVec3::new(f64::from(ax), f64::from(ay), f64::from(az)).distance_squared(DVec3::new(
+        f64::from(bx),
+        f64::from(by),
+        f64::from(bz),
+    ))
 }
 
 impl Goal for MoveThroughVillageGoal {
@@ -97,6 +97,10 @@ impl Goal for MoveThroughVillageGoal {
     }
 
     fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
+        if !super::door_interact::has_ground_path_navigation(mob) {
+            return false;
+        }
+
         self.update_visited();
         let Some(world) = mob.level() else {
             return false;
@@ -115,12 +119,12 @@ impl Goal for MoveThroughVillageGoal {
         let land_pos =
             land_random_pos_with_weight(mob, STROLL_RANGE_XZ, STROLL_RANGE_Y, |candidate| {
                 if !world.is_village(candidate) {
-                    return f32::NEG_INFINITY;
+                    return f64::NEG_INFINITY;
                 }
 
                 let storage = world.poi_storage.lock();
                 MoveThroughVillageGoal::find_unvisited_poi(&storage, candidate, &has_not_visited)
-                    .map_or(f32::NEG_INFINITY, |poi| -dist_sqr(poi, pos) as f32)
+                    .map_or(f64::NEG_INFINITY, |poi| -dist_sqr(poi, pos))
             });
         let Some(land_pos) = land_pos else {
             return false;
@@ -149,13 +153,7 @@ impl Goal for MoveThroughVillageGoal {
 
         if self.path.is_none() {
             let (x, y, z) = self.poi_pos.get_bottom_center();
-            let partial = default_random_pos_towards(
-                mob,
-                10,
-                7,
-                DVec3::new(x, y, z),
-                std::f64::consts::FRAC_PI_2,
-            );
+            let partial = default_random_pos_towards(mob, 10, 7, DVec3::new(x, y, z), HALF_PI);
             let Some(partial) = partial else {
                 return false;
             };

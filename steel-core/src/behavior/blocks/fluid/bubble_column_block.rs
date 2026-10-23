@@ -16,7 +16,8 @@ use steel_utils::{BlockPos, BlockStateId};
 
 use crate::behavior::context::BlockPlaceContext;
 use crate::behavior::{
-    BLOCK_BEHAVIORS, BlockCollisionContext, block::BlockBehavior, block::PickupResult,
+    BLOCK_BEHAVIORS, BlockCollisionContext, BlockStateBehaviorExt as _, block::BlockBehavior,
+    block::PickupResult,
 };
 use crate::entity::{Entity, InsideBlockEffectCollector};
 use crate::player::Player;
@@ -86,7 +87,7 @@ impl BubbleColumnBlock {
         fluid_state
             .fluid_id
             .has_tag(&FluidTag::BUBBLE_COLUMN_CAN_OCCUPY)
-            && occupy_state.get_block() == &vanilla_blocks::WATER
+            && occupy_state.is_liquid_block()
             && fluid_state.is_source()
             && fluid_state.is_full()
     }

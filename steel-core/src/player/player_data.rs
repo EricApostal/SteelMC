@@ -5,12 +5,14 @@
 use rustc_hash::FxHashSet;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::stat::Stat;
+use steel_registry::{REGISTRY, RegistryExt as _};
 use steel_utils::types::GameType;
 
 use super::{
     Player, PlayerRespawnConfig, abilities::Abilities, experience::Experience, food_data::FoodData,
     player_inventory::PlayerInventory,
 };
+use crate::player::advancement::{PersistentAdvancement, PersistentCriterion};
 use crate::player::stats_counter::StatState;
 use crate::{
     chunk_saver::{ChunkStorage, PersistentEntity},
@@ -23,7 +25,7 @@ use crate::{
 
 /// Current data version for player saves.
 /// Increment when making breaking changes to the format.
-pub const PLAYER_DATA_VERSION: i32 = 7;
+pub const PLAYER_DATA_VERSION: i32 = 9;
 
 /// Persistent player data saved by Steel's storage backend.
 ///
@@ -129,6 +131,12 @@ pub struct PersistentPlayerData {
 
     /// The tracked statistics of the player with their counters.
     pub stats: Vec<PersistentStat>,
+
+    /// Vanilla `PlayerAdvancements` progress (`advancements` in vanilla player data).
+    pub advancements: Vec<PersistentAdvancement>,
+
+    /// Vanilla `ServerRecipeBook.pack()`: unlocked recipes, highlights and book settings.
+    pub recipe_book: crate::player::recipe_book::PackedRecipeBook,
 }
 
 /// A vanilla `RootVehicle` tree persisted with player data.
@@ -237,6 +245,8 @@ impl PersistentPlayerData {
             .or_else(|| player.pending_root_vehicle_for_current_world());
         let ender_pearls = Self::ender_pearls_from_player(player);
         let stats = Self::stats_from_player(player);
+        let advancements = player.advancements.lock().snapshot();
+        let recipe_book = player.recipe_book.lock().pack();
 
         Self {
             pos: [pos.x, pos.y, pos.z],
@@ -283,6 +293,8 @@ impl PersistentPlayerData {
             ender_pearls,
             ender_items,
             stats,
+            advancements,
+            recipe_book,
         }
     }
 
@@ -349,6 +361,7 @@ impl Player {
         *self.ender_chest_inventory.lock() = PlayerEnderChestContainer::new();
         *self.food_data.lock() = FoodData::new();
         self.stats.lock().reset();
+        *self.recipe_book.lock() = crate::player::recipe_book::ServerRecipeBook::new();
 
         let mut experience = Experience::default();
         experience.dirty = true;
@@ -542,5 +555,16 @@ impl PersistentPlayerData {
                 stats.stats.insert(*stat, (*count, StatState::Dirty));
             }
         }
+
+        // Advancements
+        player.advancements.lock().restore(&self.advancements);
+
+        // Recipe book: vanilla drops ids that are no longer registered.
+        player
+            .recipe_book
+            .lock()
+            .load_untrusted(self.recipe_book.clone(), |id| {
+                REGISTRY.recipes.by_key(id).is_some()
+            });
     }
 }

@@ -186,17 +186,11 @@ pub struct StructureSpawnOverrideData {
 }
 
 /// Spawn entry inside a structure spawn override.
-#[derive(Debug, Clone)]
-pub struct StructureSpawnerData {
-    /// Entity type id.
-    pub entity_type: Identifier,
-    /// Spawn weight.
-    pub weight: i32,
-    /// Minimum group size.
-    pub min_count: i32,
-    /// Maximum group size.
-    pub max_count: i32,
-}
+///
+/// Vanilla `StructureSpawnOverride.spawns` is a `WeightedList` of the same
+/// `MobSpawnSettings.SpawnerData` biomes use, so this is an alias rather than a
+/// second struct with an identical shape.
+pub type StructureSpawnerData = crate::biome::SpawnerData;
 
 /// Type-specific structure config.
 #[derive(Debug, Clone)]

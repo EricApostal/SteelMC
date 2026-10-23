@@ -8,6 +8,10 @@ use super::super::{
 };
 use super::{JobPoll, ServerJob, ServerJobContext};
 use crate::entity::LivingEntity as _;
+use crate::player::{
+    PlayerRespawnConfig, personal_respawn_chunk_positions, resolve_personal_respawn,
+};
+use steel_protocol::packets::game::{CGameEvent, GameEventType};
 
 pub(in crate::server) struct RootVehicleRestoreJob {
     player: Arc<Player>,
@@ -422,11 +426,14 @@ impl ServerJob for NetherPortalTeleportJob {
     }
 }
 
-const END_PORTAL_RESPAWN_SEARCH_READY_CANDIDATE_BUDGET: usize = 8;
-
-struct EndPortalRespawnSpawn {
-    position: DVec3,
-    rotation: (f32, f32),
+/// Requests the chunk holding the shared respawn position before resolving the
+/// fallback destination (`Entity.adjustSpawnLocation` reads that chunk's heightmap).
+fn shared_spawn_request(world: &Arc<World>, respawn_data: &RespawnData) -> ChunkRequestHandle {
+    world.chunk_map.request_chunk(
+        end_portal::prewarm_center(respawn_data.pos()),
+        ChunkStatus::Full,
+        ChunkTicketKind::Portal,
+    )
 }
 
 pub(in crate::server) struct EndPortalTeleportJob {
@@ -446,14 +453,20 @@ enum EndPortalTeleportPhase {
         respawn_data: RespawnData,
         request: ChunkRequestHandle,
     },
-    SearchingPlayerRespawn {
+    /// Vanilla `ServerPlayer.findRespawnPositionAndUseSpawnBlock`: personal bed/anchor lookup.
+    ReturningPlayer {
+        /// World holding the player's personal spawn block.
+        personal_world: Arc<World>,
+        personal: PlayerRespawnConfig,
+        /// Shared respawn fallback used when the personal spawn block is unusable.
+        fallback_world: Arc<World>,
+        fallback_respawn_data: RespawnData,
+        request: ChunkRequestHandle,
+    },
+    /// Vanilla `TeleportTransition.createDefault` / `missingRespawnBlock` destination.
+    LoadingSharedSpawn {
         target_world: Arc<World>,
         respawn_data: RespawnData,
-        search: PlayerSpawnSearch,
-    },
-    LoadingPlayerRespawn {
-        target_world: Arc<World>,
-        spawn: EndPortalRespawnSpawn,
         request: ChunkRequestHandle,
     },
 }
@@ -509,25 +522,38 @@ impl EndPortalTeleportJob {
     pub(in crate::server) fn returning_player(
         entity: SharedEntity,
         source_world: Arc<World>,
-        target_world: Arc<World>,
-        respawn_data: RespawnData,
+        fallback_world: Arc<World>,
+        fallback_respawn_data: RespawnData,
+        personal: Option<(Arc<World>, PlayerRespawnConfig)>,
         pending_token: PendingWorldChangeToken,
-    ) -> Result<Self, String> {
-        let search = PlayerSpawnSearch::new(
-            &target_world,
-            respawn_data.pos(),
-            target_world.default_gamemode(),
-        )?;
-        Ok(Self {
+    ) -> Self {
+        let phase = match personal {
+            Some((personal_world, personal)) => {
+                let request = personal_world.chunk_map.request_chunks(ChunkRequest {
+                    status: ChunkStatus::Full,
+                    positions: personal_respawn_chunk_positions(personal.respawn_data.pos()),
+                    ticket_kind: ChunkTicketKind::Portal,
+                });
+                EndPortalTeleportPhase::ReturningPlayer {
+                    personal_world,
+                    personal,
+                    fallback_world,
+                    fallback_respawn_data,
+                    request,
+                }
+            }
+            None => EndPortalTeleportPhase::LoadingSharedSpawn {
+                request: shared_spawn_request(&fallback_world, &fallback_respawn_data),
+                target_world: fallback_world,
+                respawn_data: fallback_respawn_data,
+            },
+        };
+        Self {
             entity,
             source_world,
             pending_token,
-            phase: EndPortalTeleportPhase::SearchingPlayerRespawn {
-                target_world,
-                respawn_data,
-                search,
-            },
-        })
+            phase,
+        }
     }
 
     fn still_valid(&self) -> bool {
@@ -586,35 +612,11 @@ impl ServerJob for EndPortalTeleportJob {
                     let changed_entity = change_entity_world(Arc::clone(&entity), &transition);
                     return finish_portal_world_change(&entity, pending_token, changed_entity);
                 }
-                EndPortalTeleportPhase::SearchingPlayerRespawn {
-                    target_world,
-                    respawn_data,
-                    search,
-                } => match search.poll_with_ready_candidate_budget(
-                    target_world,
-                    END_PORTAL_RESPAWN_SEARCH_READY_CANDIDATE_BUDGET,
-                ) {
-                    PlayerSpawnSearchPoll::Pending => return JobPoll::Pending,
-                    PlayerSpawnSearchPoll::Cancelled => {
-                        clear_pending_world_change(&entity, pending_token);
-                        return JobPoll::Finished;
-                    }
-                    PlayerSpawnSearchPoll::Ready(position) => {
-                        let spawn = EndPortalRespawnSpawn {
-                            position,
-                            rotation: (respawn_data.yaw, respawn_data.pitch),
-                        };
-                        let request = target_world.request_player_spawn_chunks(position);
-                        self.phase = EndPortalTeleportPhase::LoadingPlayerRespawn {
-                            target_world: Arc::clone(target_world),
-                            spawn,
-                            request,
-                        };
-                    }
-                },
-                EndPortalTeleportPhase::LoadingPlayerRespawn {
-                    target_world,
-                    spawn,
+                EndPortalTeleportPhase::ReturningPlayer {
+                    personal_world,
+                    personal,
+                    fallback_world,
+                    fallback_respawn_data,
                     request,
                 } => {
                     if let Some(job_poll) =
@@ -622,11 +624,54 @@ impl ServerJob for EndPortalTeleportJob {
                     {
                         return job_poll;
                     }
+                    let Some(player) = entity.as_player() else {
+                        clear_pending_world_change(&entity, pending_token);
+                        return JobPoll::Finished;
+                    };
+                    // Vanilla passes `consumeSpawnBlock = false`: the End return never
+                    // depletes a respawn anchor.
+                    let Some(spawn) =
+                        resolve_personal_respawn(personal_world, player, personal, false)
+                    else {
+                        // Vanilla `TeleportTransition.missingRespawnBlock`: tell the client
+                        // and fall back to the shared respawn position.
+                        player.send_packet(CGameEvent {
+                            event: GameEventType::NoRespawnBlockAvailable,
+                            data: 0.0,
+                        });
+                        let target_world = Arc::clone(fallback_world);
+                        let respawn_data = fallback_respawn_data.clone();
+                        let request = shared_spawn_request(&target_world, &respawn_data);
+                        self.phase = EndPortalTeleportPhase::LoadingSharedSpawn {
+                            target_world,
+                            respawn_data,
+                            request,
+                        };
+                        continue;
+                    };
                     let transition = end_portal::calculate_player_return_transition(
-                        target_world,
+                        personal_world,
                         entity.as_ref(),
                         spawn.position,
                         spawn.rotation,
+                    );
+                    let changed_entity = change_entity_world(Arc::clone(&entity), &transition);
+                    return finish_portal_world_change(&entity, pending_token, changed_entity);
+                }
+                EndPortalTeleportPhase::LoadingSharedSpawn {
+                    target_world,
+                    respawn_data,
+                    request,
+                } => {
+                    if let Some(job_poll) =
+                        poll_portal_chunks_until_ready(request, &entity, pending_token)
+                    {
+                        return job_poll;
+                    }
+                    let transition = end_portal::calculate_player_shared_return_transition(
+                        target_world,
+                        entity.as_ref(),
+                        respawn_data,
                     );
                     let changed_entity = change_entity_world(Arc::clone(&entity), &transition);
                     return finish_portal_world_change(&entity, pending_token, changed_entity);
@@ -640,8 +685,8 @@ impl ServerJob for EndPortalTeleportJob {
         match &mut self.phase {
             EndPortalTeleportPhase::EntryToEnd { request, .. }
             | EndPortalTeleportPhase::ReturningEntity { request, .. }
-            | EndPortalTeleportPhase::LoadingPlayerRespawn { request, .. } => request.cancel(),
-            EndPortalTeleportPhase::SearchingPlayerRespawn { .. } => {}
+            | EndPortalTeleportPhase::ReturningPlayer { request, .. }
+            | EndPortalTeleportPhase::LoadingSharedSpawn { request, .. } => request.cancel(),
         }
     }
 }

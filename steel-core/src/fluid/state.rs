@@ -10,6 +10,7 @@ use steel_registry::REGISTRY;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::BlockStateProperties;
 use steel_registry::fluid::{FluidRef, FluidState, is_lava_fluid, is_water_fluid};
+use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_blocks;
 use steel_utils::{BlockPos, BlockStateId, Direction};
 
@@ -206,7 +207,11 @@ where
         let mut neighbor_height = get_own_height(neighbor_fluid);
         let mut distance = 0.0;
         if neighbor_height == 0.0 {
-            if !block_at(neighbor_pos).blocks_motion() {
+            // Vanilla: `!level.getBlockState(blockPos).is(BlockTags.BLOCKS_FLUID_FLOW)`
+            if !block_at(neighbor_pos)
+                .get_block()
+                .has_tag(&BlockTag::BLOCKS_FLUID_FLOW)
+            {
                 let below_fluid = fluid_at(neighbor_pos.below());
                 if affects_flow_with(below_fluid, &same_fluid) {
                     neighbor_height = get_own_height(below_fluid);
@@ -278,7 +283,14 @@ where
     if direction == Direction::Up {
         return true;
     }
-    state.get_block() != &vanilla_blocks::ICE && state.is_face_sturdy_at(pos, direction)
+    // Vanilla: `state.getBlock() instanceof IceBlock ? false : ...`.
+    // Only `IceBlock` and its subclass `FrostedIceBlock` extend `IceBlock`.
+    !is_ice_block(state.get_block()) && state.is_face_sturdy_at(pos, direction)
+}
+
+/// Vanilla `block instanceof IceBlock` (matches `ice` and `frosted_ice`).
+fn is_ice_block(block: steel_registry::blocks::BlockRef) -> bool {
+    block == &vanilla_blocks::ICE || block == &vanilla_blocks::FROSTED_ICE
 }
 
 #[cfg(test)]

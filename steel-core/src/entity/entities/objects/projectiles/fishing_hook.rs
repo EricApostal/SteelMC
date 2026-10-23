@@ -551,23 +551,31 @@ impl FishingHookEntity {
                     };
 
                     if let Some(luck) = luck {
+                        let Some(world) = self.level() else {
+                            return damage;
+                        };
                         let mut rng = rng();
+                        let position = self.position();
+                        // Vanilla loot params carry the level, which
+                        // `minecraft:location_check` resolves against (the junk
+                        // table's jungle-only bamboo entry).
+                        let level = crate::entity::loot::loot_level_view(
+                            &world,
+                            (position.x, position.y, position.z),
+                        );
 
                         // This is equivalent to `LootParams params` in the java src.
                         let mut loot_ctx = LootContext::new(&mut rng)
-                            .with_origin(self.position().x, self.position().y, self.position().z)
+                            .with_origin(position.x, position.y, position.z)
                             .with_tool(rod)
                             .with_this_entity(entity_loot_ref(self, None))
-                            .with_luck(luck as f32 + player.get_luck());
+                            .with_luck(luck as f32 + player.get_luck())
+                            .with_location(&level);
 
                         let items =
                             vanilla_loot_tables::GAMEPLAY_FISHING.get_random_items(&mut loot_ctx);
 
                         // TODO: criteria triggers (advancements)
-
-                        let Some(world) = self.level() else {
-                            return damage;
-                        };
 
                         self.spawn_loot_award_stat(items, &world, owner.as_ref());
 

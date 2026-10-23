@@ -14,8 +14,9 @@ use steel_utils::{BlockPos, BlockStateId, BoundingBox, Direction, Identifier, ty
 use super::StructurePiecePlacer;
 use crate::chunk::heightmap::HeightmapType;
 use crate::entity::{entities::ChestMinecartEntity, next_entity_id};
+use crate::world::{LevelAccessor as _, LevelReader as _};
 use crate::worldgen::generator::vanilla::fuzzed_biome_at_block;
-use crate::worldgen::region::WorldGenRegion;
+use crate::worldgen::template::TemplateLevelAccess;
 use steel_worldgen::structure::mineshaft::{
     MineshaftPieceKind, MineshaftPiecePayload, MineshaftType,
 };
@@ -29,8 +30,8 @@ impl StructurePiecePlacer {
         clippy::too_many_arguments,
         reason = "structure-piece placement carries vanilla postProcess inputs"
     )]
-    pub(super) fn place_mineshaft_piece(
-        region: &mut WorldGenRegion<'_>,
+    pub(super) fn place_mineshaft_piece<L: TemplateLevelAccess>(
+        region: &mut L,
         registry: &Registry,
         bounding_box: BoundingBox,
         orientation: Option<Direction>,
@@ -79,8 +80,8 @@ impl StructurePiecePlacer {
     }
 }
 
-struct MineshaftPlacer<'a, 'world> {
-    region: &'a mut WorldGenRegion<'world>,
+struct MineshaftPlacer<'a, L: TemplateLevelAccess> {
+    region: &'a mut L,
     registry: &'a Registry,
     bounding_box: BoundingBox,
     orientation: Option<Direction>,
@@ -89,7 +90,7 @@ struct MineshaftPlacer<'a, 'world> {
     biome_zoom_seed: i64,
 }
 
-impl MineshaftPlacer<'_, '_> {
+impl<L: TemplateLevelAccess> MineshaftPlacer<'_, L> {
     fn place_room(&mut self, child_entrance_boxes: &[BoundingBox]) {
         self.generate_box(
             self.bounding_box.min_x(),
@@ -903,7 +904,7 @@ impl MineshaftPlacer<'_, '_> {
         if self.region.is_outside_build_height(pos.y()) {
             Self::air()
         } else {
-            self.region.block_state(pos)
+            self.region.get_block_state(pos)
         }
     }
 

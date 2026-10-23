@@ -1,6 +1,7 @@
 use std::{mem, sync::Arc};
 
 use steel_registry::item_stack::ItemStack;
+use steel_registry::stat::vanilla_stat_types;
 use steel_utils::{DowncastType, DowncastTypeKey};
 
 use crate::{
@@ -90,10 +91,19 @@ impl Slot for ResultSlot {
     fn on_take(
         &self,
         guard: &mut ContainerLockGuard,
-        _stack: &ItemStack,
+        stack: &ItemStack,
         player: &Player,
     ) -> Option<ItemStack> {
-        // TODO: Track the crafted count and run ITEM_CRAFTED/item callbacks.
+        // Vanilla `ResultSlot.checkTakeAchievements`: `carried.onCraftedBy(player, removeCount)`
+        // awards the `crafted` stat for the item and amount taken. The item's own
+        // `ItemStack.onCraftedBy`/`Item.onCraftedBy` callbacks remain a separate gap.
+        if !stack.is_empty() {
+            player.award_stat_with_count(
+                &vanilla_stat_types::ITEM_CRAFTED,
+                stack.item(),
+                stack.count(),
+            );
+        }
         self.handler.on_result_taken(guard, player)
     }
 

@@ -13,6 +13,9 @@ use std::sync::{Arc, Weak};
 use simdnbt::borrow::BaseNbtCompound as BorrowedNbtCompound;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
+use steel_registry::data_components::DataComponentMap;
+use steel_registry::data_components::vanilla_components::CUSTOM_NAME;
+use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_block_entity_types;
 use steel_utils::{
     BlockPos, BlockStateId, DowncastType, DowncastTypeKey, locks::SyncMutex, translations,
@@ -126,9 +129,58 @@ impl BlockEntity for EnchantingTableBlockEntity {
         }
     }
 
+    fn apply_components_from_item(&self, item: &ItemStack) {
+        // Vanilla `EnchantingTableBlockEntity.applyImplicitComponents`: the only
+        // implicit component of an enchanting table is `minecraft:custom_name`.
+        self.set_custom_name(item.get(CUSTOM_NAME).cloned());
+    }
+
+    fn stored_components(&self) -> DataComponentMap {
+        // Vanilla `EnchantingTableBlockEntity.collectImplicitComponents`.
+        let mut components = self.base().stored_components();
+        components.set(CUSTOM_NAME, self.custom_name());
+        components
+    }
+
     fn get_update_tag(&self) -> Option<NbtCompound> {
         // Vanilla sends no update tag for the enchanting table: the client
         // renders the book from its own local animation state.
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_items};
+
+    use super::*;
+
+    fn table() -> EnchantingTableBlockEntity {
+        init_vanilla_registry();
+        EnchantingTableBlockEntity::new(
+            Weak::new(),
+            BlockPos::new(2, 70, 5),
+            vanilla_blocks::ENCHANTING_TABLE.default_state(),
+        )
+    }
+
+    #[test]
+    fn custom_name_component_applies_and_recollects() {
+        let table = table();
+        let mut item = ItemStack::new(&vanilla_items::ENCHANTING_TABLE);
+        item.set(CUSTOM_NAME, TextComponent::plain("altar"));
+
+        table.apply_components_from_item(&item);
+
+        let name = table.custom_name();
+        assert!(name.is_some());
+        assert_eq!(table.stored_components().get(CUSTOM_NAME), name);
+    }
+
+    #[test]
+    fn unnamed_table_collects_no_custom_name_component() {
+        let table = table();
+
+        assert!(!table.stored_components().has(CUSTOM_NAME));
     }
 }

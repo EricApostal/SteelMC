@@ -26,7 +26,6 @@ use crate::world::game_event::{
     GameEventContext, GameEventDispatcher, GameEventListenerCount, GameEventListenerStorage,
     SharedGameEventListener,
 };
-use crate::world::spawn::ChunkInhabitedTimes;
 use crate::{chunk::chunk_map::ChunkMapGameTickTimings, world::weather::Weather};
 use steel_utils::saved_data::{SavedDataManager, names as saved_data_names};
 
@@ -321,12 +320,12 @@ pub struct World {
         SyncMutex<Option<Arc<tick_scheduler::ScheduledTickRunBatch<FluidRef>>>>,
     /// Point of interest storage for efficient spatial queries of special blocks.
     pub poi_storage: SyncMutex<PointOfInterestStorage>,
+    /// Vanilla `ServerLevel`'s map saved data (`Level.getMapData`/`setMapData`).
+    pub(crate) maps: crate::map::MapStorage,
     /// Vanilla `Raids` saved data: the raids currently running in this level.
     raids: SyncMutex<Raids>,
     /// Vanilla `SavedData.setDirty` for [`Self::raids`].
     raids_dirty: AtomicBool,
-    /// Per-chunk inhabited time feeding `getCurrentDifficultyAt`.
-    pub(crate) inhabited_times: ChunkInhabitedTimes,
     /// Vanilla `ServerLevel.dragonFight`: the ender dragon fight, present only in
     /// dimensions whose type opts in with `has_ender_dragon_fight`.
     ender_dragon_fight: Option<SyncMutex<crate::entity::boss::EnderDragonFight>>,
@@ -390,6 +389,9 @@ impl World {
             WorldStorageConfig::Disk { path } => {
                 Arc::new(ChunkStorage::Disk(RegionManager::new(path.clone())))
             }
+            WorldStorageConfig::Anvil { path } => Arc::new(ChunkStorage::Anvil(
+                crate::chunk_saver::AnvilStorage::new(path.clone()),
+            )),
             WorldStorageConfig::RamOnly => {
                 Arc::new(ChunkStorage::RamOnly(RamOnlyStorage::empty_world()))
             }
@@ -407,6 +409,10 @@ impl World {
             config.game_time_source,
         )
         .await?;
+        if matches!(config.storage, WorldStorageConfig::Anvil { .. }) {
+            level_data.enable_vanilla_level_dat();
+        }
+
         if level_data.is_dirty() {
             level_data.save().await?;
         }
@@ -444,6 +450,8 @@ impl World {
                 weather.thunder_level = 1.0;
             }
         }
+
+        let maps = crate::map::MapStorage::load(&saved_data).await?;
 
         let world = Arc::new_cyclic(|weak_self: &Weak<World>| {
             let chunk_map = Arc::new(ChunkMap::new_with_storage_and_ticket_storage(
@@ -497,9 +505,9 @@ impl World {
                 scheduled_block_ticks_this_tick: SyncMutex::new(None),
                 scheduled_fluid_ticks_this_tick: SyncMutex::new(None),
                 poi_storage: SyncMutex::new(PointOfInterestStorage::new()),
+                maps,
                 raids: SyncMutex::new(raids),
                 raids_dirty: AtomicBool::new(false),
-                inhabited_times: ChunkInhabitedTimes::new(),
                 ender_dragon_fight,
                 custom_spawners: SyncMutex::new(Vec::new()),
                 pending_world_changes: SyncMutex::new(Vec::new()),
@@ -562,6 +570,10 @@ impl World {
         }
 
         self.save_custom_spawners().await;
+
+        if let Err(error) = self.maps.save(&self.saved_data).await {
+            log::error!("Failed to save map data for world {}: {error}", self.key);
+        }
 
         match self.save_all_chunks().await {
             Ok(count) => *total_saved += count,

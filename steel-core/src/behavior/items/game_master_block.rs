@@ -4,9 +4,10 @@
 //! that non-game-master players get no placement state at all, which makes the
 //! placement fail before anything is written to the world.
 //!
-//! **Vanilla differences:** vanilla consults `Player.canUseGameMasterBlocks()`
-//! (operator permission level >= 2). Steel has no operator-level model yet, so
-//! this uses [`Player::is_operator`], which is the nearest available predicate.
+//! **Vanilla differences:** none. Vanilla consults
+//! `Player.canUseGameMasterBlocks()` (creative abilities plus the
+//! `COMMANDS_GAMEMASTER` permission, i.e. operator level >= 2), which Steel
+//! mirrors with [`Player::can_use_game_master_blocks`].
 
 use crate::behavior::ItemBehavior;
 use crate::behavior::context::{InteractionResult, UseOnContext};
@@ -46,7 +47,7 @@ impl GameMasterBlockItem {
     /// `GameMasterBlockItem.getPlacementState`.
     #[must_use]
     fn can_place(player: &Player) -> bool {
-        player.is_operator()
+        player.can_use_game_master_blocks()
     }
 }
 

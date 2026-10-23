@@ -127,15 +127,20 @@ impl FeatureDecorationRunner {
                                 SIMPLE_DUNGEON,
                                 random.next_i64(),
                             );
-                            break;
                         }
+                        // Vanilla breaks out of the inner loop even when `safeSetBlock`
+                        // refused the chest (no block entity, so no loot-table seed draw).
+                        break;
                     }
                 }
             }
         }
 
         let spawner = vanilla_blocks::SPAWNER.default_state();
-        if Self::safe_set_feature_block(region, origin, spawner) {
+        let _ = Self::safe_set_feature_block(region, origin, spawner);
+        // Vanilla only rolls a mob (and consumes the draw) when a spawner block
+        // entity actually sits at the origin.
+        if region.block_entity(origin).is_some() {
             let entity_id = MONSTER_ROOM_MOBS[random.next_i32_bounded(4) as usize];
             Self::set_spawner_entity(region, origin, spawner, entity_id);
         }

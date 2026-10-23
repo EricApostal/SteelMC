@@ -7,6 +7,10 @@
 //! comparison uses `OwnerHurt*` fields vanilla reads: the goal starts when the owner's
 //! `lastHurtByMobTimestamp`/`lastHurtMobTimestamp` differs from the last one the goal acted
 //! on.
+//!
+//! Difference: vanilla `OwnerHurtByTargetGoal` tests `owner.getLastDamageSource(100)`; Steel's
+//! damage history only exposes the no-argument window (40 ticks), so a retaliation between 40
+//! and 100 ticks old is not seen.
 
 use crate::entity::ai::targeting::TargetingConditions;
 use crate::entity::{LivingEntity, PathfinderMob, SharedEntity};

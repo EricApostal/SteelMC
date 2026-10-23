@@ -60,6 +60,26 @@ impl SteelConfig {
             Arc::new(FilePermissionGroupStore::new(path.clone())) as Arc<dyn PermissionGroupStore>
         })
     }
+
+    /// Marks `domain` as the only default domain, mirroring vanilla's
+    /// `--world`/`level-name` selection of the level that boots.
+    ///
+    /// Steel's default domain is the container for the overworld, Nether, and
+    /// End worlds, so it stands in for vanilla's level directory.
+    ///
+    /// # Errors
+    /// Returns an error when `domain` is not declared in `worlds.toml`.
+    pub fn select_default_domain(&mut self, domain: &str) -> Result<(), String> {
+        if !self.worlds.domains.contains_key(domain) {
+            return Err(format!(
+                "--world '{domain}' is not declared in worlds.toml; add a [domains.{domain}] entry or omit --world"
+            ));
+        }
+        for (name, config) in &mut self.worlds.domains {
+            config.default = name == domain;
+        }
+        Ok(())
+    }
 }
 
 const fn empty_worlds_config() -> WorldsConfig {

@@ -7,7 +7,7 @@
 
 use glam::DVec3;
 
-use super::random_pos::{air_and_water_random_pos, hover_random_pos};
+use super::random_pos::{HALF_PI, air_and_water_random_pos, hover_random_pos};
 use super::random_stroll::RandomStrollGoal;
 use super::selector::{Goal, GoalControls};
 use crate::entity::PathfinderMob;
@@ -54,7 +54,7 @@ impl WaterAvoidingRandomFlyingGoal {
             HOVER_VERTICAL_DISTANCE,
             view.x,
             view.z,
-            std::f64::consts::FRAC_PI_2,
+            HALF_PI,
             HOVER_MAX_HEIGHT,
             HOVER_MIN_HEIGHT,
         )
@@ -66,7 +66,7 @@ impl WaterAvoidingRandomFlyingGoal {
                 AIR_FLYING_HEIGHT,
                 view.x,
                 view.z,
-                std::f64::consts::FRAC_PI_2,
+                HALF_PI,
             )
         })
     }

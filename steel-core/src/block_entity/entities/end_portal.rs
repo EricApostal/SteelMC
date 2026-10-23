@@ -40,6 +40,9 @@ impl BlockEntity for EndPortalBlockEntity {
     fn save_additional(&self, _nbt: &mut NbtCompound) {}
 
     fn get_update_tag(&self) -> Option<NbtCompound> {
-        Some(NbtCompound::new())
+        // Vanilla `TheEndPortalBlockEntity` does not override `getUpdateTag`, so the default
+        // empty tag applies: the chunk packet carries this block-entity type with no data, and
+        // `getUpdatePacket` stays `null` so no `ClientboundBlockEntityDataPacket` is ever sent.
+        None
     }
 }

@@ -1,4 +1,7 @@
 use super::*;
+use crate::world::LevelReader as _;
+use crate::world::LevelReader as _;
+use crate::worldgen::template::TemplateLevelAccess;
 use steel_registry::structure_processor::{
     StructureProcessorBlockSet, StructureProcessorHeightmap,
 };
@@ -51,8 +54,8 @@ impl StructureTemplate {
         position.offset(transformed.x(), transformed.y(), transformed.z())
     }
 
-    pub(super) fn process_block(
-        region: &WorldGenRegion<'_>,
+    pub(super) fn process_block<L: TemplateLevelAccess>(
+        region: &L,
         registry: &Registry,
         original: &ProcessedBlockInfo,
         initial: ProcessedBlockInfo,
@@ -94,8 +97,8 @@ impl StructureTemplate {
         clippy::too_many_arguments,
         reason = "processor calls mirror vanilla StructureProcessor.processBlock inputs"
     )]
-    pub(super) fn process_block_with_processor(
-        region: &WorldGenRegion<'_>,
+    pub(super) fn process_block_with_processor<L: TemplateLevelAccess>(
+        region: &L,
         registry: &Registry,
         processor: &StructureProcessorKind,
         original: &ProcessedBlockInfo,
@@ -140,13 +143,13 @@ impl StructureTemplate {
             }
             StructureProcessorKind::ProtectedBlocks { cannot_replace } => {
                 let existing =
-                    Self::block_for_state(registry, region.block_state(current.world_pos));
+                    Self::block_for_state(registry, region.get_block_state(current.world_pos));
                 (!Self::block_set_contains(registry, cannot_replace, existing)).then_some(current)
             }
             StructureProcessorKind::Rule { rules } => {
                 let mut rule_random =
                     LegacyRandom::from_seed(Self::block_pos_seed(current.world_pos) as u64);
-                let location_state = region.block_state(current.world_pos);
+                let location_state = region.get_block_state(current.world_pos);
                 for rule in rules {
                     if Self::rule_matches(
                         registry,
@@ -168,7 +171,7 @@ impl StructureTemplate {
             )),
             StructureProcessorKind::LavaSubmergedBlock => Some(Self::process_lava_submerged_block(
                 registry,
-                region.block_state(current.world_pos),
+                region.get_block_state(current.world_pos),
                 current,
             )),
             StructureProcessorKind::BlackstoneReplace => {
@@ -373,15 +376,16 @@ impl StructureTemplate {
     /// Mirrors vanilla `GravityProcessor.processBlock`: the block's world X/Z stay
     /// put while its Y becomes the heightmap column height plus `offset` plus the
     /// block's template-relative Y.
-    pub(super) fn process_gravity(
-        region: &WorldGenRegion<'_>,
+    pub(super) fn process_gravity<L: TemplateLevelAccess>(
+        region: &L,
         original: &ProcessedBlockInfo,
         mut current: ProcessedBlockInfo,
         heightmap: StructureProcessorHeightmap,
         offset: i32,
     ) -> ProcessedBlockInfo {
-        // Structure placement only runs against a `WorldGenRegion`, never a
-        // `ServerLevel`, so vanilla keeps the configured heightmap type.
+        // This processor keeps the configured heightmap type for a live level
+        // too: vanilla's `GravityProcessor` only swaps it for `OceanFloorWg`
+        // when it can see the sky, which this Steel port does not model here.
         let height = region.height_at(
             Self::heightmap_type(heightmap),
             current.world_pos.x(),
@@ -534,8 +538,8 @@ impl StructureTemplate {
         clippy::too_many_arguments,
         reason = "processor finalization receives vanilla's full template processing context"
     )]
-    pub(super) fn finalize_processing(
-        region: &WorldGenRegion<'_>,
+    pub(super) fn finalize_processing<L: TemplateLevelAccess>(
+        region: &L,
         registry: &Registry,
         position: BlockPos,
         reference_pos: BlockPos,
@@ -567,8 +571,8 @@ impl StructureTemplate {
         clippy::too_many_arguments,
         reason = "matches vanilla CappedProcessor.finalizeProcessing inputs"
     )]
-    pub(super) fn finalize_capped_processing(
-        region: &WorldGenRegion<'_>,
+    pub(super) fn finalize_capped_processing<L: TemplateLevelAccess>(
+        region: &L,
         registry: &Registry,
         position: BlockPos,
         reference_pos: BlockPos,
@@ -726,8 +730,8 @@ impl StructureTemplate {
         Some(&rest[..end])
     }
 
-    pub(super) fn apply_terrain_matching_projection(
-        region: &WorldGenRegion<'_>,
+    pub(super) fn apply_terrain_matching_projection<L: TemplateLevelAccess>(
+        region: &L,
         original: &ProcessedBlockInfo,
         mut current: ProcessedBlockInfo,
     ) -> ProcessedBlockInfo {

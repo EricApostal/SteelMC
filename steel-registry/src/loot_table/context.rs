@@ -1,8 +1,13 @@
 use super::{
-    BlockStateId, DyeColor, Identifier, ItemStack, LootCondition, REGISTRY, RegistryExt, RngExt,
+    BlockStateId, CopySource, DyeColor, Identifier, ItemStack, LootCondition, REGISTRY,
+    RegistryExt, RngExt,
 };
+use crate::advancement::predicates::LevelView;
+use crate::data_components::DataComponentMap;
 use crate::enchantment::effect::LevelBasedValue;
 use crate::equipment::EquipmentSlot;
+use crate::game_profile::GameProfile;
+use simdnbt::owned::NbtCompound;
 
 /// Entity target for loot context lookups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1023,6 +1028,68 @@ pub struct LootContext<'a, R: rand::Rng> {
     pub enchantment_level: Option<i32>,
     /// Resolution of `minecraft:<path>` provider references; `None` yields `0`.
     pub number_providers: Option<&'a dyn NumberProviderLookup>,
+    /// World view read by `minecraft:location_check`
+    /// (vanilla `LootContextParams.ORIGIN` plus the level the loot runs in).
+    ///
+    /// With no view installed a constrained location predicate fails closed; an
+    /// unconstrained one still passes whenever an origin is present.
+    pub location: Option<&'a dyn LevelView>,
+    /// Live entity/block-entity state read by the item functions that copy
+    /// components, custom data, player-head profiles, or allocate exploration
+    /// maps. With no hooks installed those functions leave the stack untouched,
+    /// matching vanilla's behaviour when the referenced source is absent.
+    pub item_source: Option<&'a dyn LootItemSourceHooks>,
+}
+
+/// Host hooks for loot item functions that need live world or entity state the
+/// registry cannot model by itself.
+///
+/// Every method defaults to `None`, so a host installs only what it can supply.
+/// The hooks mirror the vanilla accessors named on each method; an absent hook
+/// behaves exactly like vanilla's `null` lookup result.
+pub trait LootItemSourceHooks {
+    /// Vanilla `DataComponentGetter` for `target` (`Entity.collectComponents`),
+    /// used by `minecraft:copy_components`.
+    fn entity_components(&self, _target: LootContextEntity) -> Option<&DataComponentMap> {
+        None
+    }
+
+    /// Vanilla `BlockEntity.collectComponents`, used by
+    /// `minecraft:copy_components` with a `block_entity` source.
+    fn block_entity_components(&self) -> Option<&DataComponentMap> {
+        None
+    }
+
+    /// Vanilla `NbtProvider` payload of an entity, used by
+    /// `minecraft:copy_custom_data`.
+    fn entity_nbt(&self, _target: LootContextEntity) -> Option<&NbtCompound> {
+        None
+    }
+
+    /// Vanilla `NbtProvider` payload of the looted block entity, used by
+    /// `minecraft:copy_custom_data`.
+    fn block_entity_nbt(&self) -> Option<&NbtCompound> {
+        None
+    }
+
+    /// Vanilla `Player.getGameProfile`, used by `minecraft:fill_player_head`.
+    fn player_profile(&self, _target: LootContextEntity) -> Option<&GameProfile> {
+        None
+    }
+
+    /// Vanilla `ExplorationMapFunction.run`: claims/finds the nearest structure
+    /// for `destination` and allocates the map's saved data. Returns the
+    /// structure's block X/Z and the new map id.
+    fn create_exploration_map(
+        &self,
+        _destination: &Identifier,
+        _origin: (f64, f64, f64),
+        _zoom: i32,
+        _search_radius: i32,
+        _skip_existing_chunks: bool,
+    ) -> Option<((i32, i32), i32)> {
+        None
+    }
 }
 
 /// Weather state for `WeatherCheck` condition.
@@ -1147,6 +1214,8 @@ impl<'a, R: rand::Rng> LootContext<'a, R> {
             environment_attributes: None,
             enchantment_level: None,
             number_providers: None,
+            location: None,
+            item_source: None,
         }
     }
 
@@ -1283,6 +1352,13 @@ impl<'a, R: rand::Rng> LootContext<'a, R> {
         self
     }
 
+    /// Set the world view read by `minecraft:location_check`.
+    #[must_use]
+    pub const fn with_location(mut self, location: &'a dyn LevelView) -> Self {
+        self.location = Some(location);
+        self
+    }
+
     /// Set the enchantment level read by `minecraft:enchantment_level`.
     #[must_use]
     pub const fn with_enchantment_level(mut self, level: i32) -> Self {
@@ -1297,6 +1373,14 @@ impl<'a, R: rand::Rng> LootContext<'a, R> {
         number_providers: &'a dyn NumberProviderLookup,
     ) -> Self {
         self.number_providers = Some(number_providers);
+        self
+    }
+
+    /// Set the hooks the item functions use to read live entity, block-entity,
+    /// and world state.
+    #[must_use]
+    pub const fn with_item_source(mut self, item_source: &'a dyn LootItemSourceHooks) -> Self {
+        self.item_source = Some(item_source);
         self
     }
 

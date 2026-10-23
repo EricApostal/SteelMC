@@ -254,6 +254,30 @@ where
         });
     }
 
+    /// Vanilla `ExecutionContext.queueInitialFunctionCall`.
+    ///
+    /// Used by the function tags and `/schedule`, which run a function outside of
+    /// an enclosing command. The top frame's consumer is `EMPTY`, exactly like
+    /// vanilla's `ServerFunctionManager.execute`.
+    pub(crate) fn queue_initial_function_call(
+        &mut self,
+        chains: Vec<SteelContextChain<S>>,
+        source: Arc<S>,
+    ) {
+        let frame = self.create_top_frame(CommandResultCallback::empty());
+        // Vanilla passes `sender.callback()` as the function frame's consumer, so a
+        // `/return` inside the function reports through the running source.
+        let result = source.callback();
+        self.queue_entry(CommandQueueEntry {
+            frame,
+            action: Box::new(FunctionCallAction {
+                chains,
+                source,
+                result,
+            }),
+        });
+    }
+
     pub(crate) fn run(&mut self) -> ExecutionStop {
         if self.suspension.is_some() {
             return ExecutionStop::Suspended;
@@ -505,6 +529,67 @@ where
     pub(crate) fn return_failure(&mut self) {
         self.frame.return_failure();
         self.context.discard(&self.frame);
+    }
+
+    /// Vanilla `CallFunction`: queues an instantiated function below this frame.
+    ///
+    /// `chains` are the function's parsed lines and `source` is the function
+    /// source, whose callback stays `EMPTY` so per-line results do not reach the
+    /// caller; `result` is the function frame's return consumer, exactly like
+    /// vanilla's `CallFunction.resultCallback`.
+    pub(crate) fn queue_function_call(
+        &mut self,
+        chains: Vec<SteelContextChain<S>>,
+        source: Arc<S>,
+        result: CommandResultCallback,
+    ) {
+        self.queue_next(FunctionCallAction {
+            chains,
+            source,
+            result,
+        });
+    }
+}
+
+/// Vanilla `CallFunction`: one instantiated function body in its own frame.
+struct FunctionCallAction<S>
+where
+    S: ExecutionCommandSource,
+{
+    chains: Vec<SteelContextChain<S>>,
+    source: Arc<S>,
+    result: CommandResultCallback,
+}
+
+impl<S> EntryAction<S> for FunctionCallAction<S>
+where
+    S: ExecutionCommandSource,
+{
+    fn execute(self: Box<Self>, context: &mut CommandExecutionContext<S>, frame: Frame) {
+        let Self {
+            chains,
+            source,
+            result,
+        } = *self;
+        context.increment_cost();
+        // Vanilla `CallFunction`: `context.frameControlForDepth(newDepth)`.
+        let depth = frame.depth() + 1;
+        let function_frame = Frame {
+            depth,
+            return_value_consumer: result,
+            discard: FrameDiscard::AtOrAbove(depth),
+        };
+        for chain in chains {
+            context.queue_next(
+                function_frame.clone(),
+                BuildContextsAction {
+                    chain,
+                    original_source: Arc::clone(&source),
+                    sources: vec![Arc::clone(&source)],
+                    modifiers: ChainModifiers::default(),
+                },
+            );
+        }
     }
 }
 

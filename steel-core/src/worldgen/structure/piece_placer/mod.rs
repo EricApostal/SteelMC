@@ -4,6 +4,13 @@
 //! blocks during biome decoration. This module is the single dispatch point for
 //! that pass; individual family placers must fill in exact vanilla behavior
 //! before any payload variant starts writing blocks.
+//!
+//! Every placer here is generic over
+//! [`TemplateLevelAccess`](crate::worldgen::template::TemplateLevelAccess), so
+//! the same code serves both world generation and live placement (`/place
+//! structure`). `PoolElement::Feature` is the one operation only a
+//! world-generation level can perform; see
+//! `GAP(feature-pool-element-live-level)` in `pool_element.rs`.
 
 mod buried_treasure;
 mod desert_pyramid;
@@ -38,7 +45,8 @@ use steel_utils::{
 
 use crate::entity::{ENTITIES, SharedEntity, next_entity_id};
 use crate::world::World;
-use crate::worldgen::region::WorldGenRegion;
+use crate::world::{LevelAccessor as _, LevelReader as _};
+use crate::worldgen::template::TemplateLevelAccess;
 use steel_worldgen::structure::{
     ProceduralPieceData, StructureMirror, StructurePiece, StructurePiecePayload,
 };
@@ -94,8 +102,8 @@ impl StructurePiecePlacer {
         clippy::too_many_lines,
         reason = "single dispatch boundary for all structure piece payload families"
     )]
-    pub(crate) fn place_piece(
-        region: &mut WorldGenRegion<'_>,
+    pub(crate) fn place_piece<L: TemplateLevelAccess>(
+        region: &mut L,
         registry: &Registry,
         piece: &mut StructurePiece,
         reference_pos: BlockPos,
@@ -214,8 +222,8 @@ impl StructurePiecePlacer {
         placed
     }
 
-    pub(crate) fn after_place_structure(
-        region: &mut WorldGenRegion<'_>,
+    pub(crate) fn after_place_structure<L: TemplateLevelAccess>(
+        region: &mut L,
         structure: StructureRef,
         pieces: &mut [StructurePiece],
         clip: BoundingBox,
@@ -232,8 +240,8 @@ impl StructurePiecePlacer {
         Direction::West,
     ];
 
-    pub(super) fn reorient_chest(
-        region: &WorldGenRegion<'_>,
+    pub(super) fn reorient_chest<L: TemplateLevelAccess>(
+        region: &L,
         pos: BlockPos,
         state: BlockStateId,
     ) -> BlockStateId {
@@ -241,7 +249,7 @@ impl StructurePiecePlacer {
 
         for direction in Self::VANILLA_HORIZONTAL_DIRECTIONS {
             let relative_pos = pos.relative(direction);
-            let neighbor = region.block_state(relative_pos);
+            let neighbor = region.get_block_state(relative_pos);
             if neighbor.get_block() == &vanilla_blocks::CHEST {
                 return state;
             }
@@ -264,29 +272,29 @@ impl StructurePiecePlacer {
 
         let mut lock_dir = state.get_value(&BlockStateProperties::HORIZONTAL_FACING);
         let mut relative_pos = pos.relative(lock_dir);
-        if region.block_state(relative_pos).is_solid_render() {
+        if region.get_block_state(relative_pos).is_solid_render() {
             lock_dir = lock_dir.opposite();
             relative_pos = pos.relative(lock_dir);
         }
-        if region.block_state(relative_pos).is_solid_render() {
+        if region.get_block_state(relative_pos).is_solid_render() {
             lock_dir = lock_dir.rotate_y_clockwise();
             relative_pos = pos.relative(lock_dir);
         }
-        if region.block_state(relative_pos).is_solid_render() {
+        if region.get_block_state(relative_pos).is_solid_render() {
             lock_dir = lock_dir.opposite();
         }
         state.set_value(&BlockStateProperties::HORIZONTAL_FACING, lock_dir)
     }
 
-    pub(super) fn create_loot_chest(
-        region: &mut WorldGenRegion<'_>,
+    pub(super) fn create_loot_chest<L: TemplateLevelAccess>(
+        region: &mut L,
         clip: BoundingBox,
         random: &mut WorldgenRandom,
         pos: BlockPos,
         loot_table: &'static str,
     ) -> bool {
         if !clip.contains_blockpos(pos)
-            || region.block_state(pos).get_block() == &vanilla_blocks::CHEST
+            || region.get_block_state(pos).get_block() == &vanilla_blocks::CHEST
         {
             return false;
         }
@@ -306,8 +314,8 @@ impl StructurePiecePlacer {
         )
     }
 
-    pub(super) fn set_loot_table_block_entity(
-        region: &WorldGenRegion<'_>,
+    pub(super) fn set_loot_table_block_entity<L: TemplateLevelAccess>(
+        region: &L,
         pos: BlockPos,
         block_entity_type: BlockEntityTypeRef,
         state: BlockStateId,
@@ -322,8 +330,8 @@ impl StructurePiecePlacer {
         region.set_block_entity_data(pos, block_entity_type, state, nbt)
     }
 
-    pub(super) fn set_spawner_entity(
-        region: &WorldGenRegion<'_>,
+    pub(super) fn set_spawner_entity<L: TemplateLevelAccess>(
+        region: &L,
         pos: BlockPos,
         state: BlockStateId,
         entity_id: &'static str,
@@ -351,8 +359,8 @@ impl StructurePiecePlacer {
         region.set_block_entity_data(pos, &vanilla_block_entity_types::MOB_SPAWNER, state, nbt)
     }
 
-    pub(super) fn set_brushable_loot_table(
-        region: &WorldGenRegion<'_>,
+    pub(super) fn set_brushable_loot_table<L: TemplateLevelAccess>(
+        region: &L,
         pos: BlockPos,
         state: BlockStateId,
         loot_table: &'static str,

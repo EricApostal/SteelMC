@@ -12,6 +12,7 @@ use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_enchantment_tags::EnchantmentTag;
 use steel_registry::vanilla_game_rules::BLOCK_DROPS;
 use steel_registry::{REGISTRY, RegistryExt as _, TaggedRegistryExt as _, vanilla_entities};
+use steel_utils::entity_events::EntityStatus;
 use steel_utils::{BlockPos, BlockStateId, Identifier};
 
 use crate::behavior::{BlockBehavior, BlockLootContext, BlockPlaceContext};
@@ -37,9 +38,9 @@ fn prevents_infested_spawns(tool: &ItemStack) -> bool {
 
 /// Spawns the vanilla silverfish ambush for an infested block.
 ///
-/// TODO(deps): the entity lane has no `Silverfish` factory yet, so this
-/// currently returns `false` and spawns nothing. The spawn path is complete and
-/// will work as soon as `vanilla_entities::SILVERFISH` is registered.
+/// Vanilla `InfestedBlock.spawnInfestation`: create a `SILVERFISH` with
+/// `EntitySpawnReason.TRIGGERED`, snap it to the block's lower center, add it to the
+/// level, then play its spawn animation (`Mob.spawnAnim` → entity event 60).
 fn spawn_infestation(world: &Arc<World>, pos: BlockPos) -> bool {
     if !ENTITIES.has_factory(&vanilla_entities::SILVERFISH) {
         return false;
@@ -58,10 +59,17 @@ fn spawn_infestation(world: &Arc<World>, pos: BlockPos) -> bool {
     ) else {
         return false;
     };
+    entity.snap_to(position, 0.0, 0.0);
     if let Some(mob) = entity.as_mob() {
         let _ = mob.finalize_spawn(world, EntitySpawnReason::Triggered, None);
     }
-    world.try_add_entity(entity).is_ok()
+    if world.try_add_entity(Arc::clone(&entity)).is_err() {
+        return false;
+    }
+    // Vanilla `Mob.spawnAnim` broadcasts entity event 20 (Steel's
+    // `EntityStatus::SilverfishMergeAnim`).
+    entity.broadcast_entity_event(EntityStatus::SilverfishMergeAnim);
+    true
 }
 
 /// `InfestedBlock` behavior.

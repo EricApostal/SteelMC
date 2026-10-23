@@ -219,8 +219,9 @@ pub(crate) fn build() -> TokenStream {
 
         let buoyant = archetype.buoyant;
 
-        let explosion = match &archetype.explosion {
-            Some(explosion) => {
+        let explosion = archetype.explosion.as_ref().map_or_else(
+            || quote! { None },
+            |explosion| {
                 let power = explosion.power;
                 let causes_fire = explosion.causes_fire;
                 let fuse = explosion.fuse;
@@ -231,12 +232,12 @@ pub(crate) fn build() -> TokenStream {
                         fuse: #fuse,
                     })
                 }
-            }
-            None => quote! { None },
-        };
+            },
+        );
 
-        let contact_damage = match &archetype.contact_damage {
-            Some(damage) => {
+        let contact_damage = archetype.contact_damage.as_ref().map_or_else(
+            || quote! { None },
+            |damage| {
                 let damage_type = generate_identifier(&damage.damage_type);
                 let amount = damage.amount;
                 let attribute_to_source = damage.attribute_to_source;
@@ -247,9 +248,8 @@ pub(crate) fn build() -> TokenStream {
                         attribute_to_source: #attribute_to_source,
                     })
                 }
-            }
-            None => quote! { None },
-        };
+            },
+        );
 
         let horizontal_power = archetype.knockback_modifiers.horizontal_power;
         let vertical_power = archetype.knockback_modifiers.vertical_power;

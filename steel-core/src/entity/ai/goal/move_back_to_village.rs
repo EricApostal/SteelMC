@@ -3,12 +3,10 @@
 //! A `RandomStrollGoal` variant that only walks when the mob is outside a village and steers
 //! toward the closest village section within two sections of its own.
 
-use std::f64::consts::FRAC_PI_2;
-
 use glam::DVec3;
 use steel_utils::SectionPos;
 
-use super::random_pos::default_random_pos_towards;
+use super::random_pos::{HALF_PI, default_random_pos_towards};
 use super::random_stroll::RandomStrollGoal;
 use super::selector::{Goal, GoalControls};
 use crate::entity::PathfinderMob;
@@ -47,7 +45,7 @@ impl MoveBackToVillageGoal {
         }
 
         let (x, y, z) = section_center(optimal_section_pos).get_bottom_center();
-        default_random_pos_towards(mob, MAX_XZ_DIST, MAX_Y_DIST, DVec3::new(x, y, z), FRAC_PI_2)
+        default_random_pos_towards(mob, MAX_XZ_DIST, MAX_Y_DIST, DVec3::new(x, y, z), HALF_PI)
     }
 }
 

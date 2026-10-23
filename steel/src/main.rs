@@ -3,9 +3,9 @@
 
 use std::backtrace::{Backtrace, BacktraceStatus};
 use std::panic::AssertUnwindSafe;
-use std::path::Path;
+use std::path::{Path, absolute};
 use std::sync::Arc;
-use std::{env, panic, thread};
+use std::{env, fs, io, panic, process, thread};
 
 use crossterm::style::Attribute::{Bold, Dim, Reset};
 use crossterm::style::{Color, ResetColor, SetForegroundColor};
@@ -28,8 +28,19 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 #[cfg(feature = "jaeger")]
 use tracing_subscriber::{Layer, registry::LookupSpan};
 
+/// Command-line options, mirroring vanilla `Main`'s option set.
+mod cli;
+/// Mojang EULA acceptance check, mirroring vanilla `Eula`.
+mod eula;
 /// Cross-platform shutdown signal handling.
 mod shutdown;
+
+/// Path of the EULA acceptance file, resolved against the working directory
+/// exactly like vanilla `Main#main`.
+const EULA_PATH: &str = "eula.txt";
+
+/// Path of the main configuration file, resolved against the working directory.
+const CONFIG_PATH: &str = "config/config.toml";
 
 #[cfg(feature = "jaeger")]
 fn init_jaeger<S>() -> impl Layer<S> + Send + Sync
@@ -150,14 +161,47 @@ fn steel_main() {
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
 
+    // Vanilla parses its options before touching any settings, prints help on
+    // `--help`, and returns without booting when parsing fails.
+    let args = match cli::CliArgs::parse(env::args_os()) {
+        Ok(args) => args,
+        Err(message) => {
+            eprintln!("{message}");
+            return;
+        }
+    };
+    if let Some(path) = &args.pid_file {
+        if let Err(error) = write_pid_file(path) {
+            eprintln!("Failed to write pid file {}: {error}", path.display());
+            return;
+        }
+    }
+
     // Load config once at startup
-    let steel_config = match config::load_or_create(Path::new("config/config.toml")) {
+    let mut steel_config = match config::load_or_create(Path::new(CONFIG_PATH)) {
         Ok(config) => config,
         Err(error) => {
             eprintln!("Failed to load configuration: {error}");
             return;
         }
     };
+    if let Err(error) = apply_startup_overrides(&mut steel_config, &args) {
+        eprintln!("{error}");
+        return;
+    }
+
+    // Vanilla constructs its `Eula` before the `--initSettings` check, so a
+    // fresh run always leaves an `eula.txt` behind, then refuses to boot until
+    // the operator agrees.
+    let eula = eula::Eula::load(Path::new(EULA_PATH));
+    if args.init_settings {
+        println!(
+            "Initialized '{}' and '{}'",
+            display_path(Path::new(CONFIG_PATH)),
+            display_path(Path::new(EULA_PATH))
+        );
+        return;
+    }
 
     let main_worker_threads = worker_threads_for_available(
         steel_config.server.threads.main_runtime,
@@ -184,13 +228,17 @@ fn steel_main() {
         .build()
         .unwrap();
 
-    main_runtime.block_on(main_async(Arc::clone(&chunk_runtime), steel_config));
+    main_runtime.block_on(main_async(Arc::clone(&chunk_runtime), steel_config, eula));
 
     drop(main_runtime);
     drop(chunk_runtime);
 }
 
-async fn main_async(chunk_runtime: Arc<Runtime>, steel_config: config::SteelConfig) {
+async fn main_async(
+    chunk_runtime: Arc<Runtime>,
+    steel_config: config::SteelConfig,
+    eula: eula::Eula,
+) {
     let cancel_token = CancellationToken::new();
 
     let logger = match init_tracing(cancel_token.clone(), steel_config.log.clone()).await {
@@ -200,6 +248,17 @@ async fn main_async(chunk_runtime: Arc<Runtime>, steel_config: config::SteelConf
             return;
         }
     };
+    if eula.wrote_defaults() {
+        log::warn!("Failed to load {EULA_PATH}; wrote fresh defaults");
+    }
+    if !eula.has_agreed_to_eula() {
+        // Vanilla `Main#main` message, logged at INFO level.
+        log::info!(
+            "You need to agree to the EULA in order to run the server. Go to {EULA_PATH} for more info."
+        );
+        logger.stop().await;
+        return;
+    }
     shutdown::install(cancel_token.clone());
     let panic_token = cancel_token.clone();
     panic::set_hook(Box::new(move |panic_info| {
@@ -337,9 +396,33 @@ async fn run_server(
 
     let server = Arc::clone(&steel.server);
 
+    // Vanilla runs `stopServer` from a `finally`, so an unexpected panic still
+    // saves player and world data before the process exits.
+    let run_result = AssertUnwindSafe(run_started_server(&mut steel)).catch_unwind().await;
+
+    server.save_and_shutdown().await;
+
+    match run_result {
+        Ok(()) => {
+            log::info!("Server stopped");
+            Ok(())
+        }
+        Err(payload) => {
+            log::error!("Server thread panicked; saved world and player data before shutting down");
+            panic::resume_unwind(payload);
+        }
+    }
+}
+
+/// Runs the accept loop until shutdown, then drains the pending tasks.
+///
+/// Split out of [`run_server`] so the caller can save data even when this
+/// unwinds.
+async fn run_started_server(steel: &mut SteelServer) {
+    let server = Arc::clone(&steel.server);
+
     if !server.prepare_spawn_area().await {
-        server.save_and_shutdown().await;
-        return Ok(());
+        return;
     }
 
     SERVER.set(Arc::clone(&steel.server)).ok();
@@ -352,9 +435,44 @@ async fn run_server(
 
     task_tracker.close();
     task_tracker.wait().await;
+}
 
-    server.save_and_shutdown().await;
-
-    log::info!("Server stopped");
+/// Applies the command-line overrides vanilla's launcher exposes.
+///
+/// `--port` overrides `server.server_port` unless it is negative, matching
+/// vanilla's `-1` default that falls back to `server.properties`. `--universe`
+/// replaces the save root and `--world` selects the default domain, Steel's
+/// equivalents of vanilla's universe directory and `level-name`.
+fn apply_startup_overrides(
+    steel_config: &mut config::SteelConfig,
+    args: &cli::CliArgs,
+) -> Result<(), String> {
+    if let Some(port) = args.port {
+        if port < 0 {
+            // Vanilla keeps `server-port` when `--port` is negative.
+        } else {
+            steel_config.server.server_port = u16::try_from(port)
+                .map_err(|_| format!("--port must fit in 0..=65535, got {port}"))?;
+        }
+    }
+    if let Some(universe) = &args.universe {
+        steel_config.worlds.save_path = universe.to_string_lossy().into_owned();
+    }
+    if let Some(world) = &args.world {
+        steel_config.select_default_domain(world)?;
+    }
     Ok(())
+}
+
+/// Writes the process id to `path`, like vanilla `Main#writePidFile`.
+fn write_pid_file(path: &Path) -> io::Result<()> {
+    fs::write(path, process::id().to_string())
+}
+
+/// Absolute display path for startup messages (vanilla `Path#toAbsolutePath`).
+fn display_path(path: &Path) -> String {
+    absolute(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .display()
+        .to_string()
 }

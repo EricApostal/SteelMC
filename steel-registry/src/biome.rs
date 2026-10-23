@@ -50,7 +50,7 @@ pub struct BiomeEffects {
     pub particle: Option<Particle>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SpawnerData {
     pub entity_type: Identifier,
     pub weight: i32,

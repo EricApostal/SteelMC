@@ -1,20 +1,35 @@
 //! `SpawnerBlockEntity` (`net.minecraft.world.level.block.entity.SpawnerBlockEntity`).
 //!
-//! Mirrors vanilla's `BaseSpawner` state: the next `SpawnData`, its `SpawnPotentials` table, the
-//! delay between attempts, the spawn count/range and the player proximity requirements. The
-//! server tick advances the delay and delegates the actual attempt to
-//! [`crate::world::spawner`]-style helpers once the entity factory lane provides them.
+//! Mirrors vanilla's `BaseSpawner` state: the next `SpawnData`, its `SpawnPotentials` weighted
+//! list, the delay between attempts, the spawn count/range and the player proximity
+//! requirements. The server tick advances the delay and runs the vanilla spawn attempt.
 
-use std::sync::Weak;
+use std::str::FromStr;
+use std::sync::{Arc, Weak};
 
+use glam::DVec3;
+use rand::RngExt as _;
 use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
 use simdnbt::owned::{NbtCompound, NbtList};
-use steel_registry::vanilla_block_entity_types;
-use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, locks::SyncMutex};
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+use steel_registry::entity_type::EntityTypeRef;
+use steel_registry::vanilla_game_rules;
+use steel_registry::{REGISTRY, RegistryExt as _, vanilla_block_entity_types, vanilla_game_events};
+use steel_utils::entity_events::EntityStatus;
+use steel_utils::nbt::NbtNumeric as _;
+use steel_utils::types::Difficulty;
+use steel_utils::{
+    BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier, WorldAabb, locks::SyncMutex,
+};
 
 use crate::block_entity::{BlockEntity, BlockEntityBase};
-use crate::world::World;
+use crate::entity::{Entity as _, EntitySpawnReason, create_entity_instance};
+use crate::world::game_event::GameEventContext;
+use crate::world::spawn::SpawnPlacements;
+use crate::world::{LightLayer, World};
 
+/// Vanilla `BaseSpawner.DEFAULT_SPAWN_DELAY`.
+pub const SPAWNER_DEFAULT_SPAWN_DELAY: i32 = 20;
 /// Vanilla `BaseSpawner.DEFAULT_MIN_SPAWN_DELAY`.
 pub const SPAWNER_MIN_SPAWN_DELAY: i32 = 200;
 /// Vanilla `BaseSpawner.DEFAULT_MAX_SPAWN_DELAY`.
@@ -27,14 +42,150 @@ pub const SPAWNER_MAX_NEARBY_ENTITIES: i32 = 6;
 pub const SPAWNER_SPAWN_RANGE: i32 = 4;
 /// Vanilla `BaseSpawner.DEFAULT_REQUIRED_PLAYER_RANGE`.
 pub const SPAWNER_REQUIRED_PLAYER_RANGE: i32 = 16;
+/// Vanilla `BaseSpawner.EVENT_SPAWN` (block event that re-rolls the delay on clients).
+pub const SPAWNER_EVENT_SPAWN: i32 = 1;
+/// Vanilla `LevelEvent.PARTICLES_MOBSPAWNER_SPAWN` (`levelEvent(2004, pos, 0)`).
+pub const SPAWNER_LEVEL_EVENT_SPAWN: i32 = 2004;
 
-/// One entry of the `SpawnPotentials` weighted list.
+/// Vanilla `SpawnData.CustomSpawnRules`: inclusive light limits that gate a spawn position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CustomSpawnRules {
+    /// Inclusive block-light range (`block_light_limit`).
+    pub block_light_limit: (i32, i32),
+    /// Inclusive sky-light range (`sky_light_limit`).
+    pub sky_light_limit: (i32, i32),
+}
+
+impl CustomSpawnRules {
+    /// Vanilla `CustomSpawnRules.LIGHT_RANGE`, the default for both limits.
+    pub const LIGHT_RANGE: (i32, i32) = (0, 15);
+
+    /// Vanilla `SpawnData.CustomSpawnRules.isValidPosition`.
+    #[must_use]
+    pub fn is_valid_position(self, world: &World, pos: BlockPos) -> bool {
+        Self::contains(self.block_light_limit, world.light_value_at(LightLayer::Block, pos))
+            && Self::contains(
+                self.sky_light_limit,
+                world.effective_sky_brightness(pos),
+            )
+    }
+
+    fn contains((min, max): (i32, i32), value: u8) -> bool {
+        i32::from(value) >= min && i32::from(value) <= max
+    }
+
+    /// Reads one `InclusiveRange<Integer>` field, defaulting to `0..=15` like vanilla's lenient
+    /// `lightLimit` field.
+    fn read(view: &NbtCompoundView<'_, '_>, name: &str) -> (i32, i32) {
+        let Some(range) = view.compound(name) else {
+            return Self::LIGHT_RANGE;
+        };
+        let min = range
+            .get("min_inclusive")
+            .and_then(|tag| tag.codec_i32())
+            .unwrap_or(Self::LIGHT_RANGE.0);
+        let max = range
+            .get("max_inclusive")
+            .and_then(|tag| tag.codec_i32())
+            .unwrap_or(Self::LIGHT_RANGE.1);
+        (min, max)
+    }
+
+    fn write_range(nbt: &mut NbtCompound, name: &str, (min, max): (i32, i32)) {
+        let mut range = NbtCompound::new();
+        range.insert("min_inclusive", min);
+        range.insert("max_inclusive", max);
+        nbt.insert(name, range);
+    }
+}
+
+/// Vanilla `SpawnData`: the entity to spawn plus its optional spawn rules and equipment.
+#[derive(Clone, Debug, Default)]
+pub struct SpawnData {
+    /// Vanilla `SpawnData.entityToSpawn` (the `entity` compound).
+    pub entity_to_spawn: NbtCompound,
+    /// Vanilla `SpawnData.customSpawnRules` (`custom_spawn_rules`).
+    pub custom_spawn_rules: Option<CustomSpawnRules>,
+    /// Vanilla `SpawnData.equipment` (`equipment`), kept verbatim for NBT round-trips.
+    pub equipment: Option<NbtCompound>,
+}
+
+impl SpawnData {
+    /// Vanilla `SpawnData.CODEC` decoding: requires the `entity` field.
+    pub(super) fn from_view(view: &NbtCompoundView<'_, '_>) -> Option<Self> {
+        let mut entity_to_spawn = view.compound("entity")?.to_owned();
+        normalize_entity_id(&mut entity_to_spawn);
+        let custom_spawn_rules = view
+            .compound("custom_spawn_rules")
+            .map(|rules| CustomSpawnRules {
+                block_light_limit: CustomSpawnRules::read(&rules, "block_light_limit"),
+                sky_light_limit: CustomSpawnRules::read(&rules, "sky_light_limit"),
+            });
+        Some(Self {
+            entity_to_spawn,
+            custom_spawn_rules,
+            equipment: view.compound("equipment").map(|data| data.to_owned()),
+        })
+    }
+
+    /// Builds `SpawnData` from an entity compound, as `setEntityData`/`setEntityId` do.
+    #[must_use]
+    pub fn from_entity(entity: NbtCompound) -> Self {
+        let mut entity_to_spawn = entity;
+        normalize_entity_id(&mut entity_to_spawn);
+        Self {
+            entity_to_spawn,
+            custom_spawn_rules: None,
+            equipment: None,
+        }
+    }
+
+    /// Vanilla `SpawnData.CODEC` encoding.
+    pub(super) fn write(&self, nbt: &mut NbtCompound) {
+        nbt.insert("entity", self.entity_to_spawn.clone());
+        if let Some(rules) = self.custom_spawn_rules {
+            let mut compound = NbtCompound::new();
+            CustomSpawnRules::write_range(&mut compound, "block_light_limit", rules.block_light_limit);
+            CustomSpawnRules::write_range(&mut compound, "sky_light_limit", rules.sky_light_limit);
+            nbt.insert("custom_spawn_rules", compound);
+        }
+        if let Some(equipment) = &self.equipment {
+            nbt.insert("equipment", equipment.clone());
+        }
+    }
+
+    /// Returns the entity type referenced by the `id` string, if it resolves.
+    #[must_use]
+    pub fn entity_type(&self) -> Option<EntityTypeRef> {
+        let id = self.entity_to_spawn.string("id")?;
+        let id = Identifier::from_str(id.to_str().as_ref()).ok()?;
+        REGISTRY.entity_types.by_key(&id)
+    }
+}
+
+/// Vanilla `SpawnData`'s compact constructor: canonicalise the `id` string, dropping it when it
+/// does not parse as an identifier.
+fn normalize_entity_id(entity: &mut NbtCompound) {
+    let Some(id) = entity.string("id").map(|id| id.to_str().into_owned()) else {
+        return;
+    };
+    match Identifier::from_str(&id) {
+        Ok(identifier) => {
+            entity.insert("id", identifier.to_string());
+        }
+        Err(_) => {
+            entity.remove("id");
+        }
+    }
+}
+
+/// One entry of the `SpawnPotentials` weighted list (`WeightedList.Weighted<SpawnData>`).
 #[derive(Clone, Debug)]
 pub struct SpawnPotential {
     /// Weight of this entry in the weighted selection.
     pub weight: i32,
-    /// Raw entity NBT for this entry.
-    pub data: NbtCompound,
+    /// The `SpawnData` value (`data` in vanilla's `Weighted.codec`).
+    pub data: SpawnData,
 }
 
 /// Vanilla `BaseSpawner` state.
@@ -54,8 +205,8 @@ pub struct SpawnerData {
     pub spawn_range: i32,
     /// Player distance that keeps the spawner running.
     pub required_player_range: i32,
-    /// The next entity to spawn.
-    pub spawn_data: NbtCompound,
+    /// The next entity to spawn (vanilla's nullable `nextSpawnData`).
+    pub next_spawn_data: Option<SpawnData>,
     /// Weighted alternatives for the next spawn.
     pub spawn_potentials: Vec<SpawnPotential>,
 }
@@ -63,14 +214,14 @@ pub struct SpawnerData {
 impl Default for SpawnerData {
     fn default() -> Self {
         Self {
-            delay: 20,
+            delay: SPAWNER_DEFAULT_SPAWN_DELAY,
             min_spawn_delay: SPAWNER_MIN_SPAWN_DELAY,
             max_spawn_delay: SPAWNER_MAX_SPAWN_DELAY,
             spawn_count: SPAWNER_SPAWN_COUNT,
             max_nearby_entities: SPAWNER_MAX_NEARBY_ENTITIES,
             spawn_range: SPAWNER_SPAWN_RANGE,
             required_player_range: SPAWNER_REQUIRED_PLAYER_RANGE,
-            spawn_data: NbtCompound::new(),
+            next_spawn_data: None,
             spawn_potentials: Vec::new(),
         }
     }
@@ -103,27 +254,285 @@ impl SpawnerBlockEntity {
         self.state.lock().clone()
     }
 
-    /// Vanilla `BaseSpawner.setNextSpawnData`: replaces the next spawn and clears the potentials
-    /// when no weighted list is supplied.
-    pub fn set_next_spawn_data(&self, spawn_data: NbtCompound, potentials: Vec<SpawnPotential>) {
+    /// Vanilla `BaseSpawner.setNextSpawnData`: replaces the next spawn and, when a non-empty
+    /// weighted list is supplied, the `SpawnPotentials` table.
+    ///
+    /// Vanilla's spawn-egg path (`SpawnerBlockEntity.setEntityData`) only replaces the next
+    /// spawn data and keeps the existing potentials, so an empty list leaves them untouched.
+    pub fn set_next_spawn_data(&self, entity_data: NbtCompound, potentials: Vec<SpawnPotential>) {
         let mut state = self.state.lock();
-        state.spawn_data = spawn_data;
-        state.spawn_potentials = potentials;
+        state.next_spawn_data = Some(SpawnData::from_entity(entity_data));
+        if !potentials.is_empty() {
+            state.spawn_potentials = potentials;
+        }
         drop(state);
-        BlockEntity::set_changed(self);
+        self.mark_updated();
     }
 
-    /// Vanilla `BaseSpawner.setEntityId` (spawn egg / `/setblock` data): sets the entity id and
-    /// clears the potentials.
+    /// Vanilla `BaseSpawner.setEntityId` (spawn egg / `/setblock` data): sets the entity id of
+    /// the next spawn data, keeping the weighted list.
     pub fn set_entity_id(&self, entity_id: &str) {
-        let mut data = NbtCompound::new();
-        data.insert("id", entity_id);
         let mut state = self.state.lock();
-        state.spawn_data = data;
-        state.spawn_potentials.clear();
+        let spawn_data = state.next_spawn_data.get_or_insert_with(SpawnData::default);
+        spawn_data.entity_to_spawn.insert("id", entity_id);
         drop(state);
-        BlockEntity::set_changed(self);
+        self.mark_updated();
     }
+
+    /// Vanilla `SpawnerBlockEntity`'s `setNextSpawnData` override: `setChanged` plus
+    /// `sendBlockUpdated(pos, state, state, 260)`.
+    fn mark_updated(&self) {
+        BlockEntity::set_changed(self);
+        if let Some(world) = self.get_level() {
+            world.send_block_updated(self.get_block_pos());
+        }
+    }
+
+    /// Vanilla `BaseSpawner.isNearPlayer` / `Level.hasNearbyAlivePlayer`.
+    fn is_near_player(&self, world: &Arc<World>, pos: BlockPos) -> bool {
+        let range = f64::from(self.state.lock().required_player_range);
+        world
+            .nearest_player(
+                DVec3::new(
+                    f64::from(pos.x()) + 0.5,
+                    f64::from(pos.y()) + 0.5,
+                    f64::from(pos.z()) + 0.5,
+                ),
+                range,
+                |player| !player.is_spectator() && player.is_alive(),
+            )
+            .is_some()
+    }
+
+    /// Vanilla `BaseSpawner.getOrCreateNextSpawnData`.
+    fn next_spawn_data(&self, rng: &mut impl rand::Rng) -> SpawnData {
+        let mut state = self.state.lock();
+        if let Some(data) = &state.next_spawn_data {
+            return data.clone();
+        }
+        let selected = Self::pick_weighted(&state.spawn_potentials, rng).unwrap_or_default();
+        state.next_spawn_data = Some(selected.clone());
+        selected
+    }
+
+    /// Vanilla `WeightedList.getRandom`.
+    fn pick_weighted(potentials: &[SpawnPotential], rng: &mut impl rand::Rng) -> Option<SpawnData> {
+        let total: i32 = potentials.iter().map(|entry| entry.weight).sum();
+        if total <= 0 {
+            return None;
+        }
+        let mut roll = rng.random_range(0..total);
+        for entry in potentials {
+            roll -= entry.weight;
+            if roll < 0 {
+                return Some(entry.data.clone());
+            }
+        }
+        None
+    }
+
+    /// Vanilla `BaseSpawner.delay`: re-rolls the delay, advances to the next weighted entry and
+    /// broadcasts block event 1.
+    fn delay(&self, world: &Arc<World>) {
+        let pos = self.get_block_pos();
+        let mut rng = rand::rng();
+        let selected = {
+            let mut state = self.state.lock();
+            state.delay = if state.max_spawn_delay <= state.min_spawn_delay {
+                state.min_spawn_delay
+            } else {
+                state.min_spawn_delay
+                    + rng.random_range(0..state.max_spawn_delay - state.min_spawn_delay)
+            };
+            let selected = Self::pick_weighted(&state.spawn_potentials, &mut rng);
+            if let Some(data) = &selected {
+                state.next_spawn_data = Some(data.clone());
+            }
+            selected
+        };
+        if selected.is_some() {
+            // Vanilla's `SpawnerBlockEntity.setNextSpawnData` override pushes the new data.
+            world.send_block_updated(pos);
+        }
+        world.block_event(
+            pos,
+            self.get_block_state().get_block(),
+            SPAWNER_EVENT_SPAWN,
+            0,
+        );
+    }
+
+    /// Vanilla `BaseSpawner.serverTick`'s spawn branch.
+    fn spawn_attempt(&self, world: &Arc<World>) {
+        let pos = self.get_block_pos();
+        let mut rng = rand::rng();
+        let next_spawn_data = self.next_spawn_data(&mut rng);
+        let (spawn_count, spawn_range, max_nearby) = {
+            let state = self.state.lock();
+            (
+                state.spawn_count,
+                state.spawn_range,
+                state.max_nearby_entities,
+            )
+        };
+        let mut spawned = false;
+
+        for _ in 0..spawn_count {
+            let Some(entity_type) = next_spawn_data.entity_type() else {
+                self.delay(world);
+                return;
+            };
+
+            let spawn_pos = Self::read_pos(&next_spawn_data.entity_to_spawn).unwrap_or_else(|| {
+                DVec3::new(
+                    f64::from(pos.x())
+                        + (rng.random::<f64>() - rng.random::<f64>()) * f64::from(spawn_range)
+                        + 0.5,
+                    f64::from(pos.y()) + f64::from(rng.random_range(0..3)) - 1.0,
+                    f64::from(pos.z())
+                        + (rng.random::<f64>() - rng.random::<f64>()) * f64::from(spawn_range)
+                        + 0.5,
+                )
+            });
+
+            if !world.no_collision(spawn_aabb(entity_type, spawn_pos)) {
+                continue;
+            }
+
+            let spawn_block_pos = BlockPos::from(spawn_pos);
+            if let Some(rules) = next_spawn_data.custom_spawn_rules {
+                // Vanilla also skips friendly categories in Peaceful; Steel exposes the
+                // per-type `allowed_in_peaceful` flag instead of the category check.
+                if !entity_type.allowed_in_peaceful && world.difficulty() == Difficulty::Peaceful {
+                    continue;
+                }
+                if !rules.is_valid_position(world, spawn_block_pos) {
+                    continue;
+                }
+            } else {
+                let mut random = steel_utils::random::RandomSource::Legacy(
+                    steel_utils::random::legacy_random::LegacyRandom::from_seed(rng.random::<u64>()),
+                );
+                if !SpawnPlacements::check_spawn_rules(
+                    entity_type,
+                    world,
+                    EntitySpawnReason::Spawner,
+                    spawn_block_pos,
+                    &mut random,
+                ) {
+                    continue;
+                }
+            }
+
+            let Ok(entity) = create_entity_instance(world, entity_type, spawn_pos) else {
+                self.delay(world);
+                return;
+            };
+            if entity
+                .load_with_owned_components(&next_spawn_data.entity_to_spawn)
+                .is_err()
+            {
+                self.delay(world);
+                return;
+            }
+            entity.base().set_position_local(spawn_pos);
+            let yaw = rng.random::<f32>() * 360.0;
+            entity.set_rotation((yaw, 0.0));
+            entity.set_old_position_to_current();
+            entity.base().set_old_rotation_to_current();
+
+            let nearby_aabb = WorldAabb::new(
+                f64::from(pos.x()),
+                f64::from(pos.y()),
+                f64::from(pos.z()),
+                f64::from(pos.x()) + 1.0,
+                f64::from(pos.y()) + 1.0,
+                f64::from(pos.z()) + 1.0,
+            )
+            .inflate(f64::from(spawn_range));
+            let nearby = world
+                .get_entities_in_aabb(&nearby_aabb)
+                .into_iter()
+                .filter(|other| {
+                    other.entity_type().id() == entity_type.id() && !other.is_spectator()
+                })
+                .count();
+            if i32::try_from(nearby).unwrap_or(i32::MAX) >= max_nearby {
+                self.delay(world);
+                return;
+            }
+
+            if let Some(mob) = entity.as_mob() {
+                if !mob.check_spawn_obstruction(world) {
+                    continue;
+                }
+                let has_no_configuration = next_spawn_data.entity_to_spawn.len() == 1
+                    && next_spawn_data.entity_to_spawn.string("id").is_some();
+                if has_no_configuration {
+                    mob.finalize_spawn(world, EntitySpawnReason::Spawner, None);
+                }
+            }
+
+            if world.try_add_entity(Arc::clone(&entity)).is_err() {
+                self.delay(world);
+                return;
+            }
+
+            world.level_event(SPAWNER_LEVEL_EVENT_SPAWN, pos, 0, None);
+            world.game_event(
+                &vanilla_game_events::ENTITY_PLACE,
+                spawn_block_pos,
+                &GameEventContext::new(Some(entity.as_ref()), None),
+            );
+            if entity.as_mob().is_some() {
+                // Vanilla `Mob.spawnAnim` broadcasts entity status byte 20.
+                entity.broadcast_entity_event(EntityStatus::SilverfishMergeAnim);
+            }
+            spawned = true;
+        }
+
+        if spawned {
+            self.delay(world);
+        }
+    }
+
+    /// Vanilla `ValueInput.read("Pos", Vec3.CODEC)`: an optional `[x, y, z]` double list.
+    fn read_pos(entity: &NbtCompound) -> Option<DVec3> {
+        let values = entity.list("Pos")?.doubles()?;
+        if values.len() != 3 {
+            return None;
+        }
+        let pos = DVec3::new(values[0], values[1], values[2]);
+        pos.is_finite().then_some(pos)
+    }
+}
+
+/// Vanilla `EntityType.getSpawnAABB`: the type's dimensions centred on `pos`.
+pub(super) fn spawn_aabb(entity_type: EntityTypeRef, pos: DVec3) -> WorldAabb {
+    let half_width = f64::from(entity_type.dimensions.half_width());
+    let height = f64::from(entity_type.dimensions.height);
+    WorldAabb::new(
+        pos.x - half_width,
+        pos.y,
+        pos.z - half_width,
+        pos.x + half_width,
+        pos.y + height,
+        pos.z + half_width,
+    )
+}
+
+/// Vanilla `ValueInput.getShortOr`: reads any numeric tag's value (vanilla's `shortValue()`).
+fn read_short_or(view: &NbtCompoundView<'_, '_>, key: &str, default: i32) -> i32 {
+    view.get(key)
+        .and_then(|tag| tag.codec_i32())
+        .unwrap_or(default)
+}
+
+/// Vanilla `ValueInput.getIntOr`.
+fn read_int_or(view: &NbtCompoundView<'_, '_>, key: &str, default: i32) -> i32 {
+    view.get(key)
+        .and_then(|tag| tag.codec_i32())
+        .unwrap_or(default)
 }
 
 impl BlockEntity for SpawnerBlockEntity {
@@ -135,44 +544,48 @@ impl BlockEntity for SpawnerBlockEntity {
         let view: NbtCompoundView<'_, '_> = nbt.into();
         let mut state = self.state.lock();
 
-        state.delay = view.short("Delay").map_or(20, i32::from);
-        state.min_spawn_delay = view
-            .short("MinSpawnDelay")
-            .map_or(SPAWNER_MIN_SPAWN_DELAY, i32::from);
-        state.max_spawn_delay = view
-            .short("MaxSpawnDelay")
-            .map_or(SPAWNER_MAX_SPAWN_DELAY, i32::from);
-        state.spawn_count = view
-            .short("SpawnCount")
-            .map_or(SPAWNER_SPAWN_COUNT, i32::from);
-        state.max_nearby_entities = view
-            .short("MaxNearbyEntities")
-            .map_or(SPAWNER_MAX_NEARBY_ENTITIES, i32::from);
-        state.spawn_range = view
-            .short("SpawnRange")
-            .map_or(SPAWNER_SPAWN_RANGE, i32::from);
-        state.required_player_range = view
-            .short("RequiredPlayerRange")
-            .map_or(SPAWNER_REQUIRED_PLAYER_RANGE, i32::from);
-
-        // `SpawnData` is a compound holding the entity NBT directly.
-        state.spawn_data = view
+        state.delay = read_short_or(&view, "Delay", SPAWNER_DEFAULT_SPAWN_DELAY);
+        state.next_spawn_data = view
             .compound("SpawnData")
-            .map(|compound| compound.to_owned())
-            .unwrap_or_default();
+            .and_then(|data| SpawnData::from_view(&data));
+        state.min_spawn_delay = read_int_or(&view, "MinSpawnDelay", SPAWNER_MIN_SPAWN_DELAY);
+        state.max_spawn_delay = read_int_or(&view, "MaxSpawnDelay", SPAWNER_MAX_SPAWN_DELAY);
+        state.spawn_count = read_int_or(&view, "SpawnCount", SPAWNER_SPAWN_COUNT);
+        state.max_nearby_entities =
+            read_int_or(&view, "MaxNearbyEntities", SPAWNER_MAX_NEARBY_ENTITIES);
+        state.required_player_range =
+            read_int_or(&view, "RequiredPlayerRange", SPAWNER_REQUIRED_PLAYER_RANGE);
+        state.spawn_range = read_int_or(&view, "SpawnRange", SPAWNER_SPAWN_RANGE);
 
         state.spawn_potentials.clear();
-        if let Some(potentials) = view.list("SpawnPotentials")
-            && let Some(entries) = potentials.compounds()
-        {
+        let potentials = view
+            .list("SpawnPotentials")
+            .and_then(|list| list.compounds());
+        if let Some(entries) = potentials {
             for compound in entries {
-                let weight = compound.int("weight").unwrap_or(1);
-                let data = compound
+                let weight = compound
+                    .get("weight")
+                    .and_then(|tag| tag.codec_i32())
+                    .unwrap_or(1);
+                let Some(data) = compound
                     .compound("data")
-                    .map(|data| data.to_owned())
-                    .unwrap_or_default();
+                    .and_then(|data| SpawnData::from_view(&data))
+                else {
+                    continue;
+                };
                 state.spawn_potentials.push(SpawnPotential { weight, data });
             }
+        } else {
+            // Vanilla falls back to a single-entry list holding the current spawn data.
+            let data = state.next_spawn_data.clone().unwrap_or_default();
+            state.spawn_potentials = vec![SpawnPotential { weight: 1, data }];
+        }
+        drop(state);
+
+        // Vanilla `BaseSpawner.load` runs through `setNextSpawnData`, whose block-entity
+        // override pushes a block update whenever a level is attached.
+        if let Some(world) = self.get_level() {
+            world.send_block_updated(self.get_block_pos());
         }
     }
 
@@ -183,9 +596,14 @@ impl BlockEntity for SpawnerBlockEntity {
         nbt.insert("MaxSpawnDelay", state.max_spawn_delay as i16);
         nbt.insert("SpawnCount", state.spawn_count as i16);
         nbt.insert("MaxNearbyEntities", state.max_nearby_entities as i16);
-        nbt.insert("SpawnRange", state.spawn_range as i16);
         nbt.insert("RequiredPlayerRange", state.required_player_range as i16);
-        nbt.insert("SpawnData", state.spawn_data.clone());
+        nbt.insert("SpawnRange", state.spawn_range as i16);
+
+        if let Some(data) = &state.next_spawn_data {
+            let mut compound = NbtCompound::new();
+            data.write(&mut compound);
+            nbt.insert("SpawnData", compound);
+        }
 
         let potentials: Vec<NbtCompound> = state
             .spawn_potentials
@@ -193,7 +611,9 @@ impl BlockEntity for SpawnerBlockEntity {
             .map(|potential| {
                 let mut entry = NbtCompound::new();
                 entry.insert("weight", potential.weight);
-                entry.insert("data", potential.data.clone());
+                let mut data = NbtCompound::new();
+                potential.data.write(&mut data);
+                entry.insert("data", data);
                 entry
             })
             .collect();
@@ -201,46 +621,46 @@ impl BlockEntity for SpawnerBlockEntity {
     }
 
     fn get_update_tag(&self) -> Option<NbtCompound> {
-        // Vanilla sends only `SpawnData` to clients.
-        let state = self.state.lock();
+        // Vanilla `SpawnerBlockEntity.getUpdateTag`: `saveCustomOnly` minus `SpawnPotentials`.
         let mut nbt = NbtCompound::new();
-        nbt.insert("SpawnData", state.spawn_data.clone());
+        self.save_additional(&mut nbt);
+        while nbt.remove("SpawnPotentials").is_some() {}
         Some(nbt)
     }
 
-    fn tick(&self, world: &std::sync::Arc<World>) {
-        let pos = self.get_block_pos();
-        let (required_range, delay) = {
-            let mut state = self.state.lock();
-            if state.delay > 0 {
-                state.delay -= 1;
-                return;
-            }
-            (state.required_player_range, state.delay)
-        };
-        let _ = delay;
+    fn trigger_event(&self, param_a: i32, param_b: i32) -> bool {
+        let _ = param_b;
+        // Vanilla `BaseSpawner.onEventTriggered`: only event 1 is handled.
+        param_a == SPAWNER_EVENT_SPAWN
+    }
 
-        let range_sq = f64::from(required_range) * f64::from(required_range);
-        let has_player = world
-            .nearest_player_distance_sqr(glam::DVec3::new(
-                f64::from(pos.x()) + 0.5,
-                f64::from(pos.y()) + 0.5,
-                f64::from(pos.z()) + 0.5,
-            ))
-            .is_some_and(|distance| distance <= range_sq);
-
-        let mut state = self.state.lock();
-        if !has_player {
-            // Vanilla resets the delay to 20 ticks while no player is in range.
-            state.delay = 20;
+    fn tick(&self, world: &Arc<World>) {
+        // Vanilla `BaseSpawner.serverTick` gates everything on the player check and the
+        // `spawner_blocks_work` game rule (`ServerLevel.isSpawnerBlockEnabled`).
+        if !self.is_near_player(world, self.get_block_pos())
+            || !world.get_game_rule(&vanilla_game_rules::SPAWNER_BLOCKS_WORK)
+        {
             return;
         }
 
-        // TODO(Entities): perform the vanilla spawn attempt (`BaseSpawner.serverTick`): pick a
-        // weighted `SpawnPotentials` entry, check `max_nearby_entities`, and spawn
-        // `spawn_count` entities via the entity factory. Blocked on the entity lane exposing a
-        // `EntityTypeRef` → NBT-spawn bridge (vanilla `EntityType.create(CompoundTag)`).
-        let next_delay = rand::random_range(state.min_spawn_delay..=state.max_spawn_delay);
-        state.delay = next_delay;
+        let needs_delay = self.state.lock().delay == -1;
+        if needs_delay {
+            self.delay(world);
+        }
+
+        let counting_down = {
+            let mut state = self.state.lock();
+            if state.delay > 0 {
+                state.delay -= 1;
+                true
+            } else {
+                false
+            }
+        };
+        if counting_down {
+            return;
+        }
+
+        self.spawn_attempt(world);
     }
 }

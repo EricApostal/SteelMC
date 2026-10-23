@@ -44,6 +44,9 @@ pub trait FlowingFluid: FluidBehavior {
                 self.fluid_type(),
                 self.drop_off(world),
             );
+            // Vanilla computes the delay before branching, so lava's uphill-delay
+            // random draw happens for every flowing tick, not only when the level changes.
+            let tick_delay = self.get_spread_delay(world, pos, current_fluid, new_fluid);
 
             if new_fluid.is_empty() {
                 current_fluid = new_fluid;
@@ -51,16 +54,11 @@ pub trait FlowingFluid: FluidBehavior {
                 block_state = REGISTRY.blocks.get_default_state_id(&vanilla_blocks::AIR);
                 world.set_block(pos, block_state, UpdateFlags::UPDATE_ALL);
             } else if new_fluid != current_fluid {
-                let old_fluid = current_fluid;
                 current_fluid = new_fluid;
                 block_state = fluid_state_to_block_with_existing(new_fluid, block_state);
                 world.set_block(pos, block_state, UpdateFlags::UPDATE_ALL);
 
-                world.schedule_fluid_tick_default(
-                    pos,
-                    new_fluid.fluid_id,
-                    self.get_spread_delay(world, pos, old_fluid, new_fluid),
-                );
+                world.schedule_fluid_tick_default(pos, new_fluid.fluid_id, tick_delay);
             }
         }
 

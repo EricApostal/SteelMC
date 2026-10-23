@@ -1,9 +1,12 @@
 //! Vanilla `TradeWithVillager`.
 //!
-//! `figureOutWhatIAmWillingToTrade` reads `VillagerProfession.requestedItems`,
-//! which the assets extractor does not carry: Steel's
-//! `VillagerProfession::requested_items` is always empty, so the willing-to-trade
-//! set is always empty and the third `throwHalfStack` call in `tick` never runs.
+//! `figureOutWhatIAmWillingToTrade` reads `VillagerProfession.requestedItems`, which the
+//! vendored extractor output does not carry (vanilla hard-codes it in
+//! `VillagerProfession.bootstrap`). The build generator reads it from
+//! `build_assets/villager_professions.json`, where only `farmer` declares a set
+//! (`wheat, wheat_seeds, beetroot_seeds, bone_meal`) — every other profession has an
+//! empty one, exactly as in vanilla, so the willing-to-trade set is non-empty only
+//! between two villagers with different professions.
 
 use steel_registry::data_components::vanilla_components::VILLAGER_FOOD;
 use steel_registry::item_stack::ItemStack;

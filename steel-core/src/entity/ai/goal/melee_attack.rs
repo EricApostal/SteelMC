@@ -1,7 +1,6 @@
 use glam::DVec3;
 use steel_utils::types::InteractionHand;
 
-use super::reduced_tick_delay;
 use super::selector::{Goal, GoalControls};
 use crate::entity::ai::path::Path;
 use crate::entity::{LivingEntity, PathfinderMob, SharedEntity};
@@ -81,8 +80,11 @@ impl MeleeAttackGoal {
     }
 
     /// Vanilla `MeleeAttackGoal.getAttackInterval`, read by `ZombieAttackGoal`.
+    ///
+    /// `MeleeAttackGoal.requiresUpdateEveryTick` is `true`, so vanilla's
+    /// `adjustedTickDelay(20)` is the unreduced interval.
     pub(super) const fn attack_interval() -> i32 {
-        reduced_tick_delay(ATTACK_INTERVAL_TICKS)
+        ATTACK_INTERVAL_TICKS
     }
 
     fn has_no_pathed_target(&self) -> bool {
@@ -123,12 +125,13 @@ impl MeleeAttackGoal {
             self.ticks_until_next_path_recalculation += PATH_RECALC_MEDIUM_DISTANCE_PENALTY;
         }
 
-        if !mob.move_to_pos(target.position(), self.speed_modifier) {
+        // Vanilla `getNavigation().moveTo(target, 0, speedModifier)` — reach range 0.
+        if !mob.move_to_pos_with_reach(target.position(), 0, self.speed_modifier) {
             self.ticks_until_next_path_recalculation += PATH_RECALC_FAILED_MOVE_PENALTY;
         }
 
-        self.ticks_until_next_path_recalculation =
-            reduced_tick_delay(self.ticks_until_next_path_recalculation);
+        // Vanilla `adjustedTickDelay(...)`: this goal requires an update every tick, so the
+        // delay is not halved.
     }
 }
 

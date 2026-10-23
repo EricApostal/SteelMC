@@ -587,8 +587,11 @@ mod tests {
         );
     }
 
+    /// Vanilla `ConversionType.SINGLE` re-leashes the converted mob to the source's holder
+    /// (`ConversionType.java` `SINGLE.convert`: `to.setLeashedTo(leashHolder, true)`); only
+    /// `SPLIT_ON_DEATH` drops the leash instead.
     #[test]
-    fn conversion_transfers_the_sources_leash() {
+    fn single_conversion_transfers_the_sources_leash() {
         init_vanilla_registry();
         init_entities();
         let world_fixture = conversion_world();
@@ -612,8 +615,10 @@ mod tests {
             .expect("a registered factory converts the source");
 
         assert!(source.is_removed(), "single conversion discards the source");
-        // `convert_single` re-leashes the converted mob to the source's holder, so the
-        // leash is never silently dropped while the original entity is discarded.
+        // Vanilla 26.3 `ConversionType.SINGLE.convert` copies the leash holder onto the
+        // converted mob (`to.setLeashedTo(leashHolder, true)`); only `SPLIT_ON_DEATH`
+        // drops the source's leash, which `split_on_death_conversion_drops_the_sources_leash`
+        // covers. `convert_single` mirrors SINGLE exactly.
         assert_eq!(
             converted
                 .as_mob()
@@ -621,7 +626,47 @@ mod tests {
                 .leash_holder()
                 .map(|entity| entity.id()),
             Some(holder.id()),
-            "a single conversion moves the leash to the converted mob"
+            "vanilla `ConversionType.SINGLE` copies the leash to the converted mob"
+        );
+    }
+
+    /// Vanilla `ConversionType.SPLIT_ON_DEATH` is the *only* conversion type that drops the
+    /// source's leash; the split mob never inherits it.
+    #[test]
+    fn split_on_death_conversion_drops_the_sources_leash() {
+        init_vanilla_registry();
+        init_entities();
+        let world_fixture = conversion_world();
+        let world = &world_fixture.world;
+        let source = add_pig(world);
+        let holder = add_pig(world);
+        let source_mob = source.as_mob().expect("pig is a mob");
+        assert!(
+            source_mob.set_leashed_to(&holder),
+            "the test pig should leash to the holder"
+        );
+
+        let cow = source
+            .downcast_ref::<PigEntity>()
+            .expect("pig is concrete")
+            .convert_to(
+                &vanilla_entities::COW,
+                ConversionParams {
+                    conversion_type: ConversionType::SplitOnDeath,
+                    keep_equipment: false,
+                    preserve_can_pick_up_loot: false,
+                },
+                None,
+            )
+            .expect("split conversion should create the cow");
+
+        assert!(
+            source_mob.leash_holder().is_none(),
+            "SPLIT_ON_DEATH drops the source's leash"
+        );
+        assert!(
+            cow.as_mob().expect("cow is a mob").leash_holder().is_none(),
+            "the split mob does not inherit the leash"
         );
     }
 

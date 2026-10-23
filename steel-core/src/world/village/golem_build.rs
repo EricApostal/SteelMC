@@ -335,7 +335,7 @@ fn clear_pattern_blocks(level: &Arc<World>, found: &PatternMatch, pattern: &Bloc
     }
 }
 
-/// Vanilla `CarvedPumpkinBlock.updatePatternBlocks`: notifies neighbours of every
+/// Vanilla `CarvedPumpkinBlock.updatePatternBlocks`: notifies neighbors of every
 /// pattern block that was cleared.
 fn update_pattern_blocks(level: &Arc<World>, found: &PatternMatch, pattern: &BlockPattern) {
     for pos in found.cells(pattern.width(), pattern.height()) {
@@ -380,6 +380,151 @@ mod tests {
         assert_eq!(IRON_GOLEM_FULL.height(), 3);
         assert_eq!(SNOW_GOLEM_FULL.width(), 1);
         assert_eq!(SNOW_GOLEM_FULL.height(), 3);
+    }
+
+    /// The live pumpkin build: placing the iron pattern and calling `try_spawn_golem`
+    /// spawns a player-created iron golem at `(1, 2, 0)` of the match and clears the
+    /// pattern blocks to air (vanilla `CarvedPumpkinBlock.trySpawnGolem`).
+    #[test]
+    fn pumpkin_build_spawns_a_player_created_iron_golem() {
+        use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
+        use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+        use steel_utils::ChunkPos;
+
+        init_vanilla_registry();
+        crate::entity::init_entities();
+
+        let fixture = fresh_test_world("pumpkin_iron_golem");
+        let world = &fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+
+        // forwards = north, up = up: `right` is +x and `down` is -y, so the top-left
+        // origin is the pumpkin's west neighbour.
+        let origin = BlockPos::new(10, 70, 10);
+        let pumpkin = BlockPos::new(11, 70, 10);
+        let air = vanilla_blocks::AIR.default_state();
+        world.set_block(
+            pumpkin,
+            vanilla_blocks::CARVED_PUMPKIN.default_state(),
+            UpdateFlags::UPDATE_CLIENTS,
+        );
+        for x in 10..=12 {
+            world.set_block(
+                BlockPos::new(x, 69, 10),
+                vanilla_blocks::IRON_BLOCK.default_state(),
+                UpdateFlags::UPDATE_CLIENTS,
+            );
+        }
+        world.set_block(
+            BlockPos::new(11, 68, 10),
+            vanilla_blocks::IRON_BLOCK.default_state(),
+            UpdateFlags::UPDATE_CLIENTS,
+        );
+
+        let golem = try_spawn_golem(world, pumpkin).expect("the iron pattern builds a golem");
+        assert_eq!(golem.entity_type(), &vanilla_entities::IRON_GOLEM);
+        assert_eq!(
+            golem.position(),
+            DVec3::new(11.5, 68.05, 10.5),
+            "vanilla spawns at `getBlock(1, 2, 0)` plus the 0.05 Y snap"
+        );
+        assert!(
+            golem
+                .downcast_ref::<crate::entity::entities::mobs::golem::IronGolemEntity>()
+                .expect("iron golem downcast")
+                .is_player_created(),
+            "a pumpkin-built golem is player-created"
+        );
+
+        // Every pattern cell is cleared, including the pumpkin and the spawn cell.
+        assert_eq!(world.get_block_state(pumpkin), air);
+        for x in 10..=12 {
+            assert_eq!(world.get_block_state(BlockPos::new(x, 69, 10)), air);
+        }
+        assert_eq!(world.get_block_state(BlockPos::new(11, 68, 10)), air);
+        assert!(
+            world.get_entity_by_id(golem.id()).is_some(),
+            "the golem joins the level"
+        );
+        assert!(origin.x() < pumpkin.x());
+    }
+
+    /// The snow golem pattern spawns at `(0, 2, 0)` and is not player-created-flagged
+    /// (vanilla only sets that flag on iron golems).
+    #[test]
+    fn pumpkin_build_spawns_a_snow_golem() {
+        use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
+        use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+        use steel_utils::ChunkPos;
+
+        init_vanilla_registry();
+        crate::entity::init_entities();
+
+        let fixture = fresh_test_world("pumpkin_snow_golem");
+        let world = &fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(1, 1));
+
+        let pumpkin = BlockPos::new(20, 70, 20);
+        world.set_block(
+            pumpkin,
+            vanilla_blocks::CARVED_PUMPKIN.default_state(),
+            UpdateFlags::UPDATE_CLIENTS,
+        );
+        world.set_block(
+            BlockPos::new(20, 69, 20),
+            vanilla_blocks::SNOW_BLOCK.default_state(),
+            UpdateFlags::UPDATE_CLIENTS,
+        );
+        world.set_block(
+            BlockPos::new(20, 68, 20),
+            vanilla_blocks::SNOW_BLOCK.default_state(),
+            UpdateFlags::UPDATE_CLIENTS,
+        );
+
+        let golem = try_spawn_golem(world, pumpkin).expect("the snow pattern builds a golem");
+        assert_eq!(golem.entity_type(), &vanilla_entities::SNOW_GOLEM);
+        assert_eq!(golem.position(), DVec3::new(20.5, 68.05, 20.5));
+        assert_eq!(
+            world.get_block_state(pumpkin),
+            vanilla_blocks::AIR.default_state()
+        );
+    }
+
+    /// `can_spawn_golem` accepts a pumpkin whose placement completes a base pattern, and
+    /// rejects one that completes nothing.
+    #[test]
+    fn can_spawn_golem_checks_the_base_patterns() {
+        use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
+        use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+        use steel_utils::ChunkPos;
+
+        init_vanilla_registry();
+        let fixture = fresh_test_world("pumpkin_can_spawn");
+        let world = &fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(1, 1));
+
+        // The pattern search spans a 3x3x3 cube from the placed pumpkin, so keep it
+        // inside the loaded chunk (x/z 16..31).
+        let top = BlockPos::new(18, 70, 18);
+        assert!(
+            !can_spawn_golem(world.as_ref(), top),
+            "bare air matches nothing"
+        );
+
+        world.set_block(
+            BlockPos::new(18, 69, 18),
+            vanilla_blocks::IRON_BLOCK.default_state(),
+            UpdateFlags::UPDATE_CLIENTS,
+        );
+        world.set_block(
+            BlockPos::new(18, 68, 18),
+            vanilla_blocks::IRON_BLOCK.default_state(),
+            UpdateFlags::UPDATE_CLIENTS,
+        );
+        assert!(
+            can_spawn_golem(world.as_ref(), top),
+            "a column of two iron blocks completes the iron base pattern"
+        );
     }
 
     /// `translateAndRotate` builds the pattern's right vector from `forwards × up`, which

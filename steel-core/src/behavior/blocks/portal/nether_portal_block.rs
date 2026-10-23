@@ -4,17 +4,23 @@ use std::sync::Arc;
 
 use crate::behavior::block::BlockBehavior;
 use crate::behavior::context::BlockPlaceContext;
-use crate::entity::{Entity, InsideBlockEffectCollector};
+use crate::entity::{
+    Entity, EntitySpawnPlacement, EntitySpawnReason, EntitySpawnRequest,
+    InsideBlockEffectCollector, spawn_entity,
+};
 use crate::portal::PortalKind;
 use crate::portal::portal_shape::{PortalShape, nether_portal_config};
 use crate::world::ScheduledTickAccess;
 use crate::world::World;
+use crate::world::spawn::local_mob_cap::players_close_for_spawning;
+use crate::world::spawn::placement::is_valid_spawn_on_block;
 use steel_macros::block_behavior;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::{Axis, BlockStateProperties, EnumProperty};
 use steel_registry::vanilla_blocks::AIR;
-use steel_utils::{BlockPos, BlockStateId, Direction};
+use steel_registry::vanilla_entities;
+use steel_utils::{BlockPos, BlockStateId, ChunkPos, Difficulty, Direction};
 
 /// Behavior for the nether portal block.
 #[block_behavior]
@@ -64,6 +70,66 @@ impl BlockBehavior for NetherPortalBlock {
 
     fn get_state_for_placement(&self, _context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
         Some(self.block.default_state())
+    }
+
+    /// Vanilla `NetherPortalBlock.randomTick`: spawns a zombified piglin on the block
+    /// below the portal column, gated by monsters spawning, difficulty, the
+    /// `nether_portal_spawns_piglin` dimension attribute, and player proximity.
+    fn random_tick(&self, _state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
+        if !world.is_spawning_monsters()
+            || world.difficulty() == Difficulty::Peaceful
+            || !world.dimension_type.nether_portal_spawns_piglin
+        {
+            return;
+        }
+
+        let difficulty_id = i32::from(u8::from(world.difficulty()));
+        if rand::random_range(0..2000) >= difficulty_id {
+            return;
+        }
+        if players_close_for_spawning(world, ChunkPos::from_block_pos(pos)).is_empty() {
+            return;
+        }
+
+        // Vanilla walks down to the first block that is not a portal block.
+        let mut spawn_pos = pos;
+        while world.get_block_state(spawn_pos).get_block() == self.block {
+            spawn_pos = spawn_pos.below();
+        }
+
+        let spawn_state = world.get_block_state(spawn_pos);
+        if !is_valid_spawn_on_block(
+            world.as_ref(),
+            spawn_pos,
+            spawn_state,
+            &vanilla_entities::ZOMBIFIED_PIGLIN,
+        ) {
+            return;
+        }
+
+        let Ok(entity) = spawn_entity(
+            world,
+            EntitySpawnRequest {
+                entity_type: &vanilla_entities::ZOMBIFIED_PIGLIN,
+                placement: EntitySpawnPlacement::Block {
+                    pos: spawn_pos.above(),
+                    try_move_down: false,
+                    moved_up: false,
+                },
+                reason: EntitySpawnReason::Structure,
+                finalize_spawn: true,
+                play_ambient_sound: true,
+                item_stack: None,
+                user_is_operator: false,
+            },
+        ) else {
+            return;
+        };
+
+        entity.set_portal_cooldown(entity.dimension_changing_delay());
+        if let Some(vehicle) = entity.vehicle() {
+            vehicle.set_portal_cooldown(vehicle.dimension_changing_delay());
+        }
     }
 
     fn entity_inside(

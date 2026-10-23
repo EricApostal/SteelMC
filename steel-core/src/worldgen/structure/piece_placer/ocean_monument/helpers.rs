@@ -1,7 +1,9 @@
 use super::*;
 
-pub(super) fn generate_water_box(
-    placer: &mut ScatteredFeaturePlacer<'_, '_>,
+use crate::worldgen::template::TemplateLevelAccess;
+
+pub(super) fn generate_water_box<L: TemplateLevelAccess>(
+    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
     x0: i32,
     y0: i32,
     z0: i32,
@@ -34,8 +36,8 @@ pub(super) fn generate_water_box(
     clippy::too_many_arguments,
     reason = "matches vanilla OceanMonumentPiece.generateBoxOnFillOnly bounds"
 )]
-pub(super) fn generate_box_on_fill_only(
-    placer: &mut ScatteredFeaturePlacer<'_, '_>,
+pub(super) fn generate_box_on_fill_only<L: TemplateLevelAccess>(
+    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
     x0: i32,
     y0: i32,
     z0: i32,
@@ -60,8 +62,8 @@ pub(super) fn generate_box_on_fill_only(
     clippy::too_many_lines,
     reason = "direct port of vanilla OceanMonumentPiece.generateDefaultFloor"
 )]
-pub(super) fn generate_default_floor(
-    placer: &mut ScatteredFeaturePlacer<'_, '_>,
+pub(super) fn generate_default_floor<L: TemplateLevelAccess>(
+    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
     xoff: i32,
     zoff: i32,
     down_opening: bool,
@@ -170,7 +172,12 @@ pub(super) fn generate_default_floor(
     }
 }
 
-pub(super) fn spawn_elder(placer: &mut ScatteredFeaturePlacer<'_, '_>, x: i32, y: i32, z: i32) {
+pub(super) fn spawn_elder<L: TemplateLevelAccess>(
+    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    x: i32,
+    y: i32,
+    z: i32,
+) {
     let pos = placer.world_pos(x, y, z);
     if !placer.clip().contains_blockpos(pos) {
         return;

@@ -1,8 +1,8 @@
 //! `FlowerPotBlock` behavior (`net.minecraft.world.level.block.FlowerPotBlock`).
 //!
-//! TODO: Potted open/closed eyeblossoms do not transform at day/night yet.
-//! Vanilla reads `EnvironmentAttributes.EYEBLOSSOM_OPEN`, which Steel lacks
-//! (the same gap documented on `EyeblossomBlock`).
+//! Potted eyeblossoms swap between the open and closed pot at day/night
+//! boundaries through the same `minecraft:gameplay/eyeblossom_open` attribute the
+//! standalone eyeblossom reads.
 
 use crate::player::player_inventory::Prediction;
 use std::sync::{Arc, LazyLock};
@@ -10,6 +10,7 @@ use std::sync::{Arc, LazyLock};
 use rustc_hash::FxHashMap;
 use steel_macros::block_behavior;
 use steel_registry::blocks::BlockRef;
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::item::BlockHitResult;
 use steel_registry::vanilla_custom_stats;
@@ -22,6 +23,9 @@ use crate::behavior::{BlockBehavior, BlockPlaceContext, InteractionResult, Inven
 use crate::block_entity::SharedBlockEntity;
 use crate::entity::ai::path::PathComputationType;
 use crate::player::Player;
+use crate::behavior::blocks::vegetation::{
+    EyeblossomType, EYEBLOSSOM_OPEN_ATTRIBUTE, bool_attribute,
+};
 use crate::world::game_event::GameEventContext;
 use crate::world::{ScheduledTickAccess, World};
 
@@ -57,6 +61,18 @@ impl FlowerPotBlock {
     /// Returns the potted block holding `content`
     fn potted_block_for(content: BlockRef) -> Option<BlockRef> {
         POTTED_BY_CONTENT.lock().get(&content.key).copied()
+    }
+
+    /// Vanilla `FlowerPotBlock.opposite`: swaps an open potted eyeblossom for a
+    /// closed one (and back); any other state is returned unchanged.
+    fn opposite(state: BlockStateId) -> BlockStateId {
+        if state.get_block() == &vanilla_blocks::POTTED_OPEN_EYEBLOSSOM {
+            vanilla_blocks::POTTED_CLOSED_EYEBLOSSOM.default_state()
+        } else if state.get_block() == &vanilla_blocks::POTTED_CLOSED_EYEBLOSSOM {
+            vanilla_blocks::POTTED_OPEN_EYEBLOSSOM.default_state()
+        } else {
+            state
+        }
     }
 }
 
@@ -163,6 +179,26 @@ impl BlockBehavior for FlowerPotBlock {
         _computation_type: PathComputationType,
     ) -> bool {
         false
+    }
+
+    fn random_tick(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
+        if self.potted != &vanilla_blocks::OPEN_EYEBLOSSOM
+            && self.potted != &vanilla_blocks::CLOSED_EYEBLOSSOM
+        {
+            return;
+        }
+
+        let is_open = self.potted == &vanilla_blocks::OPEN_EYEBLOSSOM;
+        let should_be_open = bool_attribute(world, EYEBLOSSOM_OPEN_ATTRIBUTE, is_open);
+        if is_open == should_be_open {
+            return;
+        }
+
+        world.set_block(pos, Self::opposite(state), UpdateFlags::UPDATE_ALL);
+
+        let new_type = EyeblossomType::from_boolean(is_open).transform();
+        new_type.spawn_transform_particle(world, pos, &mut rand::rng());
+        world.play_block_sound(new_type.long_switch_sound(), pos, 1.0, 1.0, None);
     }
 }
 

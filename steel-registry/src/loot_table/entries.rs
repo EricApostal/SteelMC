@@ -314,6 +314,25 @@ impl LootPool {
 }
 
 impl LootEntry {
+    /// Expands this entry into the items it contributes, mirroring vanilla
+    /// `LootPoolEntryContainer.expand`.
+    ///
+    /// `minecraft:set_contents` / `minecraft:modify_contents` use this to build
+    /// container contents; dynamic and slot entries contribute nothing because
+    /// Steel's loot context does not model live block-entity inventories.
+    #[must_use]
+    pub fn expand_items<R: rand::Rng>(&self, ctx: &mut LootContext<'_, R>) -> Vec<ItemStack> {
+        let mut result = Vec::new();
+        if self
+            .conditions()
+            .iter()
+            .all(|condition| condition.test(ctx))
+        {
+            self.create_items(ctx, &mut result);
+        }
+        result
+    }
+
     /// Create items from this entry and add them to the result.
     fn create_items<R: rand::Rng>(
         &self,

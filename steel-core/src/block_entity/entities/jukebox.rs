@@ -314,6 +314,12 @@ impl BlockEntity for JukeboxBlockEntity {
         }
     }
 
+    fn get_update_tag(&self) -> Option<NbtCompound> {
+        // Vanilla's default `BlockEntity.getUpdateTag` returns `saveCustomOnly`, so the chunk
+        // sync carries `RecordItem` and `ticks_since_song_started`.
+        Some(self.save_custom_only())
+    }
+
     fn tick(&self, world: &Arc<World>) {
         let action = {
             let mut state = self.state.lock();

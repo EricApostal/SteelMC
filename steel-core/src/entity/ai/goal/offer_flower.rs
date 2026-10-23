@@ -12,7 +12,6 @@ use steel_utils::Downcast as _;
 
 use super::reduced_tick_delay;
 use super::selector::{Goal, GoalControls};
-use crate::entity::ai::control::{DEFAULT_LOOK_X_MAX_ROT_ANGLE, DEFAULT_LOOK_Y_MAX_ROT_SPEED};
 use crate::entity::ai::targeting::TargetingConditions;
 use crate::entity::entities::mobs::golem::IronGolemEntity;
 use crate::entity::{PathfinderMob, SharedEntity};
@@ -24,6 +23,9 @@ const OFFER_RANGE: f64 = 6.0;
 const OFFER_PROBABILITY: i32 = 8000;
 const OFFER_BOX_XZ: f64 = 6.0;
 const OFFER_BOX_Y: f64 = 2.0;
+/// Vanilla `OfferFlowerGoal.tick`: `setLookAt(entity, 30.0F, 30.0F)`.
+const OFFER_LOOK_Y_MAX_ROT_SPEED: f32 = 30.0;
+const OFFER_LOOK_X_MAX_ROT_ANGLE: f32 = 30.0;
 
 pub struct OfferFlowerGoal {
     entity: Option<SharedEntity>,
@@ -125,11 +127,12 @@ impl Goal for OfferFlowerGoal {
 
     fn tick(&mut self, mob: &dyn PathfinderMob, _entity: &SharedEntity) {
         if let Some(entity) = &self.entity {
+            // Vanilla `setLookAt(Entity, ...)` aims at `entity.getEyeY()`.
             let position = entity.position();
             mob.mob_base().controls().lock().look_control.set_look_at(
-                position,
-                DEFAULT_LOOK_Y_MAX_ROT_SPEED,
-                DEFAULT_LOOK_X_MAX_ROT_ANGLE,
+                glam::DVec3::new(position.x, entity.get_eye_y(), position.z),
+                OFFER_LOOK_Y_MAX_ROT_SPEED,
+                OFFER_LOOK_X_MAX_ROT_ANGLE,
             );
         }
 
@@ -144,8 +147,8 @@ fn nearest_gift_candidate(
     context: &TargetingConditions,
 ) -> Option<SharedEntity> {
     let search_box = OfferFlowerGoal::golem_bounding_box(mob);
-    let position = mob.position();
-    let origin = glam::DVec3::new(position.x, mob.get_eye_y(), position.z);
+    // Vanilla `ServerLevel.getNearestEntity(..., golem.getX(), golem.getY(), golem.getZ(), box)`.
+    let origin = mob.position();
 
     world.nearest_entity_in_aabb_matching(&search_box, origin, |entity| {
         let in_tag = steel_registry::REGISTRY.entity_types.is_in_tag(

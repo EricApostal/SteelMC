@@ -160,17 +160,23 @@ impl Action {
         advancements: &[AdvancementRef],
         show_advancement: bool,
     ) -> i32 {
-        let mut guard = player.advancements.lock();
-        if !show_advancement {
-            guard.flush_dirty(player, true);
-        }
-        let count = advancements
-            .iter()
-            .filter(|advancement| self.perform_single_inner(player, &mut guard, advancement))
-            .count() as i32;
-        if !show_advancement {
-            guard.flush_dirty(player, false);
-        }
+        let count = {
+            let mut guard = player.advancements.lock();
+            if !show_advancement {
+                guard.flush_dirty(player, true);
+            }
+            let count = advancements
+                .iter()
+                .filter(|advancement| self.perform_single_inner(player, &mut guard, advancement))
+                .count() as i32;
+            if !show_advancement {
+                guard.flush_dirty(player, false);
+            }
+            count
+        };
+        // Recipe rewards are queued under the advancement lock; apply them once it
+        // is released (`PlayerAdvancement::award` → `grant_reward`).
+        player.flush_pending_recipe_awards();
         count
     }
 
@@ -180,11 +186,15 @@ impl Action {
         advancement: &'static Advancement,
         criterion: &str,
     ) -> bool {
-        let mut guard = player.advancements.lock();
-        match self {
-            Self::Grant => guard.award(player, advancement, criterion),
-            Self::Revoke => guard.revoke(advancement, criterion),
-        }
+        let granted = {
+            let mut guard = player.advancements.lock();
+            match self {
+                Self::Grant => guard.award(player, advancement, criterion),
+                Self::Revoke => guard.revoke(advancement, criterion),
+            }
+        };
+        player.flush_pending_recipe_awards();
+        granted
     }
 }
 

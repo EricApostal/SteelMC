@@ -157,7 +157,7 @@ impl BlockBehavior for FireBlock {
         World::fire_state_with_age(world, pos, i32::from(age))
     }
 
-    /// Vanilla `FireBlock.getStateForPlacement`: connection properties from burnable neighbours.
+    /// Vanilla `FireBlock.getStateForPlacement`: connection properties from burnable neighbors.
     fn get_state_for_placement(&self, context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
         Some(World::fire_placement_state(
             context.world.as_ref(),

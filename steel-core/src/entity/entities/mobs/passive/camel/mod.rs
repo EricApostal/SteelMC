@@ -25,9 +25,6 @@
 //!   `onElasticLeashPull` (stand up) is implemented.
 //! - The `sitAnimationState`/`dashAnimationState` family, `setupAnimationStates`
 //!   and `updateWalkAnimation` are client render state.
-//! - GAP(horse-inventory): `Camel.openCustomInventoryScreen` needs the horse menu
-//!   owned by the Menus slice; [`CamelEntity::open_custom_inventory_screen`] logs
-//!   and returns, and the saddle persists as equipment.
 //! - GAP(camel-eat-grass): vanilla camels inherit `AbstractHorse.aiStep`'s
 //!   eating/standing counters; no camel surface reads them, so they are not ticked.
 
@@ -59,7 +56,7 @@ use crate::behavior::InteractionResult;
 use crate::entity::ai::brain::Brain;
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::mobs::passive::equine::{
-    AbstractHorseParts, load_abstract_horse, save_abstract_horse,
+    AbstractHorseParts, load_abstract_horse, open_mount_inventory, save_abstract_horse,
 };
 use crate::entity::{
     AgeableMob, AgeableMobBase, Animal, AnimalBase, Entity, EntityBase, EntityBaseLoad,
@@ -69,7 +66,7 @@ use crate::entity::{
 use crate::inventory::equipment::EquipmentSlot;
 use crate::physics::MoveResult;
 use crate::player::Player;
-use crate::world::World;
+use crate::world::{LevelReader, World};
 
 /// Vanilla `Camel.DASH_COOLDOWN_TICKS`.
 const DASH_COOLDOWN_TICKS: i32 = 55;
@@ -354,12 +351,11 @@ impl CamelEntity {
 
     /// Vanilla `Camel.openCustomInventoryScreen`.
     ///
-    /// `// GAP:` the horse inventory menu belongs to the Menus slice.
-    fn open_custom_inventory_screen(&self, _player: &Player) {
-        log::debug!(
-            "camel inventory screen for entity {} is not implemented yet",
-            self.id()
-        );
+    /// The camel is always tamed and vanilla does not gate on riding, so this
+    /// opens unconditionally (`getInventoryColumns` stays the `AbstractHorse`
+    /// default of 0: saddle only, no chest storage).
+    fn open_custom_inventory_screen(&self, player: &Player) {
+        open_mount_inventory(self, &self.parts, player, 0);
     }
 
     /// Vanilla `Camel.getBodyAnchorAnimationYOffset`: the rider seat height during
@@ -925,11 +921,32 @@ impl Animal for CamelEntity {
     fn play_eating_sound(&self) {
         self.make_sound(Some(&sound_events::ENTITY_CAMEL_EAT));
     }
+
+    /// Vanilla `Camel.checkCamelSpawnRules`.
+    fn check_animal_spawn_rules(
+        level: &dyn LevelReader,
+        _spawn_reason: EntitySpawnReason,
+        pos: BlockPos,
+    ) -> bool
+    where
+        Self: Sized,
+    {
+        level
+            .get_block_state(pos.below())
+            .get_block()
+            .has_tag(&BlockTag::CAMELS_SPAWNABLE_ON)
+            && Self::is_bright_enough_to_spawn(level, pos)
+    }
 }
 
 impl Mob for CamelEntity {
     fn mob_base(&self) -> &MobBase {
         &self.mob_base
+    }
+
+    /// Vanilla `AbstractHorse.getMaxSpawnClusterSize`.
+    fn max_spawn_cluster_size(&self) -> i32 {
+        6
     }
 
     fn mob_flags(&self) -> i8 {

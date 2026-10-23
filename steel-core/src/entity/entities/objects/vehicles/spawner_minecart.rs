@@ -211,6 +211,12 @@ impl Entity for SpawnerMinecartEntity {
             return;
         };
 
+        // Vanilla `BaseSpawner.serverTick` (used by `MinecartSpawner`): no
+        // attempts while the `spawner_blocks_work` game rule is disabled.
+        if !world.get_game_rule(&steel_registry::vanilla_game_rules::SPAWNER_BLOCKS_WORK) {
+            return;
+        }
+
         // Vanilla `BaseSpawner.serverTick` distance gate.
         if world
             .nearest_player(self.position(), f64::from(required_range), |_| true)

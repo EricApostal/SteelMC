@@ -707,8 +707,11 @@ impl Player {
     /// Awards stats and sends particles when an entity gets attacked by this player.
     pub fn damage_stats_and_hearts(&self, entity: &dyn Entity, old_entity_living_health: f32) {
         const PARTICLES_PER_HEALTH: f32 = 0.5;
+        const PARTICLE_HEIGHT_FACTOR: f64 = 0.5;
         const PARTICLE_SPREAD_XZ: f64 = 0.1;
         const PARTICLE_SPEED: f64 = 0.2;
+        // Vanilla only shows damage indicators for hits above this damage.
+        const MIN_DAMAGE_FOR_PARTICLES: f32 = 2.0;
 
         if let Some(entity) = entity.as_living_entity() {
             let actual_damage = old_entity_living_health - entity.get_health();
@@ -717,10 +720,15 @@ impl Player {
                 (actual_damage * 10.0).round() as i32,
             );
 
-            let count = (actual_damage * 0.5).round() as i32;
+            if actual_damage <= MIN_DAMAGE_FOR_PARTICLES {
+                return;
+            }
+
+            // Vanilla `(int)(actualDamage * 0.5F)` truncates instead of rounding.
+            let count = (actual_damage * PARTICLES_PER_HEALTH) as i32;
             let offset = DVec3::new(
                 0.0,
-                f64::from(entity.base().dimensions().height * PARTICLES_PER_HEALTH),
+                f64::from(entity.base().dimensions().height) * PARTICLE_HEIGHT_FACTOR,
                 0.0,
             );
             self.get_world().send_particles(

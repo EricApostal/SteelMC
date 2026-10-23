@@ -89,6 +89,14 @@ pub(crate) fn calculate_transition(
             PortalTicketTarget::Block(pos),
         )
     } else {
+        // Vanilla `NetherPortalBlock.getExitPortal`: spectators never generate a new portal.
+        if entity
+            .as_player()
+            .is_some_and(|player| player.is_spectator())
+        {
+            return None;
+        }
+
         let source_portal_axis = source_world
             .get_block_state(portal_entry_pos)
             .try_get_value(&BlockStateProperties::HORIZONTAL_AXIS)

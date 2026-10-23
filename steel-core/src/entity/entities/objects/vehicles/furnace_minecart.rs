@@ -38,9 +38,7 @@ use crate::entity::{Entity, EntityBase, EntityBaseLoad, EntitySyncedData};
 use crate::player::Player;
 use crate::world::{LevelReader as _, World};
 
-use super::minecart_base::{
-    self, MAX_SPEED_IN_WATER, MAX_SPEED_ON_LAND, Minecart, MinecartState, base_natural_slowdown,
-};
+use super::minecart_base::{self, Minecart, MinecartState, base_natural_slowdown};
 
 /// Vanilla `MinecartFurnace.FUEL_TICKS_PER_ITEM`.
 const FUEL_TICKS_PER_ITEM: i32 = 3600;
@@ -209,11 +207,12 @@ impl Minecart for FurnaceMinecartEntity {
         Some(&vanilla_items::FURNACE_MINECART)
     }
 
-    fn max_speed(&self, _world: &World) -> f64 {
+    fn max_speed(&self, world: &World) -> f64 {
+        // Vanilla `MinecartFurnace.getMaxSpeed` scales `super.getMaxSpeed`.
         if self.is_in_water() {
-            MAX_SPEED_IN_WATER * WATER_MAX_SPEED_MULTIPLIER
+            minecart_base::default_max_speed(self, world) * WATER_MAX_SPEED_MULTIPLIER
         } else {
-            MAX_SPEED_ON_LAND * LAND_MAX_SPEED_MULTIPLIER
+            minecart_base::default_max_speed(self, world) * LAND_MAX_SPEED_MULTIPLIER
         }
     }
 

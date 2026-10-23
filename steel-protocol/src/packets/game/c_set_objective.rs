@@ -135,7 +135,7 @@ impl WriteTo for NumberFormat {
     }
 }
 
-/// Vanilla `TextColor#serialize`: the colour name, or `#RRGGBB` for custom colours.
+/// Vanilla `TextColor#serialize`: the color name, or `#RRGGBB` for custom colors.
 fn serialize_color(color: &Color) -> String {
     match color {
         Color::Aqua => "aqua".to_owned(),

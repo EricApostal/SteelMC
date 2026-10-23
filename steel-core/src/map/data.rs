@@ -1,6 +1,6 @@
 //! Map item saved data.
 //!
-//! Mirrors vanilla `MapItemSavedData`: the map's dimension, centre, scale, color
+//! Mirrors vanilla `MapItemSavedData`: the map's dimension, center, scale, color
 //! buffer, banner and frame markers, live player markers, and the per-viewer
 //! dirty tracking that drives `ClientboundMapItemDataPacket` updates.
 
@@ -184,7 +184,7 @@ pub struct MapItemSavedData {
 }
 
 impl MapItemSavedData {
-    /// Vanilla `MapItemSavedData.createFresh`: centres a new map on the nearest
+    /// Vanilla `MapItemSavedData.createFresh`: centers a new map on the nearest
     /// scale-aligned area containing `(origin_x, origin_z)`.
     #[must_use]
     pub fn create_fresh(
@@ -299,6 +299,14 @@ impl MapItemSavedData {
         self.carried_by_players.contains_key(&player)
     }
 
+    /// Vanilla `MapItemSavedData.getHoldingPlayer(player).step++`: advances the
+    /// viewer's rasterizer dither phase and returns the new step.
+    pub fn next_viewer_step(&mut self, player: Uuid) -> u32 {
+        let holding = self.carried_by_players.entry(player).or_default();
+        holding.step = holding.step.wrapping_add(1);
+        holding.step
+    }
+
     /// Vanilla `MapItemSavedData.getUpdatePacket`.
     #[must_use]
     pub fn update_packet(&mut self, map_id: i32, player: Uuid) -> Option<CMapItemData> {
@@ -346,13 +354,18 @@ impl MapItemSavedData {
     }
 
     /// Vanilla `MapItemSavedData.updateColor`: writes a color and marks it dirty.
-    pub fn update_color(&mut self, x: u8, y: u8, color: u8) {
-        if self.colors[usize::from(y) * MAP_SIZE + usize::from(x)] != color {
-            self.set_color(x, y, color);
-            for holding in self.carried_by_players.values_mut() {
-                holding.set_colors_dirty(x, y);
-            }
+    ///
+    /// Returns whether the pixel changed; the rasterizer keeps sampling a column
+    /// while it still sees changes.
+    pub fn update_color(&mut self, x: u8, y: u8, color: u8) -> bool {
+        if self.colors[usize::from(y) * MAP_SIZE + usize::from(x)] == color {
+            return false;
         }
+        self.set_color(x, y, color);
+        for holding in self.carried_by_players.values_mut() {
+            holding.set_colors_dirty(x, y);
+        }
+        true
     }
 
     /// Vanilla `MapItemSavedData.checkBanners` call site: refreshes banner

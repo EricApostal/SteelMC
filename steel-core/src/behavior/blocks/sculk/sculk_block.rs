@@ -6,6 +6,12 @@
 //! Steel currently only has in its worldgen form
 //! (`crate::worldgen::feature::features::sculk_patch`, private and `WorldGenRegion`-based), so the
 //! spread half stays a documented dependency while the experience drop is implemented.
+//!
+//! Deviation: vanilla `SculkBlock.attemptUseCharge` (charge decay, `growth_spawn_cost`,
+//! `no_growth_radius`, `additional_decay_rate`, `canPlaceGrowth` with `SCULK_GROWTH_INHIBITORS`)
+//! runs on a live `SculkSpreader`; Steel's only spreader is the private, `WorldGenRegion`-based
+//! `worldgen::feature::features::sculk_patch`, which exposes no level-bound `ChargeCursor`
+//! API (owner: worldgen lane).
 
 use std::sync::Arc;
 
@@ -40,13 +46,9 @@ impl BlockBehavior for SculkBlock {
         Some(self.block.default_state())
     }
 
-    // TODO(Worldgen): Vanilla `SculkBlock.attemptUseCharge` (charge decay, `growth_spawn_cost`,
+    // Vanilla `SculkBlock.attemptUseCharge` (charge decay, `growth_spawn_cost`,
     // `no_growth_radius`, `additional_decay_rate`, `canPlaceGrowth` with `SCULK_GROWTH_INHIBITORS`)
-    // operates on a live `SculkSpreader` created by `SculkSpreader.createLevelSpreader()`. Steel's
-    // only spreader lives in `worldgen/feature/features/sculk_patch.rs` and is private, takes a
-    // `WorldGenRegion`, and exposes no `ChargeCursor`/`add_cursors` API for a level-bound spreader.
-    // This behavior therefore cannot spread sculk patches yet; `SculkCatalystBlockEntity` records
-    // its accumulated charge so the wiring can land once that API exists.
+    // operates on a live `SculkSpreader`; see the module note above.
 
     fn spawn_after_break(
         &self,

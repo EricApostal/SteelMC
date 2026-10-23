@@ -224,8 +224,7 @@ fn generate_equipment(equipment: &EquipmentJson) -> TokenStream {
     let chances = equipment
         .slot_drop_chances
         .as_ref()
-        .map(generate_slot_drop_chances)
-        .unwrap_or_default();
+        .map_or_else(Vec::new, generate_slot_drop_chances);
     quote! {
         EquipmentTable {
             loot_table: #loot_table,
@@ -240,24 +239,26 @@ fn generate_spawn_data(data: &SpawnDataJson) -> TokenStream {
         .entity
         .get("id")
         .and_then(serde_json::Value::as_str)
-        .map(|id| id.parse::<Identifier>().unwrap())
-        .unwrap_or_else(|| panic!("Spawn data entity is missing an `id` key: {entity_nbt}"));
+        .map_or_else(
+            || panic!("Spawn data entity is missing an `id` key: {entity_nbt}"),
+            |id| id.parse::<Identifier>().unwrap(),
+        );
     let entity_type = generate_identifier(&entity_type);
 
-    let custom_spawn_rules = match &data.custom_spawn_rules {
-        Some(rules) => {
+    let custom_spawn_rules = data.custom_spawn_rules.as_ref().map_or_else(
+        || quote! { None },
+        |rules| {
             let rules = generate_custom_spawn_rules(rules);
             quote! { Some(#rules) }
-        }
-        None => quote! { None },
-    };
-    let equipment = match &data.equipment {
-        Some(equipment) => {
+        },
+    );
+    let equipment = data.equipment.as_ref().map_or_else(
+        || quote! { None },
+        |equipment| {
             let equipment = generate_equipment(equipment);
             quote! { Some(#equipment) }
-        }
-        None => quote! { None },
-    };
+        },
+    );
 
     quote! {
         SpawnData {
@@ -337,13 +338,13 @@ pub(crate) fn build() -> TokenStream {
                 }
             }
         });
-        let items_to_drop_when_ominous = match &config.items_to_drop_when_ominous {
-            Some(identifier) => {
+        let items_to_drop_when_ominous = config.items_to_drop_when_ominous.as_ref().map_or_else(
+            || quote! { None },
+            |identifier| {
                 let identifier = generate_identifier(identifier);
                 quote! { Some(#identifier) }
-            }
-            None => quote! { None },
-        };
+            },
+        );
 
         stream.extend(quote! {
             pub static #ident: LazyLock<TrialSpawnerConfig> = LazyLock::new(|| TrialSpawnerConfig {

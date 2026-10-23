@@ -19,7 +19,8 @@ use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::{AbstractHorseEntityData, SkeletonHorseEntityData};
 use steel_registry::{sound_events, vanilla_entities};
-use steel_utils::locks::SyncMutex;
+use steel_utils::locks::{Shared, SyncMutex};
+use steel_utils::random::RandomSource;
 use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, BlockStateId, Downcast as _, DowncastType, DowncastTypeKey};
 
@@ -37,6 +38,7 @@ use crate::entity::ai::goal::{
     WaterAvoidingRandomStrollGoal,
 };
 use crate::entity::damage::DamageSource;
+use crate::entity::entities::PigEntity;
 use crate::entity::npc::inventory_carrier::InventoryCarrier;
 use crate::entity::{
     AgeableMob, AgeableMobBase, Animal, AnimalBase, ENTITIES, Entity, EntityBase, EntityBaseLoad,
@@ -299,13 +301,15 @@ impl SkeletonHorseEntity {
 
     /// Vanilla `AbstractHorse.inventory`.
     #[must_use]
-    pub fn carried_items(&self) -> &SyncMutex<InventoryCarrier> {
+    pub fn carried_items(&self) -> &Shared<InventoryCarrier> {
         self.parts.inventory()
     }
 
-    /// GAP: `HorseMenu` opening belongs to the Menus slice (see module docs).
+    /// Vanilla `AbstractHorse.openCustomInventoryScreen`.
     pub fn open_custom_inventory_screen(&self, player: &Player) {
-        open_custom_inventory_screen(self, player);
+        self.with_horse_data(|data| {
+            open_custom_inventory_screen(self, &self.parts, data, player, 0)
+        });
     }
 
     /// Vanilla `SkeletonHorse.mobInteract`: untamed skeleton horses ignore
@@ -323,8 +327,30 @@ impl SkeletonHorseEntity {
         }
 
         self.with_horse_data(|data| {
-            abstract_horse_mob_interact(self, &self.parts, data, player, hand)
+            abstract_horse_mob_interact(self, &self.parts, data, player, hand, 0)
         })
+    }
+
+    /// Vanilla `SkeletonHorse.checkSkeletonHorseSpawnRules`, the `SpawnPlacements`
+    /// predicate for `EntityType.SKELETON_HORSE`.
+    ///
+    /// Non-spawner reasons fall back to the shared
+    /// `Animal.checkAnimalSpawnRules`; spawner reasons skip the surface check
+    /// and only require ignored light or sufficient brightness.
+    #[must_use]
+    pub fn check_skeleton_horse_spawn_rules(
+        _entity_type: EntityTypeRef,
+        level: &World,
+        spawn_reason: EntitySpawnReason,
+        pos: BlockPos,
+        _random: &mut RandomSource,
+    ) -> bool {
+        if spawn_reason.is_spawner() {
+            spawn_reason.ignores_light_requirements()
+                || <Self as Animal>::is_bright_enough_to_spawn(level, pos)
+        } else {
+            <PigEntity as Animal>::check_animal_spawn_rules(level, spawn_reason, pos)
+        }
     }
 }
 
@@ -533,6 +559,11 @@ impl LivingEntity for SkeletonHorseEntity {
     /// Vanilla `AbstractHorse.dropEquipment`: carried inventory stacks drop too.
     fn drop_custom_death_loot(&self, _source: &DamageSource, _killed_by_player: bool) {
         super::drop_carried_items(self, &self.parts);
+    }
+
+    /// Vanilla `AbstractHorse.getMaxSpawnClusterSize`.
+    fn max_spawn_cluster_size(&self) -> i32 {
+        6
     }
 
     fn is_immobile(&self) -> bool {

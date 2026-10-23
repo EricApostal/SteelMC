@@ -11,8 +11,8 @@ use steel_utils::{BlockPos, BlockStateId, BoundingBox, Direction, types::UpdateF
 
 use super::StructurePiecePlacer;
 use crate::chunk::heightmap::HeightmapType;
-use crate::worldgen::region::WorldGenRegion;
-use crate::worldgen::template::StructureTemplate;
+use crate::world::{LevelAccessor as _, LevelReader as _};
+use crate::worldgen::template::{StructureTemplate, TemplateLevelAccess};
 use steel_worldgen::structure::desert_pyramid::DesertPyramidPieceData;
 use steel_worldgen::structure::{
     ProceduralPieceData, StructurePiece, StructurePiecePayload, StructureStart,
@@ -28,8 +28,8 @@ const HORIZONTAL_PLANE: [Direction; 4] = [
 ];
 
 impl StructurePiecePlacer {
-    pub(super) fn place_desert_pyramid_piece(
-        region: &mut WorldGenRegion<'_>,
+    pub(super) fn place_desert_pyramid_piece<L: TemplateLevelAccess>(
+        region: &mut L,
         registry: &Registry,
         bounding_box: &mut BoundingBox,
         orientation: Option<Direction>,
@@ -54,8 +54,8 @@ impl StructurePiecePlacer {
         true
     }
 
-    pub(super) fn after_place_desert_pyramid(
-        region: &mut WorldGenRegion<'_>,
+    pub(super) fn after_place_desert_pyramid<L: TemplateLevelAccess>(
+        region: &mut L,
         pieces: &mut [StructurePiece],
         clip: BoundingBox,
     ) {
@@ -107,8 +107,8 @@ impl StructurePiecePlacer {
         }
     }
 
-    fn place_desert_pyramid_suspicious_sand(
-        region: &mut WorldGenRegion<'_>,
+    fn place_desert_pyramid_suspicious_sand<L: TemplateLevelAccess>(
+        region: &mut L,
         clip: BoundingBox,
         pos: BlockPos,
     ) {
@@ -139,8 +139,8 @@ impl StructurePiecePlacer {
     }
 }
 
-struct DesertPyramidPlacer<'a, 'world> {
-    region: &'a mut WorldGenRegion<'world>,
+struct DesertPyramidPlacer<'a, L: TemplateLevelAccess> {
+    region: &'a mut L,
     registry: &'a Registry,
     bounding_box: &'a mut BoundingBox,
     orientation: Option<Direction>,
@@ -148,7 +148,7 @@ struct DesertPyramidPlacer<'a, 'world> {
     data: &'a mut DesertPyramidPieceData,
 }
 
-impl DesertPyramidPlacer<'_, '_> {
+impl<L: TemplateLevelAccess> DesertPyramidPlacer<'_, L> {
     fn update_height_position_to_lowest_ground_height(&mut self, offset: i32) -> bool {
         if self.data.height_position.is_some() {
             return true;
@@ -605,7 +605,7 @@ impl DesertPyramidPlacer<'_, '_> {
             return;
         }
 
-        while Self::is_replaceable_by_structures(self.region.block_state(pos))
+        while Self::is_replaceable_by_structures(self.region.get_block_state(pos))
             && pos.y() > self.region.min_y() + 1
         {
             let _ = self
@@ -633,7 +633,7 @@ impl DesertPyramidPlacer<'_, '_> {
     fn get_block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
         let pos = self.world_pos(x, y, z);
         if self.clip.contains_blockpos(pos) {
-            self.region.block_state(pos)
+            self.region.get_block_state(pos)
         } else {
             vanilla_blocks::AIR.default_state()
         }

@@ -1,10 +1,11 @@
 //! Vanilla `DifficultyInstance` and `ServerLevel.getCurrentDifficultyAt`.
 
-use rustc_hash::FxHashMap;
 use steel_registry::vanilla_timelines;
 use steel_utils::types::Difficulty;
-use steel_utils::{BlockPos, ChunkPos, locks::SyncRwLock};
+use steel_utils::{BlockPos, ChunkPos};
 
+use crate::chunk::Chunk;
+use crate::chunk::status::ChunkStatus;
 use crate::world::World;
 
 /// Vanilla `DimensionType.MOON_BRIGHTNESS_PER_PHASE`, indexed by moon phase.
@@ -112,7 +113,7 @@ fn calculate_difficulty(
 }
 
 /// Vanilla `MoonPhase` index for a clock time, read from the data-driven
-/// `minecraft:moon` timeline so a datapack change is honoured.
+/// `minecraft:moon` timeline so a datapack change is honored.
 #[must_use]
 pub fn moon_phase_index(total_ticks: i64) -> usize {
     const PHASE_NAMES: [&str; 8] = [
@@ -157,42 +158,6 @@ pub fn moon_brightness(total_ticks: i64) -> f32 {
     MOON_BRIGHTNESS_PER_PHASE[moon_phase_index(total_ticks)]
 }
 
-/// Per-chunk inhabited time, incremented once per spawning chunk per tick.
-///
-/// Vanilla stores this on the chunk and persists it with the chunk payload;
-/// Steel's chunk format has no inhabited-time field yet, so this table keeps the
-/// value for the lifetime of the world and a restart resets it to zero.
-pub struct ChunkInhabitedTimes {
-    times: SyncRwLock<FxHashMap<ChunkPos, i64>>,
-}
-
-impl Default for ChunkInhabitedTimes {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ChunkInhabitedTimes {
-    /// Creates an empty table.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            times: SyncRwLock::new(FxHashMap::default()),
-        }
-    }
-
-    /// Vanilla `ChunkAccess.incrementInhabitedTime`.
-    pub fn increment(&self, pos: ChunkPos) {
-        *self.times.write().entry(pos).or_insert(0) += 1;
-    }
-
-    /// Vanilla `ChunkAccess.getInhabitedTime`.
-    #[must_use]
-    pub fn get(&self, pos: ChunkPos) -> i64 {
-        self.times.read().get(&pos).copied().unwrap_or(0)
-    }
-}
-
 impl World {
     /// Vanilla `ServerLevel.getCurrentDifficultyAt`.
     #[must_use]
@@ -215,13 +180,14 @@ impl World {
     }
 
     /// Vanilla `ChunkAccess.getInhabitedTime`.
+    ///
+    /// Inhabited time lives on the chunk (vanilla `LevelChunk.inhabitedTime`),
+    /// so an unloaded chunk reports zero, exactly as vanilla's `getChunk` miss
+    /// path does.
     #[must_use]
     pub fn chunk_inhabited_time(&self, pos: ChunkPos) -> i64 {
-        self.inhabited_times.get(pos)
-    }
-
-    /// Vanilla `LevelChunk.incrementInhabitedTime`.
-    pub fn increment_chunk_inhabited_time(&self, pos: ChunkPos) {
-        self.inhabited_times.increment(pos);
+        self.chunk_map
+            .with_chunk_at_status(pos, ChunkStatus::StructureStarts, Chunk::inhabited_time)
+            .unwrap_or(0)
     }
 }

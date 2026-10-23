@@ -1,6 +1,7 @@
 //! Furnace-specific input, fuel, and result slots.
 
 use steel_registry::item_stack::ItemStack;
+use steel_registry::stat::vanilla_stat_types;
 use steel_registry::vanilla_items;
 use steel_utils::{DowncastType, DowncastTypeKey};
 
@@ -129,10 +130,19 @@ impl Slot for FurnaceResultSlot {
     fn on_take(
         &self,
         guard: &mut ContainerLockGuard,
-        _stack: &ItemStack,
+        stack: &ItemStack,
         player: &Player,
     ) -> Option<ItemStack> {
-        // TODO: Award crafted stats/recipes and trigger RECIPE_CRAFTED once supported.
+        // Vanilla `FurnaceResultSlot.checkTakeAchievements`: `carried.onCraftedBy(player,
+        // removeCount)` awards the `crafted` stat for the item and amount taken. The item's own
+        // `onCraftedBy` callback and `RECIPE_CRAFTED` triggers remain a separate gap.
+        if !stack.is_empty() {
+            player.award_stat_with_count(
+                &vanilla_stat_types::ITEM_CRAFTED,
+                stack.item(),
+                stack.count(),
+            );
+        }
         let (container, _) = self.storage().physical_backing()?;
         let container_id = container.container_id();
         let recipes = guard

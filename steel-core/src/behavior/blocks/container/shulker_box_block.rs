@@ -1,3 +1,21 @@
+//! Shulker box block behavior.
+//!
+//! Mirrors vanilla `ShulkerBoxBlock`: the lid opens towards `FACING`, the
+//! collision/support shapes follow the animation, the box drops itself with its
+//! `container` component, and a comparator reads the contents.
+//!
+//! Deviations:
+//! - Vanilla `useWithoutItem` calls
+//!   `PiglinAi.angerNearbyPiglins(level, player, true)`; Steel has no such helper
+//!   (owner: `entity/ai/behavior/piglin/ai.rs`).
+//! - Vanilla `playerWillDestroy` calls `ShulkerBoxBlockEntity.unpackLootTable`;
+//!   Steel's `ShulkerBoxBlockEntity` is not a `RandomizableContainerBlockEntity`
+//!   and has no loot-table API (owner: `block_entity/entities/shulker_box.rs`).
+//! - Vanilla `ShulkerBoxBlockEntity.startOpen`/`stopOpen` raise block event 1 to
+//!   start the lid animation; Steel's `ShulkerBoxBlockEntity` implements no
+//!   `ContainerViewers`, so nothing ever raises that event for a menu
+//!   (owner: `block_entity/entities/shulker_box.rs`).
+
 use std::sync::{Arc, Weak};
 
 use steel_macros::block_behavior;
@@ -111,7 +129,6 @@ impl BlockBehavior for ShulkerBoxBlock {
             );
 
             player.award_custom_stat(&vanilla_custom_stats::OPEN_SHULKER_BOX);
-            // TODO: Anger nearby piglins (PiglinAi.angerNearbyPiglins)
         }
         InteractionResult::Success
     }
@@ -135,9 +152,10 @@ impl BlockBehavior for ShulkerBoxBlock {
         if player.prevents_block_drops() && !shulker_box_block_entity.is_empty() {
             let item = shulker_box_block_entity.shulker_box_as_item(state);
             world.pop_resource(pos, item);
-        } else {
-            // TODO: maybe? shulkerBoxBlockEntity.unpackLootTable(player);
         }
+        // Vanilla's `else` branch calls
+        // `shulkerBoxBlockEntity.unpackLootTable(player)`; Steel's block entity
+        // stores no loot table (see the module docs).
 
         state
     }

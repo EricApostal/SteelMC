@@ -17,6 +17,9 @@ use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::GhastEntityData;
 use steel_registry::{sound_events, vanilla_attributes, vanilla_entities};
 use steel_utils::locks::SyncMutex;
+use steel_utils::random::Random as _;
+use steel_utils::random::RandomSource;
+use steel_utils::types::Difficulty;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
 use crate::entity::ai::goal::{Goal, GoalControls, NearestAttackableTargetGoal};
@@ -231,6 +234,21 @@ impl GhastEntity {
             .get_value(vanilla_attributes::FLYING_SPEED)
             .unwrap_or(0.0);
         self.set_velocity(self.velocity() + direction * (flying_speed * FLYING_SPEED_SCALE));
+    }
+
+    /// Vanilla `Ghast.checkGhastSpawnRules`, the `SpawnPlacements` predicate for
+    /// `EntityType.GHAST`.
+    #[must_use]
+    pub fn check_ghast_spawn_rules(
+        entity_type: EntityTypeRef,
+        level: &World,
+        spawn_reason: EntitySpawnReason,
+        pos: BlockPos,
+        random: &mut RandomSource,
+    ) -> bool {
+        level.difficulty() != Difficulty::Peaceful
+            && random.next_i32_bounded(20) == 0
+            && <Self as Mob>::check_mob_spawn_rules(entity_type, level, spawn_reason, pos)
     }
 }
 
@@ -592,6 +610,11 @@ impl LivingEntity for GhastEntity {
 impl Mob for GhastEntity {
     fn mob_base(&self) -> &MobBase {
         &self.mob_base
+    }
+
+    /// Vanilla `Ghast.getMaxSpawnClusterSize`.
+    fn max_spawn_cluster_size(&self) -> i32 {
+        1
     }
 
     fn tick_goal_selectors(&self, entity: &SharedEntity) {

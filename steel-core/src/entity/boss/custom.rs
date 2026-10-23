@@ -20,9 +20,23 @@ use uuid::Uuid;
 use super::event::ServerBossEvent;
 use crate::entity::Entity as _;
 use crate::player::Player;
+use crate::server::Server;
 
 /// Vanilla `SavedData` name for the custom boss-bar manager.
 pub const CUSTOM_BOSS_EVENTS_NAME: &str = "custom_boss_events";
+
+/// Per-tick flush of the server's custom boss bars.
+///
+/// Vanilla `ServerBossEvent` sends `ClientboundBossEventPacket`s while the `/bossbar` command
+/// mutates a bar; Steel queues them and the game tick hands them over here, after commands ran, so
+/// every `/bossbar add`/`set`/`remove` reaches the clients on the tick it was issued.
+///
+/// Vanilla equivalent: `MinecraftServer` driving `ServerBossEvent`'s own sends, plus
+/// `CustomBossEvents.onPlayerConnect`/`onPlayerDisconnect`.
+pub fn tick_custom_boss_events(server: &Server) {
+    let online_players = server.get_players();
+    server.custom_boss_events.lock().tick(&online_players);
+}
 
 /// Vanilla `CustomBossEvent.DEFAULT_MAX`.
 pub const DEFAULT_MAX: i32 = 100;
@@ -266,9 +280,39 @@ impl CustomBossEvent {
         &mut self.event
     }
 
+    /// Vanilla `CustomBossEvent.onPlayerConnect` + `onPlayerDisconnect`, evaluated once per tick.
+    ///
+    /// Vanilla drives the pair from the connection lifecycle. Steel deliberately folds them into
+    /// the per-tick flush so no join/disconnect hook has to reach into the saved-data manager; the
+    /// persisted viewer set still only grows and shrinks through `/bossbar`.
+    pub fn sync_live_players(&mut self, online_players: &[Arc<Player>]) {
+        let offline: Vec<Uuid> = self
+            .event
+            .player_uuids()
+            .copied()
+            .filter(|uuid| !online_players.iter().any(|player| player.uuid() == *uuid))
+            .collect();
+        for uuid in offline {
+            // Vanilla `onPlayerDisconnect` removes only the live handle, keeping the
+            // persisted viewer entry that re-shows the bar on the next connect.
+            self.event.remove_player(&uuid);
+        }
+
+        for player in online_players {
+            if self.players.contains(&player.uuid()) {
+                self.add_player(Arc::clone(player));
+            }
+        }
+    }
+
     /// Drains queued wire packets for this bar.
     pub fn drain_packets(&mut self) -> Vec<CBossEvent> {
         self.event.drain_packets()
+    }
+
+    /// Delivers queued wire operations to this bar's viewers.
+    pub fn broadcast_pending(&mut self) {
+        self.event.broadcast_pending();
     }
 
     /// Vanilla `CustomBossEvent.setValue`/`setMax` progress derivation:
@@ -503,25 +547,15 @@ impl CustomBossEvents {
         }
     }
 
-    /// Vanilla `CustomBossEvents.onPlayerConnect`: shows every bar the player
-    /// is persisted as a viewer of.
-    pub fn on_player_connect(&mut self, player: &Arc<Player>) {
-        let uuid = player.uuid();
+    /// Vanilla per-tick custom-bar flush: reconciles every bar's live viewers with the online set
+    /// and then delivers the queued `ClientboundBossEventPacket`s.
+    pub fn tick(&mut self, online_players: &[Arc<Player>]) {
         for event in self.events.values_mut() {
-            if event.player_uuids().contains(&uuid) {
-                event.add_player(Arc::clone(player));
-            }
+            event.sync_live_players(online_players);
         }
-        self.dirty = true;
-    }
-
-    /// Vanilla `CustomBossEvent.onPlayerDisconnect`: drops the live viewer but
-    /// keeps the persisted membership.
-    pub fn on_player_disconnect(&mut self, uuid: &Uuid) {
         for event in self.events.values_mut() {
-            event.event_mut().remove_player(uuid);
+            event.broadcast_pending();
         }
-        self.dirty = true;
     }
 
     /// Drains pending wire packets from every bar in id order.
@@ -531,6 +565,15 @@ impl CustomBossEvents {
             packets.extend(event.drain_packets());
         }
         packets
+    }
+
+    /// Vanilla per-tick custom-bar flush: `CustomBossEvent.setDirty` requests persistence, while
+    /// the actual `ClientboundBossEventPacket` traffic is delivered here, once per tick, to the
+    /// players each bar currently tracks.
+    pub fn broadcast_pending(&mut self) {
+        for event in self.events.values_mut() {
+            event.broadcast_pending();
+        }
     }
 
     /// Vanilla `CustomBossEvents` save form.

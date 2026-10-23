@@ -177,6 +177,13 @@ impl SteelServer {
                 }
             }
         }
-        let _ = server_handle.await;
+        match server_handle.await {
+            Ok(()) => {}
+            Err(error) => {
+                // Vanilla's server thread dying takes the process down; Steel
+                // keeps going so the caller can still save and exit cleanly.
+                log::error!("Server task ended unexpectedly: {error}");
+            }
+        }
     }
 }

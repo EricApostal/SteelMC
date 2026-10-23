@@ -162,20 +162,46 @@ impl ValidatePersistentComponent for ChargedProjectiles {
 }
 
 /// The ordered item templates stored in a bundle.
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct BundleContents {
     items: Vec<ItemStackTemplate>,
+    /// Index of the item the client shows as selected, or `-1` for none.
+    ///
+    /// Vanilla keeps `BundleContents.selectedItem` out of the codec: it is runtime-only state that
+    /// survives on the live `ItemStack` instance. Steel mirrors that by excluding it from every
+    /// serializer below.
+    selected_item: i32,
+}
+
+impl Default for BundleContents {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl PartialEq for BundleContents {
+    /// Compares the stored items only: the selected index is runtime-only state that every
+    /// serializer excludes, so two bundles with equal contents are the same component value.
+    fn eq(&self, other: &Self) -> bool {
+        self.items == other.items
+    }
 }
 
 impl BundleContents {
     #[must_use]
     pub const fn empty() -> Self {
-        Self { items: Vec::new() }
+        Self {
+            items: Vec::new(),
+            selected_item: -1,
+        }
     }
 
     #[must_use]
     pub const fn new(items: Vec<ItemStackTemplate>) -> Self {
-        Self { items }
+        Self {
+            items,
+            selected_item: -1,
+        }
     }
 
     #[must_use]
@@ -183,9 +209,48 @@ impl BundleContents {
         &self.items
     }
 
+    /// Vanilla `BundleContents.getSelectedItemIndex`.
+    #[must_use]
+    pub const fn selected_item_index(&self) -> i32 {
+        self.selected_item
+    }
+
+    /// Vanilla `BundleContents.Mutable.toggleSelectedItem`: selecting the already selected index,
+    /// or an index outside the stored items, clears the selection.
+    #[must_use]
+    pub fn with_toggled_selected_item(&self, selected_item: i32) -> Self {
+        let out_of_bounds = selected_item < 0 || selected_item as usize >= self.items.len();
+        let next = if self.selected_item != selected_item && !out_of_bounds {
+            selected_item
+        } else {
+            -1
+        };
+        Self {
+            items: self.items.clone(),
+            selected_item: next,
+        }
+    }
+
     /// Validates the checked rational weight used by Vanilla's strict item-stack validation.
     pub(crate) fn validate_weight(&self) -> Result<()> {
         self.compute_weight().map(|_| ())
+    }
+
+    /// Vanilla `BundleContents.Mutable.tryInsert` over a fresh bundle: each
+    /// stack contributes as much of itself as still fits in the bundle's weight
+    /// budget, merging into an equal stack when possible.
+    #[must_use]
+    pub fn with_contents(&self, contents: impl IntoIterator<Item = ItemStack>) -> Self {
+        let mut builder = BundleBuilder {
+            items: Vec::new(),
+            weight: CheckedFraction::ZERO,
+        };
+        for stack in contents {
+            builder.try_insert(stack);
+        }
+        Self {
+            items: builder.items,
+        }
     }
 
     fn compute_weight(&self) -> Result<CheckedFraction> {
@@ -195,6 +260,78 @@ impl BundleContents {
             weight = weight.add(item_weight)?;
         }
         Ok(weight)
+    }
+}
+
+/// Vanilla `BundleContents.Mutable` reduced to what `copyWithContents` needs.
+struct BundleBuilder {
+    items: Vec<ItemStackTemplate>,
+    weight: CheckedFraction,
+}
+
+impl BundleBuilder {
+    /// Vanilla `BundleContents.Mutable.tryInsert`; returns the inserted count.
+    fn try_insert(&mut self, mut stack: ItemStack) -> i32 {
+        if stack.is_empty() {
+            return 0;
+        }
+        let Ok(template) = ItemStackTemplate::from_stack(&stack) else {
+            return 0;
+        };
+        let Ok(item_weight) = bundle_item_weight(&template) else {
+            return 0;
+        };
+        let Ok(remaining) = CheckedFraction::ONE.sub(self.weight) else {
+            return 0;
+        };
+        let Ok(max_amount) = remaining.div_int_value(item_weight) else {
+            return 0;
+        };
+        let amount = stack.count().min(max_amount.max(0));
+        if amount == 0 {
+            return 0;
+        }
+        let Ok(stacked) = item_weight.multiply(amount) else {
+            return 0;
+        };
+        let Ok(weight) = self.weight.add(stacked) else {
+            return 0;
+        };
+        self.weight = weight;
+
+        if let Some(index) = self.find_stack_index(&stack) {
+            let existing = self.items.remove(index);
+            let merged = existing.count() + amount;
+            match ItemStackTemplate::try_with_count_and_patch(
+                existing.item(),
+                merged.min(ItemStackTemplate::MAX_COUNT),
+                existing.components().clone(),
+            ) {
+                Ok(template) => self.items.insert(0, template),
+                Err(_) => return 0,
+            }
+        } else {
+            match ItemStackTemplate::try_with_count_and_patch(
+                template.item(),
+                amount.min(ItemStackTemplate::MAX_COUNT),
+                template.components().clone(),
+            ) {
+                Ok(template) => self.items.insert(0, template),
+                Err(_) => return 0,
+            }
+        }
+        amount
+    }
+
+    /// Vanilla `Mutable.findStackIndex` limited to stackable stacks.
+    fn find_stack_index(&self, stack: &ItemStack) -> Option<usize> {
+        if !stack.is_stackable() {
+            return None;
+        }
+        self.items.iter().position(|existing| {
+            existing.item().key == stack.item().key
+                && existing.components() == stack.components_patch()
+        })
     }
 }
 
@@ -289,6 +426,27 @@ impl CheckedFraction {
             checked_mul(self.numerator, value / reduction)?,
             self.denominator / reduction,
         )
+    }
+
+    /// `self - other` for non-negative results (`Fraction.subtract`).
+    fn sub(self, other: Self) -> Result<Self> {
+        let left = i64::from(self.numerator) * i64::from(other.denominator);
+        let right = i64::from(other.numerator) * i64::from(self.denominator);
+        let numerator = i32::try_from(left - right)
+            .map_err(|_| Error::other("Excessive total bundle weight"))?;
+        let denominator = checked_mul(self.denominator, other.denominator)?;
+        Self::new(numerator, denominator)
+    }
+
+    /// Vanilla `Fraction.divideBy(...).intValue()`: the truncated quotient.
+    fn div_int_value(self, other: Self) -> Result<i32> {
+        if other.numerator == 0 {
+            return Err(Error::other("Invalid bundle weight divisor"));
+        }
+        let numerator = i64::from(self.numerator) * i64::from(other.denominator);
+        let denominator = i64::from(self.denominator) * i64::from(other.numerator);
+        i32::try_from(numerator / denominator)
+            .map_err(|_| Error::other("Excessive total bundle weight"))
     }
 }
 

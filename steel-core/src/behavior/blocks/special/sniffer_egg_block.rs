@@ -2,21 +2,25 @@
 //!
 //! Vanilla schedules a hatch progression tick on placement (24 000 ticks, halved to 12 000 on
 //! moss, plus a random 0-299 offset) and increments `hatch` on each tick until the third stage
-//! spawns a baby sniffer. Steel has no sniffer entity yet, so the hatch stages, sounds and block
-//! removal are complete while the spawn is a reported dependency.
+//! spawns a baby sniffer.
 
 use std::sync::Arc;
 
+use glam::DVec3;
 use steel_macros::block_behavior;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{BlockStateProperties, IntProperty};
 use steel_registry::sound_events;
+use steel_registry::vanilla_block_tags::BlockTag;
+use steel_registry::vanilla_entities;
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId};
 
 use crate::behavior::{BlockBehavior, BlockPlaceContext};
-use crate::world::World;
+use crate::entity::ai::path::PathComputationType;
+use crate::entity::{AgeableMob, add_spawned_entity, create_entity_instance};
+use crate::world::{LevelReader, World};
 
 /// Vanilla `SnifferEggBlock.MAX_HATCH_LEVEL`.
 pub const MAX_HATCH_LEVEL: u8 = 2;
@@ -54,6 +58,35 @@ impl SnifferEggBlock {
     pub fn is_ready_to_hatch(state: BlockStateId) -> bool {
         Self::hatch_level(state) == MAX_HATCH_LEVEL
     }
+
+    /// Vanilla `SnifferEggBlock.hatchBoost`: the block below is tagged
+    /// `#sniffer_egg_hatch_boost`.
+    #[must_use]
+    pub fn hatch_boost(world: &dyn LevelReader, pos: BlockPos) -> bool {
+        world
+            .get_block_state(pos.below())
+            .get_block()
+            .has_tag(&BlockTag::SNIFFER_EGG_HATCH_BOOST)
+    }
+
+    /// Vanilla `SnifferEggBlock.tick`'s hatch branch: spawn a baby sniffer at the
+    /// block center facing a random yaw.
+    fn spawn_sniffer(world: &Arc<World>, pos: BlockPos) {
+        let spawn_at = DVec3::new(
+            f64::from(pos.x()) + 0.5,
+            f64::from(pos.y()) + 0.5,
+            f64::from(pos.z()) + 0.5,
+        );
+        let Ok(sniffer) = create_entity_instance(world, &vanilla_entities::SNIFFER, spawn_at)
+        else {
+            return;
+        };
+        if let Some(ageable) = sniffer.as_ageable_mob() {
+            ageable.set_baby(true);
+        }
+        sniffer.snap_to(spawn_at, rand::random::<f32>() * 360.0, 0.0);
+        let _ = add_spawned_entity(world, sniffer);
+    }
 }
 
 impl BlockBehavior for SnifferEggBlock {
@@ -73,12 +106,7 @@ impl BlockBehavior for SnifferEggBlock {
             return;
         }
 
-        // Vanilla `hatchBoost`: a block below tagged `#sniffer_egg_hatch_boost` (moss blocks)
-        // halves the hatch time and plays level event 3009 (`PARTICLES_EGG_CRACK`).
-        let boosted = world
-            .get_block_state(pos.below())
-            .get_block()
-            .has_tag(&steel_registry::vanilla_block_tags::BlockTag::SNIFFER_EGG_HATCH_BOOST);
+        let boosted = Self::hatch_boost(world.as_ref(), pos);
         if boosted {
             world.level_event(3009, pos, 0, None);
         }
@@ -88,14 +116,13 @@ impl BlockBehavior for SnifferEggBlock {
         } else {
             REGULAR_HATCH_TIME_TICKS
         };
-        let progression_delay = hatch_time / 3 + rand::random_range(0..RANDOM_HATCH_OFFSET_TICKS);
-        world.schedule_block_tick_default(pos, self.block, progression_delay);
-        // Vanilla re-emits `BLOCK_PLACE` here (the placement path already emitted it).
         world.game_event(
             &steel_registry::vanilla_game_events::BLOCK_PLACE,
             pos,
             &crate::world::game_event::GameEventContext::new(None, Some(state)),
         );
+        let progression_delay = hatch_time / 3 + rand::random_range(0..RANDOM_HATCH_OFFSET_TICKS);
+        world.schedule_block_tick_default(pos, self.block, progression_delay);
     }
 
     fn tick(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
@@ -124,8 +151,14 @@ impl BlockBehavior for SnifferEggBlock {
             None,
         );
         world.destroy_block(pos, false);
-        // TODO(Entities): spawn a baby `SNIFFER` at the block center once the entity lane
-        // registers a factory for `vanilla_entities::SNIFFER` (vanilla
-        // `SnifferEggBlock.tick` → `EntityTypes.SNIFFER.create` + `setBaby` + `addFreshEntity`).
+        Self::spawn_sniffer(world, pos);
+    }
+
+    fn is_pathfindable(
+        &self,
+        _state: BlockStateId,
+        _computation_type: PathComputationType,
+    ) -> bool {
+        false
     }
 }

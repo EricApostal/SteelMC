@@ -508,6 +508,12 @@ pub struct ServerEntityMovementSyncUpdate {
     pub has_dirty_entity_data: bool,
     /// Vanilla living fall-flying velocity sync exception.
     pub force_velocity_sync: bool,
+    /// Vanilla `AbstractArrow` always sends position and rotation together,
+    /// skipping the usual movement thresholds.
+    pub force_position_rotation: bool,
+    /// Vanilla `Entity.getRequiresPrecisePosition`: forces a full absolute
+    /// position sync instead of a delta movement packet.
+    pub requires_precise_position: bool,
 }
 
 impl ServerEntityMovementSyncUpdate {
@@ -608,9 +614,13 @@ impl ServerEntityMovementSyncState {
     }
 
     const fn should_process(self, needs_velocity_sync: bool, has_dirty_entity_data: bool) -> bool {
+        // `i32::MAX` is the registry's encoding of vanilla
+        // `UpdateInterval.NEVER`, whose `test` always returns false.
         needs_velocity_sync
             || has_dirty_entity_data
-            || (self.update_interval > 0 && self.tick_count % self.update_interval == 0)
+            || (self.update_interval != i32::MAX
+                && self.update_interval > 0
+                && self.tick_count % self.update_interval == 0)
     }
 
     fn record_passenger_update(
@@ -646,15 +656,20 @@ impl ServerEntityMovementSyncState {
         self.teleport_delay = self.teleport_delay.wrapping_add(1);
 
         let position_changed = self.position.position_changed(update.position);
-        let should_send_position =
-            position_changed || self.tick_count % FORCED_POS_UPDATE_PERIOD == 0;
+        // Vanilla `ServerEntity.createMovePacket` is called with `true, true` for
+        // `AbstractArrow`, so arrows ignore the movement thresholds entirely.
+        let should_send_rotation = should_send_rotation || update.force_position_rotation;
+        let should_send_position = update.force_position_rotation
+            || position_changed
+            || self.tick_count % FORCED_POS_UPDATE_PERIOD == 0;
 
         let packed_delta = self.position.packed_delta(update.position);
         let delta_too_big = packed_delta.is_none();
         let full_precision_required = should_send_position
             && packed_delta.is_some_and(|delta| update.is_full_precision_encoding_required(delta));
 
-        let force_full = delta_too_big
+        let force_full = update.requires_precise_position
+            || delta_too_big
             || self.teleport_delay > FORCED_TELEPORT_PERIOD
             || self.was_riding
             || self.was_on_ground != update.on_ground;

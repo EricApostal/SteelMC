@@ -8,7 +8,7 @@
 use std::fmt;
 
 use steel_protocol::packets::game::{
-    ArgumentType as ProtocolArgumentType, CRecipeBookAdd, SuggestionType as ProtocolSuggestionType,
+    ArgumentType as ProtocolArgumentType, SuggestionType as ProtocolSuggestionType,
 };
 use steel_registry::{REGISTRY, recipe::UntypedRecipeRef};
 use steel_utils::{DowncastType, DowncastTypeKey, Identifier, translations};
@@ -25,7 +25,10 @@ use super::super::{
     },
     registration::CommandRegistration,
 };
-use crate::{command::incorrectly_typed_argument, entity::Entity as _, player::Player};
+use crate::{
+    command::incorrectly_typed_argument, entity::Entity as _, player::Player,
+    player::recipe_book::is_special,
+};
 
 pub(super) fn registration() -> CommandRegistration<CommandSource> {
     CommandRegistration::new(Identifier::vanilla_static("recipe"), |_| command())
@@ -65,7 +68,7 @@ fn give_recipes(
 
     let mut tracker = PlayerTracker::new();
     for player in &players {
-        tracker.track(player.as_ref(), award_recipes(player, &recipes));
+        tracker.track(player.as_ref(), player.award_recipes(&recipes));
     }
     finish(context, &tracker, RecipeAction::Give)
 }
@@ -80,7 +83,7 @@ fn take_recipes(
 
     let mut tracker = PlayerTracker::new();
     for player in &players {
-        tracker.track(player.as_ref(), reset_recipes(player, &recipes));
+        tracker.track(player.as_ref(), player.reset_recipes(&recipes));
     }
     finish(context, &tracker, RecipeAction::Take)
 }
@@ -183,50 +186,6 @@ fn learnable_recipes() -> Vec<UntypedRecipeRef> {
         .iter()
         .filter(|recipe| !is_special(*recipe))
         .collect()
-}
-
-/// Vanilla `Recipe.isSpecial`, sourced from the recipe's own properties.
-fn is_special(recipe: UntypedRecipeRef) -> bool {
-    recipe
-        .data()
-        .properties()
-        .is_some_and(|properties| properties.special)
-}
-
-/// Vanilla `ServerPlayer.awardRecipes`: returns newly learned recipe count.
-///
-/// Vanilla sends `ClientboundRecipeBookAddPacket` with the newly resolved
-/// display entries. Steel has no `ServerRecipeBook.DisplayResolver` yet, so the
-/// book still learns the recipes (the source of truth for `recipe_unlocked`
-/// criteria) but no display entries are resolved and no packet is sent.
-fn award_recipes(player: &Player, recipes: &[UntypedRecipeRef]) -> i32 {
-    let mut book = player.recipe_book();
-    let (entries, unlocked) = book.add_recipes(recipes, None);
-    drop(book);
-    if !entries.is_empty() {
-        player.send_packet(CRecipeBookAdd {
-            entries,
-            replace: false,
-        });
-    }
-    i32::try_from(unlocked.len()).unwrap_or(i32::MAX)
-}
-
-/// Vanilla `ServerPlayer.resetRecipes`: returns removed recipe count.
-///
-/// Vanilla also sends `ClientboundRecipeBookRemovePacket` for the removed
-/// displays; that needs display ids, which Steel cannot resolve yet.
-fn reset_recipes(player: &Player, recipes: &[UntypedRecipeRef]) -> i32 {
-    let mut book = player.recipe_book();
-    let mut removed = 0;
-    for recipe in recipes {
-        let key = recipe.key();
-        if book.contains(key) {
-            book.remove(key);
-            removed += 1;
-        }
-    }
-    removed
 }
 
 fn recipe_value(

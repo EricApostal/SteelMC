@@ -180,11 +180,17 @@ impl PandaEntity {
                     false,
                 ),
             );
+            // Vanilla `PandaAvoidGoal` passes `EntitySelector.NO_SPECTATORS` as the
+            // `predicateOnAvoidEntity` (creative players are still avoided).
             goal_selector.add_goal(
                 6,
-                AvoidEntityGoal::with_selector(8.0, 2.0, 2.0, |target, _world| {
-                    target.entity_type() == &vanilla_entities::PLAYER
-                }),
+                AvoidEntityGoal::with_predicates(
+                    8.0,
+                    2.0,
+                    2.0,
+                    |target, _world| target.entity_type() == &vanilla_entities::PLAYER,
+                    |target, _world| !target.is_spectator(),
+                ),
             );
             goal_selector.add_goal(9, LookAtPlayerGoal::new(6.0));
             goal_selector.add_goal(10, RandomLookAroundGoal::new());

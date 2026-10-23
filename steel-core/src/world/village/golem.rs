@@ -6,6 +6,10 @@
 //! state, and once enough of them agree one of them runs the placement search. The
 //! search is `SpawnUtil`'s: random XZ offsets around the villager, then descend from
 //! `spawnRangeY` above the candidate until a block that can support a golem is found.
+//!
+//! Deliberate difference: vanilla samples `level.getRandom()`; Steel's `World` exposes no
+//! level RNG, so the placement search and spawn yaw use the thread RNG like the other
+//! world-spawn ports (see `entity::raid::patrol`).
 
 use std::sync::Arc;
 
@@ -270,4 +274,165 @@ fn is_disallowed_iron_golem_ground(state: steel_utils::BlockStateId) -> bool {
     REGISTRY.blocks.is_in_tag(block, &BlockTag::LEAVES)
         || REGISTRY.blocks.is_in_tag(block, &BlockTag::C_GLASS_BLOCKS)
         || REGISTRY.blocks.is_in_tag(block, &BlockTag::C_GLASS_PANES)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity::ai::brain::memory::module_type as mem;
+    use crate::entity::entities::mobs::npc::villager::VillagerEntity;
+    use crate::test_support::{
+        advance_test_game_time_to, fresh_test_world, insert_ready_full_chunk,
+    };
+    use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+    use steel_registry::{init_vanilla_registry, vanilla_blocks};
+    use steel_utils::ChunkPos;
+    use steel_utils::types::UpdateFlags;
+
+    /// Loads the 3x3 chunk area around `center` and builds a flat stone floor at
+    /// `center.y - 1` so the spawn search always finds a `LEGACY_IRON_GOLEM` support
+    /// block. The search reaches 8 blocks horizontally, so every candidate stays inside
+    /// the loaded area.
+    fn build_floor(world: &Arc<World>, center: BlockPos) {
+        let chunk = ChunkPos::from_block_pos(center);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                insert_ready_full_chunk(world, ChunkPos::new(chunk.0.x + dx, chunk.0.y + dz));
+            }
+        }
+        for dx in -8..=8 {
+            for dz in -8..=8 {
+                assert!(
+                    world.set_block(
+                        center.offset(dx, -1, dz),
+                        vanilla_blocks::STONE.default_state(),
+                        UpdateFlags::UPDATE_CLIENTS,
+                    ),
+                    "the test floor must be writable at {} {}",
+                    center.offset(dx, -1, dz).x(),
+                    center.offset(dx, -1, dz).z()
+                );
+            }
+        }
+    }
+
+    fn spawn_villager(world: &Arc<World>, id: i32, pos: DVec3) -> SharedEntity {
+        let villager: SharedEntity = Arc::new(VillagerEntity::new(
+            &vanilla_entities::VILLAGER,
+            id,
+            pos,
+            Arc::downgrade(world),
+        ));
+        world
+            .try_add_entity(Arc::clone(&villager))
+            .expect("the villager joins the loaded chunk");
+        villager
+    }
+
+    fn set_last_slept(villager: &SharedEntity, game_time: i64) {
+        villager
+            .as_mob()
+            .and_then(Mob::brain)
+            .expect("the villager has a brain")
+            .lock()
+            .set_memory(&mem::LAST_SLEPT, Some(game_time));
+    }
+
+    /// Vanilla `Villager.spawnGolemIfNeeded`: five villagers that slept recently agree and
+    /// one golem appears; the whole neighborhood is then marked as having detected it.
+    #[test]
+    fn gossip_consensus_spawns_one_golem_and_marks_the_neighborhood() {
+        init_vanilla_registry();
+        crate::entity::init_entities();
+
+        let fixture = fresh_test_world("village_golem_consensus");
+        let world = &fixture.world;
+        build_floor(world, BlockPos::new(8, 60, 8));
+
+        let mut villagers = Vec::new();
+        for (index, (x, z)) in [(8, 8), (9, 8), (8, 9), (9, 9), (10, 10)]
+            .into_iter()
+            .enumerate()
+        {
+            let villager = spawn_villager(
+                world,
+                i32::try_from(index + 1).expect("small index"),
+                DVec3::new(f64::from(x) + 0.5, 60.0, f64::from(z) + 0.5),
+            );
+            set_last_slept(&villager, 0);
+            villagers.push(villager);
+        }
+        assert!(
+            villagers
+                .iter()
+                .all(|villager| villager_wants_golem(villager.as_ref(), world)),
+            "every villager that slept within the window wants a golem"
+        );
+
+        let golem = spawn_golem_if_needed(world, villagers[0].as_ref(), 5)
+            .expect("five agreeing villagers summon a golem");
+        assert_eq!(golem.entity_type(), &vanilla_entities::IRON_GOLEM);
+        assert!(
+            world.get_entity_by_id(golem.id()).is_some(),
+            "the summoned golem joins the level"
+        );
+
+        for villager in &villagers {
+            assert!(
+                !villager_wants_golem(villager.as_ref(), world),
+                "`GolemSensor.golemDetected` blocks further summons"
+            );
+        }
+
+        // A second summon is refused while the detection memory lives.
+        assert!(spawn_golem_if_needed(world, villagers[0].as_ref(), 5).is_none());
+    }
+
+    /// A summon needs `villagersNeededToAgree` agreeing villagers, and villagers that did
+    /// not sleep inside `GOLEM_SLEEP_WINDOW` do not count.
+    #[test]
+    fn golem_consensus_requires_recent_sleepers() {
+        init_vanilla_registry();
+        crate::entity::init_entities();
+
+        let fixture = fresh_test_world("village_golem_consensus_threshold");
+        let world = &fixture.world;
+        build_floor(world, BlockPos::new(8, 60, 8));
+
+        // `gameTime` must exceed the sleep window for a stale `LAST_SLEPT` to disqualify.
+        advance_test_game_time_to(world, GOLEM_SLEEP_WINDOW + 1);
+
+        let fresh = spawn_villager(world, 1, DVec3::new(8.5, 60.0, 8.5));
+        set_last_slept(&fresh, world.game_time());
+        let stale = spawn_villager(world, 2, DVec3::new(9.5, 60.0, 8.5));
+        set_last_slept(&stale, 0);
+        assert!(
+            !villager_wants_golem(stale.as_ref(), world),
+            "a villager that slept a full day ago does not want a golem"
+        );
+
+        assert!(
+            spawn_golem_if_needed(world, fresh.as_ref(), 2).is_none(),
+            "one willing villager cannot meet a two-villager consensus"
+        );
+        assert!(
+            spawn_golem_if_needed(world, fresh.as_ref(), 1).is_some(),
+            "a single villager can meet a one-villager consensus"
+        );
+    }
+
+    /// Vanilla `Villager.wantsToSpawnGolem` also requires `LAST_SLEPT` to be present.
+    #[test]
+    fn golem_summon_requires_the_last_slept_memory() {
+        init_vanilla_registry();
+        crate::entity::init_entities();
+
+        let fixture = fresh_test_world("village_golem_no_sleep");
+        let world = &fixture.world;
+        build_floor(world, BlockPos::new(8, 60, 8));
+
+        let villager = spawn_villager(world, 1, DVec3::new(8.5, 60.0, 8.5));
+        assert!(!villager_wants_golem(villager.as_ref(), world));
+        assert!(spawn_golem_if_needed(world, villager.as_ref(), 1).is_none());
+    }
 }

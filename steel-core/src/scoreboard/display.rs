@@ -1,7 +1,7 @@
 //! Scoreboard display slots.
 //!
 //! Mirrors vanilla `DisplaySlot`: the three shared slots plus one sidebar slot
-//! per team colour.
+//! per team color.
 
 use serde::{Deserialize, Serialize};
 
@@ -177,7 +177,7 @@ impl DisplaySlot {
         }
     }
 
-    /// Returns the team colour whose sidebar this slot is, if any.
+    /// Returns the team color whose sidebar this slot is, if any.
     #[must_use]
     pub const fn team_color(self) -> Option<TeamColor> {
         match self {
@@ -218,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn team_sidebar_slots_expose_their_colour() {
+    fn team_sidebar_slots_expose_their_color() {
         assert!(DisplaySlot::Sidebar.team_color().is_none());
         assert_eq!(
             DisplaySlot::SidebarTeamRed

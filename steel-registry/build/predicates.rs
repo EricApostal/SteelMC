@@ -129,11 +129,10 @@ fn quote_identifier(value: &str) -> TokenStream {
 
 /// Quotes one `match_block` member. `properties` is shared across members.
 fn quote_match_block(block: &str, properties: &[TokenStream]) -> TokenStream {
-    if block.starts_with('#') {
-        panic!(
-            "match_block block tags are not modelled by Steel's LootCondition::MatchBlock: {block}"
-        );
-    }
+    assert!(
+        !block.starts_with('#'),
+        "match_block block tags are not modeled by Steel's LootCondition::MatchBlock: {block}"
+    );
     let block = quote_identifier(block);
     quote! {
         LootCondition::MatchBlock {
@@ -225,37 +224,37 @@ fn quote_match_tool(predicate: &ToolPredicateJson) -> TokenStream {
 fn generate_condition(predicate: &PredicateJson) -> TokenStream {
     match predicate.condition.as_str() {
         "minecraft:match_block" => {
-            let properties: Vec<TokenStream> = predicate
-                .properties
-                .as_ref()
-                .map(|properties| {
-                    properties
-                        .iter()
-                        .map(|(name, value)| {
-                            let value = match value {
-                                PropertyValueJson::Exact(value) => value.clone(),
-                                PropertyValueJson::Range { min, max } => format!(
-                                    "{}..{}",
-                                    min.as_deref().unwrap_or(""),
-                                    max.as_deref().unwrap_or("")
-                                ),
-                            };
-                            quote! { PropertyCheck { name: #name, value: #value } }
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
+            let properties: Vec<TokenStream> =
+                predicate
+                    .properties
+                    .as_ref()
+                    .map_or_else(Vec::new, |properties| {
+                        properties
+                            .iter()
+                            .map(|(name, value)| {
+                                let value = match value {
+                                    PropertyValueJson::Exact(value) => value.clone(),
+                                    PropertyValueJson::Range { min, max } => format!(
+                                        "{}..{}",
+                                        min.as_deref().unwrap_or(""),
+                                        max.as_deref().unwrap_or("")
+                                    ),
+                                };
+                                quote! { PropertyCheck { name: #name, value: #value } }
+                            })
+                            .collect()
+                    });
             match &predicate.blocks {
                 Some(blocks) => quote_block_set(blocks, &properties),
                 None => quote_match_block("minecraft:air", &properties),
             }
         }
-        "minecraft:match_tool" => match &predicate.predicate {
-            Some(tool) => quote_match_tool(tool),
-            None => quote! { LootCondition::MatchTool(ToolPredicate::Any) },
-        },
+        "minecraft:match_tool" => predicate.predicate.as_ref().map_or_else(
+            || quote! { LootCondition::MatchTool(ToolPredicate::Any) },
+            quote_match_tool,
+        ),
         other => panic!(
-            "predicate type {other} is not modelled by the predicate generator; \
+            "predicate type {other} is not modeled by the predicate generator; \
              extend steel-registry/build/predicates.rs when vanilla ships it"
         ),
     }

@@ -38,9 +38,6 @@
 //!
 //! # Known gaps
 //!
-//! * Opening the mount inventory (`HasCustomInventoryScreen`) needs the
-//!   `HorseMenu` GUI owned by the Menus slice; [`open_custom_inventory_screen`]
-//!   is a documented no-op and the inventory NBT is persisted in full.
 //! * Rider jump (`PlayerRideableJumping.onPlayerJump` / `handleStartJump`) has
 //!   no Steel packet hook yet; [`AbstractHorseParts::player_jump_pending_scale`]
 //!   is tracked but never driven.
@@ -51,7 +48,7 @@
 //! * `AbstractHorse.followMommy` needs a nearby-`AbstractHorse` query that the
 //!   world API does not expose yet.
 //! * The `eatAnim`/`standAnim`/`mouthAnim`/`tailCounter` animation fields are
-//!   client-render state and are not modelled.
+//!   client-render state and are not modeled.
 
 mod donkey;
 mod horse;
@@ -64,6 +61,9 @@ pub use horse::{HorseEntity, HorseMarkings};
 pub use mule::MuleEntity;
 pub use skeleton_horse::SkeletonHorseEntity;
 pub use zombie_horse::ZombieHorseEntity;
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
@@ -78,7 +78,7 @@ use steel_registry::{
     vanilla_items,
 };
 use steel_utils::entity_events::EntityStatus;
-use steel_utils::locks::SyncMutex;
+use steel_utils::locks::{IntoShared, Shared, SyncMutex};
 use steel_utils::types::InteractionHand;
 use steel_utils::{Downcast as _, UuidExt as _};
 
@@ -90,6 +90,8 @@ use crate::entity::{
     SpawnGroupData,
 };
 use crate::inventory::equipment::EquipmentSlot;
+use crate::inventory::lock::ContainerRef;
+use crate::inventory::menu::kinds::mount_inventory_menu;
 use crate::player::Player;
 
 /// Vanilla `AbstractHorse.FLAG_TAME`.
@@ -123,7 +125,14 @@ pub(crate) struct AbstractHorseParts {
     /// Vanilla `AbstractHorse.owner` (`EntityReference` reduced to its UUID).
     owner: SyncMutex<Option<uuid::Uuid>>,
     /// Vanilla `AbstractHorse.inventory`; empty while `getInventoryColumns` is 0.
-    inventory: SyncMutex<InventoryCarrier>,
+    ///
+    /// Shared so the mount menu can expose it as a [`ContainerRef`] while the
+    /// entity keeps owning the same storage.
+    inventory: Shared<InventoryCarrier>,
+    /// Bumped whenever [`AbstractHorseParts::create_inventory`] rebuilds the
+    /// storage; an open mount menu compares it like vanilla's
+    /// `AbstractHorse.hasInventoryChanged` identity check.
+    inventory_generation: Arc<AtomicU32>,
     /// Vanilla `AbstractHorse.eatingCounter`.
     eating_counter: SyncMutex<i32>,
     /// Vanilla `AbstractHorse.mouthCounter`.
@@ -147,7 +156,8 @@ impl AbstractHorseParts {
         Self {
             temper: SyncMutex::new(DEFAULT_TEMPER),
             owner: SyncMutex::new(None),
-            inventory: SyncMutex::new(InventoryCarrier::new(0)),
+            inventory: InventoryCarrier::new(0).into_shared(),
+            inventory_generation: Arc::new(AtomicU32::new(0)),
             eating_counter: SyncMutex::new(0),
             mouth_counter: SyncMutex::new(0),
             stand_counter: SyncMutex::new(0),
@@ -189,8 +199,20 @@ impl AbstractHorseParts {
 
     /// Vanilla `AbstractHorse.inventory`.
     #[must_use]
-    pub(crate) fn inventory(&self) -> &SyncMutex<InventoryCarrier> {
+    pub(crate) fn inventory(&self) -> &Shared<InventoryCarrier> {
         &self.inventory
+    }
+
+    /// The mount inventory as a menu container.
+    #[must_use]
+    pub(crate) fn inventory_container(&self) -> ContainerRef {
+        ContainerRef::from(self.inventory.clone())
+    }
+
+    /// The rebuild token an open mount menu compares against.
+    #[must_use]
+    pub(crate) fn inventory_generation(&self) -> Arc<AtomicU32> {
+        Arc::clone(&self.inventory_generation)
     }
 
     /// Vanilla `AbstractHorse.createInventory`: rebuilds storage, copying slots.
@@ -202,6 +224,9 @@ impl AbstractHorseParts {
             rebuilt.set_item(slot, inventory.get_item(slot).clone());
         }
         *inventory = rebuilt;
+        // Vanilla's menu notices the rebuild through `this.inventory != oldInventory`;
+        // Steel compares this token instead.
+        self.inventory_generation.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Vanilla `AbstractChestedHorse.addAdditionalSaveData` `Items` list.
@@ -593,14 +618,58 @@ pub(crate) fn do_player_ride<E: Animal + ?Sized>(
 
 /// Vanilla `AbstractHorse.openCustomInventoryScreen`.
 ///
-/// GAP: the horse inventory GUI (`HorseMenu`) belongs to the Menus slice, so
-/// there is nothing to open yet. The inventory itself is persisted in full and
-/// exposed through the entity's `carried_items` accessor.
-pub(crate) fn open_custom_inventory_screen<E: Animal + ?Sized>(entity: &E, _player: &Player) {
-    log::debug!(
-        "horse inventory screen for entity {} is not implemented yet",
-        entity.id()
-    );
+/// Opens the mount inventory screen through `ClientboundMountScreenOpenPacket`
+/// (vanilla 26.3 has no `horse` menu type) unless the horse is being ridden by
+/// someone else or is untamed.
+pub(crate) fn open_custom_inventory_screen<E: Animal + ?Sized>(
+    entity: &E,
+    parts: &AbstractHorseParts,
+    data: &AbstractHorseEntityData,
+    player: &Player,
+    inventory_columns: i32,
+) {
+    let ridden_by_other = entity.is_vehicle()
+        && !entity
+            .passengers()
+            .iter()
+            .any(|passenger| passenger.id() == player.id());
+    if ridden_by_other || !is_tamed(data) {
+        return;
+    }
+
+    open_mount_inventory(entity, parts, player, inventory_columns);
+}
+
+/// Sends the mount screen packet and installs the matching menu.
+///
+/// Shared by the equines (which gate on taming) and the camel (which is always
+/// tamed and skips the vehicle check), matching each vanilla override.
+pub(crate) fn open_mount_inventory<E: Animal + ?Sized>(
+    entity: &E,
+    parts: &AbstractHorseParts,
+    player: &Player,
+    inventory_columns: i32,
+) {
+    let Some(world) = entity.level() else {
+        return;
+    };
+    let Some(mount) = world.get_entity_by_id(entity.id()) else {
+        return;
+    };
+
+    let inventory = Arc::clone(&player.inventory);
+    let mount_inventory = parts.inventory_container();
+    let generation = parts.inventory_generation();
+    player.open_mount_menu(entity.id(), inventory_columns, move |context| {
+        mount_inventory_menu(
+            inventory,
+            context.container_id,
+            mount,
+            mount_inventory,
+            inventory_columns,
+            generation,
+        )
+    });
 }
 
 /// Vanilla `AbstractHorse.mobInteract`.
@@ -610,13 +679,14 @@ pub(crate) fn abstract_horse_mob_interact<E: Animal + ?Sized>(
     data: &mut AbstractHorseEntityData,
     player: &Player,
     hand: InteractionHand,
+    inventory_columns: i32,
 ) -> InteractionResult {
     if entity.is_vehicle() || AgeableMob::is_baby(entity) {
         return Animal::mob_interact_animal(entity, player, hand);
     }
 
     if is_tamed(data) && player.is_secondary_use_active() {
-        open_custom_inventory_screen(entity, player);
+        open_custom_inventory_screen(entity, parts, data, player, inventory_columns);
         return InteractionResult::Success;
     }
 

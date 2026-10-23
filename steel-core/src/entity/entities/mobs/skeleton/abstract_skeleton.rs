@@ -254,9 +254,15 @@ pub trait AbstractSkeleton: Monster + RangedAttackMob {
     /// Vanilla `AbstractSkeleton.populateDefaultEquipmentSlots`.
     fn populate_default_equipment_slots(
         &self,
-        _random: &mut impl Random,
-        _difficulty_modifier: f32,
+        random: &mut impl Random,
+        difficulty_modifier: f32,
     ) {
+        // Vanilla calls `Mob.populateDefaultEquipmentSlots` first, then forces a bow.
+        crate::entity::entities::mobs::spawn_equipment::populate_default_equipment_slots(
+            self,
+            random,
+            difficulty_modifier,
+        );
         self.living_base()
             .equipment()
             .lock()
@@ -264,15 +270,17 @@ pub trait AbstractSkeleton: Monster + RangedAttackMob {
     }
 
     /// Vanilla `Mob.populateDefaultEquipmentEnchantments`.
-    ///
-    /// Steel has no `EnchantmentHelper.enchantRandomly`-equivalent spawn pass yet, so the
-    /// random equipment enchantments vanilla rolls for a spawn are not applied.
     fn populate_default_equipment_enchantments(
         &self,
         _world: &World,
-        _random: &mut impl Random,
-        _difficulty_modifier: f32,
+        random: &mut (impl Random + steel_registry::enchantment::table::EnchantmentRandom),
+        difficulty_modifier: f32,
     ) {
+        crate::entity::entities::mobs::spawn_equipment::populate_default_equipment_enchantments(
+            self,
+            random,
+            difficulty_modifier,
+        );
     }
 
     /// Vanilla `AbstractSkeleton.canUseNonMeleeWeapon`.

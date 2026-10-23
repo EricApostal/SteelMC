@@ -330,9 +330,6 @@ impl ItemEntity {
             return false;
         }
 
-        // Calculate how many items were picked up
-        let picked_up_count = original_count - item.count();
-
         // Vanilla uses the stack's count to award the stat that many items picked up, which is
         // wrong if not all the items get picked up by the player. This could be considered
         // buggy, but it's possible that people depend on this behavior.
@@ -346,12 +343,13 @@ impl ItemEntity {
             player.award_custom_stat(&vanilla_custom_stats::FISH_CAUGHT);
         }
 
-        // Send the take animation packet to nearby players
+        // Vanilla `Player.take(entity, orgCount)` sends the original stack count, not the
+        // amount actually transferred, so the client's pickup animation matches vanilla.
         if let Some(world) = self.level() {
             let pos = self.position();
             let chunk_pos = steel_utils::ChunkPos::from_entity_pos(pos);
 
-            let take_packet = CTakeItemEntity::new(self.id(), player.id(), picked_up_count);
+            let take_packet = CTakeItemEntity::new(self.id(), player.id(), original_count);
             world.broadcast_to_nearby(chunk_pos, take_packet, None);
         }
 

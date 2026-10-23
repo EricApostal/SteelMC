@@ -6,6 +6,7 @@
 
 mod admin_blocks;
 mod bonemealable_feature_placer_block;
+mod copper_golem_statue_block;
 mod creaking_heart_block;
 mod decorated_pot_block;
 mod dried_ghast_block;
@@ -20,6 +21,7 @@ mod vault_block;
 
 pub use admin_blocks::*;
 pub use bonemealable_feature_placer_block::*;
+pub use copper_golem_statue_block::*;
 pub use creaking_heart_block::*;
 pub use decorated_pot_block::*;
 pub use dried_ghast_block::*;

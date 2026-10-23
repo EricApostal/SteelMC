@@ -2,7 +2,7 @@
 //!
 //! Vanilla extends `TamableAnimal`; Steel expresses the tameable half through the
 //! [`Tameable`] capability trait the owner/beg/sit goals consume, and the wolf owns the
-//! vanilla state behind it (owner, sitting pose, collar colour, interest, anger, variants).
+//! vanilla state behind it (owner, sitting pose, collar color, interest, anger, variants).
 
 use std::iter::empty;
 use std::sync::{Arc, Weak};
@@ -16,6 +16,7 @@ use steel_registry::data_components::vanilla_components::DYE;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
+use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entity_data::WolfEntityData;
 use steel_registry::{
     sound_events, vanilla_attributes, vanilla_entities, vanilla_item_tags, vanilla_items,
@@ -42,7 +43,7 @@ use crate::entity::{
 };
 use crate::physics::MoveResult;
 use crate::player::Player;
-use crate::world::World;
+use crate::world::{LevelReader, World};
 
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
 const XP_REWARD: i32 = 1;
@@ -546,6 +547,11 @@ impl Mob for WolfEntity {
         &self.mob_base
     }
 
+    /// Vanilla `Wolf.getMaxSpawnClusterSize`.
+    fn max_spawn_cluster_size(&self) -> i32 {
+        8
+    }
+
     fn tick_goal_selectors(&self, entity: &SharedEntity) {
         PathfinderMob::tick_pathfinder_goal_selectors(self, entity);
     }
@@ -577,7 +583,7 @@ impl Mob for WolfEntity {
         self.entity_data.lock().mob_mut().mob_flags.set(flags);
     }
 
-    /// Vanilla `Wolf.mobInteract`: feeding, dyeing the collar, armour and taming.
+    /// Vanilla `Wolf.mobInteract`: feeding, dyeing the collar, armor and taming.
     fn mob_interact(&self, player: &Player, hand: InteractionHand) -> InteractionResult {
         let item_stack = {
             let inventory = player.inventory.lock();
@@ -677,6 +683,22 @@ impl Animal for WolfEntity {
             && item_stack
                 .item()
                 .has_tag(&vanilla_item_tags::ItemTag::WOLF_FOOD)
+    }
+
+    /// Vanilla `Wolf.checkWolfSpawnRules`.
+    fn check_animal_spawn_rules(
+        level: &dyn LevelReader,
+        _spawn_reason: EntitySpawnReason,
+        pos: BlockPos,
+    ) -> bool
+    where
+        Self: Sized,
+    {
+        level
+            .get_block_state(pos.below())
+            .get_block()
+            .has_tag(&BlockTag::WOLVES_SPAWNABLE_ON)
+            && Self::is_bright_enough_to_spawn(level, pos)
     }
 }
 

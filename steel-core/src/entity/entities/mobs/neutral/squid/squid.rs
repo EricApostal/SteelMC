@@ -2,8 +2,9 @@
 //!
 //! Vanilla extends `AgeableWaterCreature`/`WaterAnimal`; Steel has no water-creature base, so
 //! the squid is an [`AgeableMob`] + [`PathfinderMob`] whose water behaviour is implemented here
-//! (buoyancy drag, tentacle cycle, ink defence) and whose navigation is the shared ground
-//! navigation. Documented deviation: `WaterBoundPathNavigation` is not implemented in Steel.
+//! (buoyancy drag, tentacle cycle, ink defense). Vanilla `Squid` does not override
+//! `createNavigation`, so it keeps `GroundPathNavigation`; only the water pathfinding malus from
+//! `AgeableWaterCreature` is configured here.
 
 use std::sync::{Arc, Weak};
 
@@ -18,21 +19,23 @@ use steel_registry::fluid::FluidStateExt as _;
 use steel_registry::particle_type::ParticleData;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::SquidEntityData;
-use steel_registry::{sound_events, vanilla_attributes};
+use steel_registry::{sound_events, vanilla_attributes, vanilla_blocks};
 use steel_utils::Downcast as _;
 use steel_utils::entity_events::EntityStatus;
 use steel_utils::locks::SyncMutex;
+use steel_utils::random::RandomSource;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
 use crate::entity::ai::goal::{Goal, GoalControls};
+use crate::entity::ai::path::PathType;
 use crate::entity::damage::DamageSource;
 use crate::entity::{
-    AgeableMob, AgeableMobBase, Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySyncedData,
-    LivingEntity, LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity,
+    AgeableMob, AgeableMobBase, Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason,
+    EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity,
 };
 
 use crate::physics::MoveResult;
-use crate::world::World;
+use crate::world::{LevelReader, World};
 
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
 const XP_REWARD: i32 = 1;
@@ -111,6 +114,11 @@ impl SquidEntity {
         let mob_base = MobBase::new();
         mob_base.set_xp_reward(XP_REWARD);
         let ageable_base = AgeableMobBase::new();
+        // Vanilla `AgeableWaterCreature`: `setPathfindingMalus(WATER, 0.0F)`.
+        mob_base
+            .pathfinding_malus()
+            .lock()
+            .set(PathType::Water, 0.0);
         let mut entity_data = SquidEntityData::new();
         living_base.initialize_synced_data(&mut entity_data);
 
@@ -307,6 +315,30 @@ impl SquidEntity {
             let x_body_rot = *self.x_body_rot.lock();
             *self.x_body_rot.lock() = x_body_rot + (-90.0 - x_body_rot) * 0.02;
         }
+    }
+
+    /// Vanilla `AgeableWaterCreature.checkSurfaceAgeableWaterCreatureSpawnRules`, the
+    /// `SpawnPlacements` predicate for `EntityType.SQUID`.
+    ///
+    /// Vanilla ignores `entity_type` and `random`; the position must be within 13
+    /// blocks below sea level, the block below must be water and the block above
+    /// must be a full water block.
+    #[must_use]
+    pub fn check_surface_ageable_water_creature_spawn_rules(
+        _entity_type: EntityTypeRef,
+        level: &World,
+        _spawn_reason: EntitySpawnReason,
+        pos: BlockPos,
+        _random: &mut RandomSource,
+    ) -> bool {
+        let min_spawn_level = level.sea_level() - 13;
+        pos.y() >= min_spawn_level
+            && pos.y() <= level.sea_level()
+            && level
+                .get_block_state(pos.below())
+                .get_fluid_state()
+                .is_water()
+            && level.get_block_state(pos.above()).get_block() == &vanilla_blocks::WATER
     }
 }
 

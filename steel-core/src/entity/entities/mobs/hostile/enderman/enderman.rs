@@ -807,8 +807,6 @@ impl Entity for EndermanEntity {
         hurt
     }
 
-    /// Vanilla `Enderman.getWalkTargetValue` returns 0 for every position.
-
     fn save_additional(&self, nbt: &mut NbtCompound) {
         self.save_mob(nbt);
         if let Some(carried) = self.carried_block() {
@@ -973,6 +971,7 @@ impl Mob for EndermanEntity {
 impl Monster for EndermanEntity {}
 
 impl PathfinderMob for EndermanEntity {
+    /// Vanilla `Enderman.getWalkTargetValue` returns 0 for every position.
     fn get_walk_target_value(&self, _pos: BlockPos) -> f32 {
         0.0
     }

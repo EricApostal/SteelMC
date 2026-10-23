@@ -124,6 +124,14 @@ impl SuspiciousStewEffects {
     pub fn effects(&self) -> &[SuspiciousStewEffect] {
         &self.effects
     }
+
+    /// Vanilla `SuspiciousStewEffects.withEffectAdded`: appends one effect.
+    #[must_use]
+    pub fn with_effect_added(&self, effect: SuspiciousStewEffect) -> Self {
+        let mut effects = self.effects.clone();
+        effects.push(effect);
+        Self { effects }
+    }
 }
 
 impl WriteTo for SuspiciousStewEffects {

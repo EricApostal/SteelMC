@@ -303,6 +303,9 @@ impl DomainSwitchJob {
             self.player.gameprofile.id(),
             PlayerAdmissionState::Relocating,
         );
+        // Vanilla `PlayerList.respawn` resends the book after the new player entity
+        // is in place; the target domain's saved book may differ from the source's.
+        self.player.send_initial_recipe_book();
         server.schedule_domain_restores(&self.player, self.residence_token, restores);
 
         let (sender, receiver) = mpsc::channel();

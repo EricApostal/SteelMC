@@ -8,6 +8,7 @@ use crate::{
         click::{Click, MouseButton},
         container::Container as _,
     },
+    player::player_inventory::PlayerInventory,
     test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk},
 };
 use glam::DVec3;
@@ -82,4 +83,44 @@ fn partial_result_overflow_has_no_thrower() {
     assert!(item.get_item().is(&vanilla_items::OAK_PLANKS));
     assert_eq!(item.get_item().count(), 3);
     assert_eq!(item.get_thrower(), None);
+}
+
+#[test]
+fn shift_click_equips_armor_then_falls_back_to_the_hotbar() {
+    init_vanilla_registry();
+    init_behaviors();
+    let world_fixture = fresh_test_world("inventory_menu_armor_equip");
+    let world = &world_fixture.world;
+    insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+    let player = TestPlayerBuilder::new(Arc::clone(world), "EquipTester", 1).build();
+    player.base().set_position_local(DVec3::new(0.5, 64.0, 0.5));
+    let mut menu = inventory_menu(Arc::clone(&player.inventory));
+
+    // Menu slot 9 is main-inventory index 9; the head slot is menu slot 5.
+    player
+        .inventory
+        .lock()
+        .set_item(9, ItemStack::new(&vanilla_items::DIAMOND_HELMET));
+    menu.clicked(Click::QuickMove { slot: 9 }, &player);
+    assert!(
+        player
+            .inventory
+            .lock()
+            .get_item(PlayerInventory::ARMOR_TOP_DOWN[0])
+            .is(&vanilla_items::DIAMOND_HELMET)
+    );
+
+    // With the head slot occupied, vanilla falls back to the hotbar.
+    player
+        .inventory
+        .lock()
+        .set_item(10, ItemStack::new(&vanilla_items::DIAMOND_HELMET));
+    menu.clicked(Click::QuickMove { slot: 10 }, &player);
+    assert!(
+        player
+            .inventory
+            .lock()
+            .get_item(PlayerInventory::HOTBAR.start)
+            .is(&vanilla_items::DIAMOND_HELMET)
+    );
 }

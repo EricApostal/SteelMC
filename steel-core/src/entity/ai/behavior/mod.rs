@@ -53,6 +53,7 @@ pub mod mount;
 pub mod move_to_sky_seeing_spot;
 pub mod move_to_target_sink;
 pub mod play_tag_with_other_kids;
+pub mod piglin;
 pub mod poi;
 pub mod poi_competitor_scan;
 pub mod prepare_ram_nearest_target;

@@ -19,20 +19,20 @@ use glam::DVec3;
 use crate::entity::npc::trading::{ItemCost, Merchant, MerchantOffers};
 use steel_protocol::packets::game::SSeenAdvancement::Opened;
 use steel_protocol::packets::game::{
-    CContainerClose, CMerchantOffers, COpenScreen, CSetPlayerInventory, ClickType,
-    MerchantItemCost, MerchantOffer as WireMerchantOffer, SContainerButtonClick, SContainerClick,
-    SContainerClose, SContainerSlotStateChanged, SRenameItem, SSeenAdvancement, SSelectTrade,
-    SSetBeacon, SSetCarriedItem, SSetCreativeModeSlot, SoundSource,
+    CContainerClose, CMerchantOffers, CMountScreenOpen, COpenScreen, CSetPlayerInventory,
+    ClickType, MerchantItemCost, MerchantOffer as WireMerchantOffer, SContainerButtonClick,
+    SContainerClick, SContainerClose, SContainerSlotStateChanged, SRenameItem, SSeenAdvancement,
+    SSelectTrade, SSetBeacon, SSetCarriedItem, SSetCreativeModeSlot, SoundSource,
 };
-use steel_registry::data_components::vanilla_components::SwingAnimation;
+use steel_registry::data_components::vanilla_components::{BUNDLE_CONTENTS, SwingAnimation};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::mob_effect::MobEffectRef;
 use steel_registry::sound_events;
 use steel_registry::stat::vanilla_stat_types;
 use steel_registry::vanilla_custom_stats;
-use steel_registry::{REGISTRY, RegistryExt};
+use steel_registry::{REGISTRY, RegistryExt, vanilla_entities};
 use steel_utils::{
-    Downcast as _,
+    Downcast as _, WorldAabb,
     locks::Shared,
     translations,
     types::{GameType, InteractionHand},
@@ -40,9 +40,9 @@ use steel_utils::{
 use text_components::TextComponent;
 
 use super::{
-    DeferredMenuAction, MenuItemDisposition, MenuOpenContext, MenuRemovalStatus, OpenMenuDispatch,
-    OpenMenuUnavailable, PendingMenuOpen, PlayerInventory, Prediction, PreparedMenu,
-    TerminalMenuRemoval,
+    DeferredMenuAction, MenuItemDisposition, MenuOpenContext, MenuOpenScreen, MenuRemovalStatus,
+    OpenMenuDispatch, OpenMenuUnavailable, PendingMenuOpen, PlayerInventory, Prediction,
+    PreparedMenu, TerminalMenuRemoval,
 };
 
 impl Player {
@@ -130,8 +130,12 @@ impl Player {
                     self.execute_menu_open(*prepared);
                 }
                 DeferredMenuAction::Install(prepared) => {
-                    let PreparedMenu { title, menu } = *prepared;
-                    self.open_prepared_menu(title, menu);
+                    let PreparedMenu {
+                        title,
+                        menu,
+                        screen,
+                    } = *prepared;
+                    self.open_prepared_menu(title, menu, screen);
                 }
             }
         }
@@ -171,15 +175,23 @@ impl Player {
 
     /// Attempts to pick up nearby item entities.
     ///
-    /// Mirrors vanilla's `Player.aiStep()` item pickup logic:
-    /// - Calculates pickup area as bounding box inflated by (1.0, 0.5, 1.0)
-    /// - Calls `playerTouch()` on each entity in range
+    /// Mirrors vanilla's `Player.aiStep()` pickup block: the pickup area covers the
+    /// vehicle when riding, every non-orb entity in range is touched, and exactly
+    /// one randomly chosen experience orb is touched (vanilla keeps orbs out of the
+    /// per-entity loop so a co-located pile is consumed in random order).
     pub(in crate::player) fn touch_nearby_items(&self) {
-        if self.game_mode() == GameType::Spectator {
+        if self.game_mode() == GameType::Spectator || self.get_health() <= 0.0 {
             return;
         }
 
-        let pickup_area = self.bounding_box().inflate_xyz(1.0, 0.5, 1.0);
+        let bounding_box = self.bounding_box();
+        let pickup_area = match self.vehicle() {
+            Some(vehicle) if !vehicle.is_removed() => {
+                WorldAabb::encapsulating(&bounding_box, &vehicle.bounding_box())
+                    .inflate_xyz(1.0, 0.0, 1.0)
+            }
+            _ => bounding_box.inflate_xyz(1.0, 0.5, 1.0),
+        };
         let world = self.get_world();
         let entities = world.get_entities_in_aabb(&pickup_area);
 
@@ -187,12 +199,22 @@ impl Player {
             return;
         };
 
+        let mut orbs = Vec::new();
         for entity in entities {
             if entity.id() == self.id() || entity.is_removed() {
                 continue;
             }
 
-            entity.player_touch(&player_arc);
+            if entity.entity_type().key == vanilla_entities::EXPERIENCE_ORB.key {
+                orbs.push(entity);
+            } else {
+                entity.player_touch(&player_arc);
+            }
+        }
+
+        if !orbs.is_empty() {
+            let index = rand::random_range(0..orbs.len());
+            orbs[index].player_touch(&player_arc);
         }
     }
 
@@ -389,6 +411,99 @@ impl Player {
         }
     }
 
+    /// Handles a recipe-book placement packet.
+    ///
+    /// Vanilla `ServerGamePacketListenerImpl.handlePlaceRecipe`.
+    pub fn handle_place_recipe(&self, packet: steel_protocol::packets::game::SPlaceRecipe) {
+        self.reset_last_action_time();
+        if self.game_mode() == GameType::Spectator {
+            return;
+        }
+        if self.get_health() <= 0.0 {
+            return;
+        }
+
+        match self.take_open_menu_for_callback(Some(packet.container_id)) {
+            Ok(mut menu) => {
+                self.apply_recipe_placement(&mut menu, &packet);
+                self.finish_open_menu_callback(menu);
+            }
+            Err(OpenMenuUnavailable::Closed) => {
+                let mut menu = self.inventory_menu.lock();
+                if i32::from(menu.behavior().container_id()) == packet.container_id {
+                    self.apply_recipe_placement(&mut menu, &packet);
+                }
+            }
+            Err(OpenMenuUnavailable::Unavailable) => {}
+        }
+    }
+
+    /// The shared body of [`Self::handle_place_recipe`].
+    fn apply_recipe_placement(
+        &self,
+        menu: &mut Menu,
+        packet: &steel_protocol::packets::game::SPlaceRecipe,
+    ) {
+        use steel_protocol::packets::game::CPlaceGhostRecipe;
+
+        use crate::inventory::recipe_book_placement::PostPlaceAction;
+        use crate::player::recipe_book::{display_for_id, recipe_for_display};
+
+        if !menu.still_valid(self) {
+            log::debug!(
+                "Player {} interacted with invalid menu",
+                self.gameprofile.name()
+            );
+            return;
+        }
+
+        let Some(recipe) = recipe_for_display(packet.recipe) else {
+            return;
+        };
+        if !self.recipe_book.lock().contains(recipe.key()) {
+            return;
+        }
+        // Vanilla `RecipeBookMenu.handlePlacement` bails on recipes whose
+        // placement info is empty before touching the grid.
+        if recipe
+            .data()
+            .properties()
+            .and_then(|properties| properties.placement.as_ref())
+            .is_some_and(|placement| placement.is_impossible_to_place())
+        {
+            log::debug!(
+                "Player {} tried to place impossible recipe {}",
+                self.gameprofile.name(),
+                recipe.key()
+            );
+            return;
+        }
+
+        let allow_dropping_items_to_clear = self.game_mode() == GameType::Creative;
+        let action = {
+            // Take the container set before borrowing the kind mutably: the guard
+            // must outlive `kind_mut`, so it cannot borrow `menu.behavior()`.
+            let refs = menu.behavior().container_refs().to_vec();
+            let mut guard = ContainerLockGuard::lock_all(&refs);
+            menu.kind_mut().handle_placement(
+                &mut guard,
+                recipe,
+                packet.use_max_items,
+                allow_dropping_items_to_clear,
+                self,
+            )
+        };
+
+        if action == Some(PostPlaceAction::PlaceGhostRecipe)
+            && let Some(display) = display_for_id(packet.recipe)
+        {
+            self.send_packet(CPlaceGhostRecipe {
+                container_id: packet.container_id,
+                recipe_display: display.display.clone(),
+            });
+        }
+    }
+
     /// Processes a container click on any menu implementing the Menu trait.
     ///
     /// This is the common implementation shared between inventory menu and
@@ -529,6 +644,48 @@ impl Player {
         }
     }
 
+    /// Handles a bundle item selection packet, mirroring
+    /// `AbstractContainerMenu.setSelectedBundleItemIndex` behind
+    /// `ServerGamePacketListenerImpl#handleBundleItemSelectedPacket`.
+    ///
+    /// Vanilla toggles the selection on the stack in that slot of the currently open menu: an
+    /// out-of-range slot or a stack without bundle contents is left untouched, and the selection
+    /// is runtime-only state, so nothing is resent.
+    pub fn set_selected_bundle_item_index(&self, slot_id: i32, selected_item_index: i32) {
+        let Ok(slot_index) = usize::try_from(slot_id) else {
+            return;
+        };
+
+        match self.take_open_menu_for_callback(None) {
+            Ok(mut menu) => {
+                Self::toggle_slot_bundle_selection(&mut menu, slot_index, selected_item_index);
+                self.finish_open_menu_callback(menu);
+            }
+            Err(OpenMenuUnavailable::Closed) => {
+                let mut menu = self.inventory_menu.lock();
+                Self::toggle_slot_bundle_selection(&mut menu, slot_index, selected_item_index);
+            }
+            Err(OpenMenuUnavailable::Unavailable) => {}
+        }
+    }
+
+    /// Applies vanilla `BundleItem.toggleSelectedItem` to one menu slot's stack.
+    fn toggle_slot_bundle_selection(menu: &mut Menu, slot_index: usize, selected_item_index: i32) {
+        let mut guard = menu.behavior().lock_all_containers();
+        let Some(slot) = menu.behavior().slots().get(slot_index) else {
+            return;
+        };
+        let mut stack = slot.get_item(&guard).clone();
+        let Some(bundle) = stack.get(BUNDLE_CONTENTS) else {
+            return;
+        };
+        stack.set(
+            BUNDLE_CONTENTS,
+            bundle.with_toggled_selected_item(selected_item_index),
+        );
+        slot.set_item(&mut guard, stack);
+    }
+
     /// Handles a container slot state changed packet (e.g., crafter slot toggle).
     ///
     /// Mirrors vanilla `ServerGamePacketListenerImpl.handleContainerSlotStateChanged`:
@@ -565,7 +722,7 @@ impl Player {
     /// Handles a creative mode slot set packet.
     pub fn handle_set_creative_mode_slot(&self, packet: SSetCreativeModeSlot) {
         // Vanilla gates on `hasInfiniteMaterials()` (the instabuild ability), not
-        // the game mode, so ability edits and restored player data are honoured.
+        // the game mode, so ability edits and restored player data are honored.
         if !self.has_infinite_materials() {
             return;
         }
@@ -678,6 +835,41 @@ impl Player {
         self.open_menu_inner(PendingMenuOpen {
             title: title.into(),
             create: Box::new(create),
+            screen: MenuOpenScreen::Menu,
+        });
+        self.finish_menu_open_operation();
+    }
+
+    /// Opens a mount inventory screen for this player.
+    ///
+    /// Based on Java's `ServerPlayer::openHorseInventory`: vanilla 26.3 has no
+    /// `horse` menu type, so the client is told the container id, the mount
+    /// inventory's column count and the entity id through
+    /// `ClientboundMountScreenOpenPacket`, and builds `HorseInventoryMenu`
+    /// itself. The factory receives the same [`MenuOpenContext`] as
+    /// [`Player::open_menu`].
+    ///
+    /// # Panics
+    /// Panics if the created menu uses a different container id than the one
+    /// allocated for it.
+    pub fn open_mount_menu(
+        &self,
+        entity_id: i32,
+        inventory_columns: i32,
+        create: impl for<'a> FnOnce(MenuOpenContext<'a>) -> Menu + Send + 'static,
+    ) {
+        if !self.begin_menu_open_operation() {
+            return;
+        }
+        self.open_menu_inner(PendingMenuOpen {
+            // The mount packet carries no title; the client uses the entity's
+            // display name.
+            title: TextComponent::new(),
+            create: Box::new(create),
+            screen: MenuOpenScreen::Mount {
+                entity_id,
+                inventory_columns,
+            },
         });
         self.finish_menu_open_operation();
     }
@@ -714,7 +906,11 @@ impl Player {
             }
         }
 
-        let PendingMenuOpen { title, create } = pending;
+        let PendingMenuOpen {
+            title,
+            create,
+            screen,
+        } = pending;
         let container_id = self.next_container_counter();
         let world = self.get_world();
         let menu = create(MenuOpenContext {
@@ -729,10 +925,10 @@ impl Player {
             menu.container_id(),
             container_id,
         );
-        self.open_prepared_menu(title, menu);
+        self.open_prepared_menu(title, menu, screen);
     }
 
-    fn open_prepared_menu(&self, title: TextComponent, mut menu: Menu) {
+    fn open_prepared_menu(&self, title: TextComponent, mut menu: Menu, screen: MenuOpenScreen) {
         loop {
             {
                 let mut open_menu = self.open_menu.lock();
@@ -757,6 +953,7 @@ impl Player {
                     .push(DeferredMenuAction::Install(Box::new(PreparedMenu {
                         title,
                         menu,
+                        screen,
                     })));
                 return;
             }
@@ -771,13 +968,23 @@ impl Player {
             break;
         }
 
-        self.send_packet(COpenScreen {
-            container_id: i32::from(menu.container_id()),
-            menu_type: menu
-                .menu_type()
-                .expect("a menu opened via open_menu must declare a menu type"),
-            title,
-        });
+        match screen {
+            MenuOpenScreen::Menu => self.send_packet(COpenScreen {
+                container_id: i32::from(menu.container_id()),
+                menu_type: menu
+                    .menu_type()
+                    .expect("a menu opened via open_menu must declare a menu type"),
+                title,
+            }),
+            MenuOpenScreen::Mount {
+                entity_id,
+                inventory_columns,
+            } => self.send_packet(CMountScreenOpen::new(
+                i32::from(menu.container_id()),
+                inventory_columns,
+                entity_id,
+            )),
+        }
 
         // Fire on_open before the full sync so anything the menu populates here
         // is included in the first render sent below.

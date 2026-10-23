@@ -591,7 +591,7 @@ impl ArmorStandEntity {
         );
     }
 
-    /// Drops every equipment slot, honouring vanilla's prevent-drop enchantment.
+    /// Drops every equipment slot, honoring vanilla's prevent-drop enchantment.
     fn drop_equipment(&self) {
         let block_above = self.block_position().above();
         for slot in EquipmentSlot::ALL {

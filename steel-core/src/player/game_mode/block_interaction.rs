@@ -1,4 +1,7 @@
 use super::{block_breaking::BlockBreakAction, *};
+use steel_registry::data_components::CustomData;
+use steel_registry::data_components::components::BlockEntityData;
+use steel_registry::data_components::vanilla_components::BLOCK_ENTITY_DATA;
 
 impl Player {
     /// Sends block update packets for a position and its neighbor.
@@ -176,6 +179,39 @@ impl Player {
         }
     }
 
+    /// Copies a block entity's custom data and stored components onto a picked item stack.
+    ///
+    /// Mirrors vanilla `ServerGamePacketListenerImpl#addBlockDataToItem`: the custom
+    /// (non-metadata) NBT becomes the `block_entity_data` component and the block
+    /// entity's stored components are applied to the stack.
+    fn add_block_entity_data_to_item(world: &World, pos: BlockPos, item_stack: &mut ItemStack) {
+        if !world.get_block_state(pos).has_block_entity() {
+            return;
+        }
+        let Some(block_entity) = world.get_block_entity(pos) else {
+            return;
+        };
+
+        let Some(data) = CustomData::try_from_compound(block_entity.save_custom_only()) else {
+            return;
+        };
+        item_stack.set(
+            BLOCK_ENTITY_DATA,
+            BlockEntityData::new(block_entity.get_type(), data),
+        );
+
+        let components = block_entity.stored_components();
+        if components.is_empty() {
+            return;
+        }
+
+        let mut patch = item_stack.patch().clone();
+        for (key, value) in components.iter() {
+            patch.set_raw(key.clone(), value.clone());
+        }
+        *item_stack = ItemStack::with_count_and_patch(item_stack.item(), item_stack.count(), patch);
+    }
+
     /// Handles the pick block action (middle click on a block).
     ///
     /// # Panics
@@ -201,7 +237,7 @@ impl Player {
 
         let include_data = self.has_infinite_materials() && packet.include_data;
 
-        let Some(item_stack) =
+        let Some(mut item_stack) =
             behavior.get_clone_item_stack(block, state, block_entity, include_data)
         else {
             return;
@@ -211,7 +247,9 @@ impl Player {
             return;
         }
 
-        // TODO: If include_data, copy the block entity data into the picked item stack.
+        if include_data {
+            Self::add_block_entity_data_to_item(&world, packet.pos, &mut item_stack);
+        }
 
         let mut inventory = self.inventory.lock();
 

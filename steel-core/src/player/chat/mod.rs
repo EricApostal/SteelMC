@@ -476,6 +476,9 @@ impl Player {
     }
 
     /// Handles a chat acknowledgment packet from the client.
+    ///
+    /// Vanilla disconnects with `multiplayer.disconnect.chat_validation_failed` when the offset
+    /// cannot be applied to the last-seen validator.
     pub fn handle_chat_ack(&self, packet: SChatAck) {
         let applied = self
             .chat()
@@ -487,6 +490,7 @@ impl Player {
                 "Player {} sent invalid chat acknowledgment: {err}",
                 self.gameprofile.name()
             );
+            self.disconnect(translations::MULTIPLAYER_DISCONNECT_CHAT_VALIDATION_FAILED.msg());
         }
     }
 }

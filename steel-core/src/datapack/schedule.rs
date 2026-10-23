@@ -4,11 +4,12 @@
 //! Functions are scheduled onto absolute game ticks and popped when the tick
 //! advances past them, exactly like vanilla's `TimerQueue`. Steel keeps the queue
 //! free of world types so `/schedule` and the reload path can share it.
+//!
+//! Deliberate difference: vanilla persists the queue as a `SavedData` entry in
+//! `level.dat`; Steel keeps it in memory, so pending schedules end with the server
+//! process.
 
-use std::{
-    cmp::Reverse,
-    collections::{BinaryHeap, HashMap},
-};
+use std::{cmp::Reverse, collections::BinaryHeap};
 
 use steel_utils::Identifier;
 
@@ -21,117 +22,127 @@ pub(crate) enum ScheduleMode {
     Replace,
 }
 
-/// One function scheduled for an absolute tick.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ScheduledFunction {
-    /// Function to run.
-    pub(crate) function: Identifier,
-    /// Absolute game tick it becomes due.
-    pub(crate) tick: i64,
+/// Vanilla `FunctionCallback`/`FunctionTagCallback`: what a scheduled entry runs.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum ScheduledCallback {
+    /// `FunctionCallback`: one function id.
+    Function(Identifier),
+    /// `FunctionTagCallback`: every function in a tag, in tag order.
+    Tag(Identifier),
+}
+
+impl ScheduledCallback {
+    /// Vanilla `TimerQueue`'s string id: `id` for functions, `#id` for tags.
+    #[must_use]
+    pub(crate) fn key(&self) -> String {
+        match self {
+            Self::Function(id) => id.to_string(),
+            Self::Tag(id) => format!("#{id}"),
+        }
+    }
 }
 
 /// Vanilla `TimerQueue<QualifiedName>` equivalent for scheduled functions.
 #[derive(Debug, Default)]
 pub(crate) struct ScheduleRegistry {
     queue: BinaryHeap<Reverse<ScheduledEntry>>,
-    /// Index of the next due tick per function, so `replace` and `clear` are O(1).
-    next_tick: HashMap<Identifier, i64>,
+    /// Vanilla `TimerQueue.sequentialId`: orders entries due on the same tick.
+    sequential_id: u64,
 }
 
 impl ScheduleRegistry {
-    /// Vanilla `ScheduleCommand.schedule`: queues `function` for `at_tick`.
+    /// Vanilla `ScheduleCommand.schedule`: queues `callback` for `at_tick`.
     ///
-    /// Returns `false` when the entry already existed and the mode is `Replace`
-    /// only in the sense of replacing it — the return value mirrors vanilla's
-    /// "was a new entry added" signal used for the command's feedback text.
+    /// `Replace` drops every pending entry for the callback first, exactly like
+    /// vanilla's `TimerQueue.remove` followed by `TimerQueue.schedule`.
     pub(crate) fn schedule(
         &mut self,
-        function: Identifier,
+        callback: ScheduledCallback,
         at_tick: i64,
         mode: ScheduleMode,
-    ) -> bool {
-        let existing = self.next_tick.get(&function).copied();
-        if existing.is_some() && mode == ScheduleMode::Append {
-            // Vanilla `append` still adds a second entry at the same tick.
-            self.queue.push(Reverse(ScheduledEntry {
-                tick: at_tick,
-                function,
-            }));
-            return true;
+    ) {
+        if mode == ScheduleMode::Replace {
+            self.clear_callback(&callback);
+        } else if self
+            .queue
+            .iter()
+            .any(|entry| entry.0.callback == callback && entry.0.tick == at_tick)
+        {
+            // Vanilla `TimerQueue.schedule` ignores a duplicate `(id, time)` pair.
+            return;
         }
-        self.remove(&function);
+
+        let sequential_id = self.sequential_id;
+        self.sequential_id = self.sequential_id.wrapping_add(1);
         self.queue.push(Reverse(ScheduledEntry {
             tick: at_tick,
-            function: function.clone(),
+            sequential_id,
+            callback,
         }));
-        self.next_tick.insert(function, at_tick);
-        true
     }
 
-    /// Vanilla `ScheduleCommand.clear`: drops every entry for `function`.
+    /// Vanilla `ScheduleCommand.clear`: drops every entry for a function id.
     ///
-    /// Returns whether anything was removed. The heap is rebuilt because vanilla's
-    /// `TimerQueue.remove` is also linear in the number of pending entries.
-    pub(crate) fn clear(&mut self, function: &Identifier) -> bool {
-        if self.next_tick.remove(function).is_none() {
-            return false;
-        }
-        self.queue.retain(|entry| &entry.0.function != function);
-        true
+    /// Returns how many entries were removed; vanilla reports the count and errors
+    /// when it is zero. Tags cannot be cleared by `/schedule clear`, exactly like
+    /// vanilla, whose `IdentifierArgument` never matches the `#id` key.
+    pub(crate) fn clear(&mut self, function: &Identifier) -> usize {
+        self.clear_callback(&ScheduledCallback::Function(function.clone()))
     }
 
-    /// Drops every scheduled function, used when a reload replaces the functions.
-    pub(crate) fn clear_all(&mut self) {
-        self.queue.clear();
-        self.next_tick.clear();
+    /// Removes every entry for `callback`, returning the removed count.
+    fn clear_callback(&mut self, callback: &ScheduledCallback) -> usize {
+        let before = self.queue.len();
+        self.queue.retain(|entry| &entry.0.callback != callback);
+        before - self.queue.len()
     }
 
-    /// Pops every entry due at or before `current_tick`.
-    pub(crate) fn take_due(&mut self, current_tick: i64) -> Vec<ScheduledFunction> {
+    /// Pops every entry due at or before `current_tick`, in vanilla `TimerQueue` order.
+    pub(crate) fn take_due(&mut self, current_tick: i64) -> Vec<ScheduledCallback> {
         let mut due = Vec::new();
         while let Some(Reverse(entry)) = self.queue.peek() {
             if entry.tick > current_tick {
                 break;
             }
             let Reverse(entry) = self.queue.pop().expect("peeked entry is present");
-            if self.next_tick.get(&entry.function) == Some(&entry.tick) {
-                self.next_tick.remove(&entry.function);
-            }
-            due.push(ScheduledFunction {
-                function: entry.function,
-                tick: entry.tick,
-            });
+            due.push(entry.callback);
         }
         due
     }
 
-    /// Vanilla `/schedule` feedback: every pending function and its due tick.
+    /// Vanilla `TimerQueue.getEventsIds`: every pending id, for `/schedule` suggestions.
     #[must_use]
-    pub(crate) fn pending(&self) -> Vec<ScheduledFunction> {
-        let mut entries: Vec<ScheduledFunction> = self
-            .next_tick
+    pub(crate) fn pending_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .queue
             .iter()
-            .map(|(function, &tick)| ScheduledFunction {
-                function: function.clone(),
-                tick,
-            })
+            .map(|entry| entry.0.callback.key())
             .collect();
-        entries.sort_by(|left, right| left.tick.cmp(&right.tick));
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
+    /// Every pending entry and its due tick, in due order.
+    #[cfg(test)]
+    pub(crate) fn pending(&self) -> Vec<(ScheduledCallback, i64)> {
+        let mut entries: Vec<(ScheduledCallback, i64)> = self
+            .queue
+            .iter()
+            .map(|entry| (entry.0.callback.clone(), entry.0.tick))
+            .collect();
+        entries.sort_by(|left, right| {
+            left.1
+                .cmp(&right.1)
+                .then_with(|| left.0.key().cmp(&right.0.key()))
+        });
         entries
     }
 
     /// Whether any function is scheduled.
-    #[must_use]
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.queue.is_empty()
-    }
-
-    /// Removes the indexed entry for `function`, leaving heap entries to be skipped.
-    fn remove(&mut self, function: &Identifier) {
-        self.next_tick.remove(function);
-        // Vanilla `TimerQueue.remove` also drops the heap entry, so a replaced schedule
-        // can never fire at its old tick.
-        self.queue.retain(|entry| &entry.0.function != function);
     }
 }
 
@@ -139,14 +150,15 @@ impl ScheduleRegistry {
 #[derive(Debug, PartialEq, Eq)]
 struct ScheduledEntry {
     tick: i64,
-    function: Identifier,
+    sequential_id: u64,
+    callback: ScheduledCallback,
 }
 
 impl Ord for ScheduledEntry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.tick
             .cmp(&other.tick)
-            .then_with(|| self.function.cmp(&other.function))
+            .then_with(|| self.sequential_id.cmp(&other.sequential_id))
     }
 }
 
@@ -182,11 +194,15 @@ pub(crate) fn parse_delay(argument: &str) -> Result<i64, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScheduleMode, ScheduleRegistry, parse_delay};
+    use super::{ScheduleMode, ScheduleRegistry, ScheduledCallback, parse_delay};
     use steel_utils::Identifier;
 
-    fn function(name: &'static str) -> Identifier {
-        Identifier::vanilla_static(name)
+    fn function(name: &'static str) -> ScheduledCallback {
+        ScheduledCallback::Function(Identifier::vanilla_static(name))
+    }
+
+    fn tag(name: &'static str) -> ScheduledCallback {
+        ScheduledCallback::Tag(Identifier::vanilla_static(name))
     }
 
     #[test]
@@ -196,8 +212,8 @@ mod tests {
         registry.schedule(function("a"), 10, ScheduleMode::Replace);
         let due = registry.take_due(40);
         assert_eq!(due.len(), 2);
-        assert_eq!(due[0].function, function("a"));
-        assert_eq!(due[1].function, function("b"));
+        assert_eq!(due[0], function("a"));
+        assert_eq!(due[1], function("b"));
         assert!(registry.is_empty());
     }
 
@@ -228,14 +244,30 @@ mod tests {
     }
 
     #[test]
+    fn append_ignores_an_identical_pair() {
+        let mut registry = ScheduleRegistry::default();
+        registry.schedule(function("a"), 10, ScheduleMode::Append);
+        registry.schedule(function("a"), 10, ScheduleMode::Append);
+        assert_eq!(registry.pending().len(), 1);
+    }
+
+    #[test]
     fn clear_removes_every_entry_for_a_function() {
         let mut registry = ScheduleRegistry::default();
         registry.schedule(function("a"), 10, ScheduleMode::Append);
         registry.schedule(function("a"), 20, ScheduleMode::Append);
         registry.schedule(function("b"), 15, ScheduleMode::Replace);
-        assert!(registry.clear(&function("a")));
-        assert!(!registry.clear(&function("a")));
+        assert_eq!(registry.clear(&Identifier::vanilla_static("a")), 2);
+        assert_eq!(registry.clear(&Identifier::vanilla_static("a")), 0);
         assert_eq!(registry.pending().len(), 1);
+    }
+
+    #[test]
+    fn tags_schedule_under_a_hash_key() {
+        let mut registry = ScheduleRegistry::default();
+        registry.schedule(tag("load"), 5, ScheduleMode::Replace);
+        assert_eq!(registry.pending_ids(), vec!["#minecraft:load".to_owned()]);
+        assert_eq!(registry.take_due(5)[0], tag("load"));
     }
 
     #[test]

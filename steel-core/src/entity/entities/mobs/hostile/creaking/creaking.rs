@@ -456,8 +456,6 @@ impl Entity for CreakingEntity {
         self.is_heart_bound() || Entity::fire_immune(self)
     }
 
-    /// Vanilla `Creaking.getWalkTargetValue` returns 0 everywhere.
-
     fn save_additional(&self, nbt: &mut NbtCompound) {
         self.save_mob(nbt);
         if let Some(home) = self.home_pos() {
@@ -628,6 +626,7 @@ impl Mob for CreakingEntity {
 impl Monster for CreakingEntity {}
 
 impl PathfinderMob for CreakingEntity {
+    /// Vanilla `Creaking.getWalkTargetValue` returns 0 everywhere.
     fn get_walk_target_value(&self, _pos: BlockPos) -> f32 {
         0.0
     }

@@ -3,10 +3,9 @@
 //! This module handles fluid mechanics: spreading, flowing, waterlogging.
 //! Based on vanilla Minecraft's `FlowingFluid` system.
 //!
-//! ### TODOs
-//! - TODO: Remaining entity fluid side effects: drowning, splash particles/sounds.
-//! - TODO: Block item drops when water destroys blocks (cactus infrastructure merged, needs implementation).
-//! - TODO: Lava random tick fire spread.
+//! ### Remaining gaps
+//! - Entity fluid side effects: drowning, splash particles/sounds.
+//! - Fluid fog type (`FogType`) for client rendering.
 pub mod collision;
 pub mod conversion;
 pub mod flowing_fluid;

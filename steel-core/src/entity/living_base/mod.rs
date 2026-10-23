@@ -29,6 +29,7 @@ use uuid::Uuid;
 
 use crate::behavior::MOB_EFFECT_BEHAVIORS;
 use crate::entity::attribute::{AttributeMap, AttributeModifier, AttributeModifierOperation};
+use crate::entity::damage::CombatTracker;
 use crate::entity::{LivingEntity, SharedEntity, WeakEntity};
 use crate::inventory::equipment::{EntityEquipment, EquipmentSlot, OwnedEntityEquipment};
 use crate::world::World;
@@ -707,6 +708,7 @@ pub struct LivingEntityBase {
     pending_equipment_changes: SyncMutex<[Option<ItemStack>; EquipmentSlot::ALL.len()]>,
     equipment_attribute_modifiers:
         SyncMutex<[Vec<EquipmentAttributeModifierKey>; EquipmentSlot::ALL.len()]>,
+    combat_tracker: SyncMutex<CombatTracker>,
 }
 
 #[derive(Debug)]
@@ -753,7 +755,15 @@ impl LivingEntityBase {
             last_equipment_items: SyncMutex::new(array::from_fn(|_| ItemStack::empty())),
             pending_equipment_changes: SyncMutex::new(array::from_fn(|_| None)),
             equipment_attribute_modifiers: SyncMutex::new(array::from_fn(|_| Vec::new())),
+            combat_tracker: SyncMutex::new(CombatTracker::new()),
         }
+    }
+
+    /// Returns this entity's vanilla `CombatTracker`.
+    #[inline]
+    #[must_use]
+    pub const fn combat_tracker(&self) -> &SyncMutex<CombatTracker> {
+        &self.combat_tracker
     }
 
     /// Returns this entity's attribute map.

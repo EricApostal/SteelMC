@@ -11,7 +11,7 @@ use steel_registry::data_components::vanilla_components::{
 use steel_registry::recipe::{
     BookCloningRecipe, CraftingInput, CraftingRecipe, DyeRecipe, FireworkRocketRecipe,
     FireworkStarFadeRecipe, FireworkStarRecipe, PositionedCraftingInput, ShieldDecorationRecipe,
-    TypedRecipeRef, vanilla_recipe_types,
+    TypedRecipeRef, UntypedRecipeRef, vanilla_recipe_types,
 };
 use steel_registry::{
     DyeColor, ItemStackTemplate, REGISTRY, RegistryExt as _, TaggedRegistryExt as _,
@@ -40,6 +40,16 @@ pub fn find_recipe(crafting: &CraftingContainer) -> Option<CraftingRecipeRef> {
     REGISTRY
         .recipes
         .find_match(&vanilla_recipe_types::CRAFTING, &positioned.input)
+}
+
+/// Finds the first matching crafting recipe as a type-erased registry reference.
+///
+/// Used by the recipe book and the crafting take path, which need the recipe's
+/// persistent key rather than its typed data.
+#[must_use]
+pub fn find_recipe_ref(crafting: &CraftingContainer) -> Option<UntypedRecipeRef> {
+    let recipe = find_recipe(crafting)?;
+    REGISTRY.recipes.by_key(recipe.key())
 }
 
 /// Finds and interprets the output for the current crafting container.

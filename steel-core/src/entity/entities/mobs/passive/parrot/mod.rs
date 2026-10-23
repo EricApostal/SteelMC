@@ -21,6 +21,7 @@ use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::entity_variant::ParrotVariant;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
+use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entity_data::ParrotEntityData;
 use steel_registry::vanilla_item_tags::ItemTag;
 use steel_registry::{
@@ -46,11 +47,11 @@ use crate::entity::{
     AgeableMob, AgeableMobBase, AgeableMobGroupData, Animal, AnimalBase, Entity, EntityBase,
     EntityBaseLoad, EntityEventSource, EntityPose, EntitySpawnReason, EntitySyncedData,
     LivingEntity, LivingEntityBase, LivingTravelInput, Mob, MobBase, MobEffectInstance,
-    PathfinderMob, SharedEntity, SpawnGroupData,
+    PathfinderMob, RemovalReason, SharedEntity, SpawnGroupData,
 };
 use crate::physics::MoveResult;
 use crate::player::Player;
-use crate::world::{LevelReader as _, World};
+use crate::world::{LevelReader, World};
 
 /// Vanilla `ShoulderRidingEntity.RIDE_COOLDOWN`.
 const RIDE_COOLDOWN: i32 = 100;
@@ -710,11 +711,21 @@ impl ParrotEntity {
 
     /// Vanilla `ShoulderRidingEntity.setEntityOnShoulder`.
     ///
-    /// GAP: Steel's `Player` has no shoulder-slot storage yet (see the shoulder
-    /// TODOs in `player/mod.rs` and `player/game_mode/player_methods.rs`), so a
-    /// parrot cannot be stored on a shoulder and this always reports failure.
-    pub fn set_entity_on_shoulder(&self, _owner: &SharedEntity) -> bool {
-        false
+    /// Serializes this parrot as vanilla `Entity.saveWithoutId` + `id` and hands
+    /// it to the owner; the parrot is discarded once the owner stores it.
+    pub fn set_entity_on_shoulder(&self, owner: &SharedEntity) -> bool {
+        let Some(player) = owner.as_player() else {
+            return false;
+        };
+        let Some(tag) = self.nbt_for_passenger_save() else {
+            return false;
+        };
+        if player.set_entity_on_shoulder(tag) {
+            self.set_removed(RemovalReason::Discarded);
+            true
+        } else {
+            false
+        }
     }
 
     /// Copies resolved mob-effect display state into the synced entity data.
@@ -1153,6 +1164,22 @@ impl Animal for ParrotEntity {
     fn is_food(&self, _item_stack: &ItemStack) -> bool {
         // Vanilla `Parrot.isFood` is always false; parrots cannot breed.
         false
+    }
+
+    /// Vanilla `Parrot.checkParrotSpawnRules`.
+    fn check_animal_spawn_rules(
+        level: &dyn LevelReader,
+        _spawn_reason: EntitySpawnReason,
+        pos: BlockPos,
+    ) -> bool
+    where
+        Self: Sized,
+    {
+        level
+            .get_block_state(pos.below())
+            .get_block()
+            .has_tag(&BlockTag::PARROTS_SPAWNABLE_ON)
+            && Self::is_bright_enough_to_spawn(level, pos)
     }
 }
 

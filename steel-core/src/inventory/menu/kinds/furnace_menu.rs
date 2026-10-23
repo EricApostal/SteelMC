@@ -209,19 +209,18 @@ impl MenuKind for FurnaceMenuKind {
         }
         Some(clicked)
     }
-
-    fn can_take_item_for_pick_all(&self, _carried: &ItemStack, slot_index: usize) -> bool {
-        !self.result.contains(slot_index)
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use steel_registry::{init_vanilla_registry, vanilla_items};
     use steel_utils::locks::IntoShared as _;
 
     use super::*;
     use crate::inventory::container::SimpleContainer;
+    use crate::test_support::{TestPlayerBuilder, fresh_test_world};
 
     #[test]
     fn manual_input_accepts_items_without_a_matching_recipe() {
@@ -251,5 +250,38 @@ mod tests {
 
             assert!(menu.behavior().slots()[0].may_place(&stack));
         }
+    }
+
+    #[test]
+    fn double_click_collects_the_furnace_result() {
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world("furnace_result_pick_all");
+        let player =
+            TestPlayerBuilder::new(Arc::clone(&world_fixture.world), "FurnaceTester", 1).build();
+        let container = SimpleContainer::new(3).into_shared();
+        container
+            .lock()
+            .set_item(2, ItemStack::with_count(&vanilla_items::STONE, 5));
+        let mut menu = furnace_menu(
+            Arc::clone(&player.inventory),
+            1,
+            ContainerRef::from(Arc::clone(&container)),
+            FurnaceKind::Furnace,
+        );
+        *menu.behavior_mut().carried_mut() = ItemStack::with_count(&vanilla_items::STONE, 1);
+
+        // Vanilla `AbstractFurnaceMenu` leaves `canTakeItemForPickAll` at its
+        // permissive default, so double-clicking an empty player slot collects
+        // the result stack.
+        menu.clicked(
+            Click::PickupAll {
+                slot: 3,
+                direction: FillDirection::Forward,
+            },
+            &player,
+        );
+
+        assert!(container.lock().get_item(2).is_empty());
+        assert_eq!(menu.behavior().carried().count(), 6);
     }
 }

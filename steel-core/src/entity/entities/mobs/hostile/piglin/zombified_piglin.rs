@@ -7,7 +7,7 @@
 //! zombified piglin enables (`convertsInWater` is false, spawn reinforcements chance is 0).
 
 use std::iter::empty;
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 
 use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
@@ -18,10 +18,14 @@ use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::entity_type::{
     EntityAttachmentPoint, EntityAttachments, EntityDimensions, EntityTypeRef,
 };
+use steel_registry::equipment::EquipmentSlot;
+use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::ZombifiedPiglinEntityData;
-use steel_registry::{sound_events, vanilla_attributes};
+use steel_registry::{sound_events, vanilla_attributes, vanilla_items};
 use steel_utils::locks::SyncMutex;
+use steel_utils::random::Random as _;
+use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::{
     BlockPos, BlockStateId, Downcast as _, DowncastType, DowncastTypeKey, Identifier,
 };
@@ -33,15 +37,32 @@ use crate::entity::ai::goal::{
 use crate::entity::attribute::{AttributeModifier, AttributeModifierOperation};
 use crate::entity::damage::DamageSource;
 use crate::entity::neutral_mob::{NeutralMob, PersistentAnger};
+use crate::entity::entities::mobs::zombie::zombie;
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
-    LivingEntity, LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, SharedEntity,
+    AgeableMobGroupData, Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason,
+    EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase, Monster, PathfinderMob,
+    SharedEntity, SpawnGroupData,
 };
 use crate::physics::MoveResult;
 use crate::world::{LevelReader, World};
 
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
 const XP_REWARD: i32 = 5;
+/// Vanilla `Zombie.BABY_XP_MULTIPLIER`.
+const BABY_XP_MULTIPLIER: f64 = 2.5;
+/// Vanilla `Zombie.SPEED_MODIFIER_BABY_ID` (`minecraft:baby`); `ZombifiedPiglin`
+/// inherits `Zombie.setBaby`.
+const SPEED_MODIFIER_BABY_ID: Identifier = Identifier::vanilla_static("baby");
+/// Vanilla `Zombie.SPEED_MODIFIER_BABY` amount.
+const SPEED_MODIFIER_BABY_AMOUNT: f64 = 0.5;
+/// Vanilla `Zombie.finalizeSpawn`: `0.55F * difficulty.getSpecialMultiplier()`.
+const ZOMBIE_CAN_PICK_UP_LOOT_CHANCE: f32 = 0.55;
+/// Vanilla `Zombie.getSpawnAsBabyOdds`: `random.nextFloat() < 0.05F`.
+const ZOMBIE_SPAWN_AS_BABY_CHANCE: f32 = 0.05;
+/// Vanilla `Zombie.BREAK_DOOR_CHANCE`.
+const ZOMBIE_BREAK_DOOR_CHANCE: f32 = 0.1;
+/// Vanilla `ZombifiedPiglin.populateDefaultEquipmentSlots`: `random.nextInt(20) == 0`.
+const GOLDEN_SPEAR_WEIGHT_BOUND: i32 = 20;
 /// Vanilla `ZombifiedPiglin.SPEED_MODIFIER_ATTACKING_ID`.
 const SPEED_MODIFIER_ATTACKING_ID: Identifier = Identifier::vanilla_static("attacking");
 /// Vanilla `ZombifiedPiglin.SPEED_MODIFIER_ATTACKING` amount.
@@ -192,6 +213,21 @@ impl ZombifiedPiglinEntity {
     /// Vanilla `Zombie.setBaby`.
     pub fn set_baby(&self, baby: bool) {
         *self.baby.lock() = baby;
+        if self.level().is_some() {
+            let mut attributes = self.attributes().lock();
+            attributes.remove_modifier(vanilla_attributes::MOVEMENT_SPEED, &SPEED_MODIFIER_BABY_ID);
+            if baby {
+                attributes.add_modifier(
+                    vanilla_attributes::MOVEMENT_SPEED,
+                    AttributeModifier {
+                        id: SPEED_MODIFIER_BABY_ID,
+                        amount: SPEED_MODIFIER_BABY_AMOUNT,
+                        operation: AttributeModifierOperation::AddMultipliedBase,
+                    },
+                    false,
+                );
+            }
+        }
     }
 
     /// Vanilla `Zombie.canBreakDoors`.
@@ -447,6 +483,16 @@ impl LivingEntity for ZombifiedPiglinEntity {
         Monster::should_drop_experience_monster(self)
     }
 
+    /// Vanilla `Zombie.getBaseExperienceReward`, which `ZombifiedPiglin`
+    /// inherits: a baby's reward is its (mutated) `xpReward` scaled by 2.5.
+    fn base_experience_reward(&self) -> i32 {
+        if self.is_baby() {
+            let scaled = (f64::from(self.xp_reward()) * BABY_XP_MULTIPLIER) as i32;
+            self.set_xp_reward(scaled);
+        }
+        Mob::base_experience_reward_mob(self)
+    }
+
     fn should_drop_loot(&self, world: &World) -> bool {
         Monster::should_drop_loot_monster(self, world)
     }
@@ -523,6 +569,74 @@ impl Mob for ZombifiedPiglinEntity {
         }
         <Self as Mob>::check_mob_spawn_rules(entity_type, level, spawn_reason, pos)
     }
+
+    /// Vanilla `Zombie.finalizeSpawn`, which `ZombifiedPiglin` inherits: loot
+    /// pickup, baby odds, door breaking, equipment, then `handleAttributes`.
+    fn finalize_spawn(
+        &self,
+        world: &Arc<World>,
+        spawn_reason: EntitySpawnReason,
+        group_data: Option<SpawnGroupData>,
+    ) -> Option<SpawnGroupData> {
+        let mut random = LegacyRandom::from_seed(rand::random());
+        let difficulty_modifier = world
+            .current_difficulty_at(self.block_position())
+            .special_multiplier();
+
+        if spawn_reason != EntitySpawnReason::Conversion {
+            self.set_can_pick_up_loot(
+                random.next_f32() < ZOMBIE_CAN_PICK_UP_LOOT_CHANCE * difficulty_modifier,
+            );
+        }
+
+        let group_data = group_data.or_else(|| {
+            Some(SpawnGroupData::AgeableMob(AgeableMobGroupData::new(
+                random.next_f32() < ZOMBIE_SPAWN_AS_BABY_CHANCE,
+                AgeableMobGroupData::DEFAULT_BABY_SPAWN_CHANCE,
+            )))
+        });
+
+        if let Some(SpawnGroupData::AgeableMob(data)) = group_data {
+            if data.should_spawn_baby() {
+                self.set_baby(true);
+            }
+
+            self.set_can_break_doors(
+                random.next_f32() < difficulty_modifier * ZOMBIE_BREAK_DOOR_CHANCE,
+            );
+            if spawn_reason != EntitySpawnReason::Conversion {
+                // Vanilla `ZombifiedPiglin.populateDefaultEquipmentSlots`.
+                let item = if random.next_i32_bounded(GOLDEN_SPEAR_WEIGHT_BOUND) == 0 {
+                    &vanilla_items::GOLDEN_SPEAR
+                } else {
+                    &vanilla_items::GOLDEN_SWORD
+                };
+                self.living_base()
+                    .equipment()
+                    .lock()
+                    .set(EquipmentSlot::MainHand, ItemStack::new(item));
+                zombie::populate_zombie_equipment_enchantments(
+                    self,
+                    &mut random,
+                    difficulty_modifier,
+                );
+            }
+        }
+
+        // Vanilla `ZombifiedPiglin.randomizeReinforcementsChance` pins the base
+        // chance to `0.0` instead of drawing a new one.
+        zombie::handle_zombie_spawn_attributes(
+            self,
+            difficulty_modifier,
+            spawn_reason,
+            &mut random,
+            &|can_break_doors| self.set_can_break_doors(can_break_doors),
+            Some(0.0),
+        );
+
+        self.finalize_spawn_mob_base(world, spawn_reason, group_data)
+    }
+
 }
 
 impl Monster for ZombifiedPiglinEntity {}

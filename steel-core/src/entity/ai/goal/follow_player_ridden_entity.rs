@@ -1,13 +1,12 @@
 //! Vanilla `FollowPlayerRiddenEntityGoal` (`goal/FollowPlayerRiddenEntityGoal.java`): a
 //! dolphin trails the boat (or other ridden entity) a player is steering.
 //!
-//! Vanilla stores the concrete `PathfinderMob` plus the followed entity class; Steel takes
-//! that class as a constructor entity-type filter and stays otherwise identical.
-//!
-//! Deliberate difference: vanilla's `tick` starts with
-//! `mob.moveRelative(speed, new Vec3(xxa, yya, zza))`, using the mob's strafe inputs. Steel
-//! mobs do not retain `xxa/yya/zza`, and this goal's movement comes entirely from the
-//! navigation calls below, so that no-op step is omitted.
+//! Vanilla stores the concrete `PathfinderMob` plus the followed entity class; Steel has no
+//! class hierarchy over entity types, so the class is a type filter
+//! ([`FollowPlayerRiddenEntityGoal::new_matching`]) and the concrete mob arrives as
+//! `&dyn PathfinderMob`.
+
+use std::sync::Arc;
 
 use glam::DVec3;
 use steel_registry::entity_type::EntityTypeRef;
@@ -15,6 +14,7 @@ use steel_registry::entity_type::EntityTypeRef;
 use super::reduced_tick_delay;
 use super::selector::{Goal, GoalControls};
 use crate::entity::{Entity, PathfinderMob, SharedEntity};
+use crate::physics::MoverType;
 
 /// Vanilla `FollowPlayerRiddenEntityGoal.canContinueToUse`/`start` search box inflation.
 const SEARCH_RADIUS: f64 = 5.0;
@@ -32,20 +32,32 @@ enum FollowEntityGoal {
     GoInEntityDirection,
 }
 
+type EntityTypeFilter = Box<dyn Fn(EntityTypeRef) -> bool + Send + Sync>;
+
 /// Vanilla `FollowPlayerRiddenEntityGoal`.
 pub struct FollowPlayerRiddenEntityGoal {
-    entity_type_to_follow: EntityTypeRef,
+    entity_type_to_follow: EntityTypeFilter,
     following: Option<SharedEntity>,
     time_to_recalc_path: i32,
     current_goal: FollowEntityGoal,
 }
 
 impl FollowPlayerRiddenEntityGoal {
-    /// Vanilla `new FollowPlayerRiddenEntityGoal(mob, entityTypeToFollow)`.
+    /// Vanilla `new FollowPlayerRiddenEntityGoal(mob, entityTypeToFollow)` for a single type.
     #[must_use]
-    pub const fn new(entity_type_to_follow: EntityTypeRef) -> Self {
+    pub fn new(entity_type_to_follow: EntityTypeRef) -> Self {
+        Self::new_matching(move |entity_type| std::ptr::eq(entity_type, entity_type_to_follow))
+    }
+
+    /// Vanilla's `Class<? extends Entity>` argument, which matches subclasses: Steel entity
+    /// types are flat, so families (`AbstractBoat`, `AbstractNautilus`) are passed as a
+    /// predicate over the candidate's type.
+    #[must_use]
+    pub fn new_matching(
+        entity_type_to_follow: impl Fn(EntityTypeRef) -> bool + Send + Sync + 'static,
+    ) -> Self {
         Self {
-            entity_type_to_follow,
+            entity_type_to_follow: Box::new(entity_type_to_follow),
             following: None,
             time_to_recalc_path: 0,
             current_goal: FollowEntityGoal::GoToEntity,
@@ -59,15 +71,17 @@ impl FollowPlayerRiddenEntityGoal {
             return Vec::new();
         };
 
-        let entity_type = self.entity_type_to_follow;
+        let matches_type = &self.entity_type_to_follow;
         world.get_entities_in_aabb_matching(&mob.bounding_box().inflate(SEARCH_RADIUS), |entity| {
-            std::ptr::eq(entity.entity_type(), entity_type)
+            matches_type(entity.entity_type())
         })
     }
 
-    /// Vanilla `Entity.hasMovedHorizontallyRecently`: `|lastKnownSpeed| > 1.0E-5`.
+    /// Vanilla `Entity.hasMovedHorizontallyRecently`:
+    /// `Math.abs(lastKnownSpeed.horizontalDistance()) > 1.0E-5F`.
     fn has_moved_horizontally_recently(entity: &dyn Entity) -> bool {
-        entity.base().known_speed().length_squared() > 1.0e-5
+        let known_speed = entity.base().known_speed();
+        (known_speed.x * known_speed.x + known_speed.z * known_speed.z).sqrt() > 1.0e-5
     }
 
     /// Vanilla `Entity.getControllingPassenger` resolved to a player.
@@ -79,8 +93,10 @@ impl FollowPlayerRiddenEntityGoal {
 }
 
 impl Goal for FollowPlayerRiddenEntityGoal {
+    /// Vanilla's constructor sets no flags: the goal drives the mob directly and runs
+    /// alongside whatever `MOVE` goal is active.
     fn controls(&self) -> GoalControls {
-        GoalControls::MOVE
+        GoalControls::EMPTY
     }
 
     fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
@@ -119,7 +135,25 @@ impl Goal for FollowPlayerRiddenEntityGoal {
         self.following = None;
     }
 
-    fn tick(&mut self, mob: &dyn PathfinderMob, _entity: &SharedEntity) {
+    fn tick(&mut self, mob: &dyn PathfinderMob, entity: &SharedEntity) {
+        // Vanilla `FollowPlayerRiddenEntityGoal.tick` starts with the strafe-input push and a
+        // self move before the path recalculation.
+        let speed = if self.current_goal == FollowEntityGoal::GoInEntityDirection {
+            0.01
+        } else {
+            0.015
+        };
+        let input = mob.travel_input();
+        mob.move_relative(
+            speed,
+            DVec3::new(
+                f64::from(input.sideways()),
+                f64::from(input.vertical()),
+                f64::from(input.forward()),
+            ),
+        );
+        Arc::clone(entity).move_entity(MoverType::SelfMovement, mob.velocity());
+
         let Some(following) = self.following.clone() else {
             return;
         };
@@ -180,10 +214,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn follow_player_ridden_entity_goal_claims_only_the_move_control() {
+    fn follow_player_ridden_entity_goal_claims_no_controls_like_vanilla() {
         let goal = FollowPlayerRiddenEntityGoal::new(&steel_registry::vanilla_entities::OAK_BOAT);
 
-        assert_eq!(goal.controls(), GoalControls::MOVE);
+        assert_eq!(goal.controls(), GoalControls::EMPTY);
         assert!(goal.is_interruptable());
     }
 }

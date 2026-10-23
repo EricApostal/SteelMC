@@ -32,7 +32,7 @@ use crate::worldgen::generator::{
     ChunkGenerator, GenerationChunk, TerrainPhase, worldgen_region_random_from_splitter,
 };
 use crate::worldgen::region::WorldGenRegion;
-use crate::worldgen::structure::{StructureGenerator, create_structures};
+use crate::worldgen::structure::{StructureGenerator, StructureStart, create_structures};
 use crate::worldgen::surface::SurfaceSystem;
 use steel_worldgen::biomes::BiomeSourceKind;
 use steel_worldgen::biomes::obfuscate_biome_seed;
@@ -178,6 +178,49 @@ impl SurfaceExtensionBiomes {
 }
 
 impl<N: DimensionNoises> VanillaGenerator<N> {
+    /// Runs `f` with a structure generation context for `chunk_x`/`chunk_z`.
+    ///
+    /// Structure starts and single-structure placement share vanilla's
+    /// `Structure.GenerationContext` inputs: a chunk-scoped biome sampler, a
+    /// lazily-built aquifer, and the dimension's noise/splitter/template data.
+    fn with_structure_context<R>(
+        &self,
+        chunk_x: i32,
+        chunk_z: i32,
+        f: impl FnOnce(&mut GenerationContext<'_, '_, N>) -> R,
+    ) -> R {
+        let mut sampler = self.biome_source.chunk_sampler();
+        let chunk_min_x = chunk_x * 16;
+        let chunk_min_z = chunk_z * 16;
+
+        let mut height_cache = N::ColumnCache::default();
+        let sea_level = N::Settings::SEA_LEVEL;
+
+        // No eager `init_grid`: most chunks' structures (mineshaft, village)
+        // use their own caches, and the 1-4 column probes of the remainder
+        // hit this cache's lazy single-entry mode cheaply. Eager 5x5 quart
+        // init cost ~36us per chunk with no payoff.
+        let mut aquifer = LazyAquifer::new(chunk_min_x, chunk_min_z, &self.splitter, &*self.noises);
+        let mut surface_y_cache: Option<i32> = None;
+        let mut height_cache_grid_ready = false;
+        let mut ctx = GenerationContext::<'_, '_, N>::new(
+            self.seed,
+            chunk_x,
+            chunk_z,
+            sea_level,
+            &self.noises,
+            &self.splitter,
+            self.structure_generator.template_pools(),
+            self.structure_generator.templates(),
+            &mut sampler,
+            &mut height_cache,
+            &mut aquifer,
+            &mut surface_y_cache,
+            &mut height_cache_grid_ready,
+        );
+        f(&mut ctx)
+    }
+
     /// Creates a new `VanillaGenerator` with the given biome source and seed.
     ///
     /// # Panics
@@ -319,40 +362,20 @@ impl<N: VanillaPostNoiseStateType> ChunkGenerator for VanillaGenerator<N> {
 
     fn create_structures(&self, chunk: &Chunk) {
         let pos = chunk.pos();
-        let chunk_x = pos.0.x;
-        let chunk_z = pos.0.y;
+        self.with_structure_context(pos.0.x, pos.0.y, |ctx| {
+            create_structures(&self.structure_generator, chunk, ctx);
+        });
+    }
 
-        let mut sampler = self.biome_source.chunk_sampler();
-        let chunk_min_x = chunk_x * 16;
-        let chunk_min_z = chunk_z * 16;
-
-        let mut height_cache = N::ColumnCache::default();
-        let sea_level = N::Settings::SEA_LEVEL;
-
-        // No eager `init_grid`: most chunks' structures (mineshaft, village)
-        // use their own caches, and the 1–4 column probes of the remainder
-        // hit this cache's lazy single-entry mode cheaply. Eager 5×5 quart
-        // init cost ~36µs per chunk with no payoff.
-        let mut aquifer = LazyAquifer::new(chunk_min_x, chunk_min_z, &self.splitter, &*self.noises);
-        let mut surface_y_cache: Option<i32> = None;
-        let mut height_cache_grid_ready = false;
-        let mut ctx = GenerationContext::<'_, '_, N>::new(
-            self.seed,
-            chunk_x,
-            chunk_z,
-            sea_level,
-            &self.noises,
-            &self.splitter,
-            self.structure_generator.template_pools(),
-            self.structure_generator.templates(),
-            &mut sampler,
-            &mut height_cache,
-            &mut aquifer,
-            &mut surface_y_cache,
-            &mut height_cache_grid_ready,
-        );
-
-        create_structures(&self.structure_generator, chunk, &mut ctx);
+    fn generate_structure_start(
+        &self,
+        chunk_pos: ChunkPos,
+        structure: &Identifier,
+    ) -> Option<StructureStart> {
+        self.with_structure_context(chunk_pos.0.x, chunk_pos.0.y, |ctx| {
+            self.structure_generator
+                .generate_start_for_structure(structure, ctx)
+        })
     }
 
     fn create_biomes(&self, chunk: &Chunk) {

@@ -21,10 +21,14 @@ use steel_utils::{BlockPos, ChunkPos, WorldAabb};
 
 use super::local_mob_cap::{LocalMobCapCalculator, players_close_for_spawning};
 use super::placement::{SpawnPlacements, is_collision_shape_full_block};
+use super::structure_spawns::{
+    FORTRESS_ENEMIES, is_in_nether_fortress_bounds, structure_spawns_at,
+};
 use crate::chunk::full_chunk::FullChunkRef;
 use crate::chunk::heightmap::HeightmapType;
 use crate::entity::Entity as _;
 use crate::entity::Mob as _;
+use crate::entity::PathfinderMob as _;
 use crate::entity::SharedEntity;
 use crate::entity::{EntitySpawnReason, create_entity_instance};
 use crate::physics::CollisionWorld as _;
@@ -423,7 +427,12 @@ impl NaturalSpawner {
                     mob_trait.set_y_head_rot(yaw);
                     mob_trait.set_y_body_rot(yaw);
 
-                    if !is_valid_position_for_mob(world, &mob, player_distance_sqr) {
+                    if !is_valid_position_for_mob(
+                        world,
+                        &mob,
+                        player_distance_sqr,
+                        EntitySpawnReason::Natural,
+                    ) {
                         continue;
                     }
 
@@ -595,6 +604,7 @@ fn is_valid_position_for_mob(
     world: &Arc<World>,
     mob: &SharedEntity,
     player_distance_sqr: f64,
+    spawn_reason: EntitySpawnReason,
 ) -> bool {
     let despawn_distance = f64::from(mob.entity_type().mob_category.despawn_distance());
     let Some(mob_trait) = mob.as_mob() else {
@@ -607,39 +617,70 @@ fn is_valid_position_for_mob(
         return false;
     }
 
-    // Vanilla additionally calls `Mob.checkSpawnRules`, whose base implementation
-    // returns `true` and which no Steel mob overrides yet.
-    mob_trait.check_spawn_obstruction(world)
+    check_instance_spawn_rules(mob, world, spawn_reason) && mob_trait.check_spawn_obstruction(world)
+}
+
+/// Vanilla `PathfinderMob.checkSpawnRules` layered on `Mob.checkSpawnRules`.
+///
+/// Vanilla overrides the `Mob` default in `PathfinderMob`; Steel's
+/// `PathfinderMob` is a capability trait rather than a supertrait of the
+/// object-safe `Mob` vtable, so the spawner dispatches on the capability.
+fn check_instance_spawn_rules(
+    mob: &SharedEntity,
+    world: &Arc<World>,
+    spawn_reason: EntitySpawnReason,
+) -> bool {
+    let Some(mob_trait) = mob.as_mob() else {
+        return false;
+    };
+    if !mob_trait.check_spawn_rules(world, spawn_reason) {
+        return false;
+    }
+
+    mob.as_pathfinder_mob()
+        .is_none_or(|pathfinder| pathfinder.get_walk_target_value(mob.block_position()) >= 0.0)
 }
 
 /// Vanilla `Mob.getMaxSpawnClusterSize`.
-///
-/// The vanilla `Mob` default; Steel's mobs do not carry the override yet.
-fn max_spawn_cluster_size(_mob: &SharedEntity) -> i32 {
-    4
+fn max_spawn_cluster_size(mob: &SharedEntity) -> i32 {
+    mob.as_mob()
+        .map_or(4, |mob_trait| mob_trait.max_spawn_cluster_size())
 }
 
 /// Vanilla `Mob.isMaxGroupSizeReached`.
-///
-/// The vanilla `Mob` default; Steel's mobs do not carry the override yet.
-fn is_max_group_size_reached(_mob: &SharedEntity, _group_size: i32) -> bool {
-    false
+fn is_max_group_size_reached(mob: &SharedEntity, group_size: i32) -> bool {
+    mob.as_mob()
+        .is_some_and(|mob_trait| mob_trait.is_max_group_size_reached(group_size))
 }
 
-/// Vanilla `NaturalSpawner.mobsAt`, restricted to the biome spawn list.
+/// Vanilla `NaturalSpawner.mobsAt`.
 ///
-/// Vanilla first consults structure spawn overrides and the nether-fortress
-/// enemy list; Steel has no structure-at query yet, so only the biome list is
-/// available here.
+/// Vanilla consults the nether-fortress enemy list first, then the structure
+/// spawn overrides, and falls back to the biome's spawn list.
 #[must_use]
 pub fn mobs_at(
     world: &World,
     category: MobCategory,
     pos: BlockPos,
-) -> Option<&'static Vec<SpawnerData>> {
+) -> Option<&'static [SpawnerData]> {
+    if is_in_nether_fortress_bounds(world, pos, category) {
+        return Some(FORTRESS_ENEMIES);
+    }
+
+    structure_spawns_at(world, category, pos).or_else(|| biome_mobs_at(world, category, pos))
+}
+
+/// Vanilla's `EnvironmentAttributes.NATURAL_MOB_SPAWNS` fallback: the biome's
+/// spawn list for `category`.
+fn biome_mobs_at(
+    world: &World,
+    category: MobCategory,
+    pos: BlockPos,
+) -> Option<&'static [SpawnerData]> {
     world
         .biome_at(pos)
         .and_then(|biome| biome.spawners.get(category.name()))
+        .map(Vec::as_slice)
 }
 
 /// Vanilla `NaturalSpawner.canSpawnMobAt`.
@@ -969,7 +1010,7 @@ impl World {
             let _ = self.chunk_map.with_full_chunk(pos, |chunk| {
                 // Vanilla `ServerChunkCache.tickSpawningChunk` increments
                 // inhabited time for every spawning chunk, before the spawn gate.
-                self.increment_chunk_inhabited_time(pos);
+                chunk.increment_inhabited_time();
 
                 if spawning_categories.is_empty() || !self.can_spawn_entities_in_chunk(pos) {
                     return;

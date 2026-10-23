@@ -86,9 +86,10 @@ fn first_matching_pos_in_closed_box(
     max: BlockPos,
     mut predicate: impl FnMut(BlockPos) -> bool,
 ) -> Option<BlockPos> {
-    for z in min.z()..=max.z() {
+    // Vanilla `BlockPos.betweenClosed` iterates x, then y, then z.
+    for x in min.x()..=max.x() {
         for y in min.y()..=max.y() {
-            for x in min.x()..=max.x() {
+            for z in min.z()..=max.z() {
                 let pos = BlockPos::new(x, y, z);
                 if predicate(pos) {
                     return Some(pos);
@@ -148,14 +149,20 @@ mod tests {
     fn closed_box_scan_uses_vanilla_x_then_y_then_z_order() {
         let min = BlockPos::new(10, 20, 30);
         let max = BlockPos::new(12, 22, 32);
-        let expected = BlockPos::new(11, 20, 30);
+        let first = BlockPos::new(10, 20, 30);
         let later_y = BlockPos::new(10, 21, 30);
-        let later_z = BlockPos::new(10, 20, 31);
+        let later_x = BlockPos::new(11, 20, 30);
 
         let found = first_matching_pos_in_closed_box(min, max, |pos| {
-            pos == expected || pos == later_y || pos == later_z
+            pos == later_x || pos == later_y || pos == first
         });
 
-        assert_eq!(found, Some(expected));
+        assert_eq!(found, Some(first));
+
+        // x advances before y: (11, 20, 30) beats (10, 21, 30).
+        let found =
+            first_matching_pos_in_closed_box(min, max, |pos| pos == later_x || pos == later_y);
+
+        assert_eq!(found, Some(later_x));
     }
 }

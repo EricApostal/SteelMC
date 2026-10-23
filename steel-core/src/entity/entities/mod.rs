@@ -8,13 +8,13 @@ pub use mobs::bosses::{
     EnderDragonEntity, EnderDragonPartEntity, EnderDragonPartKind, EnderDragonPhase,
     EnderDragonPhaseManager,
 };
-pub use mobs::golem::IronGolemEntity;
+pub use mobs::golem::{CopperGolemEntity, IronGolemEntity, SnowGolemEntity};
 pub use mobs::hostile::{
     BlazeEntity, CaveSpiderEntity, CreakingEntity, CreeperEntity, ElderGuardianEntity,
-    EndermanEntity, EndermiteEntity, GhastEntity, GuardianEntity, HoglinEntity, MagmaCubeEntity,
-    PhantomEntity, SilverfishEntity, SlimeEntity, SpiderEntity, VexEntity, WardenEntity,
-    WitchEntity, WitherBossEntity, ZoglinEntity, ZombifiedPiglinEntity, breeze::BreezeEntity,
-    shulker::ShulkerEntity,
+    EndermanEntity, EndermiteEntity, GiantEntity, GhastEntity, GuardianEntity, HoglinEntity,
+    MagmaCubeEntity, PhantomEntity, PiglinBruteEntity, PiglinEntity, SilverfishEntity, SlimeEntity,
+    SpiderEntity, VexEntity, WardenEntity, WitchEntity, WitherBossEntity, ZoglinEntity,
+    ZombifiedPiglinEntity, breeze::BreezeEntity, shulker::ShulkerEntity,
 };
 pub use mobs::illager::{
     EvokerEntity, IllagerArmPose, IllagerSpell, IllusionerEntity, PillagerEntity, RaiderKeys,
@@ -26,10 +26,11 @@ pub use mobs::neutral::{
 };
 pub use mobs::npc::{VillagerEntity, WanderingTraderEntity};
 pub use mobs::passive::{
-    AllayEntity, ArmadilloEntity, AxolotlEntity, CamelEntity, CatEntity, ChickenEntity, CowEntity,
-    DonkeyEntity, FrogEntity, GoatEntity, HorseEntity, LlamaEntity, MuleEntity, MushroomCowEntity,
-    OcelotEntity, ParrotEntity, PigEntity, SheepEntity, SkeletonHorseEntity, SnifferEntity,
-    TadpoleEntity, TraderLlamaEntity, TurtleEntity, ZombieHorseEntity,
+    AllayEntity, ArmadilloEntity, AxolotlEntity, CamelEntity, CamelHuskEntity, CatEntity,
+    ChickenEntity, CowEntity, DonkeyEntity, FrogEntity, GoatEntity, HorseEntity, LlamaEntity,
+    MuleEntity, MushroomCowEntity, OcelotEntity, ParrotEntity, PigEntity, RabbitEntity,
+    SheepEntity, SkeletonHorseEntity, SnifferEntity, StriderEntity, TadpoleEntity,
+    TraderLlamaEntity, TurtleEntity, ZombieHorseEntity,
 };
 pub use mobs::skeleton::{
     BoggedEntity, ParchedEntity, SkeletonEntity, StrayEntity, WitherSkeletonEntity,
@@ -50,8 +51,8 @@ pub use objects::projectiles::{
     FishingHookState, HurtingProjectile, HurtingProjectileState, LargeFireballEntity,
     LlamaSpitEntity, Pickup, ShulkerBulletEntity, SmallFireballEntity, SnowballEntity,
     SpectralArrowEntity, ThrownEggEntity, ThrownExperienceBottleEntity,
-    ThrownLingeringPotionEntity, ThrownSplashPotionEntity, WindChargeEntity, WitherSkullEntity,
-    get_mob_arrow, piercing_count,
+    ThrownLingeringPotionEntity, ThrownSplashPotionEntity, ThrownTridentEntity, WindChargeEntity,
+    WitherSkullEntity, get_mob_arrow, piercing_count,
 };
 pub use objects::technical::{
     InteractionEntity, InteractionEntityDataView, LightningBoltEntity, MarkerEntity,

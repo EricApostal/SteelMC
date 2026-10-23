@@ -23,12 +23,12 @@ use steel_utils::random::{
     PositionalRandom as _, Random as _, RandomSource, RandomSplitter, name_hash::NameHash,
     xoroshiro::Xoroshiro,
 };
-use steel_utils::{BlockPos, ChunkPos};
+use steel_utils::{BlockPos, ChunkPos, Identifier};
 
 use self::context::{ChunkGeneratorType, EndGenerator, NetherGenerator, OverworldGenerator};
 use crate::chunk::Chunk;
 use crate::worldgen::region::WorldGenRegion;
-use crate::worldgen::structure::StructureGenerator;
+use crate::worldgen::structure::{StructureGenerator, StructureStart};
 use steel_worldgen::noise::Beardifier;
 
 /// A trait for generating chunks.
@@ -61,6 +61,20 @@ pub trait ChunkGenerator: Send + Sync {
 
     /// Creates the structures in a chunk.
     fn create_structures(&self, chunk: &Chunk);
+
+    /// Builds one structure start for `/place structure`.
+    ///
+    /// Mirrors vanilla `Structure.generate`: the structure's own generation
+    /// point search runs without the structure-set placement and frequency
+    /// checks, so a start can be forced at any chunk. Generators without a
+    /// structure engine return `None`.
+    fn generate_structure_start(
+        &self,
+        _chunk_pos: ChunkPos,
+        _structure: &Identifier,
+    ) -> Option<StructureStart> {
+        None
+    }
 
     /// Creates the biomes in a chunk.
     fn create_biomes(&self, chunk: &Chunk);

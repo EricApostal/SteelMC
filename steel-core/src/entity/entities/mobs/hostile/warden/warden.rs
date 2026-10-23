@@ -5,22 +5,32 @@
 //! client anger level, the darkness pulse, melee/sonic-boom cooldowns and the
 //! digging/emerging invulnerability.
 //!
+//! ## Vibration system
+//!
+//! The warden is an entity-side `VibrationSystem`: it registers
+//! [`EntityVibrationListener`] in the game-event registry of the section it occupies and hears
+//! every `#warden_can_listen` event within 16 blocks, with the same travel-time countdown as the
+//! sculk blocks. [`WardenEntity::on_receive_vibration`] is vanilla's
+//! `VibrationUser.onReceiveVibration`, and `listener` (vanilla `VibrationSystem.Data`) is saved
+//! and restored.
+//!
+//! Deliberate differences, all shared with the block-side vibration system:
+//! `VibrationSystem.Listener.isOccluded` (occluding-block raycast), the in-flight
+//! `VibrationParticleOption` particle, the `AVOID_VIBRATION` advancement trigger
+//! (`canTriggerAvoidVibration` returns `true` in vanilla) and the `#dampens_vibrations` tag checks
+//! are not evaluated.
+//!
 //! ## Subsystems with no Steel counterpart
 //!
-//! - `VibrationSystem`: Steel has no game-event vibration plumbing (no
-//!   `SculkSensor`/`SculkShrieker` behaviours and no `VibrationSystem.Data`), so
-//!   the warden cannot hear vibrations and `listener` is not saved.
-//!   [`WardenEntity::on_receive_vibration`] is vanilla's
-//!   `VibrationUser.onReceiveVibration` kept whole for the day that subsystem
-//!   lands; nothing dispatches to it yet.
-//! - `WardenSpawnTracker` / `spawn_wardens`: the shrieker escalation that gates
-//!   warden spawns is not part of this slice, so the game rule has no call site.
-//! - Client animation state (`roarAnimationState`, tendril/heart animation
-//!   counters, digging particles) and the heartbeat sound only exist on the
-//!   vanilla client. [`WardenEntity::heartbeat_delay`] keeps the interval math.
+//! - `WardenSpawnTracker` / `spawn_wardens`: the per-player tracker exists
+//!   ([`WardenSpawnTracker`](super::WardenSpawnTracker)), but the sculk shrieker that drives it is
+//!   not wired yet, so the game rule has no call site.
+//! - Client animation state (`roarAnimationState`, tendril/heart animation counters, digging
+//!   particles) and the heartbeat sound only exist on the vanilla client.
+//!   [`WardenEntity::heartbeat_delay`] keeps the interval math.
 //! - `getSecondsToDisableBlocking` and `dampensVibrations` have no Steel hook.
 
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, OnceLock, Weak};
 
 use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
@@ -28,13 +38,18 @@ use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
+use steel_registry::game_events::GameEventRef;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::WardenEntityData;
-use steel_registry::{sound_events, vanilla_attributes, vanilla_entities, vanilla_mob_effects};
+use steel_registry::vanilla_game_event_tags::GameEventTag;
+use steel_registry::{
+    REGISTRY, TaggedRegistryExt as _, sound_events, vanilla_attributes, vanilla_entities,
+    vanilla_mob_effects,
+};
 use steel_utils::entity_events::EntityStatus;
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::GameType;
-use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
+use steel_utils::{BlockPos, BlockStateId, Downcast, DowncastType, DowncastTypeKey};
 
 use super::anger::{AngerLevel, AngerManagement};
 use super::brain;
@@ -46,10 +61,15 @@ use crate::entity::damage::DamageSource;
 use crate::entity::{
     Entity, EntityBase, EntityBaseLoad, EntityEventSource, EntityPose, EntitySpawnReason,
     EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase, MobEffectInstance, Monster,
-    PathfinderMob, SharedEntity, SpawnGroupData,
+    PathfinderMob, RemovalReason, SharedEntity, SpawnGroupData,
 };
 use crate::physics::MoveResult;
 use crate::world::World;
+use crate::world::game_event::GameEventContext;
+use crate::world::game_event::entity_vibration::{
+    EntityVibrationListener, EntityVibrationUser, restore_listener, save_listener_nbt,
+};
+use crate::world::game_event::vibration::VibrationListenerState;
 
 /// Vanilla `Warden.xpReward`.
 const XP_REWARD: i32 = 5;
@@ -122,6 +142,9 @@ const LISTENING_SOUND_VOLUME: f32 = 10.0;
 /// Vanilla `Warden.VibrationUser.onReceiveVibration` tendril-clicks volume.
 const TENDRIL_CLICKS_VOLUME: f32 = 5.0;
 
+/// Vanilla `Warden.VibrationUser.GAME_EVENT_LISTENER_RANGE`.
+const GAME_EVENT_LISTENER_RANGE: i32 = 16;
+
 /// Vanilla `Warden.finalizeSpawn` emerge-sound volume.
 const EMERGE_SOUND_VOLUME: f32 = 5.0;
 
@@ -143,6 +166,13 @@ pub struct WardenEntity {
     /// not reentrant, so the value is queued here and written by [`Mob::brain_tick`]
     /// once the brain lock is free, in the same tick.
     pending_sonic_boom_cooldown: SyncMutex<Option<i64>>,
+    /// Vanilla `VibrationSystem.Data`, shared with [`Self::vibration_listener`].
+    ///
+    /// The entity owns the state so `listener` NBT can be written without the listener, which
+    /// only exists once a weak handle to this entity can be formed.
+    vibration_state: Arc<SyncMutex<VibrationListenerState>>,
+    /// Vanilla `DynamicGameEventListener<VibrationSystem.Listener>`, created on the first tick.
+    vibration_listener: OnceLock<Arc<EntityVibrationListener>>,
 }
 
 // SAFETY: The owner-scoped type key uniquely identifies WardenEntity.
@@ -205,6 +235,8 @@ impl WardenEntity {
             brain: SyncMutex::new(brain),
             anger: SyncMutex::new(AngerManagement::new()),
             pending_sonic_boom_cooldown: SyncMutex::new(None),
+            vibration_state: Arc::new(SyncMutex::new(VibrationListenerState::default())),
+            vibration_listener: OnceLock::new(),
         }
     }
 
@@ -268,6 +300,34 @@ impl WardenEntity {
         self.increase_anger_at_by(entity, DEFAULT_ANGER, true);
     }
 
+    /// Vanilla `Warden.getVibrationData`.
+    #[must_use]
+    pub fn vibration_state(&self) -> &Arc<SyncMutex<VibrationListenerState>> {
+        &self.vibration_state
+    }
+
+    /// Vanilla `Warden.getVibrationUser`, over any shared handle to this warden.
+    #[must_use]
+    pub fn vibration_user(self: &Arc<Self>) -> Arc<dyn EntityVibrationUser> {
+        let entity: SharedEntity = Arc::clone(self);
+        Arc::new(WardenVibrationUser {
+            warden: Arc::downgrade(&entity),
+        })
+    }
+
+    /// Vanilla `DynamicGameEventListener<VibrationSystem.Listener>`, created on first use.
+    ///
+    /// Vanilla builds it in the constructor; Steel needs a `Weak` back-reference to the entity,
+    /// which only exists once the entity is behind an `Arc`.
+    fn vibration_listener(self: &Arc<Self>) -> &Arc<EntityVibrationListener> {
+        self.vibration_listener.get_or_init(|| {
+            Arc::new(EntityVibrationListener::new(
+                self.vibration_user(),
+                Arc::clone(&self.vibration_state),
+            ))
+        })
+    }
+
     /// Vanilla `Warden.setPose(Pose.EMERGING)`/`Pose.STANDING` half of
     /// `finalizeSpawn`, exposed so spawn code can put a summoned warden in the
     /// ground.
@@ -311,10 +371,9 @@ impl WardenEntity {
 
     /// Vanilla `Warden.VibrationUser.onReceiveVibration`.
     ///
-    /// Steel has no vibration system, so nothing calls this yet; it is the
-    /// complete anger half of vanilla's callback (`VIBRATION_COOLDOWN`, tendril
-    /// clicks, `RECENT_PROJECTILE`, the `+35` source gain and the `+10`
-    /// projectile gain) so a future `VibrationSystem` only has to dispatch.
+    /// Called by [`EntityVibrationListener`] once a vibration reaches this warden: it installs
+    /// `VIBRATION_COOLDOWN`, plays the tendril clicks, feeds `RECENT_PROJECTILE`, and raises anger
+    /// by `+35` for a direct source or `+10` for a projectile owner.
     pub fn on_receive_vibration(
         &self,
         position: BlockPos,
@@ -494,7 +553,12 @@ impl WardenEntity {
 
     /// Vanilla `Warden.applyDarknessAround`.
     fn apply_darkness_around(&self, world: &World, radius: i32) {
-        let position = self.position();
+        Self::apply_darkness_around_at(world, self.position(), radius);
+    }
+
+    /// Vanilla `Warden.applyDarknessAround(level, center, source, radius)`, the static form the
+    /// sculk shrieker calls without a warden instance.
+    pub fn apply_darkness_around_at(world: &World, position: DVec3, radius: i32) {
         let darkness =
             MobEffectInstance::with_duration(vanilla_mob_effects::DARKNESS, DARKNESS_DURATION, 0)
                 .with_ambient(false)
@@ -502,7 +566,6 @@ impl WardenEntity {
 
         world.players.iter_players(|_, player| {
             if player.game_mode() != GameType::Survival
-                || self.is_allied_to(player.as_ref())
                 || position.distance_squared(player.position())
                     >= f64::from(radius) * f64::from(radius)
             {
@@ -517,7 +580,7 @@ impl WardenEntity {
                     .is_none_or(|existing| {
                         existing.amplifier() < darkness.amplifier()
                             || (existing.duration() != -1
-                                && existing.duration() <= DARKNESS_DISPLAY_LIMIT - 1)
+                                && existing.duration() < DARKNESS_DISPLAY_LIMIT)
                     });
             if eligible {
                 player.add_mob_effect(darkness.clone());
@@ -544,6 +607,98 @@ impl WardenEntity {
     }
 }
 
+/// Vanilla `Warden.VibrationUser`: the warden as a game-event listener.
+///
+/// Vanilla's `VibrationUser` is an inner class holding the outer `Warden`; Steel holds the same
+/// relation through a weak entity handle, because the listener outlives the borrow that creates it.
+struct WardenVibrationUser {
+    warden: Weak<dyn Entity>,
+}
+
+impl WardenVibrationUser {
+    /// Upgrades the weak handle, keeping the allocation alive for the caller's borrow.
+    fn warden(&self) -> Option<Arc<dyn Entity>> {
+        self.warden.upgrade()
+    }
+}
+
+impl EntityVibrationUser for WardenVibrationUser {
+    fn listener_radius(&self) -> i32 {
+        // Vanilla `VibrationUser.GAME_EVENT_LISTENER_RANGE`.
+        GAME_EVENT_LISTENER_RANGE
+    }
+
+    fn listener_position(&self) -> Option<DVec3> {
+        // Vanilla `EntityPositionSource(Warden.this, Warden.this.getEyeHeight())`.
+        let entity = self.warden()?;
+        let position = entity.position();
+        Some(DVec3::new(
+            position.x,
+            position.y + entity.get_eye_height(),
+            position.z,
+        ))
+    }
+
+    fn is_listenable_event(&self, event: GameEventRef) -> bool {
+        // Vanilla `VibrationUser.getListenableEvents` is `GameEventTags.WARDEN_CAN_LISTEN`.
+        REGISTRY
+            .game_events
+            .is_in_tag(event, &GameEventTag::WARDEN_CAN_LISTEN)
+    }
+
+    fn can_receive_vibration(
+        &self,
+        world: &Arc<World>,
+        pos: BlockPos,
+        _event: GameEventRef,
+        context: &GameEventContext<'_>,
+    ) -> bool {
+        let Some(entity) = self.warden() else {
+            return false;
+        };
+        let Some(warden) = entity.downcast_ref::<WardenEntity>() else {
+            return false;
+        };
+        if warden.is_no_ai()
+            || warden.is_dead_or_dying()
+            || warden
+                .brain
+                .lock()
+                .has_memory_value(&mem::VIBRATION_COOLDOWN)
+            || warden.is_digging_or_emerging()
+            || !world.is_block_within_world_border(pos)
+        {
+            return false;
+        }
+
+        // Vanilla rejects a living source the warden is not allowed to target
+        // (creative/spectator players, allied entities, other wardens).
+        match context.source_entity() {
+            Some(source) if source.as_living_entity().is_some() => {
+                warden.can_target_entity_ref(source)
+            }
+            _ => true,
+        }
+    }
+
+    fn on_receive_vibration(
+        &self,
+        _world: &Arc<World>,
+        pos: BlockPos,
+        _event: GameEventRef,
+        source_entity: Option<&SharedEntity>,
+        projectile_owner: Option<&SharedEntity>,
+        _receiving_distance: f32,
+    ) {
+        let Some(entity) = self.warden() else {
+            return;
+        };
+        if let Some(warden) = entity.downcast_ref::<WardenEntity>() {
+            warden.on_receive_vibration(pos, source_entity, projectile_owner);
+        }
+    }
+}
+
 impl Entity for WardenEntity {
     fn base(&self) -> &EntityBase {
         &self.base
@@ -561,6 +716,24 @@ impl Entity for WardenEntity {
         {
             self.set_dig_cooldown();
         }
+    }
+
+    fn tick(self: Arc<Self>) {
+        let entity: SharedEntity = Arc::<Self>::clone(&self);
+        // Vanilla `Warden.tick` runs `VibrationSystem.Ticker.tick` before `super.tick()`.
+        if let Some(world) = self.level() {
+            self.vibration_listener().tick(&world);
+        }
+        self.tick_living_entity(&entity);
+    }
+
+    fn set_removed(&self, reason: RemovalReason) {
+        // Vanilla `DynamicGameEventListener.remove` runs from `onTrackingEnd`; Steel unregisters
+        // here because the world's chunk-section registry is the only holder of the listener.
+        if let Some(listener) = self.vibration_listener.get() {
+            listener.remove();
+        }
+        self.base.set_removed(reason);
     }
 
     fn dimensions_for_pose(&self, pose: EntityPose) -> EntityDimensions {
@@ -630,14 +803,15 @@ impl Entity for WardenEntity {
 
     fn save_additional(&self, nbt: &mut NbtCompound) {
         self.save_mob(nbt);
-        // Vanilla also stores `listener` (`VibrationSystem.Data`), which Steel has
-        // no equivalent for.
+        // Vanilla `Warden.addAdditionalSaveData`: `listener` is `VibrationSystem.Data`.
+        save_listener_nbt(nbt, &self.vibration_state.lock());
         self.anger.lock().save(nbt);
     }
 
     fn load_additional(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
         self.load_mob(nbt);
         *self.anger.lock() = AngerManagement::load(&nbt);
+        restore_listener(&self.vibration_state, &nbt);
         self.sync_client_anger_level();
         self.sync_brain_anger();
     }

@@ -1,12 +1,8 @@
 //! `ShelfBlock` behavior (`net.minecraft.world.level.block.ShelfBlock`).
 //!
-//! Vanilla `ShelfBlock` is also a `SideChainPartBlock`. Steel has no extracted
-//! side-chain-part behavior yet, so the `SIDE_CHAIN_PART` property is kept at
-//! `unconnected` and powered multi-shelf hotbar swapping is not performed.
-//!
-//! TODO(deps): powered multi-slot hotbar swap and side-chain chaining
-//! (`getAllBlocksConnectedTo`, `updateSelfAndNeighborsOnPoweringUp`) once Steel
-//! has the vanilla side-chain helper.
+//! Includes the vanilla `SideChainPartBlock` chaining used by powered shelves:
+//! adjacent powered wooden shelves connect into chains of up to three parts, and
+//! a powered shelf swaps the player's hotbar across the whole chain.
 
 use std::sync::{Arc, Weak};
 
@@ -19,7 +15,8 @@ use steel_registry::blocks::properties::{
     BlockStateProperties, BoolProperty, Direction, EnumProperty, SideChainPart,
 };
 use steel_registry::item_stack::ItemStack;
-use steel_registry::{sound_events, vanilla_block_entity_types, vanilla_game_events};
+use steel_registry::vanilla_block_tags::BlockTag;
+use steel_registry::{REGISTRY, sound_events, vanilla_block_entity_types, vanilla_game_events};
 use steel_utils::types::{InteractionHand, UpdateFlags};
 use steel_utils::{BlockPos, BlockStateId, Downcast as _};
 
@@ -30,7 +27,9 @@ use crate::behavior::{
 };
 use crate::block_entity::entities::ShelfBlockEntity;
 use crate::block_entity::{BLOCK_ENTITIES, BlockEntityTicker};
+use crate::inventory::container::Container as _;
 use crate::player::Player;
+use crate::player::player_inventory::PlayerInventory;
 use crate::world::game_event::GameEventContext;
 use crate::world::{LevelReader, ScheduledTickAccess, SignalGetter as _, World};
 
@@ -42,6 +41,95 @@ const WATERLOGGED: &BoolProperty = &BlockStateProperties::WATERLOGGED;
 /// Columns in a shelf (vanilla `ShelfBlock.getColumns`).
 const SHELF_COLUMNS: i32 = 3;
 const PIXELS_PER_BLOCK_EDGE: f32 = 16.0;
+/// Vanilla `ShelfBlock.getMaxChainLength`.
+const MAX_CHAIN_LENGTH: i32 = 3;
+
+/// Vanilla `SideChainPart.isConnected`.
+const fn part_is_connected(part: SideChainPart) -> bool {
+    !matches!(part, SideChainPart::Unconnected)
+}
+
+/// Vanilla `SideChainPart.isConnectionTowards`.
+const fn part_connects_towards(part: SideChainPart, end: SideChainPart) -> bool {
+    matches!(
+        (part, end),
+        (SideChainPart::Center, _)
+            | (SideChainPart::Right, SideChainPart::Right)
+            | (SideChainPart::Left, SideChainPart::Left)
+    )
+}
+
+/// Vanilla `SideChainPart.isChainEnd`.
+const fn part_is_chain_end(part: SideChainPart) -> bool {
+    !matches!(part, SideChainPart::Center)
+}
+
+/// Vanilla `SideChainPart.whenConnectedToTheRight`.
+const fn part_connected_to_right(part: SideChainPart) -> SideChainPart {
+    match part {
+        SideChainPart::Unconnected | SideChainPart::Left => SideChainPart::Left,
+        SideChainPart::Right | SideChainPart::Center => SideChainPart::Center,
+    }
+}
+
+/// Vanilla `SideChainPart.whenConnectedToTheLeft`.
+const fn part_connected_to_left(part: SideChainPart) -> SideChainPart {
+    match part {
+        SideChainPart::Unconnected | SideChainPart::Right => SideChainPart::Right,
+        SideChainPart::Center | SideChainPart::Left => SideChainPart::Center,
+    }
+}
+
+/// Vanilla `SideChainPart.whenDisconnectedFromTheRight`.
+const fn part_disconnected_from_right(part: SideChainPart) -> SideChainPart {
+    match part {
+        SideChainPart::Unconnected | SideChainPart::Left => SideChainPart::Unconnected,
+        SideChainPart::Right | SideChainPart::Center => SideChainPart::Right,
+    }
+}
+
+/// Vanilla `SideChainPart.whenDisconnectedFromTheLeft`.
+const fn part_disconnected_from_left(part: SideChainPart) -> SideChainPart {
+    match part {
+        SideChainPart::Unconnected | SideChainPart::Right => SideChainPart::Unconnected,
+        SideChainPart::Center | SideChainPart::Left => SideChainPart::Left,
+    }
+}
+
+/// One step of a shelf side chain (vanilla `SideChainPartBlock.Neighbor`).
+#[derive(Clone, Copy)]
+enum ChainNeighbor {
+    /// Vanilla `SideChainPartBlock.EmptyNeighbor`.
+    Empty(BlockPos),
+    /// Vanilla `SideChainPartBlock.SideChainNeighbor`.
+    Side { pos: BlockPos, part: SideChainPart },
+}
+
+impl ChainNeighbor {
+    const fn pos(self) -> BlockPos {
+        match self {
+            Self::Empty(pos) | Self::Side { pos, .. } => pos,
+        }
+    }
+
+    const fn is_connectable(self) -> bool {
+        matches!(self, Self::Side { .. })
+    }
+
+    const fn is_unconnectable_or_chain_end(self) -> bool {
+        match self {
+            Self::Empty(_) => true,
+            Self::Side { part, .. } => part_is_chain_end(part),
+        }
+    }
+
+    const fn connects_towards(self, end_part: SideChainPart) -> bool {
+        match self {
+            Self::Empty(_) => false,
+            Self::Side { part, .. } => part_connects_towards(part, end_part),
+        }
+    }
+}
 
 /// `ShelfBlock` behavior.
 #[block_behavior]
@@ -95,6 +183,236 @@ impl ShelfBlock {
     ) {
         world.play_block_sound(sound, pos, 1.0, 1.0, None);
     }
+
+    /// Vanilla `SideChainPartBlock.isConnectable`.
+    fn is_connectable(state: BlockStateId) -> bool {
+        REGISTRY
+            .blocks
+            .by_state_id(state)
+            .is_some_and(|block| block.has_tag(&BlockTag::WOODEN_SHELVES))
+            && state.try_get_value(POWERED) == Some(true)
+    }
+
+    /// Reads one chain neighbor at `steps` in the clockwise (`left`) or
+    /// counter-clockwise (`right`) direction from `center`.
+    fn neighbor_at(
+        world: &dyn LevelReader,
+        center: BlockPos,
+        facing: Direction,
+        clockwise: bool,
+        steps: i32,
+    ) -> ChainNeighbor {
+        let direction = if clockwise {
+            facing.rotate_y_clockwise()
+        } else {
+            facing.rotate_y_counter_clockwise()
+        };
+        let pos = center.relative_n(direction, steps);
+        let state = world.get_block_state(pos);
+        let connectable =
+            Self::is_connectable(state) && state.try_get_value(FACING) == Some(facing);
+        if connectable {
+            ChainNeighbor::Side {
+                pos,
+                part: state.get_value(SIDE_CHAIN_PART),
+            }
+        } else {
+            ChainNeighbor::Empty(pos)
+        }
+    }
+
+    /// Vanilla `SideChainPartBlock.getAllBlocksConnectedTo`.
+    fn all_blocks_connected_to(world: &dyn LevelReader, pos: BlockPos) -> Vec<BlockPos> {
+        let state = world.get_block_state(pos);
+        if !Self::is_connectable(state) {
+            return Vec::new();
+        }
+        let facing = state.get_value(FACING);
+
+        let mut results = vec![pos];
+        Self::add_blocks_connecting_towards(
+            world,
+            pos,
+            facing,
+            true,
+            SideChainPart::Left,
+            &mut results,
+            true,
+        );
+        Self::add_blocks_connecting_towards(
+            world,
+            pos,
+            facing,
+            false,
+            SideChainPart::Right,
+            &mut results,
+            false,
+        );
+        results
+    }
+
+    fn add_blocks_connecting_towards(
+        world: &dyn LevelReader,
+        center: BlockPos,
+        facing: Direction,
+        clockwise: bool,
+        end_part: SideChainPart,
+        results: &mut Vec<BlockPos>,
+        prepend: bool,
+    ) {
+        for steps in 1..MAX_CHAIN_LENGTH {
+            let neighbor = Self::neighbor_at(world, center, facing, clockwise, steps);
+            if neighbor.connects_towards(end_part) {
+                if prepend {
+                    results.insert(0, neighbor.pos());
+                } else {
+                    results.push(neighbor.pos());
+                }
+            }
+            if neighbor.is_unconnectable_or_chain_end() {
+                break;
+            }
+        }
+    }
+
+    /// Vanilla `SideChainPartBlock.setPart`.
+    fn set_part(world: &Arc<World>, pos: BlockPos, new_part: SideChainPart) {
+        let state = world.get_block_state(pos);
+        if state.get_value(SIDE_CHAIN_PART) != new_part {
+            world.set_block(
+                pos,
+                state.set_value(SIDE_CHAIN_PART, new_part),
+                UpdateFlags::UPDATE_ALL_IMMEDIATE,
+            );
+        }
+    }
+
+    /// Vanilla `SideChainPartBlock.updateNeighborsAfterPoweringDown`.
+    fn update_neighbors_after_powering_down(
+        world: &Arc<World>,
+        pos: BlockPos,
+        state: BlockStateId,
+    ) {
+        let facing = state.get_value(FACING);
+        let left = Self::neighbor_at(world, pos, facing, true, 1);
+        if let ChainNeighbor::Side {
+            pos: neighbor_pos,
+            part,
+        } = left
+        {
+            Self::set_part(world, neighbor_pos, part_disconnected_from_right(part));
+        }
+        let right = Self::neighbor_at(world, pos, facing, false, 1);
+        if let ChainNeighbor::Side {
+            pos: neighbor_pos,
+            part,
+        } = right
+        {
+            Self::set_part(world, neighbor_pos, part_disconnected_from_left(part));
+        }
+    }
+
+    /// Vanilla `SideChainPartBlock.updateSelfAndNeighborsOnPoweringUp`.
+    fn update_self_and_neighbors_on_powering_up(
+        world: &Arc<World>,
+        pos: BlockPos,
+        state: BlockStateId,
+        old_state: BlockStateId,
+    ) {
+        if !Self::is_connectable(state) || Self::is_being_updated_by_neighbor(state, old_state) {
+            return;
+        }
+
+        let facing = state.get_value(FACING);
+        let left = Self::neighbor_at(world, pos, facing, true, 1);
+        let right = Self::neighbor_at(world, pos, facing, false, 1);
+        let left_chain = if left.is_connectable() {
+            Self::all_blocks_connected_to(world, left.pos()).len()
+        } else {
+            0
+        };
+        let right_chain = if right.is_connectable() {
+            Self::all_blocks_connected_to(world, right.pos()).len()
+        } else {
+            0
+        };
+
+        let mut new_part = SideChainPart::Unconnected;
+        let mut current_chain_length = 1usize;
+        if Self::can_connect(left_chain, current_chain_length) {
+            new_part = part_connected_to_left(new_part);
+            if let ChainNeighbor::Side {
+                pos: left_pos,
+                part,
+            } = left
+            {
+                Self::set_part(world, left_pos, part_connected_to_right(part));
+            }
+            current_chain_length += left_chain;
+        }
+        if Self::can_connect(right_chain, current_chain_length)
+            && let ChainNeighbor::Side {
+                pos: right_pos,
+                part,
+            } = right
+        {
+            new_part = part_connected_to_right(new_part);
+            Self::set_part(world, right_pos, part_connected_to_left(part));
+        }
+
+        Self::set_part(world, pos, new_part);
+    }
+
+    /// Vanilla `SideChainPartBlock.canConnect`.
+    const fn can_connect(new_blocks_to_connect_to: usize, current_chain_length: usize) -> bool {
+        new_blocks_to_connect_to > 0
+            && current_chain_length + new_blocks_to_connect_to <= MAX_CHAIN_LENGTH as usize
+    }
+
+    /// Vanilla `SideChainPartBlock.isBeingUpdatedByNeighbor`.
+    fn is_being_updated_by_neighbor(state: BlockStateId, old_state: BlockStateId) -> bool {
+        let is_getting_connected = part_is_connected(state.get_value(SIDE_CHAIN_PART));
+        let has_been_connected_before = Self::is_connectable(old_state)
+            && part_is_connected(old_state.get_value(SIDE_CHAIN_PART));
+        is_getting_connected || has_been_connected_before
+    }
+
+    /// Vanilla `ShelfBlock.swapHotbar`.
+    fn swap_hotbar(world: &Arc<World>, pos: BlockPos, inv: &mut InventoryAccess) -> bool {
+        let connected = Self::all_blocks_connected_to(world, pos);
+        if connected.is_empty() {
+            return false;
+        }
+
+        let mut any_swapped = false;
+        inv.with_inventory(|inventory| {
+            for (part_index, shelf_pos) in connected.iter().enumerate() {
+                let Some(block_entity) = world.get_block_entity(*shelf_pos) else {
+                    continue;
+                };
+                let Some(shelf) = block_entity.downcast_ref::<ShelfBlockEntity>() else {
+                    continue;
+                };
+
+                for slot in 0..SHELF_COLUMNS as usize {
+                    let inventory_slot =
+                        9 - (connected.len() - part_index) * SHELF_COLUMNS as usize + slot;
+                    if inventory_slot >= PlayerInventory::INVENTORY_SIZE {
+                        continue;
+                    }
+
+                    let placed = inventory.get_item(inventory_slot).clone();
+                    let replaced = shelf.swap_item(slot, placed.clone());
+                    if !placed.is_empty() || !replaced.is_empty() {
+                        inventory.set_item(inventory_slot, replaced);
+                        any_swapped = true;
+                    }
+                }
+                shelf.mark_changed(world, Some(&vanilla_game_events::ENTITY_INTERACT));
+            }
+        });
+        any_swapped
+    }
 }
 
 impl BlockBehavior for ShelfBlock {
@@ -123,6 +441,34 @@ impl BlockBehavior for ShelfBlock {
     ) -> BlockStateId {
         schedule_water_tick_if_waterlogged(state, world, pos);
         state
+    }
+
+    /// Vanilla `ShelfBlock.onPlace`: connect or disconnect the side chain.
+    fn on_place(
+        &self,
+        state: BlockStateId,
+        world: &Arc<World>,
+        pos: BlockPos,
+        old_state: BlockStateId,
+        _moved_by_piston: bool,
+    ) {
+        if state.get_value(POWERED) {
+            Self::update_self_and_neighbors_on_powering_up(world, pos, state, old_state);
+        } else {
+            Self::update_neighbors_after_powering_down(world, pos, state);
+        }
+    }
+
+    /// Vanilla `ShelfBlock.affectNeighborsAfterRemoval`: disconnect the chain
+    /// around a removed shelf.
+    fn affect_neighbors_after_removal(
+        &self,
+        state: BlockStateId,
+        world: &Arc<World>,
+        pos: BlockPos,
+        _moved_by_piston: bool,
+    ) {
+        Self::update_neighbors_after_powering_down(world, pos, state);
     }
 
     fn handle_neighbor_changed(
@@ -189,9 +535,12 @@ impl BlockBehavior for ShelfBlock {
         };
 
         if state.get_value(POWERED) {
-            // TODO(deps): powered multi-slot hotbar swap needs the side-chain
-            // helper to gather connected shelves.
-            return InteractionResult::Consume;
+            let any_swapped = Self::swap_hotbar(world, pos, inv);
+            if !any_swapped {
+                return InteractionResult::Consume;
+            }
+            Self::play_sound(world, pos, &sound_events::BLOCK_SHELF_MULTI_SWAP);
+            return InteractionResult::SuccessServer;
         }
 
         let removed = inv.with_item(|held| {

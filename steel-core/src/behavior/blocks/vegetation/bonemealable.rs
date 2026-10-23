@@ -51,6 +51,17 @@ pub trait Bonemealable {
     fn bonemeal_action_type(&self) -> BonemealAction {
         BonemealAction::Grower
     }
+
+    /// Returns where bonemeal particles spawn. Vanilla `BonemealableBlock.getParticlePos`.
+    ///
+    /// Defaults to the neighbour-spreader/grower split; blocks such as rooted dirt
+    /// override it to emit particles below themselves.
+    fn get_particle_pos(&self, pos: BlockPos) -> BlockPos {
+        match self.bonemeal_action_type() {
+            BonemealAction::NeighborSpreader => pos.above(),
+            BonemealAction::Grower => pos,
+        }
+    }
 }
 
 /// How bonemeal affects the block.
@@ -59,19 +70,6 @@ pub enum BonemealAction {
     NeighborSpreader,
     /// Grows this block directly.
     Grower,
-}
-
-impl BonemealAction {
-    /// Returns the particle position for this bonemeal action.
-    // TODO: Rooted dirt is a GROWER in vanilla but overrides getParticlePos to pos.below().
-    // Add a per-block particle-position hook before wiring bonemeal particles.
-    #[expect(dead_code, reason = "used later for spawning the particles")]
-    const fn particle_pos(&self, pos: BlockPos) -> BlockPos {
-        match self {
-            BonemealAction::NeighborSpreader => pos.above(),
-            BonemealAction::Grower => pos,
-        }
-    }
 }
 
 /// Vanilla spreadable-neighbor target check.

@@ -484,7 +484,7 @@ impl CatEntity {
     /// Vanilla `Cat.feed`: consume the stack, heal and play the eating sound.
     fn feed(&self, player: &Player, hand: InteractionHand) {
         Mob::use_player_item(self, player, hand);
-        // GAP: `FoodProperties.nutrition` is not modelled, so vanilla's
+        // GAP: `FoodProperties.nutrition` is not modeled, so vanilla's
         // `healingFactor * nutrition` collapses to the `defaultHeal` of 1.0.
         self.heal(1.0);
         Animal::play_eating_sound(self);

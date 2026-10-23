@@ -515,9 +515,7 @@ impl NbtPathNode {
     ) -> usize {
         match self {
             Self::CompoundChild(name) => match parent {
-                NbtTag::Compound(compound) => {
-                    compound.get_mut(name).map_or(0, |child| visitor(child))
-                }
+                NbtTag::Compound(compound) => compound.get_mut(name).map_or(0, &mut *visitor),
                 _ => 0,
             },
             Self::MatchObject { name, pattern } => match parent {
@@ -528,7 +526,7 @@ impl NbtPathNode {
                     if !matches {
                         return 0;
                     }
-                    compound.get_mut(name).map_or(0, |child| visitor(child))
+                    compound.get_mut(name).map_or(0, &mut *visitor)
                 }
                 _ => 0,
             },
@@ -967,14 +965,14 @@ fn insert_values_into_collection(
     }
     // Vanilla's `index < 0 ? size + index + 1 : index`, evaluated per target.
     let len = collection_len(parent).unwrap_or(0);
-    let mut actual = if index < 0 {
+    let first = if index < 0 {
         i64::try_from(len).unwrap_or(i64::MAX) + i64::from(index) + 1
     } else {
         i64::from(index)
     };
 
     let mut modified = false;
-    for value in values {
+    for (value, actual) in values.iter().zip(first..) {
         let Ok(offset) = usize::try_from(actual) else {
             return Err(NbtPathMutationError::InvalidIndex(
                 i32::try_from(actual).unwrap_or(i32::MAX),
@@ -986,7 +984,6 @@ fn insert_values_into_collection(
             ));
         }
         modified = true;
-        actual += 1;
     }
     Ok(usize::from(modified))
 }
@@ -1776,7 +1773,7 @@ mod tests {
         let mut tag = compound([("foo", compound([("bar", NbtTag::Int(1))]))]);
 
         assert_eq!(path.remove(&mut tag), 1);
-        assert!(path.get(&tag).is_empty());
+        assert_eq!(path.get(&tag), Vec::<NbtTag>::new());
         assert_eq!(path.remove(&mut tag), 0);
     }
 

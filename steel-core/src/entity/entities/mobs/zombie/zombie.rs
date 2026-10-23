@@ -83,8 +83,10 @@ const DROWNING_CONVERSION_TIME: i32 = 300;
 const CAN_PICK_UP_LOOT_CHANCE: f32 = 0.55;
 const SPAWN_AS_BABY_CHANCE: f32 = 0.05;
 const JOCKEY_CHANCE: f32 = 0.05;
-const ZOMBIE_ARMOR_CHANCE: f32 = 0.05;
-const ZOMBIE_ARMOR_CHANCE_HARD: f32 = 0.01;
+/// Vanilla `Zombie.populateDefaultEquipmentSlots` weapon chance on hard difficulty.
+const ZOMBIE_WEAPON_CHANCE_HARD: f32 = 0.05;
+/// Vanilla `Zombie.populateDefaultEquipmentSlots` weapon chance otherwise.
+const ZOMBIE_WEAPON_CHANCE: f32 = 0.01;
 /// Vanilla `Drowned.populateDefaultEquipmentSlots`: `random.nextFloat() > 0.9`.
 const DROWNED_EQUIPMENT_CHANCE: f32 = 0.9;
 /// Vanilla `Drowned.populateDefaultEquipmentSlots`: `random.nextInt(16) < 10`.
@@ -500,78 +502,152 @@ impl ZombieEntity {
         spawn_reason: EntitySpawnReason,
         random: &mut impl steel_utils::random::Random,
     ) {
-        self.randomize_reinforcements_chance(random);
-        {
-            let mut attributes = self.attributes().lock();
+        // Vanilla `Zombie.randomizeReinforcementsChance` runs before the other
+        // `handleAttributes` rolls, so the draw stays first.
+        let reinforcement_chance = random.next_f64() * 0.1;
+        handle_zombie_spawn_attributes(
+            self,
+            difficulty_modifier,
+            spawn_reason,
+            random,
+            &|can_break_doors| self.set_can_break_doors(can_break_doors),
+            Some(reinforcement_chance),
+        );
+    }
+}
+
+/// Vanilla `Zombie.handleAttributes`, shared by every zombie-family mob.
+pub(crate) fn handle_zombie_spawn_attributes(
+    mob: &dyn Mob,
+    difficulty_modifier: f32,
+    spawn_reason: EntitySpawnReason,
+    random: &mut impl steel_utils::random::Random,
+    set_can_break_doors: &dyn Fn(bool),
+    reinforcement_chance: Option<f64>,
+) {
+    // Vanilla `Zombie.randomizeReinforcementsChance`, which `ZombifiedPiglin`
+    // overrides to a flat `0.0`.
+    if let Some(amount) = reinforcement_chance {
+        mob.attributes()
+            .lock()
+            .set_base_value(vanilla_attributes::SPAWN_REINFORCEMENTS, amount);
+    }
+    {
+        let mut attributes = mob.attributes().lock();
+        attributes.set_modifier(
+            vanilla_attributes::KNOCKBACK_RESISTANCE,
+            AttributeModifier {
+                id: ZOMBIE_RANDOM_SPAWN_BONUS_ID,
+                amount: random.next_f64() * KNOCKBACK_RESISTANCE_BONUS,
+                operation: AttributeModifierOperation::AddValue,
+            },
+            true,
+        );
+
+        let follow_range_modifier =
+            random.next_f64() * FOLLOW_RANGE_BONUS * f64::from(difficulty_modifier);
+        if follow_range_modifier > 1.0 {
             attributes.set_modifier(
-                vanilla_attributes::KNOCKBACK_RESISTANCE,
+                vanilla_attributes::FOLLOW_RANGE,
                 AttributeModifier {
                     id: ZOMBIE_RANDOM_SPAWN_BONUS_ID,
-                    amount: random.next_f64() * KNOCKBACK_RESISTANCE_BONUS,
+                    amount: follow_range_modifier,
+                    operation: AttributeModifierOperation::AddMultipliedTotal,
+                },
+                true,
+            );
+        }
+    }
+
+    if random.next_f32() < difficulty_modifier * ZOMBIE_LEADER_CHANCE {
+        {
+            let mut attributes = mob.attributes().lock();
+            attributes.set_modifier(
+                vanilla_attributes::SPAWN_REINFORCEMENTS,
+                AttributeModifier {
+                    id: LEADER_ZOMBIE_BONUS_ID,
+                    amount: random.next_f64() * LEADER_REINFORCEMENT_BONUS
+                        + LEADER_REINFORCEMENT_BONUS_BASE,
                     operation: AttributeModifierOperation::AddValue,
                 },
                 true,
             );
-
-            let follow_range_modifier =
-                random.next_f64() * FOLLOW_RANGE_BONUS * f64::from(difficulty_modifier);
-            if follow_range_modifier > 1.0 {
-                attributes.set_modifier(
-                    vanilla_attributes::FOLLOW_RANGE,
-                    AttributeModifier {
-                        id: ZOMBIE_RANDOM_SPAWN_BONUS_ID,
-                        amount: follow_range_modifier,
-                        operation: AttributeModifierOperation::AddMultipliedTotal,
-                    },
-                    true,
-                );
-            }
+            attributes.set_modifier(
+                vanilla_attributes::MAX_HEALTH,
+                AttributeModifier {
+                    id: LEADER_ZOMBIE_BONUS_ID,
+                    amount: random.next_f64() * LEADER_HEALTH_BONUS + LEADER_HEALTH_BONUS_BASE,
+                    operation: AttributeModifierOperation::AddMultipliedTotal,
+                },
+                true,
+            );
         }
 
-        if random.next_f32() < difficulty_modifier * ZOMBIE_LEADER_CHANCE {
-            {
-                let mut attributes = self.attributes().lock();
-                attributes.set_modifier(
-                    vanilla_attributes::SPAWN_REINFORCEMENTS,
-                    AttributeModifier {
-                        id: LEADER_ZOMBIE_BONUS_ID,
-                        amount: random.next_f64() * LEADER_REINFORCEMENT_BONUS
-                            + LEADER_REINFORCEMENT_BONUS_BASE,
-                        operation: AttributeModifierOperation::AddValue,
-                    },
-                    true,
-                );
-                attributes.set_modifier(
-                    vanilla_attributes::MAX_HEALTH,
-                    AttributeModifier {
-                        id: LEADER_ZOMBIE_BONUS_ID,
-                        amount: random.next_f64() * LEADER_HEALTH_BONUS + LEADER_HEALTH_BONUS_BASE,
-                        operation: AttributeModifierOperation::AddMultipliedTotal,
-                    },
-                    true,
-                );
-            }
-
-            if !matches!(
-                spawn_reason,
-                EntitySpawnReason::Conversion
-                    | EntitySpawnReason::Load
-                    | EntitySpawnReason::DimensionTravel
-            ) {
-                self.set_health(self.get_max_health());
-            }
-
-            self.set_can_break_doors(true);
+        if !matches!(
+            spawn_reason,
+            EntitySpawnReason::Conversion
+                | EntitySpawnReason::Load
+                | EntitySpawnReason::DimensionTravel
+        ) {
+            mob.set_health(mob.get_max_health());
         }
+
+        set_can_break_doors(true);
+    }
+}
+
+/// Vanilla `Zombie.populateDefaultEquipmentSlots` for the non-drowned variants,
+/// shared with `ZombieVillager`.
+pub(crate) fn populate_zombie_equipment_slots(
+    mob: &dyn Mob,
+    random: &mut impl steel_utils::random::Random,
+    difficulty_modifier: f32,
+) {
+    crate::entity::entities::mobs::spawn_equipment::populate_default_equipment_slots(
+        mob,
+        random,
+        difficulty_modifier,
+    );
+
+    let chance = if mob
+        .level()
+        .is_some_and(|world| world.difficulty() == Difficulty::Hard)
+    {
+        ZOMBIE_WEAPON_CHANCE_HARD
+    } else {
+        ZOMBIE_WEAPON_CHANCE
+    };
+    if random.next_f32() >= chance {
+        return;
     }
 
-    fn randomize_reinforcements_chance(&self, random: &mut impl steel_utils::random::Random) {
-        let amount = random.next_f64() * 0.1;
-        self.attributes()
-            .lock()
-            .set_base_value(vanilla_attributes::SPAWN_REINFORCEMENTS, amount);
-    }
+    let item = match random.next_i32_bounded(6) {
+        0 => &vanilla_items::IRON_SWORD,
+        1 => &vanilla_items::IRON_SPEAR,
+        _ => &vanilla_items::IRON_SHOVEL,
+    };
+    mob.living_base()
+        .equipment()
+        .lock()
+        .set(EquipmentSlot::MainHand, ItemStack::new(item));
+}
 
+/// Vanilla `Zombie.populateDefaultEquipmentEnchantments`, shared with
+/// `ZombieVillager`.
+pub(crate) fn populate_zombie_equipment_enchantments(
+    mob: &dyn Mob,
+    random: &mut (impl steel_utils::random::Random
+          + steel_registry::enchantment::table::EnchantmentRandom),
+    difficulty_modifier: f32,
+) {
+    crate::entity::entities::mobs::spawn_equipment::populate_default_equipment_enchantments(
+        mob,
+        random,
+        difficulty_modifier,
+    );
+}
+
+impl ZombieEntity {
     /// Checked when damage lands; mirrors the vanilla `hurtServer` re-target and
     /// reinforcement roll. The vanilla source entity is not observable through
     /// Steel's `before_actually_hurt` hook, so re-targeting to the attacker is
@@ -717,24 +793,18 @@ impl ZombieEntity {
             return;
         }
 
-        let chance = if difficulty_modifier >= 1.0 {
-            ZOMBIE_ARMOR_CHANCE_HARD
-        } else {
-            ZOMBIE_ARMOR_CHANCE
-        };
-        if random.next_f32() >= chance {
-            return;
-        }
+        populate_zombie_equipment_slots(self, random, difficulty_modifier);
+    }
 
-        let item = match random.next_i32_bounded(6) {
-            0 => &vanilla_items::IRON_SWORD,
-            1 => &vanilla_items::IRON_SPEAR,
-            _ => &vanilla_items::IRON_SHOVEL,
-        };
-        self.living_base()
-            .equipment()
-            .lock()
-            .set(EquipmentSlot::MainHand, ItemStack::new(item));
+    /// Vanilla `Zombie.populateDefaultEquipmentEnchantments`; the zombie has no
+    /// override, so it is `Mob`'s weapon-then-armor pass.
+    fn populate_default_equipment_enchantments(
+        &self,
+        random: &mut (impl steel_utils::random::Random
+              + steel_registry::enchantment::table::EnchantmentRandom),
+        difficulty_modifier: f32,
+    ) {
+        populate_zombie_equipment_enchantments(self, random, difficulty_modifier);
     }
 
     /// Vanilla `Mob.dropPreservedEquipment(level, shouldDrop)`.
@@ -1115,6 +1185,7 @@ impl Mob for ZombieEntity {
             self.set_can_break_doors(random.next_f32() < difficulty_modifier * BREAK_DOOR_CHANCE);
             if spawn_reason != EntitySpawnReason::Conversion {
                 self.populate_default_equipment_slots(&mut random, difficulty_modifier);
+                self.populate_default_equipment_enchantments(&mut random, difficulty_modifier);
             }
         }
 

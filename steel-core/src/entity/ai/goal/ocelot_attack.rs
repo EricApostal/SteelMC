@@ -40,10 +40,11 @@ impl OcelotAttackGoal {
         }
     }
 
-    /// Vanilla `mob.getBbWidth() * 2.0F * (mob.getBbWidth() * 2.0F)`.
+    /// Vanilla `mob.getBbWidth() * 2.0F * (mob.getBbWidth() * 2.0F)`: the product is evaluated
+    /// in float and only then widened to double.
     fn melee_radius_sqr(mob: &dyn PathfinderMob) -> f64 {
-        let double_width = mob.bounding_box().width() * 2.0;
-        double_width * double_width
+        let double_width = mob.bounding_box().width() as f32 * 2.0;
+        f64::from(double_width * double_width)
     }
 }
 

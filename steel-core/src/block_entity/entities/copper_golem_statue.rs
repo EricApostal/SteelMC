@@ -5,15 +5,25 @@
 //! block entity's data components, and `createStatue`/`removeStatue` convert between a live
 //! `CopperGolem` and the statue. Steel keeps the custom-name component through the standard
 //! component map, so the entity only needs the golem conversion hooks.
+//!
+//! Deviation: vanilla `CopperGolemStatueBlockEntity.createStatue` writes the golem's custom name
+//! into the block entity's component map (`BlockEntity.setComponents`). Steel's
+//! `BlockEntityBase` exposes only `stored_components()` (a clone), so there is no way to write a
+//! single component yet; owner: `steel-core/src/block_entity/mod.rs`.
 
 use std::sync::Weak;
 
+use glam::DVec3;
 use simdnbt::borrow::BaseNbtCompound as BorrowedNbtCompound;
 use simdnbt::owned::NbtCompound;
-use steel_registry::vanilla_block_entity_types;
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+use steel_registry::blocks::properties::BlockStateProperties;
+use steel_registry::data_components::vanilla_components::CUSTOM_NAME;
+use steel_registry::{sound_events, vanilla_block_entity_types, vanilla_entities};
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
 use crate::block_entity::{BlockEntity, BlockEntityBase};
+use crate::entity::{ENTITIES, Entity, LivingEntity, SharedEntity, next_entity_id};
 use crate::world::World;
 
 /// `CopperGolemStatueBlockEntity`.
@@ -41,16 +51,36 @@ impl CopperGolemStatueBlockEntity {
         }
     }
 
-    /// Vanilla `CopperGolemStatueBlockEntity.removeStatue`: converts the statue back into a live
-    /// copper golem at the block centre with the statue's facing.
+    /// Vanilla `CopperGolemStatueBlockEntity.removeStatue` + `initCopperGolem`: builds the live
+    /// copper golem the statue stands for, centered on the block with the statue's facing and
+    /// carrying the statue's stored custom name.
     ///
-    /// Returns `None` while the entity lane has no `COPPER_GOLEM` factory.
-    pub fn remove_statue(&self) -> Option<crate::entity::SharedEntity> {
-        // TODO(Entities): create a `COPPER_GOLEM` at the block centre with the block's facing,
-        // copy the stored custom name and play its spawn sound (vanilla
-        // `CopperGolemStatueBlockEntity.removeStatue` + `initCopperGolem`). Blocked on the entity
-        // lane registering a `vanilla_entities::COPPER_GOLEM` factory.
-        None
+    /// Like vanilla, the golem is only created here; the caller adds it to the world.
+    pub fn remove_statue(&self) -> Option<SharedEntity> {
+        let world = self.get_level()?;
+        let pos = self.get_block_pos();
+        let (center_x, _, center_z) = pos.get_center();
+        let position = DVec3::new(center_x, f64::from(pos.y()), center_z);
+        let entity = ENTITIES.create(
+            &vanilla_entities::COPPER_GOLEM,
+            next_entity_id(),
+            position,
+            std::sync::Arc::downgrade(&world),
+        )?;
+
+        entity.set_custom_name(self.stored_components().get(CUSTOM_NAME));
+
+        let yaw = self
+            .get_block_state()
+            .get_value(&BlockStateProperties::HORIZONTAL_FACING)
+            .to_yaw();
+        entity.snap_to(position, yaw, 0.0);
+        if let Some(living) = entity.as_living_entity() {
+            living.set_y_head_rot(yaw);
+            living.set_y_body_rot(yaw);
+        }
+        entity.play_sound(&sound_events::ENTITY_COPPER_GOLEM_SPAWN, 1.0, 1.0);
+        Some(entity)
     }
 }
 

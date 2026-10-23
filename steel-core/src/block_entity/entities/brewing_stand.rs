@@ -17,9 +17,9 @@ use steel_registry::item_stack::ItemStack;
 use steel_registry::items::ItemRef;
 use steel_registry::recipe::{BrewingInput, vanilla_recipe_types};
 use steel_registry::{
-    REGISTRY, RegistryExt as _, TaggedRegistryExt, vanilla_block_entity_types, vanilla_blocks,
-    vanilla_context_float_providers, vanilla_context_int_providers, vanilla_item_tags,
-    vanilla_items,
+    REGISTRY, RegistryExt as _, TaggedRegistryExt, level_events, vanilla_block_entity_types,
+    vanilla_blocks, vanilla_context_float_providers, vanilla_context_int_providers,
+    vanilla_item_tags, vanilla_items,
 };
 use steel_utils::types::UpdateFlags;
 use steel_utils::{
@@ -47,7 +47,7 @@ const SLOTS_FOR_SIDES: &[usize] = &[SLOT_BOTTLE_START, 1, 2, SLOT_FUEL];
 /// Fuel uses granted by vanilla's `minecraft:brewing/uses_default` provider.
 ///
 /// The `minecraft:brewing_fuel` component names this provider key; the value is
-/// read from the context-int-provider registry so a datapack override is honoured.
+/// read from the context-int-provider registry so a datapack override is honored.
 fn default_fuel_uses() -> i32 {
     vanilla_context_int_providers::BREWING_USES_DEFAULT
         .provider
@@ -73,7 +73,7 @@ fn default_speed_multiplier() -> f32 {
 ///
 /// Mirrors vanilla, where the component names a context provider and the value
 /// is resolved from the registry, so a datapack override of the provider value
-/// is honoured. Brewing fuel providers are context-free constants in vanilla.
+/// is honored. Brewing fuel providers are context-free constants in vanilla.
 fn resolve_fuel_uses(key: &Identifier) -> Option<i32> {
     if let Some(entry) = REGISTRY.context_int_providers.by_key(key) {
         if let Some(value) = entry.provider.as_constant() {
@@ -150,8 +150,10 @@ enum BrewingTick {
     Idle,
     /// Bottle occupancy changed; the caller updates `HAS_BOTTLE_*`.
     BottleBits([bool; 3]),
-    /// A batch finished brewing; the caller emits the vanilla level event.
-    Brewed([bool; 3]),
+    /// A batch finished brewing without changing bottle occupancy.
+    Brewed,
+    /// A batch finished brewing and the bottle occupancy changed.
+    BrewedWithBits([bool; 3]),
 }
 
 impl BrewingStandContainer {
@@ -279,23 +281,25 @@ impl BrewingStandContainer {
         let ingredient_matches = self
             .ingredient
             .is_some_and(|item| self.items[SLOT_INGREDIENT].is(item));
+        let mut brewed = false;
         if self.brew_time > 0 {
+            // Vanilla marks the entity changed on every tick of a running batch,
+            // even when the brew is merely counting down.
             self.brew_time -= 1;
+            self.dirty = true;
             if self.brew_time == 0 {
-                if brewable && ingredient_matches {
-                    self.dirty = true;
+                // Vanilla brews with whatever reagent the slot holds now; only the
+                // recipe match is re-checked at completion time.
+                if brewable {
                     self.brew();
-                    let bits = Self::potion_bits(&self.items);
-                    self.last_potion_bits = bits;
-                    return BrewingTick::Brewed(bits);
+                    brewed = true;
+                } else {
+                    self.brew_time = 0;
+                    self.ingredient = None;
                 }
-                self.brew_time = 0;
-                self.ingredient = None;
-                self.dirty = true;
             } else if !brewable || !ingredient_matches {
                 self.brew_time = 0;
                 self.ingredient = None;
-                self.dirty = true;
             }
         } else if brewable && self.fuel > 0 {
             let speed = if self.speed_multiplier > 0.0 {
@@ -313,7 +317,13 @@ impl BrewingStandContainer {
         let bits = Self::potion_bits(&self.items);
         if bits != self.last_potion_bits {
             self.last_potion_bits = bits;
-            BrewingTick::BottleBits(bits)
+            if brewed {
+                BrewingTick::BrewedWithBits(bits)
+            } else {
+                BrewingTick::BottleBits(bits)
+            }
+        } else if brewed {
+            BrewingTick::Brewed
         } else {
             BrewingTick::Idle
         }
@@ -397,9 +407,11 @@ impl Container for BrewingStandContainer {
         &self,
         slot: usize,
         stack: &ItemStack,
-        direction: Direction,
+        _direction: Direction,
     ) -> bool {
-        if direction != Direction::Down || slot != SLOT_INGREDIENT {
+        // Vanilla `BrewingStandBlockEntity.canTakeItemThroughFace` only special-cases
+        // the reagent slot, for every face that exposes it.
+        if slot != SLOT_INGREDIENT {
             return true;
         }
         stack.is(&vanilla_items::GLASS_BOTTLE)
@@ -445,8 +457,21 @@ impl BrewingStandBlockEntity {
         match tick {
             BrewingTick::Idle => {}
             BrewingTick::BottleBits(bits) => self.sync_bottle_states(world, bits),
-            BrewingTick::Brewed(bits) => {
-                world.level_event(1035, self.get_block_pos(), 0, None);
+            BrewingTick::Brewed => {
+                world.level_event(
+                    level_events::SOUND_BREWING_STAND_BREW,
+                    self.get_block_pos(),
+                    0,
+                    None,
+                );
+            }
+            BrewingTick::BrewedWithBits(bits) => {
+                world.level_event(
+                    level_events::SOUND_BREWING_STAND_BREW,
+                    self.get_block_pos(),
+                    0,
+                    None,
+                );
                 self.sync_bottle_states(world, bits);
             }
         }
@@ -462,7 +487,7 @@ impl BrewingStandBlockEntity {
             .set_value(&BlockStateProperties::HAS_BOTTLE_0, bits[0])
             .set_value(&BlockStateProperties::HAS_BOTTLE_1, bits[1])
             .set_value(&BlockStateProperties::HAS_BOTTLE_2, bits[2]);
-        world.set_block(self.get_block_pos(), state, UpdateFlags::UPDATE_ALL);
+        world.set_block(self.get_block_pos(), state, UpdateFlags::UPDATE_CLIENTS);
     }
 
     fn load_state(&self, nbt: &BorrowedNbtCompound<'_>) {

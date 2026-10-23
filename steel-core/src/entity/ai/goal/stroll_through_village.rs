@@ -85,7 +85,7 @@ impl Goal for StrollThroughVillageGoal {
         }
 
         let wanted = land_random_pos_with_weight(mob, STROLL_RANGE_XZ, STROLL_RANGE_Y, |pos| {
-            -world.sections_to_village(SectionPos::from_block_pos(pos)) as f32
+            -f64::from(world.sections_to_village(SectionPos::from_block_pos(pos)))
         });
         self.wanted_pos = wanted.map(|pos| BlockPos::containing(pos.x, pos.y, pos.z));
         self.wanted_pos.is_some()
@@ -129,11 +129,12 @@ impl Goal for StrollThroughVillageGoal {
             )
             .unwrap_or(path_target.y());
         let surface_pos = BlockPos::new(path_target.x(), surface, path_target.z());
+        // Vanilla `navigation.moveTo(pathTarget.getX(), pathTarget.getY(), pathTarget.getZ(), 1.0)`.
         let moved = mob.move_to_pos(
             DVec3::new(
-                f64::from(surface_pos.x()) + 0.5,
+                f64::from(surface_pos.x()),
                 f64::from(surface_pos.y()),
-                f64::from(surface_pos.z()) + 0.5,
+                f64::from(surface_pos.z()),
             ),
             1.0,
         );

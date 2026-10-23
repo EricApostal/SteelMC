@@ -98,7 +98,6 @@ pub fn loom(
         banner,
         dye,
         pattern,
-        result,
         player,
         selected_pattern,
         selectable_patterns: Vec::new(),
@@ -204,7 +203,6 @@ pub struct LoomKind {
     banner: Section,
     dye: Section,
     pattern: Section,
-    result: Section,
     player: PlayerInventorySections,
     /// Client-facing selected pattern index.
     selected_pattern: DataSlot,
@@ -387,10 +385,6 @@ impl MenuKind for LoomKind {
         true
     }
 
-    fn can_take_item_for_pick_all(&self, _carried: &ItemStack, slot_index: usize) -> bool {
-        !self.result.contains(slot_index)
-    }
-
     fn quick_move(
         &mut self,
         behavior: &mut MenuBehavior,
@@ -440,5 +434,42 @@ impl MenuKind for LoomKind {
             player.add_item_or_drop_with_guard(guard, remainder, Prediction::Predicted);
         }
         Some(clicked)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use steel_registry::{init_vanilla_registry, item_stack::ItemStack, vanilla_items};
+    use steel_utils::BlockPos;
+
+    use super::loom;
+    use crate::test_support::{TestPlayerBuilder, fresh_test_world};
+
+    /// The loom result slot follows the banner, dye and pattern slots.
+    const RESULT_SLOT: usize = 3;
+
+    #[test]
+    fn pickup_all_may_take_from_the_result_slot() {
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world("loom_pick_all_result");
+        let player =
+            TestPlayerBuilder::new(Arc::clone(&world_fixture.world), "LoomTester", 1).build();
+        let menu = loom(
+            Arc::clone(&player.inventory),
+            1,
+            BlockPos::new(0, 64, 0),
+            &world_fixture.world,
+        );
+
+        // Vanilla `LoomMenu` leaves `canTakeItemForPickAll` at its permissive
+        // default; only the result slot's own `mayPickup` gates collection.
+        assert!(
+            menu.can_take_item_for_pick_all(
+                &ItemStack::new(&vanilla_items::WHITE_BANNER),
+                RESULT_SLOT
+            )
+        );
     }
 }

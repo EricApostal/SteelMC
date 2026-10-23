@@ -3,13 +3,17 @@
 use glam::DVec3;
 use steel_math::fast_floor;
 use steel_registry::REGISTRY;
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::vanilla_block_tags::BlockTag;
-use steel_utils::BlockPos;
+use steel_registry::vanilla_blocks;
+use steel_utils::{BlockPos, Identifier};
 
+use crate::entity::Mob;
 use crate::entity::ai::path::{Path, PathType, PathTypeCache, PathfindingContext};
 use crate::entity::ai::pathfinder::{PathFinder, PathRequest};
-use crate::entity::ai::walk::{NodeEvaluator, WalkNodeCollision};
+use crate::entity::ai::walk::{NodeEvaluator, WalkNodeCollision, WalkNodeEvaluator};
 use crate::world::LevelReader;
+use crate::world::raycast::{ClipBlockShape, ClipFluid};
 
 const DIRECT_TARGET_REACHED_DISTANCE_SQR: f64 = 2.500_000_3e-7;
 const DEFAULT_REQUIRED_PATH_LENGTH: f32 = 16.0;
@@ -44,6 +48,25 @@ pub struct NavigationRecomputeRequest {
     pub game_time: i64,
 }
 
+/// Vanilla's `PathNavigation` subclasses, as a kind tag.
+///
+/// Vanilla instantiates one subclass per mob in `Mob.createNavigation`; Steel
+/// stores a single [`PathNavigation`] per mob, so the subclass choice is a
+/// field. Every kind-specific method below cites the vanilla override it
+/// mirrors. `FlyingPathNavigation` remains the pre-existing `flying` flag path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NavigationKind {
+    /// Vanilla `GroundPathNavigation`.
+    #[default]
+    Ground,
+    /// Vanilla `WaterBoundPathNavigation`.
+    WaterBound,
+    /// Vanilla `AmphibiousPathNavigation`.
+    Amphibious,
+    /// Vanilla `WallClimberNavigation`.
+    WallClimber,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PathNavigation {
     path: Option<Path>,
@@ -74,6 +97,20 @@ pub struct PathNavigation {
     /// Vanilla `FlyingPathNavigation`: the mob never follows the ground, so the
     /// navigation keeps the direct target and skips ground-only checks.
     flying: bool,
+    /// Vanilla `PathNavigation` subclass selection.
+    kind: NavigationKind,
+    /// Vanilla `WaterBoundPathNavigation.allowBreaching` (dolphins only).
+    allow_breaching: bool,
+    /// Vanilla `AmphibiousNodeEvaluator.prefersShallowSwimming`.
+    prefers_shallow_swimming: bool,
+    /// Vanilla `Frog.FrogPathNavigation.canCutCorner`'s extra exclusion.
+    no_cut_corner_path_type: Option<PathType>,
+    /// Vanilla `Frog.FrogNodeEvaluator.getStart`'s in-water floor rounding.
+    amphibious_start_at_floor: bool,
+    /// Vanilla `Frog.FrogNodeEvaluator.getPathType`'s prefer-jump-to tag.
+    amphibious_prefer_jump_to: Option<&'static Identifier>,
+    /// Vanilla `WallClimberNavigation.pathToPosition`.
+    wall_climb_target: Option<BlockPos>,
 }
 
 impl PathNavigation {
@@ -106,6 +143,13 @@ impl PathNavigation {
             avoid_sun: false,
             can_path_to_targets_below_surface: false,
             flying: false,
+            kind: NavigationKind::Ground,
+            allow_breaching: false,
+            prefers_shallow_swimming: false,
+            no_cut_corner_path_type: None,
+            amphibious_start_at_floor: false,
+            amphibious_prefer_jump_to: None,
+            wall_climb_target: None,
         }
     }
 
@@ -182,7 +226,14 @@ impl PathNavigation {
     }
 
     pub const fn set_can_float(&mut self, can_float: bool) {
-        self.can_float = can_float;
+        // Vanilla `WaterBoundPathNavigation`/`AmphibiousPathNavigation` override
+        // `setCanFloat` as a no-op.
+        if !matches!(
+            self.kind,
+            NavigationKind::WaterBound | NavigationKind::Amphibious
+        ) {
+            self.can_float = can_float;
+        }
     }
 
     #[must_use]
@@ -220,6 +271,244 @@ impl PathNavigation {
     /// Enables vanilla `FlyingPathNavigation` semantics on this navigation.
     pub const fn set_flying(&mut self, flying: bool) {
         self.flying = flying;
+    }
+
+    /// Vanilla `Mob.createNavigation`'s subclass choice.
+    #[must_use]
+    pub const fn kind(&self) -> NavigationKind {
+        self.kind
+    }
+
+    /// Selects the vanilla `PathNavigation` subclass behaviour.
+    pub const fn set_kind(&mut self, kind: NavigationKind) {
+        self.kind = kind;
+    }
+
+    /// Vanilla `WaterBoundPathNavigation.createPathFinder`'s dolphin check.
+    #[must_use]
+    pub const fn allow_breaching(&self) -> bool {
+        self.allow_breaching
+    }
+
+    pub const fn set_allow_breaching(&mut self, allow_breaching: bool) {
+        self.allow_breaching = allow_breaching;
+    }
+
+    /// Vanilla `AmphibiousNodeEvaluator(boolean prefersShallowSwimming)`.
+    #[must_use]
+    pub const fn prefers_shallow_swimming(&self) -> bool {
+        self.prefers_shallow_swimming
+    }
+
+    pub const fn set_prefers_shallow_swimming(&mut self, prefers_shallow_swimming: bool) {
+        self.prefers_shallow_swimming = prefers_shallow_swimming;
+    }
+
+    /// Vanilla `Frog.FrogPathNavigation.canCutCorner`: `WATER_BORDER` is never
+    /// cut through, on top of the base exclusions.
+    pub const fn set_no_cut_corner_path_type(&mut self, path_type: Option<PathType>) {
+        self.no_cut_corner_path_type = path_type;
+    }
+
+    /// Vanilla `Frog.FrogNodeEvaluator.getStart`: when swimming, the start node
+    /// floors the mob position instead of rounding `y + 0.5`.
+    pub const fn set_amphibious_start_at_floor(&mut self, start_at_floor: bool) {
+        self.amphibious_start_at_floor = start_at_floor;
+    }
+
+    #[must_use]
+    pub const fn amphibious_start_at_floor(&self) -> bool {
+        self.amphibious_start_at_floor
+    }
+
+    /// Vanilla `Frog.FrogNodeEvaluator.getPathType`: blocks below this tag make
+    /// the position `PathType::Open`.
+    pub const fn set_amphibious_prefer_jump_to(
+        &mut self,
+        prefer_jump_to: Option<&'static Identifier>,
+    ) {
+        self.amphibious_prefer_jump_to = prefer_jump_to;
+    }
+
+    #[must_use]
+    pub const fn amphibious_prefer_jump_to(&self) -> Option<&'static Identifier> {
+        self.amphibious_prefer_jump_to
+    }
+
+    /// Vanilla `PathNavigation.canCutCorner`, including the per-kind override.
+    #[must_use]
+    pub fn can_cut_corner(&self, path_type: PathType) -> bool {
+        can_cut_corner(path_type) && self.no_cut_corner_path_type != Some(path_type)
+    }
+
+    /// Vanilla `PathNavigation.getMaxVerticalDistanceToWaypoint`; water-bound
+    /// navigation tightens it to half a block.
+    #[must_use]
+    pub const fn max_vertical_distance_to_waypoint(&self) -> f64 {
+        match self.kind {
+            NavigationKind::WaterBound => 0.5,
+            NavigationKind::Ground | NavigationKind::Amphibious | NavigationKind::WallClimber => {
+                1.0
+            }
+        }
+    }
+
+    /// Vanilla `PathNavigation.canUpdatePath`.
+    #[must_use]
+    pub fn can_update_path<M: Mob + ?Sized>(&self, mob: &M) -> bool {
+        match self.kind {
+            NavigationKind::Ground | NavigationKind::WallClimber => {
+                mob.on_ground() || mob.is_in_water() || mob.is_in_lava() || mob.is_passenger()
+            }
+            // Vanilla `WaterBoundPathNavigation.canUpdatePath`: `isInLiquid`.
+            NavigationKind::WaterBound => {
+                self.allow_breaching || mob.is_in_water() || mob.is_in_lava()
+            }
+            // Vanilla `AmphibiousPathNavigation.canUpdatePath` is always true.
+            NavigationKind::Amphibious => true,
+        }
+    }
+
+    /// Vanilla `PathNavigation.getTempMobPos`.
+    #[must_use]
+    pub fn temp_mob_pos<M: Mob + ?Sized>(&self, mob: &M, level: &dyn LevelReader) -> DVec3 {
+        let position = mob.position();
+        match self.kind {
+            NavigationKind::WaterBound | NavigationKind::Amphibious => DVec3::new(
+                position.x,
+                position.y + mob.bounding_box().height() * 0.5,
+                position.z,
+            ),
+            NavigationKind::Ground | NavigationKind::WallClimber => DVec3::new(
+                position.x,
+                f64::from(self.surface_y(mob, level)),
+                position.z,
+            ),
+        }
+    }
+
+    /// Vanilla `GroundPathNavigation.getSurfaceY`: the water surface when
+    /// floating, otherwise the block the mob stands in.
+    fn surface_y<M: Mob + ?Sized>(&self, mob: &M, level: &dyn LevelReader) -> i32 {
+        if !mob.is_in_water() || !self.can_float {
+            return fast_floor(mob.position().y + 0.5);
+        }
+
+        let position = mob.position();
+        let block_y = mob.block_position().y();
+        let mut surface = block_y;
+        let mut state = level.get_block_state(BlockPos::containing(
+            position.x,
+            f64::from(surface),
+            position.z,
+        ));
+        let mut steps = 0;
+        while state.get_block() == &vanilla_blocks::WATER {
+            surface += 1;
+            state = level.get_block_state(BlockPos::containing(
+                position.x,
+                f64::from(surface),
+                position.z,
+            ));
+            steps += 1;
+            if steps > 16 {
+                return block_y;
+            }
+        }
+
+        surface
+    }
+
+    /// Vanilla `PathNavigation.getGroundY`, overridden to the raw target Y by
+    /// the water-bound and amphibious navigations.
+    #[must_use]
+    pub fn ground_y(&self, level: &dyn LevelReader, target: DVec3) -> f64 {
+        if matches!(
+            self.kind,
+            NavigationKind::WaterBound | NavigationKind::Amphibious
+        ) {
+            return target.y;
+        }
+
+        let target_pos = BlockPos::containing(target.x, target.y, target.z);
+        if level.get_block_state(target_pos.below()).is_air() {
+            target.y
+        } else {
+            WalkNodeEvaluator::floor_level(level, target_pos)
+        }
+    }
+
+    /// Vanilla `PathNavigation.isStableDestination`, per subclass.
+    #[must_use]
+    pub fn is_stable_destination(&self, level: &dyn LevelReader, pos: BlockPos) -> bool {
+        match self.kind {
+            // Vanilla `WaterBoundPathNavigation.isStableDestination`.
+            NavigationKind::WaterBound => !level.get_block_state(pos).is_solid_render(),
+            // Vanilla `AmphibiousPathNavigation.isStableDestination`.
+            NavigationKind::Amphibious => !level.get_block_state(pos.below()).is_air(),
+            NavigationKind::Ground | NavigationKind::WallClimber => {
+                level.get_block_state(pos.below()).is_solid_render()
+            }
+        }
+    }
+
+    /// Vanilla `PathNavigation.canMoveDirectly`, per subclass.
+    #[must_use]
+    pub fn can_move_directly<M: Mob + ?Sized>(
+        &self,
+        mob: &M,
+        start_pos: DVec3,
+        stop_pos: DVec3,
+    ) -> bool {
+        match self.kind {
+            NavigationKind::WaterBound => {
+                is_clear_for_movement_between(mob, start_pos, stop_pos, false)
+            }
+            NavigationKind::Amphibious => {
+                mob.is_in_water() && is_clear_for_movement_between(mob, start_pos, stop_pos, false)
+            }
+            NavigationKind::Ground | NavigationKind::WallClimber => false,
+        }
+    }
+
+    /// Vanilla `WallClimberNavigation.createPath(BlockPos, int)`'s
+    /// `pathToPosition` write; a no-op for every other navigation kind.
+    pub const fn record_wall_climb_target(&mut self, pos: BlockPos) {
+        if matches!(self.kind, NavigationKind::WallClimber) {
+            self.wall_climb_target = Some(pos);
+        }
+    }
+
+    /// Vanilla `WallClimberNavigation.tick`'s done-path branch: keeps pushing
+    /// the mob toward the recorded climb target at its exact Y.
+    pub fn wall_climb_wanted_position(
+        &mut self,
+        context: NavigationTickContext,
+    ) -> Option<(DVec3, f64)> {
+        if !matches!(self.kind, NavigationKind::WallClimber) {
+            return None;
+        }
+
+        let target_pos = self.wall_climb_target?;
+        let mob_position = context.mob_position;
+        let width = context.mob_bounding_box_width;
+        let close_to_target = target_pos.closer_to_center_than(mob_position, width);
+        let above_target = mob_position.y > f64::from(target_pos.y())
+            && BlockPos::new(target_pos.x(), fast_floor(mob_position.y), target_pos.z())
+                .closer_to_center_than(mob_position, width);
+        if close_to_target || above_target {
+            self.wall_climb_target = None;
+            return None;
+        }
+
+        Some((
+            DVec3::new(
+                f64::from(target_pos.x()),
+                f64::from(target_pos.y()),
+                f64::from(target_pos.z()),
+            ),
+            self.speed_modifier,
+        ))
     }
 
     pub const fn can_path_to_targets_below_surface(&self) -> bool {
@@ -449,13 +738,17 @@ impl PathNavigation {
         self.done = false;
     }
 
-    pub fn next_move_target(&mut self, context: NavigationTickContext) -> Option<(DVec3, f64)> {
+    pub fn next_move_target<M: Mob + ?Sized>(
+        &mut self,
+        context: NavigationTickContext,
+        mob: &M,
+    ) -> Option<(DVec3, f64)> {
         if self.done {
             return None;
         }
 
         if self.path.is_some() {
-            return self.next_path_move_target(context);
+            return self.next_path_move_target(context, mob);
         }
 
         let target = self.direct_target?;
@@ -564,43 +857,51 @@ impl PathNavigation {
         block_center(pos).distance_squared(middle_pos) < distance * distance
     }
 
-    fn next_path_move_target(&mut self, context: NavigationTickContext) -> Option<(DVec3, f64)> {
-        {
-            let Some(path) = self.path.as_mut() else {
-                self.done = true;
-                return None;
-            };
+    fn next_path_move_target<M: Mob + ?Sized>(
+        &mut self,
+        context: NavigationTickContext,
+        mob: &M,
+    ) -> Option<(DVec3, f64)> {
+        if self.path.is_none() {
+            self.done = true;
+            return None;
+        }
 
-            let Some(current_node_pos) = path.next_node_pos() else {
-                self.stop();
-                return None;
-            };
+        let Some(current_node_pos) = self.path.as_ref().and_then(Path::next_node_pos) else {
+            self.stop();
+            return None;
+        };
 
-            let max_distance_to_waypoint = if context.mob_bounding_box_width > 0.75 {
-                context.mob_bounding_box_width / 2.0
-            } else {
-                0.75 - context.mob_bounding_box_width / 2.0
-            };
-            let x_distance =
-                (context.mob_position.x - (f64::from(current_node_pos.x()) + 0.5)).abs();
-            let y_distance = (context.mob_position.y - f64::from(current_node_pos.y())).abs();
-            let z_distance =
-                (context.mob_position.z - (f64::from(current_node_pos.z()) + 0.5)).abs();
-            let is_close_enough_to_current_node = x_distance < max_distance_to_waypoint
-                && z_distance < max_distance_to_waypoint
-                && y_distance < 1.0;
-            let should_cut_corner = path
-                .next_node()
-                .is_some_and(|node| can_cut_corner(node.path_type))
-                && should_target_next_node_in_direction(path, context.ground_mob_position);
-            if is_close_enough_to_current_node || should_cut_corner {
+        let max_distance_to_waypoint = if context.mob_bounding_box_width > 0.75 {
+            context.mob_bounding_box_width / 2.0
+        } else {
+            0.75 - context.mob_bounding_box_width / 2.0
+        };
+        let x_distance = (context.mob_position.x - (f64::from(current_node_pos.x()) + 0.5)).abs();
+        let y_distance = (context.mob_position.y - f64::from(current_node_pos.y())).abs();
+        let z_distance = (context.mob_position.z - (f64::from(current_node_pos.z()) + 0.5)).abs();
+        let is_close_enough_to_current_node = x_distance < max_distance_to_waypoint
+            && z_distance < max_distance_to_waypoint
+            && y_distance < self.max_vertical_distance_to_waypoint();
+        let should_cut_corner = self.path.as_ref().is_some_and(|path| {
+            path.next_node()
+                .is_some_and(|node| self.can_cut_corner(node.path_type))
+                && self.should_target_next_node_in_direction(
+                    path,
+                    context.ground_mob_position,
+                    context.mob_bounding_box_width,
+                    mob,
+                )
+        });
+        if is_close_enough_to_current_node || should_cut_corner {
+            if let Some(path) = self.path.as_mut() {
                 path.advance();
             }
+        }
 
-            if path.is_done() {
-                self.stop();
-                return None;
-            }
+        if self.path.as_ref().is_none_or(Path::is_done) {
+            self.stop();
+            return None;
         }
 
         self.do_stuck_detection(
@@ -682,40 +983,87 @@ impl PathNavigation {
     }
 }
 
-fn should_target_next_node_in_direction(path: &Path, mob_position: DVec3) -> bool {
-    let next_node_index = path.next_node_index();
-    if next_node_index + 1 >= path.node_count() {
-        return false;
-    }
+impl PathNavigation {
+    /// Vanilla `PathNavigation.shouldTargetNextNodeInDirection`.
+    fn should_target_next_node_in_direction<M: Mob + ?Sized>(
+        &self,
+        path: &Path,
+        mob_position: DVec3,
+        mob_bounding_box_width: f64,
+        mob: &M,
+    ) -> bool {
+        let next_node_index = path.next_node_index();
+        if next_node_index + 1 >= path.node_count() {
+            return false;
+        }
 
-    let Some(current_node_pos) = path.next_node_pos() else {
-        return false;
-    };
-    let current_node = block_bottom_center(current_node_pos);
-    if mob_position.distance_squared(current_node) >= 4.0 {
-        return false;
-    }
+        let Some(current_node_pos) = path.next_node_pos() else {
+            return false;
+        };
+        let current_node = block_bottom_center(current_node_pos);
+        if mob_position.distance_squared(current_node) >= 4.0 {
+            return false;
+        }
 
-    let Some(next_node_pos) = path.node_pos(next_node_index + 1) else {
-        return false;
-    };
-    let next_node = block_bottom_center(next_node_pos);
-    let mob_to_current = current_node - mob_position;
-    let mob_to_next = next_node - mob_position;
-    let mob_to_current_sqr = mob_to_current.length_squared();
-    let mob_to_next_sqr = mob_to_next.length_squared();
-    let closer_to_next_than_current = mob_to_next_sqr < mob_to_current_sqr;
-    let within_current_block = mob_to_current_sqr < 0.5;
-    if !closer_to_next_than_current && !within_current_block {
-        return false;
-    }
+        // Vanilla `PathNavigation.canMoveDirectly`: the subclass override decides
+        // whether the next entity position is a straight, unobstructed line away.
+        if let Some(next_entity_pos) = path_move_target(path, mob_bounding_box_width)
+            && self.can_move_directly(mob, mob_position, next_entity_pos)
+        {
+            return true;
+        }
 
-    mob_to_next.dot(mob_to_current) < 0.0
+        let Some(next_node_pos) = path.node_pos(next_node_index + 1) else {
+            return false;
+        };
+        let next_node = block_bottom_center(next_node_pos);
+        let mob_to_current = current_node - mob_position;
+        let mob_to_next = next_node - mob_position;
+        let mob_to_current_sqr = mob_to_current.length_squared();
+        let mob_to_next_sqr = mob_to_next.length_squared();
+        let closer_to_next_than_current = mob_to_next_sqr < mob_to_current_sqr;
+        let within_current_block = mob_to_current_sqr < 0.5;
+        if !closer_to_next_than_current && !within_current_block {
+            return false;
+        }
+
+        mob_to_next.dot(mob_to_current) < 0.0
+    }
 }
 
 fn block_bottom_center(pos: BlockPos) -> DVec3 {
     let (x, y, z) = pos.get_bottom_center();
     DVec3::new(x, y, z)
+}
+
+/// Vanilla `PathNavigation.isClearForMovementBetween`: a collider-only clip from
+/// the mob position to the target's mid-height, optionally including fluids.
+fn is_clear_for_movement_between<M: Mob + ?Sized>(
+    mob: &M,
+    start_pos: DVec3,
+    stop_pos: DVec3,
+    blocked_by_fluids: bool,
+) -> bool {
+    let Some(world) = mob.level() else {
+        return false;
+    };
+    let to = DVec3::new(
+        stop_pos.x,
+        stop_pos.y + mob.bounding_box().height() * 0.5,
+        stop_pos.z,
+    );
+    world
+        .clip(
+            start_pos,
+            to,
+            ClipBlockShape::Collider,
+            if blocked_by_fluids {
+                ClipFluid::Any
+            } else {
+                ClipFluid::None
+            },
+        )
+        .is_miss()
 }
 
 fn block_center(pos: BlockPos) -> DVec3 {

@@ -4,11 +4,24 @@ use steel_utils::BlockPos;
 
 use super::selector::{Goal, GoalControls};
 use crate::behavior::BLOCK_BEHAVIORS;
+use crate::entity::ai::navigation::NavigationKind;
 use crate::entity::ai::path::Path;
 use crate::entity::{PathfinderMob, SharedEntity};
 
 const DOOR_REACH_DISTANCE_SQR: f64 = 2.25;
 const PATH_NODE_SCAN_AHEAD: usize = 2;
+
+/// Vanilla `GoalUtils.hasGroundPathNavigation`: the door goals only run on a navigation that
+/// follows the ground (`GroundPathNavigation`, including the amphibious and wall-climber
+/// subclasses).
+pub(super) fn has_ground_path_navigation(mob: &dyn PathfinderMob) -> bool {
+    let navigation = mob.mob_base().navigation().lock();
+    !navigation.is_flying()
+        && matches!(
+            navigation.kind(),
+            NavigationKind::Ground | NavigationKind::Amphibious | NavigationKind::WallClimber
+        )
+}
 
 pub(super) struct DoorInteractGoal {
     door_pos: BlockPos,
@@ -78,6 +91,10 @@ impl DoorInteractGoal {
     }
 
     pub(super) fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
+        if !has_ground_path_navigation(mob) {
+            return false;
+        }
+
         if !mob.horizontal_collision() {
             return false;
         }

@@ -1,8 +1,8 @@
 //! Vanilla `Guardian` (`net.minecraft.world.entity.monster.Guardian`).
 //!
-//! Vanilla swims with `WaterBoundPathNavigation`; Steel has no water-bound navigation, so the
-//! guardian uses the shared navigation and applies the vanilla water travel drag in its own
-//! tick (documented deviation).
+//! Vanilla swims with `WaterBoundPathNavigation` and `Guardian.GuardianMoveControl`; Steel
+//! selects the water-bound navigation kind on its shared navigation and ticks the guardian
+//! move control in [`GuardianEntity`]/[`ElderGuardianEntity`]'s `tick_move_control`.
 
 use std::sync::{Arc, Weak};
 
@@ -19,13 +19,18 @@ use steel_registry::vanilla_entity_data::GuardianEntityData;
 use steel_registry::{sound_events, vanilla_attributes, vanilla_damage_types, vanilla_entities};
 use steel_utils::entity_events::EntityStatus;
 use steel_utils::locks::SyncMutex;
+use steel_utils::random::Random as _;
+use steel_utils::random::RandomSource;
 use steel_utils::types::Difficulty;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
+use crate::entity::ai::control::{MoveControlOperation, rotate_towards};
 use crate::entity::ai::goal::{
     Goal, GoalControls, LookAtPlayerGoal, MoveTowardsRestrictionGoal, NearestAttackableTargetGoal,
     RandomLookAroundGoal, RandomStrollGoal,
 };
+use crate::entity::ai::navigation::NavigationKind;
+use crate::entity::ai::path::PathType;
 use crate::entity::damage::DamageSource;
 use crate::entity::{
     Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
@@ -56,6 +61,12 @@ const GUARDIAN_MAGIC_DAMAGE: f32 = 1.0;
 const GUARDIAN_MAGIC_DAMAGE_HARD: f32 = 2.0;
 /// Vanilla `Guardian.GuardianAttackGoal` beam start tick offset.
 const GUARDIAN_BEAM_START_TICK: i32 = -10;
+/// Vanilla `Guardian.GuardianMoveControl`: `rotlerp(..., 90.0F)`.
+const GUARDIAN_MOVE_CONTROL_MAX_TURN: f32 = 90.0;
+/// Vanilla `Guardian.GuardianMoveControl`: `Mth.lerp(0.125F, ...)`.
+const GUARDIAN_SPEED_LERP: f32 = 0.125;
+/// Vanilla `Guardian.GuardianMoveControl`: the idle sine wobble amplitude.
+const GUARDIAN_PUSH: f64 = 0.05;
 
 /// Vanilla `Guardian`.
 #[entity_behavior(class = "Guardian")]
@@ -95,6 +106,16 @@ impl GuardianEntity {
         let living_base = LivingEntityBase::new(entity_type);
         let mob_base = MobBase::new();
         mob_base.set_xp_reward(XP_REWARD);
+        // Vanilla `Guardian`: `setPathfindingMalus(WATER, 0.0F)` and
+        // `createNavigation` -> `WaterBoundPathNavigation`.
+        mob_base
+            .pathfinding_malus()
+            .lock()
+            .set(PathType::Water, 0.0);
+        mob_base
+            .navigation()
+            .lock()
+            .set_kind(NavigationKind::WaterBound);
         let mut entity_data = GuardianEntityData::new();
         living_base.initialize_synced_data(&mut entity_data);
         entity_data.id_moving.set(false);
@@ -208,6 +229,49 @@ impl GuardianEntity {
         };
         self.set_velocity(velocity);
     }
+
+    /// Vanilla `Guardian.checkGuardianSpawnRules`, the `SpawnPlacements` predicate for
+    /// `EntityType.GUARDIAN` and `EntityType.ELDER_GUARDIAN`.
+    #[must_use]
+    pub fn check_guardian_spawn_rules(
+        _entity_type: EntityTypeRef,
+        level: &World,
+        spawn_reason: EntitySpawnReason,
+        pos: BlockPos,
+        random: &mut RandomSource,
+    ) -> bool {
+        (random.next_i32_bounded(20) == 0 || !can_see_sky_from_below_water(level, pos))
+            && level.difficulty() != Difficulty::Peaceful
+            && (spawn_reason.is_spawner()
+                || level.get_block_state(pos).get_fluid_state().is_water())
+            && level
+                .get_block_state(pos.below())
+                .get_fluid_state()
+                .is_water()
+    }
+}
+
+/// Vanilla `LevelReader.canSeeSkyFromBelowWater`.
+///
+/// Deliberate difference: Steel has no per-block `liquid` property, so a
+/// non-empty fluid state stands in for vanilla's `BlockState.liquid()`.
+fn can_see_sky_from_below_water(level: &World, pos: BlockPos) -> bool {
+    if pos.y() >= level.sea_level() {
+        return level.can_see_sky(pos);
+    }
+    let scan_point = BlockPos::new(pos.x(), level.sea_level(), pos.z());
+    if !level.can_see_sky(scan_point) {
+        return false;
+    }
+    let mut y = scan_point.y() - 1;
+    while y > pos.y() {
+        let state = level.get_block_state(BlockPos::new(pos.x(), y, pos.z()));
+        if state.get_light_dampening() > 0 && state.get_fluid_state().is_empty() {
+            return false;
+        }
+        y -= 1;
+    }
+    true
 }
 
 /// Vanilla `Guardian.GuardianAttackGoal` (the beam attack).
@@ -475,6 +539,12 @@ impl Mob for GuardianEntity {
         PathfinderMob::tick_pathfinder_path_navigation(self);
     }
 
+    /// Vanilla `Guardian.GuardianMoveControl.tick`.
+    fn tick_move_control(&self) {
+        let moving = tick_guardian_move_control(self);
+        self.set_moving(moving);
+    }
+
     fn ambient_sound(&self) -> Option<SoundEventRef> {
         Some(if self.is_in_water() {
             &sound_events::ENTITY_GUARDIAN_AMBIENT
@@ -537,6 +607,91 @@ impl PathfinderMob for GuardianEntity {
         }
         Monster::get_walk_target_value_monster(self, pos)
     }
+}
+
+/// Vanilla `Guardian.GuardianMoveControl.tick`.
+///
+/// Shared by `Guardian` and `ElderGuardian` (`ElderGuardian` inherits the same
+/// inner control class in vanilla). Lives here because Steel's `Mob` trait ticks
+/// controls through `tick_move_control` rather than a per-mob control object.
+pub(super) fn tick_guardian_move_control<M: Mob + ?Sized>(mob: &M) -> bool {
+    let move_control = {
+        let mut controls = mob.mob_base().controls().lock();
+        let move_control = controls.move_control;
+        if matches!(move_control.operation(), MoveControlOperation::MoveTo) {
+            controls.move_control.set_wait();
+        }
+        move_control
+    };
+
+    if move_control.operation() != MoveControlOperation::MoveTo
+        || mob.mob_base().navigation().lock().is_done()
+    {
+        mob.set_mob_speed(0.0);
+        return false;
+    }
+
+    let delta = move_control.wanted_position() - mob.position();
+    let length = delta.length();
+    if length <= 0.0 {
+        // Vanilla divides by `length` unguarded; a zero-length delta means the
+        // wanted position is the current position, so idle instead of emitting NaN.
+        mob.set_mob_speed(0.0);
+        return false;
+    }
+    let (xd, yd, zd) = (delta.x / length, delta.y / length, delta.z / length);
+
+    let y_rot_d = (delta.z.atan2(delta.x).to_degrees() as f32) - 90.0;
+    let (yaw, pitch) = mob.rotation();
+    let new_yaw = rotate_towards(yaw, y_rot_d, GUARDIAN_MOVE_CONTROL_MAX_TURN);
+    mob.set_rotation((new_yaw, pitch));
+    mob.living_base().set_y_body_rot(new_yaw);
+
+    let movement_speed = mob
+        .attributes()
+        .lock()
+        .required_value(vanilla_attributes::MOVEMENT_SPEED);
+    let target_speed = (move_control.speed_modifier() * movement_speed) as f32;
+    let new_speed = mob.get_speed() + (target_speed - mob.get_speed()) * GUARDIAN_SPEED_LERP;
+    mob.set_mob_speed(new_speed);
+
+    let tick_phase = (mob.tick_count() + mob.id()) as f64 * 0.5;
+    let push = tick_phase.sin() * GUARDIAN_PUSH;
+    let yaw_radians = f64::from(new_yaw) * (std::f64::consts::PI / 180.0);
+    let (sin_yaw, cos_yaw) = yaw_radians.sin_cos();
+    let y_push = ((mob.tick_count() + mob.id()) as f64 * 0.75).sin() * GUARDIAN_PUSH;
+    mob.set_velocity(
+        mob.velocity()
+            + DVec3::new(
+                push * cos_yaw,
+                y_push * (sin_yaw + cos_yaw) * 0.25 + f64::from(new_speed) * yd * 0.1,
+                push * sin_yaw,
+            ),
+    );
+
+    // Vanilla steers the look control toward a point ahead of the swim direction.
+    let eye_y = mob.get_eye_y();
+    let new_look = DVec3::new(
+        mob.position().x + xd * 2.0,
+        eye_y + yd / length,
+        mob.position().z + zd * 2.0,
+    );
+    let (old_look, y_max_rot_speed, x_max_rot_angle) = {
+        let controls = mob.mob_base().controls().lock();
+        let control = controls.look_control;
+        let old = if control.is_looking_at_target() {
+            control.wanted_position()
+        } else {
+            new_look
+        };
+        (old, control.y_max_rot_speed(), control.x_max_rot_angle())
+    };
+    mob.mob_base().controls().lock().look_control.set_look_at(
+        old_look.lerp(new_look, GUARDIAN_SPEED_LERP),
+        y_max_rot_speed,
+        x_max_rot_angle,
+    );
+    true
 }
 
 #[cfg(test)]

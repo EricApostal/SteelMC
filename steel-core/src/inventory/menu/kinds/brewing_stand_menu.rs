@@ -57,15 +57,6 @@ pub fn brewing_stand(
     let player = builder.player_inventory(&inventory);
     let data = std::array::from_fn(|_| builder.data_slot(0));
 
-    builder.route(bottles, player.all(), FillDirection::Backward);
-    builder.route(ingredient, player.all(), FillDirection::Backward);
-    builder.route(fuel, player.all(), FillDirection::Backward);
-    builder.route(
-        player.all(),
-        Vec::from([bottles, ingredient, fuel]),
-        FillDirection::Forward,
-    );
-
     builder.build(BrewingStandKind {
         container,
         bottles,
@@ -115,18 +106,10 @@ impl Slot for BrewingPotionSlot {
         BrewingStandContainer::is_potion_input(stack)
     }
 
-    fn get_max_stack_size(&self, guard: &ContainerLockGuard) -> i32 {
-        self.base.get_max_stack_size(guard)
-    }
-
-    /// Vanilla's potion slot only accepts a potion input into an empty slot, so
-    /// an occupied bottle slot reports no capacity for any insertion.
-    fn get_max_stack_size_for_item(&self, guard: &ContainerLockGuard, stack: &ItemStack) -> i32 {
-        if self.base.get_item(guard).is_empty() {
-            self.base.get_max_stack_size_for_item(guard, stack)
-        } else {
-            0
-        }
+    /// Vanilla `BrewingStandMenu.PotionSlot.getMaxStackSize`: a bottle slot
+    /// holds exactly one item, so an occupied slot reports no capacity.
+    fn get_max_stack_size(&self, _guard: &ContainerLockGuard) -> i32 {
+        1
     }
 
     fn set_changed(&self, guard: &mut ContainerLockGuard) {
@@ -209,61 +192,89 @@ impl MenuKind for BrewingStandKind {
             || self.ingredient.contains(slot_index)
             || self.fuel.contains(slot_index);
         let moved = if container_slot {
+            // Vanilla `moveItemStackTo(stack, 5, 41, true)`: the player
+            // inventory fills from the hotbar backwards.
             behavior.move_item_stack_to(
                 guard,
                 slot_index,
                 &mut remaining,
                 self.player.all().start(),
                 self.player.all().end(),
-                FillDirection::Forward,
-            )
-        } else if BrewingStandContainer::is_brewing_reagent(&clicked) {
-            behavior.move_item_stack_to(
-                guard,
-                slot_index,
-                &mut remaining,
-                self.ingredient.start(),
-                self.ingredient.end(),
-                FillDirection::Forward,
-            )
-        } else if BrewingStandContainer::is_brewing_fuel(&clicked) {
-            behavior.move_item_stack_to(
-                guard,
-                slot_index,
-                &mut remaining,
-                self.fuel.start(),
-                self.fuel.end(),
-                FillDirection::Forward,
-            )
-        } else if BrewingStandContainer::is_potion_input(&clicked) {
-            behavior.move_item_stack_to(
-                guard,
-                slot_index,
-                &mut remaining,
-                self.bottles.start(),
-                self.bottles.end(),
-                FillDirection::Forward,
-            )
-        } else if self.player.main().contains(slot_index) {
-            behavior.move_item_stack_to(
-                guard,
-                slot_index,
-                &mut remaining,
-                self.player.hotbar().start(),
-                self.player.hotbar().end(),
-                FillDirection::Forward,
-            )
-        } else if self.player.hotbar().contains(slot_index) {
-            behavior.move_item_stack_to(
-                guard,
-                slot_index,
-                &mut remaining,
-                self.player.main().start(),
-                self.player.main().end(),
-                FillDirection::Forward,
+                FillDirection::Backward,
             )
         } else {
-            false
+            let fuel_slot = self.fuel.start();
+            let ingredient_slot = self.ingredient.start();
+            let bottle_slot = self.bottles.start();
+            let fuel_accepts = behavior.slots()[fuel_slot].may_place(&clicked);
+            let ingredient_accepts = behavior.slots()[ingredient_slot].may_place(&clicked);
+            let bottle_accepts = behavior.slots()[bottle_slot].may_place(&clicked);
+
+            if fuel_accepts {
+                // Fuel first, then the ingredient slot for items that are both
+                // (blaze powder is also a brewing reagent).
+                behavior.move_item_stack_to(
+                    guard,
+                    slot_index,
+                    &mut remaining,
+                    fuel_slot,
+                    fuel_slot + 1,
+                    FillDirection::Forward,
+                ) || (ingredient_accepts
+                    && behavior.move_item_stack_to(
+                        guard,
+                        slot_index,
+                        &mut remaining,
+                        ingredient_slot,
+                        ingredient_slot + 1,
+                        FillDirection::Forward,
+                    ))
+            } else if ingredient_accepts {
+                behavior.move_item_stack_to(
+                    guard,
+                    slot_index,
+                    &mut remaining,
+                    ingredient_slot,
+                    ingredient_slot + 1,
+                    FillDirection::Forward,
+                )
+            } else if bottle_accepts {
+                behavior.move_item_stack_to(
+                    guard,
+                    slot_index,
+                    &mut remaining,
+                    bottle_slot,
+                    self.bottles.end(),
+                    FillDirection::Forward,
+                )
+            } else if self.player.main().contains(slot_index) {
+                behavior.move_item_stack_to(
+                    guard,
+                    slot_index,
+                    &mut remaining,
+                    self.player.hotbar().start(),
+                    self.player.hotbar().end(),
+                    FillDirection::Forward,
+                )
+            } else if self.player.hotbar().contains(slot_index) {
+                behavior.move_item_stack_to(
+                    guard,
+                    slot_index,
+                    &mut remaining,
+                    self.player.main().start(),
+                    self.player.main().end(),
+                    FillDirection::Forward,
+                )
+            } else {
+                behavior.move_item_stack_to(
+                    guard,
+                    slot_index,
+                    &mut remaining,
+                    self.player.all().start(),
+                    self.player.all().end(),
+                    FillDirection::Forward,
+                )
+            }
         };
 
         if !moved {
@@ -277,5 +288,142 @@ impl MenuKind for BrewingStandKind {
             player.add_item_or_drop_with_guard(guard, remainder, Prediction::Predicted);
         }
         Some(clicked)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use steel_registry::{init_vanilla_registry, item_stack::ItemStack, vanilla_items};
+    use steel_utils::locks::{IntoShared as _, Shared};
+
+    use super::{brewing_stand, FUEL_SLOT, INGREDIENT_SLOT};
+    use crate::block_entity::entities::BrewingStandContainer;
+    use crate::inventory::click::{Click, MouseButton};
+    use crate::inventory::container::{Container as _, SimpleContainer};
+    use crate::inventory::lock::ContainerRef;
+    use crate::player::Player;
+    use crate::player::player_inventory::PlayerInventory;
+    use crate::test_support::{TestPlayerBuilder, TestWorld, fresh_test_world};
+
+    /// Menu slot of the first main-inventory slot: the five container slots come
+    /// first, then the 27 main slots in inventory order 9..36.
+    const FIRST_MAIN_SLOT: usize = 5;
+
+    /// Builds a brewing stand menu over a five-slot stand container.
+    fn brewing_menu(key: &'static str) -> (TestWorld, Arc<Player>, Shared<SimpleContainer>) {
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world(key);
+        let player =
+            TestPlayerBuilder::new(Arc::clone(&world_fixture.world), "BrewingTester", 1).build();
+        let container = SimpleContainer::new(5).into_shared();
+        (world_fixture, player, container)
+    }
+
+    #[test]
+    fn blaze_powder_fills_the_fuel_slot_before_the_ingredient_slot() {
+        let (_world, player, container) = brewing_menu("brewing_stand_fuel_order");
+        let mut menu = brewing_stand(
+            Arc::clone(&player.inventory),
+            1,
+            ContainerRef::from(Arc::clone(&container)),
+        );
+
+        let powder = ItemStack::with_count(&vanilla_items::BLAZE_POWDER, 3);
+        assert!(
+            BrewingStandContainer::is_brewing_reagent(&powder),
+            "blaze powder is a reagent too, which is why the fuel slot must win"
+        );
+        player
+            .inventory
+            .lock()
+            .set_item(PlayerInventory::MAIN.start, powder);
+
+        menu.clicked(
+            Click::QuickMove {
+                slot: FIRST_MAIN_SLOT,
+            },
+            &player,
+        );
+
+        let container = container.lock();
+        assert_eq!(container.get_item(FUEL_SLOT).count(), 3);
+        assert!(container.get_item(INGREDIENT_SLOT).is_empty());
+    }
+
+    #[test]
+    fn unmatched_inventory_items_shift_into_the_hotbar() {
+        let (_world, player, container) = brewing_menu("brewing_stand_hotbar_fallback");
+        let mut menu = brewing_stand(
+            Arc::clone(&player.inventory),
+            1,
+            ContainerRef::from(Arc::clone(&container)),
+        );
+        player.inventory.lock().set_item(
+            PlayerInventory::MAIN.start,
+            ItemStack::with_count(&vanilla_items::DIRT, 5),
+        );
+
+        menu.clicked(
+            Click::QuickMove {
+                slot: FIRST_MAIN_SLOT,
+            },
+            &player,
+        );
+
+        assert!((0..5).all(|slot| container.lock().get_item(slot).is_empty()));
+        // Vanilla moves main-inventory items into the hotbar in slot order.
+        assert_eq!(player.inventory.lock().get_item(0).count(), 5);
+    }
+
+    #[test]
+    fn container_slots_shift_out_backwards_through_the_player_inventory() {
+        let (_world, player, container) = brewing_menu("brewing_stand_backwards_exit");
+        let mut menu = brewing_stand(
+            Arc::clone(&player.inventory),
+            1,
+            ContainerRef::from(Arc::clone(&container)),
+        );
+        container
+            .lock()
+            .set_item(0, ItemStack::new(&vanilla_items::GLASS_BOTTLE));
+
+        menu.clicked(Click::QuickMove { slot: 0 }, &player);
+
+        assert!(container.lock().get_item(0).is_empty());
+        // `moveItemStackTo(stack, 5, 41, true)` fills the last menu slot first,
+        // which is hotbar index 8.
+        assert!(
+            player
+                .inventory
+                .lock()
+                .get_item(8)
+                .is(&vanilla_items::GLASS_BOTTLE)
+        );
+        assert!(player.inventory.lock().get_item(9).is_empty());
+    }
+
+    #[test]
+    fn potion_slots_hold_a_single_bottle() {
+        let (_world, player, container) = brewing_menu("brewing_stand_potion_capacity");
+        let mut menu = brewing_stand(
+            Arc::clone(&player.inventory),
+            1,
+            ContainerRef::from(Arc::clone(&container)),
+        );
+        *menu.behavior_mut().carried_mut() =
+            ItemStack::with_count(&vanilla_items::GLASS_BOTTLE, 5);
+
+        menu.clicked(
+            Click::Pickup {
+                slot: 0,
+                button: MouseButton::Left,
+            },
+            &player,
+        );
+
+        assert_eq!(container.lock().get_item(0).count(), 1);
+        assert_eq!(menu.behavior().carried().count(), 4);
     }
 }

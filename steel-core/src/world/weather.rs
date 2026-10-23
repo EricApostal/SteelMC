@@ -331,7 +331,7 @@ impl World {
         REGISTRY.biomes.by_id(usize::from(biome_id))
     }
 
-    pub(super) fn noise_biome_id(&self, quart_x: i32, quart_y: i32, quart_z: i32) -> Option<u16> {
+    pub(crate) fn noise_biome_id(&self, quart_x: i32, quart_y: i32, quart_z: i32) -> Option<u16> {
         let chunk_pos = ChunkPos::new(quart_x >> 2, quart_z >> 2);
         let local_quart_x = (quart_x & 3) as usize;
         let local_quart_z = (quart_z & 3) as usize;

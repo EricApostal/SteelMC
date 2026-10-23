@@ -301,7 +301,7 @@ fn deserialize_compound_tag<'de, D: Deserializer<'de>>(
     }
 }
 
-fn json_to_nbt_tag(value: &serde_json::Value) -> Result<NbtTag, String> {
+pub(crate) fn json_to_nbt_tag(value: &serde_json::Value) -> Result<NbtTag, String> {
     match value {
         serde_json::Value::Null => Err("null is not a valid NBT tag".to_owned()),
         serde_json::Value::Bool(value) => Ok(NbtTag::Byte(i8::from(*value))),

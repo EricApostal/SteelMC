@@ -31,8 +31,8 @@ pub(crate) struct FlatLayerJson {
     height: u32,
 }
 
-/// Vanilla serialises `structure_overrides` either as a single structure-set id or a list of
-/// them, so both shapes are accepted and normalised to a list.
+/// Vanilla serializes `structure_overrides` either as a single structure-set id or a list of
+/// them, so both shapes are accepted and normalized to a list.
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
 pub(crate) enum StructureOverridesJson {

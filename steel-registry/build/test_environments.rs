@@ -50,7 +50,7 @@ struct TestEnvironmentJson {
 #[serde(untagged)]
 enum TestEnvironmentDefinitionJson {
     Reference(String),
-    Inline(TestEnvironmentJson),
+    Inline(Box<TestEnvironmentJson>),
 }
 
 /// A `test_environment` key with its generated static identifier.

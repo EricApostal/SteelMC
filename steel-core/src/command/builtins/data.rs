@@ -57,7 +57,7 @@ fn command() -> Builder {
 
 /// One vanilla `/data` target provider, matching `DataCommands.TARGET_PROVIDERS`.
 #[derive(Clone, Copy)]
-enum DataTarget {
+pub(super) enum DataTarget {
     Entity,
     Block,
     Storage,
@@ -65,7 +65,7 @@ enum DataTarget {
 
 impl DataTarget {
     /// Provider literal, matching `EntityDataAccessor`/`BlockDataAccessor`/`StorageDataAccessor`.
-    const fn provider(self) -> &'static str {
+    pub(super) const fn provider(self) -> &'static str {
         match self {
             Self::Entity => "entity",
             Self::Block => "block",
@@ -75,7 +75,7 @@ impl DataTarget {
 
     /// Provider argument type. Vanilla's `ArgProvider.buildList("target", ...)`
     /// names every provider argument `target`.
-    fn argument_type(self) -> SteelArgumentType {
+    pub(super) fn argument_type(self) -> SteelArgumentType {
         match self {
             Self::Entity => SteelArgumentType::entity(),
             Self::Block => SteelArgumentType::block_pos(),
@@ -85,7 +85,7 @@ impl DataTarget {
 }
 
 /// Vanilla `DataAccessor` for one resolved `/data` target.
-enum DataAccessor<'a> {
+pub(super) enum DataAccessor<'a> {
     Entity(SharedEntity),
     Block {
         position: BlockPos,
@@ -100,7 +100,7 @@ enum DataAccessor<'a> {
 
 impl DataAccessor<'_> {
     /// Vanilla `DataAccessor#getData`.
-    fn data(&self) -> NbtCompound {
+    pub(super) fn data(&self) -> NbtCompound {
         match self {
             Self::Entity(entity) => entity.nbt_for_data_compare(),
             Self::Block { block_entity, .. } => block_entity.save_with_full_metadata(),
@@ -265,7 +265,9 @@ fn remove_target(target: DataTarget) -> Builder {
 }
 
 /// Resolves the provider's `DataAccessor` the way vanilla's `access(context)` does.
-fn resolve<'a>(
+///
+/// `/function ... with` reuses this, exactly like vanilla's shared `SOURCE_PROVIDERS`.
+pub(super) fn resolve<'a>(
     context: &'a SteelCommandContext<CommandSource>,
     target: DataTarget,
 ) -> Result<DataAccessor<'a>, CommandSyntaxError> {
@@ -410,7 +412,10 @@ fn remove_data(
 ///
 /// `None` stands in for a path that selected nothing; vanilla selects
 /// `EndTag.INSTANCE` in that case and lets each caller pick its own error.
-fn single_tag(path: &NbtPath, data: &NbtTag) -> Result<Option<NbtTag>, CommandSyntaxError> {
+pub(super) fn single_tag(
+    path: &NbtPath,
+    data: &NbtTag,
+) -> Result<Option<NbtTag>, CommandSyntaxError> {
     let mut tags = path.get(data);
     if tags.len() > 1 {
         return Err(CommandSyntaxError::dynamic(TextComponent::from(
@@ -518,7 +523,7 @@ fn data_too_deep() -> CommandSyntaxError {
 }
 
 /// Vanilla `DataCommands.ERROR_GET_NON_EXISTENT` (`commands.data.get.unknown`).
-fn unknown_path(path: &NbtPath) -> CommandSyntaxError {
+pub(super) fn unknown_path(path: &NbtPath) -> CommandSyntaxError {
     CommandSyntaxError::dynamic(
         translations::COMMANDS_DATA_GET_UNKNOWN
             .message([TextComponent::from(path.as_str().to_owned())])

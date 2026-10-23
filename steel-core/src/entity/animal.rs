@@ -9,7 +9,7 @@ use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_game_rules::MOB_DROPS;
-use steel_registry::{vanilla_blocks, vanilla_entities};
+use steel_registry::{vanilla_blocks, vanilla_custom_stats, vanilla_entities};
 use steel_utils::entity_events::EntityStatus;
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::InteractionHand;
@@ -300,12 +300,15 @@ pub trait Animal: AgeableMob {
         partner: &dyn Animal,
         _offspring: Option<&dyn Animal>,
     ) {
-        if self
+        // Vanilla `Animal.finalizeSpawnChildFromBreeding` awards `animals_bred` to the love
+        // cause, falling back to the partner's love cause. The `bred_animals` advancement
+        // trigger is a separate gap.
+        if let Some(love_cause) = self
             .love_cause_uuid()
             .or_else(|| partner.love_cause_uuid())
-            .is_some()
+            && let Some(player) = world.players.get_by_uuid(&love_cause)
         {
-            // TODO: Award the animals-bred stat and advancement once those foundations exist.
+            player.award_custom_stat(&vanilla_custom_stats::ANIMALS_BRED);
         }
 
         self.set_age(PARENT_AGE_AFTER_BREEDING);

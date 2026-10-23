@@ -20,6 +20,7 @@ use steel_registry::{
 };
 use steel_utils::entity_events::EntityStatus;
 use steel_utils::locks::SyncMutex;
+use steel_utils::random::{Random as _, RandomSource};
 use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
@@ -70,8 +71,8 @@ const SPRINT_SPEED_MOD: f64 = 1.33;
 const AMBIENT_SOUND_INTERVAL: i32 = 900;
 /// Vanilla `Ocelot.mobInteract`: trusting needs the player within three blocks.
 const TRUST_INTERACT_RANGE_SQR: f64 = 9.0;
-/// Vanilla `Ocelot.checkOcelotSpawnRules` uses `random.nextInt(3) != 0`, mirrored by
-/// `finalize_spawn`'s caller only; the spawn-rule hook is not part of Steel's entity API.
+/// Vanilla `Ocelot.checkOcelotSpawnRules` uses `random.nextInt(3) != 0`; see
+/// [`OcelotEntity::check_ocelot_spawn_rules`].
 
 #[entity_behavior(class = "Ocelot")]
 /// Vanilla ocelot: an untameable wild cat with a trusting state.
@@ -240,6 +241,19 @@ impl OcelotEntity {
             self.broadcast_entity_event(EntityStatus::TrustingFailed);
         }
         true
+    }
+
+    /// Vanilla `Ocelot.checkOcelotSpawnRules`, the `SpawnPlacements` predicate for
+    /// `EntityType.OCELOT`.
+    #[must_use]
+    pub fn check_ocelot_spawn_rules(
+        _entity_type: EntityTypeRef,
+        _level: &World,
+        _spawn_reason: EntitySpawnReason,
+        _pos: BlockPos,
+        random: &mut RandomSource,
+    ) -> bool {
+        random.next_i32_bounded(3) != 0
     }
 }
 

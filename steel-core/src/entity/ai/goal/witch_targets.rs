@@ -93,9 +93,9 @@ impl NearestHealableRaiderTargetGoal {
     /// Vanilla `new NearestHealableRaiderTargetGoal<>(raider, Raider.class, mustSee, subselector)`.
     ///
     /// Vanilla searches the `Raider` class, which Steel expresses through the
-    /// [`Raider`](crate::entity::raid::Raider) capability. Vanilla passes
-    /// `randomInterval = 500` to the base goal, which the overridden `canUse` never
-    /// consults, so Steel builds the base search without an interval.
+    /// [`Raider`](crate::entity::raid::Raider) capability. `Witch.registerGoals` passes
+    /// `mustSee = true`. Vanilla passes `randomInterval = 500` to the base goal, which the
+    /// overridden `canUse` never consults, so Steel builds the base search without an interval.
     #[must_use]
     pub fn new(
         state: WitchTargetState,
@@ -266,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn attackable_witch_goal_honours_can_attack() {
+    fn attackable_witch_goal_honors_can_attack() {
         let state = WitchTargetState::new();
         let mut goal =
             NearestAttackableWitchTargetGoal::new(state.clone(), 0, true, false, |_, _| true);

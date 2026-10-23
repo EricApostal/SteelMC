@@ -573,6 +573,26 @@ pub trait Mob: LivingEntity + Leashable {
             .is_valid_spawn(state, level, below, entity_type)
     }
 
+    /// Vanilla `Mob.checkSpawnRules`, the per-instance natural-spawn gate run
+    /// after `checkSpawnObstruction`'s sibling checks.
+    ///
+    /// The vanilla `Mob` default returns `true`; [`PathfinderMob`] overrides it
+    /// to require a non-negative walk-target value. Only `PathfinderMob` types
+    /// can be created by the natural spawner, so the override applies there.
+    fn check_spawn_rules(&self, _world: &Arc<World>, _spawn_reason: EntitySpawnReason) -> bool {
+        true
+    }
+
+    /// Vanilla `Mob.getMaxSpawnClusterSize`.
+    fn max_spawn_cluster_size(&self) -> i32 {
+        4
+    }
+
+    /// Vanilla `Mob.isMaxGroupSizeReached`.
+    fn is_max_group_size_reached(&self, _group_size: i32) -> bool {
+        false
+    }
+
     fn check_spawn_obstruction(&self, world: &Arc<World>) -> bool {
         let aabb = self.bounding_box();
         if aabb_contains_any_liquid(world, aabb) {

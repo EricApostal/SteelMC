@@ -25,14 +25,16 @@ pub mod local_mob_cap;
 pub mod natural;
 pub mod placement;
 pub mod spawn_util;
+pub mod structure_spawns;
 
-pub use difficulty::{ChunkInhabitedTimes, DifficultyInstance, MOON_BRIGHTNESS_PER_PHASE};
+pub use difficulty::{DifficultyInstance, MOON_BRIGHTNESS_PER_PHASE};
 pub use local_mob_cap::LocalMobCapCalculator;
 pub use natural::{NaturalSpawner, PotentialCalculator, SpawnState};
 pub use placement::{
     SpawnPlacementType, SpawnPlacements, SpawnPlacementsData, is_valid_empty_spawn_block,
 };
 pub use spawn_util::{SpawnStrategy, try_spawn_mob};
+pub use structure_spawns::{FORTRESS_ENEMIES, is_in_nether_fortress_bounds, structure_spawns_at};
 
 const fn chunk_min_block_x(pos: ChunkPos) -> i32 {
     pos.0.x << 4

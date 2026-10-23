@@ -46,11 +46,16 @@ impl BlockEntity for DaylightDetectorBlockEntity {
         &self.base
     }
 
-    fn load_additional(&self, _nbt: &BorrowedNbtCompound<'_>) {}
+    fn load_additional(&self, _nbt: &BorrowedNbtCompound<'_>) {
+        // Vanilla `DaylightDetectorBlockEntity` has no persisted fields: its whole
+        // state is the block's `POWER`/`INVERTED` properties.
+    }
 
     fn save_additional(&self, _nbt: &mut NbtCompound) {}
 
     fn tick(&self, world: &Arc<World>) {
+        // Vanilla `DaylightDetectorBlock.tickEntity`: the block owns this ticker and
+        // only registers it when the dimension has sky light.
         if world.game_time() % 20 != 0 {
             return;
         }

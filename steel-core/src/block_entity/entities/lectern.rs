@@ -15,11 +15,14 @@ use std::{
     sync::{Arc, Weak},
 };
 
+use glam::DVec3;
 use simdnbt::ToNbtTag;
 use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
 use simdnbt::owned::{NbtCompound, NbtTag};
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
-use steel_registry::blocks::properties::{BlockStateProperties, BoolProperty};
+use steel_registry::blocks::properties::{
+    BlockStateProperties, BoolProperty, Direction, EnumProperty,
+};
 use steel_registry::data_components::vanilla_components::{
     WRITABLE_BOOK_CONTENT, WRITTEN_BOOK_CONTENT,
 };
@@ -47,6 +50,7 @@ const PAGE_CHANGE_IMPULSE_TICKS: i32 = 2;
 
 const HAS_BOOK: &BoolProperty = &BlockStateProperties::HAS_BOOK;
 const POWERED: &BoolProperty = &BlockStateProperties::POWERED;
+const FACING: &EnumProperty<Direction> = &BlockStateProperties::HORIZONTAL_FACING;
 
 /// Lectern block entity.
 ///
@@ -128,7 +132,8 @@ impl LecternContainer {
     /// Mirrors vanilla `setBook`, including recomputing the page count.
     pub fn set_book(&mut self, book: ItemStack) {
         self.page_count = page_count_for_book(&book);
-        let has_book = !book.is_empty();
+        let has_book = book.get(WRITABLE_BOOK_CONTENT).is_some()
+            || book.get(WRITTEN_BOOK_CONTENT).is_some();
         self.book = book;
         self.page = 0;
         self.pending_book_state = Some(has_book);
@@ -144,12 +149,12 @@ impl LecternContainer {
         mem::replace(&mut self.book, ItemStack::empty())
     }
 
-    /// Sets the current page, clamped to `0..page_count` like vanilla `setPage`.
+    /// Sets the current page, clamped like vanilla `Mth.clamp(page, 0, pageCount - 1)`.
     ///
     /// Returns `true` when the page changed.
     pub fn set_page(&mut self, page: i32) -> bool {
-        let max_page = self.page_count.saturating_sub(1).max(0);
-        let clamped = page.clamp(0, max_page);
+        // `Mth.clamp` clamps to the minimum first, so an empty book yields page `-1`.
+        let clamped = page.max(0).min(self.page_count - 1);
         if clamped == self.page {
             return false;
         }
@@ -166,7 +171,13 @@ impl LecternContainer {
         } else {
             1.0
         };
-        (progress * 14.0).floor() as i32 + i32::from(!self.book.is_empty())
+        (progress * 14.0).floor() as i32 + i32::from(self.has_book())
+    }
+
+    /// Vanilla `LecternBlockEntity.hasBook`: only stacks carrying a book content component count.
+    fn has_book(&self) -> bool {
+        self.book.get(WRITABLE_BOOK_CONTENT).is_some()
+            || self.book.get(WRITTEN_BOOK_CONTENT).is_some()
     }
 
     /// Forgets the book without a block-state change, used when loading NBT.
@@ -230,7 +241,7 @@ impl LecternBlockEntity {
     /// Returns whether a book is stored.
     #[must_use]
     pub fn has_book(&self) -> bool {
-        !self.state.lock().book.is_empty()
+        self.state.lock().has_book()
     }
 
     /// Returns the current page.
@@ -366,11 +377,20 @@ impl BlockEntity for LecternBlockEntity {
         if !state.get_value(HAS_BOOK) {
             return;
         }
-        let book = self.state.lock().take_book();
         let Some(world) = self.get_level() else {
             return;
         };
-        world.drop_item_stack(pos, book);
+        // Vanilla `LecternBlockEntity.preRemoveSideEffects` drops the book one block above the
+        // lectern, offset a quarter block toward its facing direction.
+        let (step_x, step_z) = state.get_value(FACING).offset_xz();
+        let drop_pos = DVec3::new(
+            f64::from(pos.x()) + 0.5 + 0.25 * f64::from(step_x),
+            f64::from(pos.y()) + 1.0,
+            f64::from(pos.z()) + 0.5 + 0.25 * f64::from(step_z),
+        );
+        if let Some(entity) = world.spawn_item(drop_pos, self.book()) {
+            entity.set_default_pickup_delay();
+        }
     }
 
     fn load_additional(&self, nbt: &BorrowedNbtCompound<'_>) {
@@ -384,8 +404,9 @@ impl BlockEntity for LecternBlockEntity {
         {
             state.set_book(book);
             let page = nbt_view.int("Page").unwrap_or(0);
-            let max_page = state.page_count.saturating_sub(1).max(0);
-            state.page = page.clamp(0, max_page);
+            // Vanilla clamps with `Mth.clamp(page, 0, pageCount - 1)`, which yields `-1` for a
+            // book without pages.
+            state.page = page.max(0).min(state.page_count - 1);
         }
         // Loading must not publish block-state changes: the block state is
         // restored from disk separately.
@@ -404,6 +425,12 @@ impl BlockEntity for LecternBlockEntity {
             nbt.insert("Book", book_nbt);
         }
         nbt.insert("Page", state.page);
+    }
+
+    fn get_update_tag(&self) -> Option<NbtCompound> {
+        // Vanilla's default `BlockEntity.getUpdateTag` returns `saveCustomOnly`, so the chunk
+        // sync carries the stored `Book` and `Page`.
+        Some(self.save_custom_only())
     }
 
     fn container_ref(&self) -> Option<ContainerRef> {
@@ -447,6 +474,18 @@ impl Container for LecternContainer {
             return ItemStack::empty();
         }
         self.take_book()
+    }
+
+    fn clear_content(&mut self) -> i32 {
+        // Vanilla `LecternBlockEntity.clearContent` delegates to `setBook(EMPTY)`, which resets
+        // the page counters but leaves the `HAS_BOOK` block state untouched.
+        let count = self.book.count();
+        if count > 0 {
+            self.book = ItemStack::empty();
+            self.page = 0;
+            self.page_count = 0;
+        }
+        count
     }
 
     fn get_max_stack_size(&self) -> i32 {

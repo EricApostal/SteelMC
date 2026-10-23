@@ -9,7 +9,7 @@
 use crate::advancement::criterion::{CriterionTrigger, CriterionTriggerInstance};
 use crate::advancement::predicates::{
     AdvancementContext, Condition, DamagePredicate, DamageSourcePredicate, DamageView, EntityView,
-    IntBounds, MobEffectsPredicate, item_predicate_matches,
+    IntBounds, ItemPredicate, MobEffectsPredicate, item_predicate_matches,
 };
 use crate::advancement::triggers::{EventBase, PlayerCondition, TriggerEvent};
 use crate::item_stack::ItemStack;
@@ -169,7 +169,7 @@ pub struct KilledByArrowTriggerInstance {
     /// Vanilla `unique_entity_types`: bounds on the distinct victim types.
     pub unique_entity_types: IntBounds,
     /// Vanilla `fired_from_weapon`.
-    pub fired_from_weapon: Option<crate::loot_table::ItemPredicate>,
+    pub fired_from_weapon: Option<ItemPredicate>,
 }
 
 impl KilledByArrowTriggerInstance {
@@ -713,11 +713,11 @@ pub struct FishingRodHookedTriggerInstance {
     /// The shared `player` condition.
     pub player: PlayerCondition,
     /// Vanilla `rod`.
-    pub rod: Option<crate::loot_table::ItemPredicate>,
+    pub rod: Option<ItemPredicate>,
     /// Vanilla `entity`: the hooked entity or hook.
     pub entity: Option<Condition>,
     /// Vanilla `item`: the hooked item.
-    pub item: Option<crate::loot_table::ItemPredicate>,
+    pub item: Option<ItemPredicate>,
 }
 
 impl FishingRodHookedTriggerInstance {
@@ -919,6 +919,64 @@ impl CriterionTrigger for BrewedPotionTrigger {
 
 /// The static `minecraft:brewed_potion` trigger.
 pub static BREWED_POTION: BrewedPotionTrigger = BrewedPotionTrigger;
+
+/// Instance of a `target_hit` criterion (`TargetHitTrigger.TriggerInstance`).
+#[derive(Debug, Default)]
+pub struct TargetHitTriggerInstance {
+    /// The shared `player` condition.
+    pub player: PlayerCondition,
+    /// Vanilla `signal_strength`: the emitted redstone signal strength.
+    pub signal_strength: Option<i32>,
+    /// Vanilla `projectile`.
+    pub projectile: Option<Condition>,
+}
+
+impl TargetHitTriggerInstance {
+    /// Vanilla `TriggerInstance.matches(projectile, signalStrength)`.
+    #[must_use]
+    pub fn matches(&self, event: &TriggerEvent<'_>) -> bool {
+        let TriggerEvent::TargetHit {
+            base,
+            projectile,
+            signal_strength,
+        } = *event
+        else {
+            return false;
+        };
+        self.player.matches(&base.context(None))
+            && self
+                .signal_strength
+                .is_none_or(|required| required == signal_strength)
+            && self.projectile.as_ref().is_none_or(|condition| {
+                condition.test(&AdvancementContext::for_entity(
+                    projectile,
+                    base.player,
+                    base.level,
+                    base.origin,
+                    None,
+                ))
+            })
+    }
+}
+
+impl CriterionTriggerInstance for TargetHitTriggerInstance {
+    fn test(&self, event: &TriggerEvent<'_>) -> bool {
+        self.matches(event)
+    }
+}
+
+/// `CriteriaTriggers.TARGET_BLOCK_HIT`.
+#[derive(Debug)]
+pub struct TargetHitTrigger;
+
+impl CriterionTrigger for TargetHitTrigger {
+    fn id(&self) -> Identifier {
+        Identifier::vanilla_static("target_hit")
+    }
+}
+
+/// The static `minecraft:target_hit` trigger.
+pub static TARGET_HIT: TargetHitTrigger = TargetHitTrigger;
 
 /// Vanilla `ItemStack` conversion helper for triggers holding a tool stack.
 pub(crate) type TriggerItemStack = ItemStack;

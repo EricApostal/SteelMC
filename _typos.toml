@@ -23,9 +23,34 @@ undescore = "undescore"
 convertable = "convertable"
 # Vanilla block name: OCHRE_FROGLIGHT.
 OCHRE = "OCHRE"
+# Vanilla `AbstractHurtingProjectile.INITAL_ACCELERATION_POWER`.
+INITAL = "INITAL"
+# Vanilla `ItemEntity.areMergable`.
+mergable = "mergable"
+Mergable = "Mergable"
+# Vanilla `NaturalSpawner.isValidSpawnPostitionForType`.
+Postition = "Postition"
+# Vanilla `DoubleBlockCombiner.combineWithNeigbour`.
+Neigbour = "Neigbour"
+# Vanilla `FishingHook.syncronizedRandom`.
+syncronized = "syncronized"
+# Vanilla `LivingEntity.DATA_PLAYER_MODE_CUSTOMISATION`.
+CUSTOMISATION = "CUSTOMISATION"
+# Vanilla `Piglin.CHANCE_OF_WEARING_EACH_ARMOUR_ITEM`.
+ARMOUR = "ARMOUR"
+# Vanilla `FunctionCommand.ERROR_FUNCTION_INSTANTATION_FAILURE`.
+INSTANTATION = "INSTANTATION"
+# Vanilla `ThrownTrident.isAcceptibleReturnOwner`.
+Acceptible = "Acceptible"
 
 [default.extend-identifiers]
 player_mode_customisation = "player_mode_customisation"
+# Vanilla `LavaFluid.hasFlammableNeighbours`.
+hasFlammableNeighbours = "hasFlammableNeighbours"
+# Vanilla `Containers.updateNeighboursAfterDestroy`.
+updateNeighboursAfterDestroy = "updateNeighboursAfterDestroy"
+# Vanilla `TransportItemsBetweenContainers.onStartTravelling`.
+onStartTravelling = "onStartTravelling"
 
 [default]
 locale = "en-us"

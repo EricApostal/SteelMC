@@ -1,7 +1,7 @@
 //! Objective criteria and render types.
 //!
 //! Mirrors vanilla `ObjectiveCriteria` and its `RenderType`: the fixed custom
-//! criteria, the per-team-colour kill criteria, and the `stat_type:value`
+//! criteria, the per-team-color kill criteria, and the `stat_type:value`
 //! dynamic lookups into the stat registries.
 
 use serde::{Deserialize, Serialize};
@@ -74,9 +74,9 @@ pub enum CriteriaKind {
     Experience,
     /// `level`: experience level, read-only.
     Level,
-    /// `teamkill.<color>`: kills of a team's colour.
+    /// `teamkill.<color>`: kills of a team's color.
     TeamKill(TeamColor),
-    /// `killedByTeam.<color>`: deaths caused by a team's colour.
+    /// `killedByTeam.<color>`: deaths caused by a team's color.
     KilledByTeam(TeamColor),
     /// `stat_type:value`: any stat in the stat-type registries.
     Stat,
@@ -297,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn team_criteria_bind_colours() {
+    fn team_criteria_bind_colors() {
         let criteria = ObjectiveCriteria::parse("teamkill.red").expect("teamkill should parse");
         assert_eq!(criteria.kind(), CriteriaKind::TeamKill(TeamColor::Red));
         assert!(ObjectiveCriteria::parse("killedByTeam.blue").is_some());

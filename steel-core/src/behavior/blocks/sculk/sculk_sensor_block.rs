@@ -62,7 +62,7 @@ impl SculkSensorBlock {
     }
 
     /// Vanilla `SculkSensorBlock.activate`: turns the sensor active with `power`, schedules the
-    /// active tick, updates neighbours and emits the clicking game event.
+    /// active tick, updates neighbors and emits the clicking game event.
     ///
     /// Sound playback beyond the game event is server-side audible context handled by listeners;
     /// particle emission (`DustColorTransitionOptions.SCULK_TO_REDSTONE`) is client-local
@@ -264,8 +264,8 @@ impl BlockBehavior for SculkSensorBlock {
     ) {
         // Vanilla skips the client side, guards on a pending active tick so a re-placed sensor
         // keeps its pulse, and uses flags 18 (`UPDATE_CLIENTS | UPDATE_KNOWN_SHAPE`).
-        // TODO(World): Steel has no server/client-side branch on `World`; block behaviors always
-        // run server-side today. Revisit when client worlds exist.
+        // Steel runs block behaviors server-side only, so vanilla's client-side early return is
+        // a no-op here (no deviation in effect).
         if state.get_block() != old_state.get_block()
             && state.get_value(POWER) > 0
             && !world.has_scheduled_block_tick(pos, self.block)

@@ -188,7 +188,7 @@ struct BarWireState {
     players: BTreeSet<Uuid>,
 }
 
-/// Vanilla `BossEvent.BossBarColor.RED`, the raid boss bar colour.
+/// Vanilla `BossEvent.BossBarColor.RED`, the raid boss bar color.
 const RAID_BAR_COLOR: BossBarColor = BossBarColor::Red;
 /// Vanilla `BossEvent.BossBarOverlay.NOTCHED_10`, the raid boss bar overlay.
 const RAID_BAR_OVERLAY: BossBarOverlay = BossBarOverlay::Notched10;
@@ -753,6 +753,15 @@ impl Raid {
 
         if !self.has_first_wave_spawned() {
             player.award_custom_stat(&steel_registry::vanilla_custom_stats::RAID_TRIGGER);
+            // Vanilla `Raid.absorbRaidOmen`: `CriteriaTriggers.RAID_OMEN.trigger(player)`.
+            let origin = player.block_position();
+            if let Some(world) = player.level() {
+                let level =
+                    crate::player::advancement::triggers::WorldLevelView::new(&world, origin);
+                crate::player::advancement::triggers::raise_voluntary_exile(
+                    player, &level, origin,
+                );
+            }
         }
         true
     }
@@ -1335,6 +1344,13 @@ impl Raid {
             ));
             if let Some(player) = hero.as_player() {
                 player.award_custom_stat(&steel_registry::vanilla_custom_stats::RAID_WIN);
+                // Vanilla `Raid`: `CriteriaTriggers.RAID_WIN.trigger(playerHero)`.
+                let origin = player.block_position();
+                let level =
+                    crate::player::advancement::triggers::WorldLevelView::new(world, origin);
+                crate::player::advancement::triggers::raise_hero_of_the_village(
+                    player, &level, origin,
+                );
             }
         }
     }
@@ -1447,7 +1463,7 @@ pub(crate) fn is_valid_empty_spawn_block(world: &World, pos: BlockPos) -> bool {
         .is_in_tag(state.get_block(), &BlockTag::PREVENT_MOB_SPAWNING_INSIDE)
 }
 
-/// Mirrors vanilla `Raids.createOrExtendRaid`'s village POI centre search.
+/// Mirrors vanilla `Raids.createOrExtendRaid`'s village POI center search.
 #[must_use]
 pub fn village_raid_center(world: &World, raid_position: BlockPos) -> BlockPos {
     let pois = world.poi_storage.lock().get_in_range(

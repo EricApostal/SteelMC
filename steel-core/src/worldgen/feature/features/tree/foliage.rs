@@ -569,6 +569,10 @@ impl FeatureDecorationRunner {
         leaf_radius: i32,
         placement: &mut TreePlacement,
     ) {
+        // Vanilla's `FoliagePlacer.createFoliage` overload samples the offset provider before
+        // dispatching. `RandomSpreadFoliagePlacer` ignores the value but still consumes the draw.
+        let _offset = Self::tree_foliage_offset(random, &config.foliage_placer);
+
         for _ in 0..placer.leaf_placement_attempts {
             let pos = attachment.pos.offset(
                 random.next_i32_bounded(leaf_radius) - random.next_i32_bounded(leaf_radius),
@@ -1290,9 +1294,31 @@ impl FeatureDecorationRunner {
             &config.foliage_provider,
             pos,
         );
-        let foliage_state = Self::copy_waterlogged_from(region, pos, foliage_state);
+        let foliage_state = Self::tree_leaf_waterlogged_state(region, pos, foliage_state);
         placement.set_foliage(region, pos, foliage_state);
         true
+    }
+
+    /// Vanilla `FoliagePlacer.tryPlaceLeaf` waterlogging.
+    ///
+    /// Vanilla tests `level.isFluidAtPosition(pos, state -> state.isSourceOfType(Fluids.WATER))`,
+    /// so only a water *source* waterlogs leaves. (`RootPlacer` instead tests the water tag,
+    /// which is why roots use the shared `copy_waterlogged_from` helper.)
+    fn tree_leaf_waterlogged_state(
+        region: &impl LevelReader,
+        pos: BlockPos,
+        state: BlockStateId,
+    ) -> BlockStateId {
+        if state
+            .try_get_value(&BlockStateProperties::WATERLOGGED)
+            .is_none()
+        {
+            return state;
+        }
+
+        let waterlogged = get_fluid_state_from_block(region.get_block_state(pos))
+            .is_source_of_type(&vanilla_fluids::WATER);
+        state.set_value(&BlockStateProperties::WATERLOGGED, waterlogged)
     }
 }
 

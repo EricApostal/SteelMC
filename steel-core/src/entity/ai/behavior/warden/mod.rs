@@ -1,8 +1,8 @@
 //! Vanilla `net.minecraft.world.entity.ai.behavior.warden` package, plus the
-//! `WardenAi` constants the warden activity file configures these behaviours
+//! `WardenAi` constants the warden activity file configures these behaviors
 //! with.
 //!
-//! The warden entity has not landed in Steel yet, so these behaviours are
+//! The warden entity has not landed in Steel yet, so these behaviors are
 //! entity-agnostic: they only read and write [`BehaviorContext`] and the brain
 //! memories vanilla's `WardenAi` registers. Two warden subsystems therefore have
 //! no counterpart here and their branches are documented at the call sites:

@@ -218,14 +218,12 @@ impl PortalShape {
         right_dir: Direction,
         config: &PortalFrameConfig,
     ) -> Option<BlockPos> {
-        // Scan down to find the lowest empty block above frame
+        // Scan down to find the lowest empty block above frame, stopping at vanilla's
+        // `max(level.getMinY(), pos.getY() - 21)` floor.
+        let min_y = world.min_y().max(pos.y() - config.max_height as i32);
         let mut cur = pos;
-        for _ in 0..config.max_height {
-            let next = cur.below();
-            if !is_empty(world, next, config) {
-                break;
-            }
-            cur = next;
+        while cur.y() > min_y && is_empty(world, cur.below(), config) {
+            cur = cur.below();
         }
 
         // Scan in opposite of right_dir to find the left edge

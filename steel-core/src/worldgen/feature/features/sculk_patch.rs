@@ -281,7 +281,12 @@ impl FeatureDecorationRunner {
             SculkBehaviorKind::Default => match facings {
                 None => Self::sculk_vein_spread_all(region, state, pos, post_process, true) > 0,
                 Some(faces) if !faces.is_empty() => {
-                    if !state.is_air() && !get_fluid_state_from_block(state).is_water() {
+                    // Vanilla `!state.getFluidState().is(Fluids.WATER)` only accepts
+                    // the source water fluid type.
+                    if !state.is_air()
+                        && !get_fluid_state_from_block(state)
+                            .is_source_of_type(&vanilla_fluids::WATER)
+                    {
                         return false;
                     }
                     Self::sculk_vein_regrow(region, pos, state, faces)
@@ -844,12 +849,14 @@ impl FeatureDecorationRunner {
     }
 
     fn sculk_can_place_growth(region: &WorldGenRegion<'_>, pos: BlockPos) -> bool {
-        let above = pos.above();
-        let state_above = region.block_state(above);
-        if !state_above.is_air()
-            && (state_above.get_block() != &vanilla_blocks::WATER
-                || !get_fluid_state_from_block(state_above).is_water())
-        {
+        let state_above = region.block_state(pos.above());
+        // Vanilla: `stateAbove.isAir() || stateAbove.is(WATER) && stateAbove.getFluidState().is(Fluids.WATER)`,
+        // where `is(Fluid)` matches the source fluid type only (flowing water fails).
+        let can_grow_above = state_above.is_air()
+            || (state_above.get_block() == &vanilla_blocks::WATER
+                && get_fluid_state_from_block(state_above)
+                    .is_source_of_type(&vanilla_fluids::WATER));
+        if !can_grow_above {
             return false;
         }
 
@@ -858,8 +865,9 @@ impl FeatureDecorationRunner {
             for y in 0..=2 {
                 for x in -4..=4 {
                     let state = region.block_state(pos.offset(x, y, z));
-                    if state.get_block() == &vanilla_blocks::SCULK_SENSOR
-                        || state.get_block() == &vanilla_blocks::SCULK_SHRIEKER
+                    if state
+                        .get_block()
+                        .has_tag(&BlockTag::SCULK_GROWTH_INHIBITORS)
                     {
                         growth_count += 1;
                     }

@@ -36,10 +36,12 @@ pub use entity::{
     LIGHTNING_STRIKE, LevitationTrigger, LevitationTriggerInstance, LightningStrikeTrigger,
     LightningStrikeTriggerInstance, PLAYER_HURT_ENTITY, PLAYER_KILLED_ENTITY,
     PlayerHurtEntityTrigger, PlayerHurtEntityTriggerInstance, SUMMONED_ENTITY, TAME_ANIMAL,
+    TARGET_HIT, TargetHitTrigger, TargetHitTriggerInstance,
 };
 pub use inventory::{
     CONSTRUCT_BEACON, CONSUME_ITEM, CRAFTER_RECIPE_CRAFTED, ConstructBeaconTrigger,
-    ConstructBeaconTriggerInstance, DistanceTrigger, DistanceTriggerInstance, FALL_AFTER_EXPLOSION,
+    ConstructBeaconTriggerInstance, DistanceTrigger, DistanceTriggerInstance, ENCHANTED_ITEM,
+    EnchantedItemTrigger, EnchantedItemTriggerInstance, FALL_AFTER_EXPLOSION,
     FALL_FROM_HEIGHT, FILLED_BUCKET, FallAfterExplosionTrigger, FallAfterExplosionTriggerInstance,
     GENERATE_LOOT, INVENTORY_CHANGED, ITEM_DURABILITY_CHANGED, InventoryChangedSlots,
     InventoryChangedTrigger, InventoryChangedTriggerInstance, ItemDurabilityChangedTrigger,
@@ -193,7 +195,7 @@ pub enum TriggerEvent<'a> {
     Distance {
         /// Shared event fields.
         base: EventBase<'a>,
-        /// Where the travelled distance started.
+        /// Where the traveled distance started.
         start: (f64, f64, f64),
     },
     /// `levitation`.

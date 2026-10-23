@@ -75,8 +75,6 @@ struct TrackedEntity {
     last_leash_holder_id: SyncMutex<Option<i32>>,
     /// Vanilla client tracking range converted to blocks.
     tracking_range: EntityTrackingRange,
-    /// Current chunk used by the player-view predicate.
-    registered_chunk: ChunkPos,
     /// Players currently tracking this entity (interior mutable for concurrent access).
     seen_by: SyncRwLock<FxHashSet<i32>>,
 }
@@ -150,12 +148,10 @@ impl EntityTracker {
         }
 
         let pos = entity.position();
-        let registered_chunk = ChunkPos::from_entity_pos(pos);
 
         let players_to_notify = Self::visible_players_for_entity(
             entity_id,
             entity.as_ref(),
-            registered_chunk,
             tracking_range,
             &get_players_in_chunk,
             &get_player,
@@ -176,7 +172,6 @@ impl EntityTracker {
             last_passenger_ids: SyncMutex::new(self.direct_tracked_passenger_ids(entity.as_ref())),
             last_leash_holder_id: SyncMutex::new(leash_holder_id(entity.as_ref())),
             tracking_range,
-            registered_chunk,
             seen_by: SyncRwLock::new(players_to_notify),
         };
 
@@ -238,10 +233,13 @@ impl EntityTracker {
                 return true;
             };
 
+            // Vanilla `TrackedEntity.updatePlayer` reads the entity's live chunk
+            // position rather than a cached one.
+            let entity_chunk = ChunkPos::from_entity_pos(entity.position());
             let visible = !entity.is_removed()
                 && entity_id != player_id
-                && view.contains(tracked.registered_chunk)
-                && is_chunk_sent(tracked.registered_chunk)
+                && view.contains(entity_chunk)
+                && is_chunk_sent(entity_chunk)
                 && entity.broadcast_to_player(player)
                 && is_within_tracking_distance(
                     entity.position(),
@@ -402,6 +400,8 @@ impl EntityTracker {
                         needs_velocity_sync: entity.needs_velocity_sync(),
                         has_dirty_entity_data,
                         force_velocity_sync: entity.forces_fall_flying_velocity_sync(),
+                        force_position_rotation: forces_position_rotation(entity.as_ref()),
+                        requires_precise_position: entity.base().requires_precise_position(),
                     });
             if result.should_clear_velocity_sync() {
                 entity.clear_velocity_sync();
@@ -544,15 +544,28 @@ impl EntityTracker {
         }
     }
 
-    /// Updates an entity's current chunk and visible players after a section move.
+    /// Refreshes the players tracking one entity after it changed section.
     ///
-    /// Vanilla refreshes tracked players when an entity's section position changes.
-    /// The old and new chunks may be the same for purely vertical section moves.
+    /// Vanilla `ChunkMap.tick` calls `TrackedEntity.updatePlayers` when an
+    /// entity's section position changes; visibility is recomputed from the
+    /// entity's live chunk position, tracking range, and broadcast predicate.
     pub fn on_entity_section_change(
         &self,
         entity_id: i32,
-        old_chunk: ChunkPos,
-        new_chunk: ChunkPos,
+        get_players_in_chunk: impl Fn(ChunkPos) -> Vec<i32>,
+        get_player: impl Fn(i32) -> Option<Arc<Player>>,
+    ) {
+        self.refresh_entity_players(entity_id, get_players_in_chunk, get_player);
+    }
+
+    /// Recomputes the set of players tracking one entity.
+    ///
+    /// Mirrors vanilla `TrackedEntity.updatePlayers`: players that newly pass
+    /// the visibility predicate are paired, players that no longer pass are
+    /// unpaired and despawned.
+    fn refresh_entity_players(
+        &self,
+        entity_id: i32,
         get_players_in_chunk: impl Fn(ChunkPos) -> Vec<i32>,
         get_player: impl Fn(i32) -> Option<Arc<Player>>,
     ) {
@@ -561,10 +574,6 @@ impl EntityTracker {
         let mut entity_to_spawn = None;
 
         self.entities.update_sync(&entity_id, |_, tracked| {
-            if old_chunk != new_chunk {
-                tracked.registered_chunk = new_chunk;
-            }
-
             let Some(entity) = tracked.entity.upgrade() else {
                 return;
             };
@@ -572,63 +581,9 @@ impl EntityTracker {
             let new_seen_by = Self::visible_players_for_entity(
                 entity_id,
                 entity.as_ref(),
-                new_chunk,
                 tracked.tracking_range,
                 &get_players_in_chunk,
                 &get_player,
-            );
-
-            let mut seen_by = tracked.seen_by.write();
-            players_to_remove.extend(seen_by.difference(&new_seen_by).copied());
-            players_to_add.extend(new_seen_by.difference(&seen_by).copied());
-            *seen_by = new_seen_by;
-            entity_to_spawn = Some(entity);
-        });
-
-        let Some(entity) = entity_to_spawn else {
-            return;
-        };
-
-        for player_id in players_to_remove {
-            if let Some(player) = get_player(player_id) {
-                if let Some(packet) =
-                    self.vehicle_passenger_packet_for_player(entity.as_ref(), player_id)
-                {
-                    player.send_packet(packet);
-                }
-                player.send_packet(CRemoveEntities::single(entity_id));
-            }
-        }
-
-        for player_id in players_to_add {
-            if let Some(player) = get_player(player_id) {
-                self.send_spawn_packets(&entity, &player);
-            }
-        }
-    }
-
-    fn refresh_entity_players(
-        &self,
-        entity_id: i32,
-        get_players_in_chunk: &impl Fn(ChunkPos) -> Vec<i32>,
-        get_player: &impl Fn(i32) -> Option<Arc<Player>>,
-    ) {
-        let mut players_to_remove = Vec::new();
-        let mut players_to_add = Vec::new();
-        let mut entity_to_spawn = None;
-
-        self.entities.update_sync(&entity_id, |_, tracked| {
-            let Some(entity) = tracked.entity.upgrade() else {
-                return;
-            };
-
-            let new_seen_by = Self::visible_players_for_entity(
-                entity_id,
-                entity.as_ref(),
-                tracked.registered_chunk,
-                tracked.tracking_range,
-                get_players_in_chunk,
-                get_player,
             );
 
             let mut seen_by = tracked.seen_by.write();
@@ -682,15 +637,19 @@ impl EntityTracker {
         let _ = self.entities.remove_sync(&entity_id);
     }
 
+    /// Collects the players that should track an entity right now.
+    ///
+    /// Mirrors vanilla `TrackedEntity.updatePlayer`, including its use of the
+    /// entity's live chunk position for the chunk-tracking predicate.
     fn visible_players_for_entity(
         entity_id: i32,
         entity: &dyn Entity,
-        entity_chunk: ChunkPos,
         tracking_range: EntityTrackingRange,
         get_players_in_chunk: &impl Fn(ChunkPos) -> Vec<i32>,
         get_player: &impl Fn(i32) -> Option<Arc<Player>>,
     ) -> FxHashSet<i32> {
         let entity_pos = entity.position();
+        let entity_chunk = ChunkPos::from_entity_pos(entity_pos);
         let tracking_range = effective_tracking_range(entity, tracking_range);
         let mut players = FxHashSet::default();
         if entity.is_removed() {
@@ -803,6 +762,18 @@ impl EntityTracker {
             })
             .unwrap_or(false)
     }
+}
+
+/// Vanilla `ServerEntity.sendChanges` special-cases `AbstractArrow`: it always
+/// asks `createMovePacket` for position *and* rotation, so arrows bypass the
+/// movement thresholds instead of only sending what changed.
+fn forces_position_rotation(entity: &dyn Entity) -> bool {
+    [
+        &vanilla_entities::ARROW,
+        &vanilla_entities::SPECTRAL_ARROW,
+        &vanilla_entities::TRIDENT,
+    ]
+    .contains(&entity.entity_type())
 }
 
 fn leash_holder_id(entity: &dyn Entity) -> Option<i32> {

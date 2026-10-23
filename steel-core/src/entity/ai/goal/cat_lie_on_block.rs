@@ -10,7 +10,6 @@ use steel_registry::vanilla_block_tags::BlockTag;
 use steel_utils::BlockPos;
 
 use super::move_to_block::MoveToBlockGoal;
-use super::reduced_tick_delay;
 use super::selector::{Goal, GoalControls};
 use crate::entity::{PathfinderMob, SharedEntity};
 use crate::world::LevelReader;
@@ -18,7 +17,8 @@ use crate::world::LevelReader;
 /// Vanilla `CatLieOnBlockGoal(cat, speedModifier, searchRange)`:
 /// `super(cat, speedModifier, searchRange, 6)`: the move-to-target vertical range is 6.
 const VERTICAL_SEARCH_RANGE: i32 = 6;
-/// Vanilla `CatLieOnBlockGoal.tick` interval before the goal may start again.
+/// Vanilla `CatLieOnBlockGoal.nextStartTick` returns the raw 40 ticks (no
+/// `reducedTickDelay`).
 const NEXT_START_TICK: i32 = 40;
 
 /// Vanilla `CatLieOnBlockGoal`.
@@ -38,7 +38,7 @@ impl CatLieOnBlockGoal {
                 is_valid_target,
             )
             .with_vertical_search_start(-2)
-            .with_next_start_tick(|_| reduced_tick_delay(NEXT_START_TICK)),
+            .with_next_start_tick(|_| NEXT_START_TICK),
         }
     }
 }

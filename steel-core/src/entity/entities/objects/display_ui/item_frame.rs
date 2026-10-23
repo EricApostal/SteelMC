@@ -171,12 +171,12 @@ impl ItemFrameEntity {
     }
 
     /// Vanilla `ItemFrame.setRotation(int, boolean)`.
-    fn set_rotation_with_update(&self, rotation: i32, update_neighbours: bool) {
+    fn set_rotation_with_update(&self, rotation: i32, update_neighbors: bool) {
         self.entity_data
             .lock()
             .rotation
             .set(rotation.rem_euclid(NUM_ROTATIONS));
-        if update_neighbours && let Some(world) = self.level() {
+        if update_neighbors && let Some(world) = self.level() {
             world.update_neighbor_for_output_signal(
                 self.block_attached_entity_base.pos(),
                 &vanilla_blocks::AIR,

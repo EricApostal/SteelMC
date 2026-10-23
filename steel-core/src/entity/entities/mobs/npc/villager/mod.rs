@@ -425,7 +425,10 @@ impl VillagerEntity {
             }
         }
 
-        if self.merchant.trading_player().is_some() {
+        // Vanilla `Villager.updateSpecialPrices` tail: `tradingPlayer != null && !merchantOffers.isEmpty()`.
+        // The offer guard is dropped before `refresh_trade_menu` re-locks it.
+        let has_offers = !self.merchant.offers().is_empty();
+        if has_offers && self.merchant.trading_player().is_some() {
             self.refresh_trade_menu(player);
         }
     }
@@ -465,6 +468,16 @@ impl VillagerEntity {
         self.mob_base
             .set_ambient_sound_time(-self.ambient_sound_interval());
         self.reward_trade_xp(offer);
+        // Vanilla `AbstractVillager.notifyTrade`: `CriteriaTriggers.TRADE.trigger(...)`.
+        if let Some(trading_player) = self.merchant.trading_player()
+            && let Some(player) = trading_player.as_player()
+        {
+            crate::player::advancement::triggers::raise_villager_trade(
+                player,
+                self,
+                offer.result(),
+            );
+        }
     }
 
     /// Vanilla `AbstractVillager.notifyTradeUpdated`.

@@ -49,6 +49,11 @@ impl FeatureDecorationRunner {
         true
     }
 
+    /// Vanilla's `stateToPlace.getBlock() instanceof DoublePlantBlock` check.
+    ///
+    /// Every block whose vanilla class extends `DoublePlantBlock` is listed here:
+    /// the tall flowers, plain double plants, `PitcherCropBlock`,
+    /// `SmallDripleafBlock` and `TallSeagrassBlock`.
     pub(in crate::worldgen::feature) fn is_double_plant_block(block: BlockRef) -> bool {
         block == &vanilla_blocks::SUNFLOWER
             || block == &vanilla_blocks::LILAC
@@ -57,6 +62,7 @@ impl FeatureDecorationRunner {
             || block == &vanilla_blocks::TALL_GRASS
             || block == &vanilla_blocks::LARGE_FERN
             || block == &vanilla_blocks::TALL_SEAGRASS
+            || block == &vanilla_blocks::PITCHER_CROP
             || block == &vanilla_blocks::PITCHER_PLANT
             || block == &vanilla_blocks::SMALL_DRIPLEAF
     }

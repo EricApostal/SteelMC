@@ -4,7 +4,8 @@
 use std::sync::Arc;
 
 use glam::DVec3;
-use steel_registry::vanilla_damage_types;
+use steel_registry::particle_type::ParticleData;
+use steel_registry::{sound_events, vanilla_damage_types, vanilla_particle_types};
 
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::module_type as mem;
@@ -90,12 +91,26 @@ impl SonicBoom {
 
         // Vanilla `target.getEyePosition().subtract(source)`, where `source`
         // is the body's position plus its `WARDEN_CHEST` attachment offset.
-        // Particles (`ParticleTypes.SONIC_BOOM`) and entity event 62 drawn from
-        // this line have no client path from the AI layer.
         let source = super::eye_position(ctx.body) + super::warden_chest_attachment(ctx);
         let delta = super::eye_position(&target) - source;
         // Vanilla `Vec3.normalize()` yields `Vec3.ZERO` for a degenerate delta.
         let direction = delta.normalize_or_zero();
+
+        // Vanilla sends one `SONIC_BOOM` particle per block of the chest-to-eye line.
+        let steps = delta.length().floor() as i32 + 7;
+        for step in 1..steps {
+            let particle_pos = source + direction * f64::from(step);
+            ctx.level.send_particles(
+                ParticleData::simple(&vanilla_particle_types::SONIC_BOOM),
+                particle_pos,
+                1,
+                DVec3::ZERO,
+                0.0,
+            );
+        }
+
+        ctx.body
+            .play_sound(&sound_events::ENTITY_WARDEN_SONIC_BOOM, 3.0, 1.0);
 
         // Vanilla `level.damageSources().sonicBoom(body)`.
         let damage_source =
@@ -135,8 +150,9 @@ impl Behavior for SonicBoom {
     fn start(&mut self, ctx: &mut BehaviorContext<'_>) {
         ctx.set_memory_with_expiry(&mem::ATTACK_COOLING_DOWN, true, i64::from(DURATION));
         ctx.set_memory_with_expiry(&mem::SONIC_BOOM_SOUND_DELAY, (), TICKS_BEFORE_PLAYING_SOUND);
-        // Vanilla plays `SoundEvents.WARDEN_SONIC_CHARGE` here; the AI layer has
-        // no server audio path.
+        // Vanilla plays `SoundEvents.WARDEN_SONIC_CHARGE` here.
+        ctx.body
+            .play_sound(&sound_events::ENTITY_WARDEN_SONIC_CHARGE, 3.0, 1.0);
     }
 
     fn tick(&mut self, ctx: &mut BehaviorContext<'_>) {
@@ -150,8 +166,7 @@ impl Behavior for SonicBoom {
             return;
         }
 
-        // Vanilla plays `SoundEvents.WARDEN_SONIC_BOOM` here; the AI layer has
-        // no server audio path.
+        // Vanilla plays `SoundEvents.WARDEN_SONIC_BOOM` inside `fire`.
         ctx.set_memory_with_expiry(
             &mem::SONIC_BOOM_SOUND_COOLDOWN,
             (),

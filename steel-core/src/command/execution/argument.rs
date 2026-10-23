@@ -392,7 +392,7 @@ impl SteelArgumentType {
         Self::new(MessageParser)
     }
 
-    /// Vanilla `HexColorArgument`: a packed opaque ARGB colour.
+    /// Vanilla `HexColorArgument`: a packed opaque ARGB color.
     pub(crate) fn hex_color() -> Self {
         Self::new(HexColorParser)
     }

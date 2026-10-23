@@ -313,6 +313,9 @@ impl Container for ChiseledBookShelfContainer {
             return;
         }
 
+        // Vanilla `ChiseledBookShelfBlockEntity.setItem` stores the stack as given (it only clamps
+        // the slot interaction to one book at the block level); count limits are enforced by
+        // `can_place_item`, not here.
         self.items[slot] = stack;
         self.last_interacted_slot = slot as i32;
         self.state_update_pending = true;
@@ -430,6 +433,7 @@ mod tests {
             bookshelf.last_interacted_slot(),
             INTERACTION_TEST_SLOT as i32,
         );
+        // Vanilla `ChiseledBookShelfBlockEntity.setItem` stores the stack as given.
         assert_eq!(
             bookshelf
                 .item(INTERACTION_TEST_SLOT)

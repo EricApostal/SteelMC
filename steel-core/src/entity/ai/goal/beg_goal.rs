@@ -76,6 +76,8 @@ impl Goal for BegGoal {
             return false;
         };
 
+        // Vanilla `ServerLevel.getNearestPlayer(TargetingConditions, mob)` measures from
+        // `mob.getX(), mob.getY(), mob.getZ()` (feet), not the eye height.
         let origin = mob.position();
         let follow = f64::from(self.look_distance);
         let conditions = self.beg_targeting.clone();

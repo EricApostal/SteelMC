@@ -6,6 +6,7 @@
 //! shared `DefaultRandomPos` port.
 
 use glam::DVec3;
+use steel_utils::entity_events::EntityStatus;
 
 use super::random_pos::default_random_pos;
 use super::selector::{Goal, GoalControls};
@@ -88,21 +89,24 @@ impl Goal for RunAroundLikeCrazyGoal {
         let Some(passenger) = mob.first_passenger() else {
             return;
         };
-        if passenger.as_player().is_none() {
-            return;
-        };
 
-        // Vanilla `AbstractHorse.tameWithName` succeeds when the tem-per roll beats the
-        // player; otherwise the horse gets angrier and throws them.
-        let max_temper = horse.max_temper();
-        if max_temper > 0 && rand::random_range(0..max_temper) < horse.temper() {
-            horse.tame_with_name(&passenger);
-            return;
+        // Vanilla only rolls taming for a player rider; any other passenger falls through
+        // to the buck-off below.
+        if passenger.as_player().is_some() {
+            // Vanilla `AbstractHorse.tameWithName` succeeds when the temper roll beats the
+            // player; otherwise the horse gets angrier and throws them.
+            let max_temper = horse.max_temper();
+            if max_temper > 0 && rand::random_range(0..max_temper) < horse.temper() {
+                horse.tame_with_name(&passenger);
+                return;
+            }
         }
 
         horse.modify_temper(TEMPER_BONUS);
         horse.eject_passengers();
         horse.make_mad(&passenger);
+        // Vanilla `level().broadcastEntityEvent(horse, (byte)6)` (`TamingFailed`).
+        mob.broadcast_entity_event(EntityStatus::TamingFailed);
     }
 }
 

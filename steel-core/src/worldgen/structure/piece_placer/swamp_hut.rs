@@ -6,15 +6,15 @@ use steel_registry::{Registry, vanilla_blocks, vanilla_entities};
 use steel_utils::random::worldgen_random::WorldgenRandom;
 use steel_utils::{BlockStateId, BoundingBox, Direction};
 
-use crate::worldgen::region::WorldGenRegion;
+use crate::worldgen::template::TemplateLevelAccess;
 use steel_worldgen::structure::swamp_hut::SwampHutPieceData;
 
 use super::StructurePiecePlacer;
 use super::scattered_feature::ScatteredFeaturePlacer;
 
 impl StructurePiecePlacer {
-    pub(super) fn place_swamp_hut_piece(
-        region: &mut WorldGenRegion<'_>,
+    pub(super) fn place_swamp_hut_piece<L: TemplateLevelAccess>(
+        region: &mut L,
         registry: &Registry,
         bounding_box: &mut BoundingBox,
         orientation: Option<Direction>,
@@ -33,7 +33,10 @@ impl StructurePiecePlacer {
     }
 }
 
-fn place_swamp_hut(placer: &mut ScatteredFeaturePlacer<'_, '_>, data: &mut SwampHutPieceData) {
+fn place_swamp_hut<L: TemplateLevelAccess>(
+    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    data: &mut SwampHutPieceData,
+) {
     let spruce_planks = vanilla_blocks::SPRUCE_PLANKS.default_state();
     let oak_log = vanilla_blocks::OAK_LOG.default_state();
     let oak_fence = vanilla_blocks::OAK_FENCE.default_state();
@@ -84,8 +87,8 @@ fn place_swamp_hut(placer: &mut ScatteredFeaturePlacer<'_, '_>, data: &mut Swamp
     spawn_swamp_hut_mob(placer, &mut data.spawned_cat, &vanilla_entities::CAT);
 }
 
-fn spawn_swamp_hut_mob(
-    placer: &mut ScatteredFeaturePlacer<'_, '_>,
+fn spawn_swamp_hut_mob<L: TemplateLevelAccess>(
+    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
     spawned: &mut bool,
     entity_type: EntityTypeRef,
 ) {

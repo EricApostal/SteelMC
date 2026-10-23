@@ -822,6 +822,7 @@ mod tests {
             postprocessing: Vec::new(),
             structure_starts: Vec::new(),
             structure_references: Vec::new(),
+            inhabited_time: 0,
             pois: Vec::new(),
         };
         let encoded = wincode::serialize(&persistent).expect("test chunk should encode");

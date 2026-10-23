@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc, Weak,
-    atomic::{AtomicI32, Ordering},
+use std::{
+    str::FromStr as _,
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicI32, Ordering},
+    },
 };
 
 use glam::DVec3;
@@ -9,36 +12,53 @@ use simdnbt::{
     borrow::{BaseNbtCompound, NbtCompound as NbtCompoundView},
     owned::{NbtCompound, NbtList, NbtTag},
 };
+use steel_protocol::packets::game::SoundSource;
 use steel_registry::{
     ItemStackTemplate, REGISTRY,
     blocks::{
         behavior::PushReaction, block_state_ext::BlockStateExt, properties::BlockStateProperties,
     },
-    data_components::{DataComponentPatch, ItemContainerContents, vanilla_components::CONTAINER},
+    data_components::{
+        DataComponentPatch, ItemContainerContents, components::SeededContainerLoot,
+        vanilla_components::{CONTAINER, CONTAINER_LOOT},
+    },
     item_stack::ItemStack,
-    vanilla_block_entity_types,
+    sound_event::SoundEventRef,
+    sound_events, vanilla_block_entity_types, vanilla_block_tags::BlockTag, vanilla_game_events,
 };
 use steel_utils::{
-    BlockLocalAabb, BlockPos, BlockStateId, Direction, DowncastType, DowncastTypeKey, WorldAabb,
+    BlockLocalAabb, BlockPos, BlockStateId, Direction, DowncastType, DowncastTypeKey, Identifier,
+    WorldAabb,
     geometry::{Aabb, Space},
     locks::SyncMutex,
-    types::UpdateFlags,
+    types::{GameType, UpdateFlags},
 };
 
 use crate::{
     behavior::blocks::ShulkerBoxBlock,
-    block_entity::{BlockEntity, BlockEntityBase},
+    block_entity::{
+        BlockEntity, BlockEntityBase, BlockEntityLifecycleExt as _,
+        entities::openers_counter::ContainerViewers,
+    },
     inventory::{
         container::Container,
         lock::{ContainerRef, SharedContainer},
     },
     physics::{CollisionWorld as _, MoverType, WorldCollisionProvider},
-    world::World,
+    player::Player,
+    world::{World, game_event::GameEventContext},
 };
 
 /// Number of slots in a shulker box (3 rows of 9).
 pub const SHULKER_BOX_SLOTS: usize = 27;
 const ANIMATION_STEPS: u8 = 10;
+
+/// Vanilla `ShulkerBoxBlockEntity.SLOTS`: every slot is reachable from every
+/// face.
+const FACE_SLOTS: [usize; SHULKER_BOX_SLOTS] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26,
+];
 
 /// The current animation state of a shulker box.
 #[derive(Debug, Clone, Copy)]
@@ -80,6 +100,10 @@ pub struct ShulkerBoxBlockEntity {
 
 struct ShulkerBoxContainer {
     items: Vec<ItemStack>,
+    /// Vanilla `RandomizableContainerBlockEntity.lootTable`.
+    loot_table: Option<Identifier>,
+    /// Vanilla `RandomizableContainerBlockEntity.lootTableSeed`.
+    loot_table_seed: i64,
 }
 
 // SAFETY: This key is owned by Steel and uniquely identifies `ShulkerBoxEntity`.
@@ -110,6 +134,8 @@ impl ShulkerBoxBlockEntity {
         ));
         let container = Arc::new(SyncMutex::new(ShulkerBoxContainer {
             items: vec![ItemStack::empty(); SHULKER_BOX_SLOTS],
+            loot_table: None,
+            loot_table_seed: 0,
         }));
         let shared_container: SharedContainer =
             Arc::<SyncMutex<ShulkerBoxContainer>>::clone(&container);
@@ -203,6 +229,18 @@ impl ShulkerBoxBlockEntity {
 
         let mut patch = DataComponentPatch::new();
         patch.set(CONTAINER, contents);
+        // Vanilla `RandomizableContainerBlockEntity.collectImplicitComponents`
+        // keeps a pending loot table on the item form.
+        let loot = {
+            let container = self.container.lock();
+            container
+                .loot_table
+                .clone()
+                .map(|loot_table| SeededContainerLoot::new(loot_table, container.loot_table_seed))
+        };
+        if let Some(loot) = loot {
+            patch.set(CONTAINER_LOOT, loot);
+        }
 
         ItemStack::with_count_and_patch(block_item, 1, patch)
     }
@@ -255,10 +293,13 @@ impl ShulkerBoxBlockEntity {
 
         let direction = state.get_value(ShulkerBoxBlock::FACING);
 
+        // Vanilla `ShulkerBoxBlock.canOpen` uses `Shulker.getProgressAabb(1.0F,
+        // facing, 0.5F, ...)`, which is `getProgressDeltaAabb(1.0F, facing,
+        // -1.0F, 0.5F, ...)`.
         let lid_open_bounding_box: WorldAabb = Self::get_progress_delta_aabb(
             1.0,
             direction,
-            0.0,
+            -1.0,
             0.5,
             DVec3::from(pos.get_bottom_center()),
         )
@@ -312,6 +353,23 @@ impl ShulkerBoxBlockEntity {
     pub fn animation_status(&self) -> AnimationStatus {
         self.animation.lock().animation_status
     }
+
+    /// Vanilla `ShulkerBoxBlockEntity.startOpen`/`stopOpen` sound: `0.5` volume
+    /// with a randomized pitch, played at the block center.
+    fn play_sound(&self, world: &Arc<World>, pos: BlockPos, sound: SoundEventRef) {
+        world.play_sound_at(
+            sound,
+            SoundSource::Blocks,
+            DVec3::new(
+                f64::from(pos.x()) + 0.5,
+                f64::from(pos.y()) + 0.5,
+                f64::from(pos.z()) + 0.5,
+            ),
+            0.5,
+            rand::random::<f32>() * 0.1 + 0.9,
+            None,
+        );
+    }
 }
 
 impl BlockEntity for ShulkerBoxBlockEntity {
@@ -344,6 +402,15 @@ impl BlockEntity for ShulkerBoxBlockEntity {
         let nbt_view: NbtCompoundView<'_, '_> = nbt.into();
         let mut container = self.container.lock();
         container.items.fill(ItemStack::empty());
+        container.loot_table = nbt_view
+            .string("LootTable")
+            .and_then(|value| Identifier::from_str(&value.to_str()).ok());
+        container.loot_table_seed = nbt_view.long("LootTableSeed").unwrap_or(0);
+
+        // Vanilla `tryLoadLootTable`: a pending loot table replaces the stored items.
+        if container.loot_table.is_some() {
+            return;
+        }
 
         let Some(items_list) = nbt_view.list("Items") else {
             return;
@@ -368,6 +435,16 @@ impl BlockEntity for ShulkerBoxBlockEntity {
 
     fn save_additional(&self, nbt: &mut NbtCompound) {
         let container = self.container.lock();
+        // Vanilla `trySaveLootTable`: an unopened loot table persists instead of items.
+        if let Some(loot_table) = &container.loot_table {
+            nbt.insert("LootTable", loot_table.to_string());
+            // Vanilla only writes the seed when it is non-zero.
+            if container.loot_table_seed != 0 {
+                nbt.insert("LootTableSeed", container.loot_table_seed);
+            }
+            return;
+        }
+
         let mut items: Vec<NbtCompound> = Vec::new();
         for (slot, item) in container.items().iter().enumerate() {
             if item.is_empty() {
@@ -379,15 +456,25 @@ impl BlockEntity for ShulkerBoxBlockEntity {
             item_nbt.insert("Slot", slot as i8);
             items.push(item_nbt);
         }
-        nbt.insert("Items", NbtList::Compound(items));
+        // Vanilla `ContainerHelper.saveAllItems(output, items, false)` omits the
+        // list entirely when the box is empty.
+        if !items.is_empty() {
+            nbt.insert("Items", NbtList::Compound(items));
+        }
     }
 
     fn apply_components_from_item(&self, item: &ItemStack) {
+        let mut container = self.container.lock();
+        // Vanilla `RandomizableContainerBlockEntity.applyImplicitComponents`.
+        if let Some(loot) = item.get(CONTAINER_LOOT) {
+            container.loot_table = Some(loot.loot_table().clone());
+            container.loot_table_seed = loot.seed();
+        }
+
         let Some(contents) = item.get(CONTAINER) else {
             return;
         };
 
-        let mut container = self.container.lock();
         container.items.fill(ItemStack::empty());
         for (slot, template) in contents.items().iter().enumerate() {
             if slot >= SHULKER_BOX_SLOTS {
@@ -406,6 +493,72 @@ impl BlockEntity for ShulkerBoxBlockEntity {
     fn container_ref(&self) -> Option<ContainerRef> {
         Some(self.container_ref.clone())
     }
+
+    fn container_viewers(&self) -> Option<&dyn ContainerViewers> {
+        Some(self)
+    }
+}
+
+impl ContainerViewers for ShulkerBoxBlockEntity {
+    /// Vanilla `ShulkerBoxBlockEntity.startOpen`.
+    ///
+    /// Shulker boxes keep their own count instead of a
+    /// `ContainerOpenersCounter`: a negative count is clamped to zero first, the
+    /// count is broadcast as block event 1, and the open game event and sound
+    /// only fire when the box becomes occupied.
+    fn start_open(&self, player: &Player) {
+        if self.is_removed() || player.game_mode() == GameType::Spectator {
+            return;
+        }
+        let Some(world) = self.get_level() else {
+            return;
+        };
+        let pos = self.get_block_pos();
+        let state = self.get_block_state();
+        let current = self.open_count.load(Ordering::Relaxed).max(0) + 1;
+        self.open_count.store(current, Ordering::Relaxed);
+        world.block_event(pos, state.get_block(), 1, current);
+        if current == 1 {
+            world.game_event(
+                &vanilla_game_events::CONTAINER_OPEN,
+                pos,
+                &GameEventContext::new(Some(player as &dyn crate::entity::Entity), None),
+            );
+            self.play_sound(&world, pos, &sound_events::BLOCK_SHULKER_BOX_OPEN);
+        }
+    }
+
+    /// Vanilla `ShulkerBoxBlockEntity.stopOpen`.
+    fn stop_open(&self, player: &Player) {
+        if self.is_removed() || player.game_mode() == GameType::Spectator {
+            return;
+        }
+        let Some(world) = self.get_level() else {
+            return;
+        };
+        let pos = self.get_block_pos();
+        let state = self.get_block_state();
+        let current = self.open_count.load(Ordering::Relaxed) - 1;
+        self.open_count.store(current, Ordering::Relaxed);
+        world.block_event(pos, state.get_block(), 1, current);
+        if current <= 0 {
+            world.game_event(
+                &vanilla_game_events::CONTAINER_CLOSE,
+                pos,
+                &GameEventContext::new(Some(player as &dyn crate::entity::Entity), None),
+            );
+            self.play_sound(&world, pos, &sound_events::BLOCK_SHULKER_BOX_CLOSE);
+        }
+    }
+
+    fn open_count(&self) -> i32 {
+        self.open_count.load(Ordering::Relaxed)
+    }
+
+    /// Vanilla has no `ShulkerBoxBlockEntity.recheckOpen`: `ShulkerBoxBlock` only
+    /// installs the animation ticker, never a recheck tick, so the count is
+    /// maintained solely by `startOpen`/`stopOpen`.
+    fn recheck_open(&self) {}
 }
 
 impl Container for ShulkerBoxContainer {
@@ -433,6 +586,25 @@ impl Container for ShulkerBoxContainer {
 
     fn get_max_stack_size(&self) -> i32 {
         64
+    }
+
+    /// Vanilla `ShulkerBoxBlockEntity.getSlotsForFace`.
+    fn slots_for_face(&self, _direction: Direction) -> Option<&'static [usize]> {
+        Some(&FACE_SLOTS)
+    }
+
+    /// Vanilla `ShulkerBoxBlockEntity.canPlaceItemThroughFace`: a shulker box
+    /// may never be inserted into another shulker box.
+    fn can_place_item_through_face(
+        &self,
+        _slot: usize,
+        stack: &ItemStack,
+        _direction: Direction,
+    ) -> bool {
+        !stack
+            .item()
+            .block
+            .is_some_and(|block| block.has_tag(&BlockTag::SHULKER_BOXES))
     }
 
     fn set_changed(&mut self) {}

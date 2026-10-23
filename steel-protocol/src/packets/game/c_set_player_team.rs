@@ -10,7 +10,7 @@ use steel_utils::{
 };
 use text_components::TextComponent;
 
-/// Scoreboard team colour (`TeamColor`, id order).
+/// Scoreboard team color (`TeamColor`, id order).
 ///
 /// Vanilla's `TeamColor` also owns the matching `TextColor` and `DisplaySlot`; the
 /// wire codec only sends this id.
@@ -107,7 +107,7 @@ impl TeamOptionFlags {
 /// Team metadata sent for method 0 (add) and 2 (change).
 ///
 /// Wire order: display name, prefix, suffix, name tag visibility, collision rule,
-/// presence-byte optional colour, option flags byte.
+/// presence-byte optional color, option flags byte.
 #[derive(Clone, Debug)]
 pub struct TeamParameters {
     /// Team display name.
@@ -120,7 +120,7 @@ pub struct TeamParameters {
     pub name_tag_visibility: NameTagVisibility,
     /// Collision rule.
     pub collision_rule: CollisionRule,
-    /// Team colour, if set.
+    /// Team color, if set.
     pub color: Option<TeamColor>,
     /// Packed option flags.
     pub options: TeamOptionFlags,

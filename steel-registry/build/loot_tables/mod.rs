@@ -390,19 +390,58 @@ const fn default_true() -> bool {
     true
 }
 
-#[derive(Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
+/// Vanilla `LocationPredicate` as it appears in `minecraft:location_check`.
+///
+/// Mirrors every field of `net.minecraft.advancements.predicates.LocationPredicate`;
+/// the loot runtime reuses the advancement predicate type.
+#[derive(Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields, default)]
 struct LocationPredicateJson {
-    #[serde(default)]
+    position: Option<PositionPredicateJson>,
+    biomes: Option<HolderSetJson>,
+    structures: Option<HolderSetJson>,
+    dimension: Option<String>,
+    light: Option<LevelRangeJson>,
     block: Option<BlockPredicateJson>,
+    fluid: Option<String>,
+    smokey: Option<bool>,
+    can_see_sky: Option<bool>,
 }
 
+/// Vanilla `LocationPredicate.PositionPredicate`: per-axis double bounds.
+#[derive(Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields, default)]
+struct PositionPredicateJson {
+    x: Option<DoubleBoundsJson>,
+    y: Option<DoubleBoundsJson>,
+    z: Option<DoubleBoundsJson>,
+}
+
+/// Vanilla `MinMaxBounds.Doubles`: a bare number or a `{min, max}` object.
 #[derive(Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
+#[serde(untagged)]
+enum DoubleBoundsJson {
+    Exact(f64),
+    Bounds {
+        #[serde(default)]
+        min: Option<f64>,
+        #[serde(default)]
+        max: Option<f64>,
+    },
+}
+
+/// A vanilla `HolderSet` reference: a `#tag`, a single key, or a key list.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(untagged)]
+enum HolderSetJson {
+    Single(String),
+    List(Vec<String>),
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+#[serde(deny_unknown_fields, default)]
 struct BlockPredicateJson {
-    #[serde(default)]
-    blocks: Option<String>,
-    #[serde(default)]
+    blocks: Option<HolderSetJson>,
     state: Option<FxHashMap<String, String>>,
 }
 
@@ -531,14 +570,14 @@ pub(crate) enum LevelRangeJson {
 }
 
 impl LevelRangeJson {
-    fn bounds(&self) -> (Option<i32>, Option<i32>) {
+    const fn bounds(&self) -> (Option<i32>, Option<i32>) {
         match self {
             Self::Exact(level) => (Some(*level), Some(*level)),
             Self::Bounds { min, max } => (*min, *max),
         }
     }
 
-    pub(crate) fn min_level(&self) -> Option<i32> {
+    pub(crate) const fn min_level(&self) -> Option<i32> {
         self.bounds().0
     }
 }
@@ -781,12 +820,13 @@ pub(crate) fn build() -> TokenStream {
     stream.extend(quote! {
         use crate::loot_table::{
             BlockPredicate, BonusFormula, ConditionalLootFunction, CopySource, DamageSourcePredicate,
-            DamageTagPredicate, DyeColor, EnchantedChance, EnchantmentMatch, EnchantmentOptions,
-            EnchantmentSource, EntityEquipment, EntityFlags, EntityPredicate, EquipmentSlotGroup,
-            InstrumentOptions, ItemPredicate, ItemSetPredicate, LocationPredicate, LootCondition,
-            LootContextEntity, LootEntry, LootFunction, LootPool, LootTable, LootTableRef,
-            LootTableRegistry, LootType, NameTarget, NumberProvider, PotionOptions, PropertyCheck,
-            StewEffect, ToolPredicate,
+            DamageTagPredicate, DoubleBounds, DyeColor, EnchantedChance, EnchantmentMatch,
+            EnchantmentOptions, EnchantmentSource, EntityEquipment, EntityFlags, EntityPredicate,
+            EquipmentSlotGroup, HolderSet, InstrumentOptions, IntBounds, ItemPredicate,
+            ItemSetPredicate, LocationPredicate, LootCondition, LootContextEntity, LootEntry,
+            LootFunction, LootPool, LootTable, LootTableRef, LootTableRegistry, LootType,
+            NameTarget, NumberProvider, PositionPredicate, PotionOptions, PropertyCheck,
+            StatePropertiesPredicate, StewEffect, ToolPredicate,
         };
         use steel_utils::Identifier;
     });

@@ -22,17 +22,17 @@ pub struct VillagerProfession {
     pub held_job_site: Option<PoiTypeRef>,
     /// Vanilla `VillagerProfession.requestedItems` (`ImmutableSet<Item>`).
     ///
-    /// Vanilla hard-codes these in `VillagerProfessions` (e.g. farmer:
-    /// `WHEAT, POTATO, CARROT, BEETROOT, BREAD, PUMPKIN, MELON`); the vendored
-    /// extractor output (`build_assets/villager_professions.json`) only carries
-    /// `id`, `key`, and `work_sound`, so this is an explicit extractor gap and is
-    /// currently always empty.
+    /// Vanilla hard-codes these in `VillagerProfession.bootstrap` (farmer:
+    /// `WHEAT, WHEAT_SEEDS, BEETROOT_SEEDS, BONE_MEAL`); every other profession
+    /// passes an empty set. They are not datapack or registry JSON data, so the
+    /// vendored extractor output cannot supply them and the build generator reads
+    /// them from `build_assets/villager_professions.json` instead.
     pub requested_items: &'static [ItemRef],
     /// Vanilla `VillagerProfession.secondaryPoi` (`ImmutableSet<Block>`).
     ///
-    /// Vanilla hard-codes these in `VillagerProfessions` (e.g. farmer:
-    /// `FARMLAND`); the vendored extractor output does not include them, so this
-    /// is an explicit extractor gap and is currently always empty.
+    /// Vanilla hard-codes these in `VillagerProfession.bootstrap` (farmer:
+    /// `FARMLAND`); every other profession passes an empty set. Same provenance
+    /// note as [`Self::requested_items`].
     pub secondary_poi: &'static [BlockRef],
     /// Vanilla `VillagerProfession.tradeSetsByLevel`, derived from the
     /// `minecraft:trade_set` entries named `<profession>/level_<n>`.

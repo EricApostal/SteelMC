@@ -241,6 +241,16 @@ pub struct Fireworks {
 impl Fireworks {
     pub const MAX_EXPLOSIONS: usize = 256;
 
+    /// Vanilla `SetFireworksFunction.DEFAULT_VALUE`: flight duration 0 with no
+    /// explosions.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            flight_duration: 0,
+            explosions: Vec::new(),
+        }
+    }
+
     /// Creates a firework component accepted by Vanilla's stream codec.
     pub fn new(flight_duration: i32, explosions: Vec<FireworkExplosion>) -> Result<Self> {
         if explosions.len() > Self::MAX_EXPLOSIONS {

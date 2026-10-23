@@ -89,7 +89,7 @@ impl AnimalPanic {
 
 /// Vanilla `AnimalPanic.lookForWater`: the closest water block within 5 blocks
 /// horizontally and 1 vertically, skipping the search when the mob's own block is
-/// solid. Mobs two blocks wide need their south/east/south-east neighbours wet too.
+/// solid. Mobs two blocks wide need their south/east/south-east neighbors wet too.
 fn look_for_water(
     ctx: &BehaviorContext<'_>,
     mob: &dyn PathfinderMob,

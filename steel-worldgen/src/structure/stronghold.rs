@@ -507,15 +507,17 @@ fn gen_and_add(
     fy: i32,
     fz: i32,
     dir: Direction,
-    depth: i32,
+    parent_depth: i32,
 ) {
-    if depth > MAX_DEPTH
+    // Vanilla `generateAndAddPiece` tests the *parent's* `genDepth` against 50 and
+    // then creates the child with `depth + 1`.
+    if parent_depth > MAX_DEPTH
         || (fx - s.start_bb.min_x()).abs() > MAX_DISTANCE
         || (fz - s.start_bb.min_z()).abs() > MAX_DISTANCE
     {
         return;
     }
-    if let Some(piece) = generate_piece(s, rng, fx, fy, fz, dir, depth) {
+    if let Some(piece) = generate_piece(s, rng, fx, fy, fz, dir, parent_depth + 1) {
         if piece.pt() == PT::Portal {
             s.has_portal = true;
         }
@@ -632,7 +634,7 @@ fn fwd(
         Direction::East => (bb.max_x() + 1, bb.min_z() + x_off),
         _ => return,
     };
-    gen_and_add(s, rng, fx, bb.min_y() + y_off, fz, dir, depth + 1);
+    gen_and_add(s, rng, fx, bb.min_y() + y_off, fz, dir, depth);
 }
 
 fn left(
@@ -651,7 +653,7 @@ fn left(
         Direction::West | Direction::East => (bb.min_x() + z_off, bb.min_z() - 1, Direction::North),
         _ => return,
     };
-    gen_and_add(s, rng, fx, bb.min_y() + y_off, fz, d, depth + 1);
+    gen_and_add(s, rng, fx, bb.min_y() + y_off, fz, d, depth);
 }
 
 fn right(
@@ -670,7 +672,7 @@ fn right(
         Direction::West | Direction::East => (bb.min_x() + z_off, bb.max_z() + 1, Direction::South),
         _ => return,
     };
-    gen_and_add(s, rng, fx, bb.min_y() + y_off, fz, d, depth + 1);
+    gen_and_add(s, rng, fx, bb.min_y() + y_off, fz, d, depth);
 }
 
 /// One generated stronghold piece.
@@ -770,7 +772,11 @@ pub fn generate_pieces(seed: i64, chunk_x: i32, chunk_z: i32) -> Vec<StrongholdG
     }
 }
 
-/// Registered under `"minecraft:stronghold"`. Biome check at chunk center, surface Y.
+/// Registered under `"minecraft:stronghold"`.
+///
+/// Vanilla `StrongholdStructure.findGenerationPoint` returns a stub at
+/// `chunkPos.getWorldPosition()` = `(minBlockX, 0, minBlockZ)`, and the biome
+/// filter samples exactly that position (`Structure.isValidBiome`).
 pub struct StrongholdStructure;
 
 impl Structure for StrongholdStructure {
@@ -780,14 +786,16 @@ impl Structure for StrongholdStructure {
         structure: &StructureData,
         _rng: &mut LegacyRandom,
     ) -> Option<GenerationStub> {
-        let surface_y = ctx.surface_y();
-        let biome = ctx.biome_at(ctx.center_block_x(), surface_y, ctx.center_block_z());
+        let stub_x = ctx.chunk_min_x();
+        let stub_y = 0;
+        let stub_z = ctx.chunk_min_z();
+        let biome = ctx.biome_at(stub_x, stub_y, stub_z);
         if !structure.allowed_biomes.contains(&biome.key) {
             return None;
         }
 
         Some(GenerationStub {
-            position: (ctx.center_block_x(), surface_y, ctx.center_block_z()),
+            position: (stub_x, stub_y, stub_z),
             pieces: generate_pieces(ctx.seed(), ctx.chunk_x(), ctx.chunk_z())
                 .into_iter()
                 .map(|piece| {

@@ -86,7 +86,7 @@ pub trait AbstractThrownPotion: ThrowableItemProjectile {
 
         // Vanilla evaluates the offsets inside the `blockHitPos.relative(hitDirection)`
         // chain: the next block on the hit face, the hit block itself, then the four
-        // horizontal neighbours of the next block.
+        // horizontal neighbors of the next block.
         let effect_pos = hit.direction.relative(hit.block_pos);
         douse_fire(&world, effect_pos, self.as_entity_event_source());
         douse_fire(&world, hit.block_pos, self.as_entity_event_source());

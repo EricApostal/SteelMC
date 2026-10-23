@@ -259,7 +259,7 @@ pub(crate) struct PackRepository {
 }
 
 impl PackRepository {
-    /// Discovers packs from `sources`, honouring `selection_file` when present.
+    /// Discovers packs from `sources`, honoring `selection_file` when present.
     ///
     /// # Errors
     /// Propagates [`PackError`] from any source, and rejects packs whose

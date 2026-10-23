@@ -36,7 +36,7 @@ pub(crate) struct TradeCostJson {
     components: Option<serde_json::Value>,
 }
 
-fn default_count() -> NumberProviderJson {
+const fn default_count() -> NumberProviderJson {
     NumberProviderJson::Constant(1.0)
 }
 

@@ -23,12 +23,7 @@ use text_components::{TextComponent, content::Content};
 use uuid::Uuid;
 
 use crate::block_entity::{BlockEntity, BlockEntityBase};
-use crate::entity::Entity;
 use crate::world::World;
-
-/// Maximum distance (in blocks) a player can be from a sign while editing.
-/// If they move further away, the edit lock is released.
-const MAX_EDIT_DISTANCE: f64 = 4.0;
 
 /// Number of text lines on each side of a sign.
 pub const SIGN_LINES: usize = 4;
@@ -38,6 +33,10 @@ pub const SIGN_LINES: usize = 4;
 pub struct SignText {
     /// The 4 lines of text (raw, unfiltered).
     pub messages: [TextComponent; SIGN_LINES],
+    /// The 4 lines of filtered text (vanilla `SignText.filteredMessages`).
+    ///
+    /// Vanilla only serializes this list when it differs from [`Self::messages`].
+    pub filtered_messages: [TextComponent; SIGN_LINES],
     /// Text color (dye color applied to the sign).
     pub color: DyeColor,
     /// Whether the text has a glowing effect (from glow ink sac).
@@ -56,6 +55,7 @@ impl SignText {
     pub fn new() -> Self {
         Self {
             messages: array::from_fn(|_| TextComponent::new()),
+            filtered_messages: array::from_fn(|_| TextComponent::new()),
             color: DyeColor::Black,
             has_glowing_text: false,
         }
@@ -68,9 +68,13 @@ impl SignText {
     }
 
     /// Sets a message line by index.
+    ///
+    /// Mirrors vanilla `SignText.Mutable.setLine(int, Component)`: the filtered
+    /// line is set to the same text.
     pub fn set_message(&mut self, index: usize, message: TextComponent) {
         if index < SIGN_LINES {
-            self.messages[index] = message;
+            self.messages[index] = message.clone();
+            self.filtered_messages[index] = message;
         }
     }
 
@@ -87,10 +91,14 @@ impl SignText {
     }
 
     /// Builds sign text from an item's `sign_text_front`/`sign_text_back`
-    /// component. Filtered messages are dropped: Steel has no text filtering.
+    /// component, including the filtered lines when the component carries them.
     fn from_component(component: Option<&SignTextComponent>) -> Self {
         component.map_or_else(Self::new, |component| Self {
             messages: component.messages.clone(),
+            filtered_messages: component
+                .filtered_messages
+                .clone()
+                .unwrap_or_else(|| component.messages.clone()),
             color: component.color,
             has_glowing_text: component.has_glowing_text,
         })
@@ -105,44 +113,38 @@ impl SignText {
             .all(|msg| matches!(msg.content, Content::Text { .. }))
     }
 
-    /// Loads sign text from borrowed NBT.
+    /// Loads sign text from borrowed NBT, mirroring vanilla `SignText.CODEC`.
+    ///
+    /// A compound without a valid `messages` list decodes to the empty text,
+    /// matching `input.read("front_text", SignText.CODEC).orElse(SignText.EMPTY)`.
     pub fn load(&mut self, nbt: BorrowedNbtCompoundView<'_, '_>) {
-        if let Some(messages) = nbt.list("messages") {
-            let tags = messages.to_owned().as_nbt_tags();
-            let messages = tags
-                .iter()
-                .map(TextComponent::from_nbt)
-                .collect::<Option<Vec<_>>>();
-            if let Some(messages) = messages
-                && let Ok(messages) = <[TextComponent; SIGN_LINES]>::try_from(messages)
-            {
-                self.messages = messages;
-            }
-        }
+        let Some(messages) = sign_lines_from_nbt(nbt, "messages") else {
+            *self = Self::new();
+            return;
+        };
 
-        // Load color
-        if let Some(color_str) = nbt.string("color") {
-            self.color =
-                DyeColor::from_serialized_name(&color_str.to_str()).unwrap_or(DyeColor::Black);
-        }
+        // `SignText.load`: an absent `filtered_messages` list falls back to `messages`.
+        let filtered = sign_lines_from_nbt(nbt, "filtered_messages");
+        self.filtered_messages = filtered.unwrap_or_else(|| messages.clone());
+        self.messages = messages;
 
-        // Load glow
-        if let Some(glow) = nbt.byte("has_glowing_text") {
-            self.has_glowing_text = glow != 0;
-        }
+        // `color` and `has_glowing_text` default to black and false.
+        self.color = nbt
+            .string("color")
+            .and_then(|color_str| DyeColor::from_serialized_name(&color_str.to_str()))
+            .unwrap_or(DyeColor::Black);
+        self.has_glowing_text = nbt.byte("has_glowing_text").is_some_and(|glow| glow != 0);
     }
 
-    /// Saves sign text to NBT.
+    /// Saves sign text to NBT with vanilla `SignText.CODEC` key names.
     pub fn save(&self, nbt: &mut NbtCompound) {
-        nbt.insert(
-            "messages",
-            NbtList::from(
-                self.messages
-                    .iter()
-                    .map(TextComponent::to_codec_nbt)
-                    .collect::<Vec<_>>(),
-            ),
-        );
+        nbt.insert("messages", sign_lines_to_nbt(&self.messages));
+
+        // `lenientOptionalFieldOf`: `filtered_messages` is only written when it
+        // differs from `messages` (`SignText.filteredMessagesForSerialization`).
+        if self.filtered_messages != self.messages {
+            nbt.insert("filtered_messages", sign_lines_to_nbt(&self.filtered_messages));
+        }
 
         // Save color
         nbt.insert("color", self.color.serialized_name());
@@ -150,6 +152,29 @@ impl SignText {
         // Save glow
         nbt.insert("has_glowing_text", i8::from(self.has_glowing_text));
     }
+}
+
+/// Decodes one 4-line component list, mirroring `SignText.messagesFromNbt`.
+fn sign_lines_from_nbt(
+    nbt: BorrowedNbtCompoundView<'_, '_>,
+    key: &str,
+) -> Option<[TextComponent; SIGN_LINES]> {
+    let tags = nbt.list(key)?.to_owned().as_nbt_tags();
+    let messages = tags
+        .iter()
+        .map(TextComponent::from_nbt)
+        .collect::<Option<Vec<_>>>()?;
+    <[TextComponent; SIGN_LINES]>::try_from(messages).ok()
+}
+
+/// Encodes one 4-line component list, mirroring `SignText.messagesToNbt`.
+fn sign_lines_to_nbt(lines: &[TextComponent; SIGN_LINES]) -> NbtList {
+    NbtList::from(
+        lines
+            .iter()
+            .map(TextComponent::to_codec_nbt)
+            .collect::<Vec<_>>(),
+    )
 }
 
 /// Sign block entity.
@@ -247,13 +272,17 @@ impl SignBlockEntity {
         self.sign.lock().is_waxed
     }
 
-    /// Makes this sign waxed, returning whether its state changed.
+    /// Vanilla `SignBlockEntity.setWaxed(true)`: returns whether the state changed
+    /// and marks the sign updated so clients receive the new `is_waxed` value.
     pub fn wax(&self) -> bool {
-        let mut sign = self.sign.lock();
-        if sign.is_waxed {
-            return false;
+        {
+            let mut sign = self.sign.lock();
+            if sign.is_waxed {
+                return false;
+            }
+            sign.is_waxed = true;
         }
-        sign.is_waxed = true;
+        self.mark_updated();
         true
     }
     /// Sets whether a side's text glows, returning whether its state changed or not :3.
@@ -261,26 +290,42 @@ impl SignBlockEntity {
     /// Mirrors vanilla `SignBlockEntity.updateText`: returns false when the side
     /// already has the requested glow state, so callers can skip consuming the item.
     pub fn set_glowing(&self, slot: SignTextSlot, glowing: bool) -> bool {
-        let mut sign = self.sign.lock();
-        let text = if slot.is_front() {
-            &mut sign.front_text
-        } else {
-            &mut sign.back_text
-        };
-        if text.has_glowing_text == glowing {
-            return false;
+        {
+            let mut sign = self.sign.lock();
+            let text = if slot.is_front() {
+                &mut sign.front_text
+            } else {
+                &mut sign.back_text
+            };
+            if text.has_glowing_text == glowing {
+                return false;
+            }
+            text.has_glowing_text = glowing;
         }
-        text.has_glowing_text = glowing;
+        self.mark_updated();
         true
     }
 
-    /// Sets the text for a side.
+    /// Vanilla `SignBlockEntity.setText`: replaces one side and calls `markUpdated`.
     pub fn set_text(&self, text: SignText, slot: SignTextSlot) {
-        let mut sign = self.sign.lock();
-        if slot.is_front() {
-            sign.front_text = text;
-        } else {
-            sign.back_text = text;
+        {
+            let mut sign = self.sign.lock();
+            if slot.is_front() {
+                sign.front_text = text;
+            } else {
+                sign.back_text = text;
+            }
+        }
+        self.mark_updated();
+    }
+
+    /// Vanilla `SignBlockEntity.markUpdated`: `setChanged` plus
+    /// `level.sendBlockUpdated(pos, state, state, 3)`, whose block-entity half
+    /// pushes the new text to tracking clients immediately.
+    fn mark_updated(&self) {
+        BlockEntity::set_changed(self);
+        if let Some(world) = self.get_level() {
+            world.broadcast_block_entity_if_needed(self.get_block_pos());
         }
     }
 }
@@ -295,20 +340,28 @@ impl BlockEntity for SignBlockEntity {
         let nbt_view: BorrowedNbtCompoundView<'_, '_> = nbt.into();
         let mut sign = self.sign.lock();
 
-        // Load front text
-        if let Some(front_nbt) = nbt_view.compound("front_text") {
-            sign.front_text.load(front_nbt);
-        }
+        // Vanilla reads each side with `SignText.CODEC` and falls back to
+        // `SignText.EMPTY` when the key is absent or fails to decode.
+        sign.front_text = match nbt_view.compound("front_text") {
+            Some(front_nbt) => {
+                let mut text = SignText::new();
+                text.load(front_nbt);
+                text
+            }
+            None => SignText::new(),
+        };
 
-        // Load back text
-        if let Some(back_nbt) = nbt_view.compound("back_text") {
-            sign.back_text.load(back_nbt);
-        }
+        sign.back_text = match nbt_view.compound("back_text") {
+            Some(back_nbt) => {
+                let mut text = SignText::new();
+                text.load(back_nbt);
+                text
+            }
+            None => SignText::new(),
+        };
 
-        // Load waxed state
-        if let Some(waxed) = nbt_view.byte("is_waxed") {
-            sign.is_waxed = waxed != 0;
-        }
+        // Vanilla `input.getBooleanOr("is_waxed", false)`.
+        sign.is_waxed = nbt_view.byte("is_waxed").is_some_and(|waxed| waxed != 0);
     }
 
     fn apply_components_from_item(&self, item: &ItemStack) {
@@ -351,13 +404,9 @@ impl BlockEntity for SignBlockEntity {
             .players
             .get_by_uuid(&editor_uuid)
             .is_none_or(|player| {
-                let pos = self.get_block_pos();
-                let player_pos = player.position();
-                let dx = player_pos.x - f64::from(pos.0.x) - 0.5;
-                let dy = player_pos.y - f64::from(pos.0.y) - 0.5;
-                let dz = player_pos.z - f64::from(pos.0.z) - 0.5;
-                let distance_sq = dx * dx + dy * dy + dz * dz;
-                distance_sq > MAX_EDIT_DISTANCE * MAX_EDIT_DISTANCE
+                // Vanilla `SignBlockEntity.playerIsTooFarAwayToEdit`:
+                // `!editingPlayer.isWithinBlockInteractionRange(pos, 4.0)`.
+                !player.is_within_block_interaction_range_with_buffer(self.get_block_pos(), 4.0)
             });
 
         if should_clear {
@@ -403,6 +452,44 @@ mod tests {
                 "3".into(),
             ])))
         );
+    }
+
+    #[test]
+    fn filtered_sign_lines_are_written_only_when_they_differ() {
+        let mut text = SignText::new();
+        text.set_message(0, TextComponent::plain("raw"));
+        text.filtered_messages[0] = TextComponent::plain("filtered");
+
+        let mut nbt = NbtCompound::new();
+        text.save(&mut nbt);
+        assert_eq!(
+            nbt.get("filtered_messages"),
+            Some(&NbtTag::List(NbtList::String(vec![
+                "filtered".into(),
+                "".into(),
+                "".into(),
+                "".into(),
+            ])))
+        );
+
+        // `SignText.load` defaults the filtered lines to the raw ones.
+        text.filtered_messages = text.messages.clone();
+        let mut nbt = NbtCompound::new();
+        text.save(&mut nbt);
+        assert!(nbt.get("filtered_messages").is_none());
+
+        let mut bytes = Vec::new();
+        NbtTag::Compound(nbt).write(&mut bytes);
+        let borrowed = read_tag(&mut Cursor::new(bytes.as_slice()))
+            .expect("saved sign text should be valid NBT");
+        let mut decoded = SignText::new();
+        decoded.load(
+            borrowed
+                .as_tag()
+                .compound()
+                .expect("saved sign text should be a compound"),
+        );
+        assert_eq!(decoded.filtered_messages, decoded.messages);
     }
 
     #[test]

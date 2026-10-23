@@ -1,6 +1,9 @@
 use crate::behavior::blocks::WallSkullBlock;
+use crate::behavior::blocks::WitherSkullBlock;
 use crate::behavior::blocks::decoration::skull::abstract_skull_block::AbstractSkullBlock;
-use crate::behavior::{BlockBehavior, BlockEntityCreation, BlockLootContext, BlockPlaceContext};
+use crate::behavior::{
+    BlockBehavior, BlockEntityCreation, BlockLootContext, BlockPlaceContext, PlacementSource,
+};
 use crate::block_entity::SharedBlockEntity;
 use crate::entity::ai::path::PathComputationType;
 use crate::world::World;
@@ -73,7 +76,17 @@ impl BlockBehavior for WitherWallSkullBlock {
     ) -> Option<Vec<ItemStack>> {
         self.base.get_drops(state, context)
     }
-    // TODO implement set_placed_by (requires WitherSkullBlock::check_spawn to be implemented)
+
+    fn set_placed_by(
+        &self,
+        _state: BlockStateId,
+        world: &Arc<World>,
+        pos: BlockPos,
+        _source: &PlacementSource<'_>,
+    ) {
+        // Vanilla `WitherWallSkullBlock.setPlacedBy` delegates to the floor skull's build check.
+        WitherSkullBlock::check_spawn(world, pos);
+    }
 }
 
 impl AbstractSkullBlock for WitherWallSkullBlock {

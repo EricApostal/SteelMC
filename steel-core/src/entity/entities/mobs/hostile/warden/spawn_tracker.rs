@@ -137,19 +137,17 @@ impl WardenSpawnTracker {
         world.get_game_rule(&SPAWN_WARDENS)
     }
 
-    /// Vanilla `WardenSpawnTracker.tryWarn`: escalates the nearest players'
-    /// trackers and returns the new warning level, or `None` when the shriek
-    /// must not escalate (nearby warden, cooldown, or `spawn_wardens` off).
+    /// Vanilla `WardenSpawnTracker.tryWarn`: escalates the nearby players' trackers and returns
+    /// the new warning level, or `None` when the shriek must not escalate (nearby warden, any
+    /// participating player on cooldown, or `spawn_wardens` off).
     ///
-    /// Vanilla mutates `ServerPlayer` trackers directly. Steel has no
-    /// per-player tracker field yet, so the caller supplies the trackers it
-    /// owns and writes back the returned one for every participating player.
+    /// Vanilla reads and writes `ServerPlayer.wardenSpawnTracker` directly; Steel's per-player
+    /// tracker lives on [`Player`], so no tracker slice has to be threaded through the caller.
     #[must_use]
     pub fn try_warn(
         world: &Arc<World>,
         pos: steel_utils::BlockPos,
         trigger_player: &Arc<Player>,
-        trackers: &mut [(Arc<Player>, WardenSpawnTracker)],
     ) -> Option<i32> {
         if !Self::can_spawn(world) || Self::has_nearby_warden(world, pos) {
             return None;
@@ -163,44 +161,32 @@ impl WardenSpawnTracker {
         {
             participants.push(Arc::clone(trigger_player));
         }
-        let participants: Vec<&Arc<Player>> = participants
-            .iter()
-            .filter(|player| {
-                !player.is_spectator()
-                    && player.is_alive()
-                    && player.position().distance(pos_center(pos)) <= PLAYER_SEARCH_RADIUS
-            })
-            .collect();
 
         // Vanilla aborts when any participating player is on cooldown.
-        let mut highest: Option<usize> = None;
-        for participant in &participants {
-            let uuid = participant.uuid();
-            let Some(index) = trackers
-                .iter()
-                .position(|(player, _)| player.uuid() == uuid)
-            else {
-                continue;
-            };
-            if trackers[index].1.on_cooldown() {
-                return None;
-            }
-            if highest.is_none_or(|best| {
-                trackers[index].1.warning_level() > trackers[best].1.warning_level()
-            }) {
-                highest = Some(index);
-            }
+        if participants
+            .iter()
+            .any(|player| player.warden_spawn_tracker().on_cooldown())
+        {
+            return None;
         }
 
-        let Some(best) = highest else {
-            return None;
-        };
-        trackers[best].1.increase_warning_level();
-        let warning = trackers[best].1;
-        for (_, tracker) in trackers.iter_mut() {
-            tracker.copy_data(warning);
+        // Vanilla takes the participant with the highest warning level (ties keep the first) and
+        // copies its escalated state onto every participant.
+        let (first, rest) = participants.split_first()?;
+        let mut best = first;
+        for player in rest {
+            if player.warden_spawn_tracker().warning_level()
+                > best.warden_spawn_tracker().warning_level()
+            {
+                best = player;
+            }
         }
-        Some(warning.warning_level())
+        let mut escalated = best.warden_spawn_tracker();
+        escalated.increase_warning_level();
+        for player in &participants {
+            player.warden_spawn_tracker_mut().copy_data(escalated);
+        }
+        Some(escalated.warning_level())
     }
 
     /// Vanilla `WardenSpawnTracker.hasNearbyWarden`.

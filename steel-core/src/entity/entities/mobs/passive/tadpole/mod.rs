@@ -563,6 +563,11 @@ impl Mob for TadpoleEntity {
         &self.mob_base
     }
 
+    /// Vanilla `AbstractFish.getMaxSpawnClusterSize`.
+    fn max_spawn_cluster_size(&self) -> i32 {
+        8
+    }
+
     fn brain(&self) -> Option<&SyncMutex<Brain>> {
         Some(&self.brain)
     }

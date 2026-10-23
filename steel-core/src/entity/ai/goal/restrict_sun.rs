@@ -1,5 +1,6 @@
 use super::selector::{Goal, GoalControls};
 use crate::entity::PathfinderMob;
+use crate::entity::ai::navigation::NavigationKind;
 use crate::inventory::equipment::EquipmentSlot;
 
 pub struct RestrictSunGoal;
@@ -9,6 +10,17 @@ impl RestrictSunGoal {
     pub(crate) const fn new() -> Self {
         Self
     }
+}
+
+/// Vanilla `GoalUtils.hasGroundPathNavigation`: `navigation.canNavigateGround()`, true for
+/// `GroundPathNavigation` (and `WallClimberNavigation`) and `AmphibiousPathNavigation`.
+fn has_ground_path_navigation(mob: &dyn PathfinderMob) -> bool {
+    let navigation = mob.mob_base().navigation().lock();
+    !navigation.is_flying()
+        && matches!(
+            navigation.kind(),
+            NavigationKind::Ground | NavigationKind::Amphibious | NavigationKind::WallClimber
+        )
 }
 
 impl Goal for RestrictSunGoal {
@@ -21,15 +33,21 @@ impl Goal for RestrictSunGoal {
             return false;
         };
 
-        world.is_bright_outside() && !mob.has_item_in_slot(EquipmentSlot::Head)
+        world.is_bright_outside()
+            && !mob.has_item_in_slot(EquipmentSlot::Head)
+            && has_ground_path_navigation(mob)
     }
 
     fn start(&mut self, mob: &dyn PathfinderMob) {
-        mob.mob_base().navigation().lock().set_avoid_sun(true);
+        if has_ground_path_navigation(mob) {
+            mob.mob_base().navigation().lock().set_avoid_sun(true);
+        }
     }
 
     fn stop(&mut self, mob: &dyn PathfinderMob) {
-        mob.mob_base().navigation().lock().set_avoid_sun(false);
+        if has_ground_path_navigation(mob) {
+            mob.mob_base().navigation().lock().set_avoid_sun(false);
+        }
     }
 }
 

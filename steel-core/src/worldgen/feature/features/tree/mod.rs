@@ -502,8 +502,57 @@ const fn abs_i32(value: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use steel_registry::feature::{ThreeLayersFeatureSize, TwoLayersFeatureSize};
     use steel_registry::{init_vanilla_registry, vanilla_blocks};
     use steel_worldgen::density_functions::overworld::OverworldNoiseSettings;
+
+    const TWO_LAYERS: FeatureSize = FeatureSize::TwoLayers(TwoLayersFeatureSize {
+        limit: 2,
+        lower_size: 0,
+        upper_size: 2,
+        min_clipped_height: None,
+    });
+
+    const THREE_LAYERS: FeatureSize = FeatureSize::ThreeLayers(ThreeLayersFeatureSize {
+        limit: 2,
+        middle_size: 1,
+        upper_limit: 3,
+        upper_size: 4,
+        min_clipped_height: None,
+    });
+
+    #[test]
+    fn two_layer_feature_size_switches_at_limit() {
+        assert_eq!(
+            FeatureDecorationRunner::tree_size_at_height(&TWO_LAYERS, 10, 1),
+            0
+        );
+        assert_eq!(
+            FeatureDecorationRunner::tree_size_at_height(&TWO_LAYERS, 10, 2),
+            2
+        );
+    }
+
+    #[test]
+    fn three_layer_feature_size_uses_upper_layer_near_crown() {
+        assert_eq!(
+            FeatureDecorationRunner::tree_size_at_height(&THREE_LAYERS, 10, 1),
+            0
+        );
+        assert_eq!(
+            FeatureDecorationRunner::tree_size_at_height(&THREE_LAYERS, 10, 2),
+            1
+        );
+        assert_eq!(
+            FeatureDecorationRunner::tree_size_at_height(&THREE_LAYERS, 10, 6),
+            1
+        );
+        // `y >= treeHeight - upperLimit` selects the upper layer.
+        assert_eq!(
+            FeatureDecorationRunner::tree_size_at_height(&THREE_LAYERS, 10, 7),
+            4
+        );
+    }
 
     struct WriteTestLevel {
         can_write: bool,

@@ -1,5 +1,5 @@
 //! Vanilla `PathfindToRaidGoal`: raiders outside the village walk towards the raid
-//! centre and recruit nearby idle raiders.
+//! center and recruit nearby idle raiders.
 //!
 //! Registered by [`Raider`](crate::entity::raid::Raider) implementations; the
 //! `mod`/`pub use` lines in `entity/ai/goal/mod.rs` are owned by the iron-golem slice and
@@ -7,8 +7,7 @@
 
 use glam::DVec3;
 
-use super::random_pos::default_random_pos_towards;
-use super::reduced_tick_delay;
+use super::random_pos::{HALF_PI, default_random_pos_towards};
 use super::selector::{Goal, GoalControls};
 use crate::entity::raid::{RaidSnapshot, can_join_raid};
 use crate::entity::{PathfinderMob, SharedEntity};
@@ -88,10 +87,14 @@ impl Goal for PathfindToRaidGoal {
         let Some(raid) = raider.current_raid(&world) else {
             return;
         };
+        // Vanilla `if (hasActiveRaid())`: a stopped or finished raid does no work here.
+        if !raid.is_active() {
+            return;
+        }
 
         if mob.tick_count() > self.recruitment_tick {
-            self.recruitment_tick =
-                mob.tick_count() + reduced_tick_delay(RECRUITMENT_SEARCH_TICK_DELAY);
+            // Vanilla uses the raw `RECRUITMENT_SEARCH_TICK_DELAY`, not a tick-adjusted one.
+            self.recruitment_tick = mob.tick_count() + RECRUITMENT_SEARCH_TICK_DELAY;
             recruit_nearby(&world, raid, mob, entity);
         }
 
@@ -107,7 +110,7 @@ impl Goal for PathfindToRaidGoal {
                 TOWARDS_HORIZONTAL_RANGE,
                 TOWARDS_VERTICAL_RANGE,
                 towards,
-                std::f64::consts::FRAC_PI_2,
+                HALF_PI,
             ) {
                 mob.move_to_pos(target, f64::from(SPEED_MODIFIER));
             }

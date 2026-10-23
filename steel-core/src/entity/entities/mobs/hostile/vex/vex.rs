@@ -22,6 +22,7 @@ use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::VexEntityData;
 use steel_registry::{sound_events, vanilla_attributes, vanilla_damage_types, vanilla_items};
 use steel_utils::locks::SyncMutex;
+use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::{BlockPos, Downcast as _, DowncastType, DowncastTypeKey};
 
 use crate::entity::ai::goal::{
@@ -431,6 +432,31 @@ impl Mob for VexEntity {
             .mob_mut()
             .mob_flags
             .set(flags);
+    }
+
+    /// Vanilla `Vex.finalizeSpawn`: refresh the sword and roll spawn enchantments
+    /// before `Mob`'s follow-range bonus.
+    fn finalize_spawn(
+        &self,
+        world: &Arc<crate::world::World>,
+        spawn_reason: crate::entity::EntitySpawnReason,
+        group_data: Option<crate::entity::SpawnGroupData>,
+    ) -> Option<crate::entity::SpawnGroupData> {
+        let mut random = LegacyRandom::from_seed(rand::random());
+        let difficulty_modifier = world
+            .current_difficulty_at(self.block_position())
+            .special_multiplier();
+        self.set_item_in_hand(
+            steel_utils::types::InteractionHand::MainHand,
+            ItemStack::new(&vanilla_items::IRON_SWORD),
+        );
+        self.set_equipment_drop_chance(EquipmentSlot::MainHand, 0.0);
+        crate::entity::entities::mobs::spawn_equipment::populate_default_equipment_enchantments(
+            self,
+            &mut random,
+            difficulty_modifier,
+        );
+        self.finalize_spawn_mob_base(world, spawn_reason, group_data)
     }
 }
 

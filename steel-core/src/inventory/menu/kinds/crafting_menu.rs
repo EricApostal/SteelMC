@@ -11,6 +11,7 @@ use std::sync::Arc;
 use crate::inventory::container::CraftingContainer;
 use crate::inventory::container::ResultContainer;
 use crate::inventory::prelude::*;
+use crate::inventory::recipe_book_placement::{PlacementGrid, PostPlaceAction, place_recipe};
 use crate::inventory::slots::CraftingHandler;
 use crate::player::player_inventory::PlayerInventory;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
@@ -101,9 +102,40 @@ impl MenuKind for CraftingKind {
         &mut self,
         _behavior: &mut MenuBehavior,
         guard: &mut ContainerLockGuard,
-        _player: &Player,
+        player: &Player,
     ) {
-        self.handler.update_result(guard);
+        // Vanilla `CraftingMenu.slotChangedCraftingGrid` runs the
+        // `limited_crafting` gate against the crafting player.
+        self.handler.update_result_for(guard, Some(player));
+    }
+
+    /// Vanilla `AbstractCraftingMenu.handlePlacement` for the 3x3 grid.
+    fn handle_placement(
+        &mut self,
+        guard: &mut ContainerLockGuard,
+        recipe: steel_registry::recipe::UntypedRecipeRef,
+        use_max_items: bool,
+        allow_dropping_items_to_clear: bool,
+        player: &Player,
+    ) -> Option<PostPlaceAction> {
+        let crafting = self.handler.crafting_container();
+        let grid = PlacementGrid {
+            crafting: &crafting,
+            result: Some(&self.result_container),
+            width: 3,
+            height: 3,
+        };
+        let action = place_recipe(
+            guard,
+            &player.inventory,
+            &grid,
+            recipe,
+            use_max_items,
+            allow_dropping_items_to_clear,
+            player,
+        );
+        self.handler.update_result_for(guard, Some(player));
+        Some(action)
     }
 }
 

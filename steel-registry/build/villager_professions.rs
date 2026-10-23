@@ -16,13 +16,17 @@ struct VillagerProfessionEntry {
     work_sound: Option<Identifier>,
     /// Vanilla `VillagerProfession.requestedItems`.
     ///
-    /// Vanilla hard-codes these in its bootstrap; the vendored extractor output
-    /// does not carry them, so only professions that declare a set list them here
-    /// (currently just `farmer`). Replace with extractor output once
-    /// `SteelExtractor` covers `VillagerProfessions`.
+    /// Vanilla hard-codes these in `VillagerProfession.bootstrap` (they are not
+    /// datapack data), and the vendored extractor output only carries `id`, `key`
+    /// and `work_sound`. The asset is therefore the only source for this field;
+    /// only `farmer` declares one because vanilla gives every other profession an
+    /// empty set. Replace with extractor output once `SteelExtractor` dumps
+    /// `VillagerProfessions` (the extractor would have to read the bootstrap code,
+    /// since no datapack or registry JSON contains it).
     #[serde(default)]
     requested_items: Option<Vec<Identifier>>,
-    /// Vanilla `VillagerProfession.secondaryPoi`; same provenance note as above.
+    /// Vanilla `VillagerProfession.secondaryPoi`; same provenance note as above
+    /// (only `farmer` has a non-empty set, `minecraft:farmland`).
     #[serde(default)]
     secondary_poi: Option<Vec<Identifier>>,
 }
@@ -128,16 +132,73 @@ pub(crate) fn build() -> TokenStream {
             Span::call_site(),
         );
 
+        let requested_items: Vec<TokenStream> = villager_profession
+            .requested_items
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|item| {
+                assert_eq!(
+                    item.namespace.as_ref(),
+                    "minecraft",
+                    "Villager profession {} declares non-vanilla requested item {}",
+                    villager_profession.key,
+                    item
+                );
+                let item_ident = Ident::new(&item.path.to_shouty_snake_case(), Span::call_site());
+                quote! { &*vanilla_items::#item_ident }
+            })
+            .collect();
+
+        let secondary_poi: Vec<TokenStream> = villager_profession
+            .secondary_poi
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|block| {
+                assert_eq!(
+                    block.namespace.as_ref(),
+                    "minecraft",
+                    "Villager profession {} declares non-vanilla secondary POI {}",
+                    villager_profession.key,
+                    block
+                );
+                let block_ident = Ident::new(&block.path.to_shouty_snake_case(), Span::call_site());
+                quote! { &vanilla_blocks::#block_ident }
+            })
+            .collect();
+
+        let requested_items_ident = Ident::new(
+            &format!(
+                "{}_REQUESTED_ITEMS",
+                villager_profession.key.path.to_shouty_snake_case()
+            ),
+            Span::call_site(),
+        );
+        let secondary_poi_ident = Ident::new(
+            &format!(
+                "{}_SECONDARY_POI",
+                villager_profession.key.path.to_shouty_snake_case()
+            ),
+            Span::call_site(),
+        );
+
+        // Both sets are `LazyLock`ed like the trade sets: `vanilla_items` entries are
+        // `LazyLock`s themselves, so neither set can live in a `const`/`static` initializer.
         constants.extend(quote! {
             static #trade_sets_ident: LazyLock<Vec<(i32, &'static crate::trade::TradeSet)>> =
                 LazyLock::new(|| vec![#(#trade_sets),*]);
+            static #requested_items_ident: LazyLock<Vec<crate::items::ItemRef>> =
+                LazyLock::new(|| vec![#(#requested_items),*]);
+            static #secondary_poi_ident: LazyLock<Vec<crate::blocks::BlockRef>> =
+                LazyLock::new(|| vec![#(#secondary_poi),*]);
 
             pub static #ident: LazyLock<VillagerProfession> = LazyLock::new(|| VillagerProfession {
                 key: #key,
                 work_sound: #work_sound,
                 held_job_site: #held_job_site,
-                requested_items: &[],
-                secondary_poi: &[],
+                requested_items: #requested_items_ident.as_slice(),
+                secondary_poi: #secondary_poi_ident.as_slice(),
                 trade_sets_by_level: #trade_sets_ident.as_slice(),
             });
         });
@@ -155,6 +216,8 @@ pub(crate) fn build() -> TokenStream {
 
     quote! {
         use crate::villager_profession::{VillagerProfession, VillagerProfessionRegistry};
+        use crate::vanilla_blocks;
+        use crate::vanilla_items;
         use crate::vanilla_poi_types;
         use crate::vanilla_trade_sets;
         use std::borrow::Cow;

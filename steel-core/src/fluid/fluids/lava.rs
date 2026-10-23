@@ -147,7 +147,7 @@ impl FluidBehavior for LavaFluid {
         );
     }
 
-    /// Vanilla `LavaFluid.randomTick`: spreads fire to flammable neighbours.
+    /// Vanilla `LavaFluid.randomTick`: spreads fire to flammable neighbors.
     ///
     /// The spread algorithm lives in [`crate::world::World::lava_random_tick_fire_spread`] so the
     /// fire table stays in one place.
@@ -188,10 +188,6 @@ impl FlowingFluid for LavaFluid {
         if direction == Direction::Down {
             let below_fluid = get_fluid_state(world, pos);
             if below_fluid.is_water() {
-                // Vanilla: fizz always plays when lava meets water going down,
-                // regardless of whether stone is formed.
-                world.level_event(level_events::LAVA_FIZZ, pos, 0, None);
-
                 // Vanilla: stone only forms when the target is a pure water LiquidBlock,
                 // not a waterlogged block (stairs, slabs, etc.).
                 let below_block = world.get_block_state(pos).get_block();
@@ -199,9 +195,13 @@ impl FlowingFluid for LavaFluid {
                     world.set_block(
                         pos,
                         REGISTRY.blocks.get_default_state_id(&vanilla_blocks::STONE),
-                        UpdateFlags::UPDATE_ALL_IMMEDIATE,
+                        UpdateFlags::UPDATE_ALL,
                     );
                 }
+
+                // Vanilla: `fizz` always plays when lava meets water going down,
+                // regardless of whether stone is formed, and after the block write.
+                world.level_event(level_events::LAVA_FIZZ, pos, 0, None);
                 return;
             }
         }

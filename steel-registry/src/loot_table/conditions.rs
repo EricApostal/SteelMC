@@ -137,7 +137,7 @@ pub struct ItemPredicate {
 
 /// The `items` holder set of an `ItemPredicate`.
 ///
-/// Item statics are lazily initialised, so a `RegistryHolderSet<Item>` cannot be
+/// Item statics are lazily initialized, so a `RegistryHolderSet<Item>` cannot be
 /// built in the constant initialisers of the generated loot functions. This
 /// mirrors the same two shapes with keys that are resolved at test time.
 #[derive(Debug, Clone)]
@@ -223,18 +223,14 @@ impl ItemPredicate {
     }
 }
 
-/// Predicate for checking location/block properties.
-#[derive(Debug, Clone)]
-pub struct LocationPredicate {
-    pub block: Option<BlockPredicate>,
-}
-
-/// Predicate for checking block properties.
-#[derive(Debug, Clone)]
-pub struct BlockPredicate {
-    pub blocks: Option<Identifier>,
-    pub state: &'static [(&'static str, &'static str)],
-}
+// Vanilla shares `LocationPredicate` between the loot and advancement systems
+// (`net.minecraft.advancements.predicates.LocationPredicate` is referenced by
+// both `LocationCheck` and advancement criteria), so the loot runtime reuses the
+// advancement type instead of keeping a second, narrower copy.
+pub use crate::advancement::predicates::{
+    BlockPredicate, DoubleBounds, HolderSet, IntBounds, LocationPredicate, PositionPredicate,
+    StatePropertiesPredicate,
+};
 
 /// Predicate for checking entity properties.
 #[derive(Debug, Clone)]
@@ -373,9 +369,28 @@ impl LootCondition {
                 predicate.test(entity, ctx)
             }
             LootCondition::DamageSourceProperties { predicate } => predicate.test(ctx),
-            LootCondition::LocationCheck { .. } => {
-                // TODO: Implement when world position data is available in context
-                true
+            LootCondition::LocationCheck {
+                offset_x,
+                offset_y,
+                offset_z,
+                predicate,
+            } => {
+                // Vanilla `LocationCheck.test`: the origin is required, an absent
+                // predicate passes, and the predicate is resolved at the origin
+                // shifted by the offset.
+                let Some((x, y, z)) = ctx.origin else {
+                    return false;
+                };
+                if location_predicate_is_unconstrained(predicate) {
+                    return true;
+                }
+                let position = (
+                    x + f64::from(*offset_x),
+                    y + f64::from(*offset_y),
+                    z + f64::from(*offset_z),
+                );
+                ctx.location
+                    .is_some_and(|level| predicate.matches_at(level, position))
             }
             LootCondition::WeatherCheck {
                 raining,
@@ -417,6 +432,21 @@ impl LootCondition {
             }
         }
     }
+}
+
+/// Whether `predicate` constrains nothing, matching vanilla's absent
+/// `LocationCheck.predicate` (an empty predicate always passes when an origin is
+/// present).
+fn location_predicate_is_unconstrained(predicate: &LocationPredicate) -> bool {
+    predicate.position.is_none()
+        && predicate.biomes.is_none()
+        && predicate.structures.is_none()
+        && predicate.dimension.is_none()
+        && predicate.light.is_none()
+        && predicate.block.is_none()
+        && predicate.fluid.is_none()
+        && predicate.smokey.is_none()
+        && predicate.can_see_sky.is_none()
 }
 
 impl ToolPredicate {

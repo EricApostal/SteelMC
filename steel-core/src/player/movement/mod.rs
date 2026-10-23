@@ -317,6 +317,7 @@ impl Player {
             }
             self.set_rotation((target_yaw, target_pitch));
             world.chunk_map.update_player_status(self);
+            world.locator_bar_player_moved(self);
             return;
         }
 
@@ -484,6 +485,7 @@ impl Player {
 
         self.check_movement_statistics(client_delta);
         world.chunk_map.update_player_status(self);
+        world.locator_bar_player_moved(self);
 
         if let Some((player_stands_on_something, y_dist)) = floating_check {
             self.record_client_floating(
@@ -683,6 +685,7 @@ impl Player {
         self.handle_player_known_movement(client_delta);
         self.check_movement_statistics(client_delta);
         world.chunk_map.update_player_status(self);
+        world.locator_bar_player_moved(self);
         self.record_client_vehicle_floating(
             &world,
             vehicle.as_ref(),
@@ -878,6 +881,7 @@ impl Player {
         self.try_set_position(pos)?;
         if world.entity_manager().get_by_id(self.id()).is_some() {
             world.chunk_map.update_player_status(self);
+            world.locator_bar_player_moved(self);
         }
         self.set_velocity(velocity);
 

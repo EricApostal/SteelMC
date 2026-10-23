@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use glam::DVec3;
-use steel_math::fast_floor;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::vanilla_blocks;
 use steel_utils::BlockPos;
@@ -14,8 +13,10 @@ use crate::physics::MoverType;
 use crate::world::LevelReader;
 
 const BREATH_AIR_THRESHOLD: i32 = 140;
-const AIR_SEARCH_HORIZONTAL_RADIUS: f64 = 1.0;
-const AIR_SEARCH_VERTICAL_ABOVE: f64 = 8.0;
+/// Vanilla `findAirPosition`'s `getBlockY() + 8` scan ceiling.
+const AIR_SEARCH_VERTICAL_ABOVE: i32 = 8;
+/// Vanilla `BlockPos.neighborColumn` steps: the mob's column, north, east, south, west.
+const NEIGHBOR_COLUMN_STEPS: [(i32, i32); 5] = [(0, 0), (0, -1), (1, 0), (0, 1), (-1, 0)];
 const BREATH_MOVE_SPEED: f32 = 0.02;
 const AIR_NAVIGATION_SPEED_MODIFIER: f64 = 1.0;
 
@@ -46,8 +47,8 @@ impl Goal for BreathAirGoal {
     }
 
     fn start(&mut self, mob: &dyn PathfinderMob) {
-        find_air_position(mob);
         mob.mob_base().navigation().lock().stop();
+        find_air_position(mob);
     }
 
     fn tick(&mut self, mob: &dyn PathfinderMob, entity: &SharedEntity) {
@@ -69,11 +70,11 @@ fn find_air_position(mob: &dyn PathfinderMob) {
     let position = mob.position();
     let destination_pos = mob
         .level()
-        .and_then(|world| first_air_position(world.as_ref(), position))
+        .and_then(|world| first_air_position(world.as_ref(), mob))
         .unwrap_or_else(|| {
             BlockPos::containing(
                 position.x,
-                position.y + AIR_SEARCH_VERTICAL_ABOVE,
+                position.y + f64::from(AIR_SEARCH_VERTICAL_ABOVE),
                 position.z,
             )
         });
@@ -88,38 +89,26 @@ fn find_air_position(mob: &dyn PathfinderMob) {
     );
 }
 
-fn first_air_position(level: &dyn LevelReader, position: DVec3) -> Option<BlockPos> {
-    let (min, max) = air_search_bounds(position);
-    first_matching_pos_in_closed_box(min, max, |pos| gives_air(level, pos))
+/// Vanilla `BreathAirGoal.findAirPosition`'s scan over
+/// `BlockPos.neighborColumn(x, y, z, y + 8)`.
+fn first_air_position(level: &dyn LevelReader, mob: &dyn PathfinderMob) -> Option<BlockPos> {
+    let origin = mob.block_position();
+    let top = origin.y() + AIR_SEARCH_VERTICAL_ABOVE;
+    neighbor_column(origin, top, |pos| gives_air(level, pos))
 }
 
-fn air_search_bounds(position: DVec3) -> (BlockPos, BlockPos) {
-    (
-        BlockPos::new(
-            fast_floor(position.x - AIR_SEARCH_HORIZONTAL_RADIUS),
-            fast_floor(position.y),
-            fast_floor(position.z - AIR_SEARCH_HORIZONTAL_RADIUS),
-        ),
-        BlockPos::new(
-            fast_floor(position.x + AIR_SEARCH_HORIZONTAL_RADIUS),
-            fast_floor(position.y + AIR_SEARCH_VERTICAL_ABOVE),
-            fast_floor(position.z + AIR_SEARCH_HORIZONTAL_RADIUS),
-        ),
-    )
-}
-
-fn first_matching_pos_in_closed_box(
-    min: BlockPos,
-    max: BlockPos,
+/// Vanilla `BlockPos.neighborColumn(startX, startY, startZ, endY)`: the mob's own column
+/// first, then north, east, south and west, each scanned bottom-up.
+fn neighbor_column(
+    origin: BlockPos,
+    top: i32,
     mut predicate: impl FnMut(BlockPos) -> bool,
 ) -> Option<BlockPos> {
-    for z in min.z()..=max.z() {
-        for y in min.y()..=max.y() {
-            for x in min.x()..=max.x() {
-                let pos = BlockPos::new(x, y, z);
-                if predicate(pos) {
-                    return Some(pos);
-                }
+    for (step_x, step_z) in NEIGHBOR_COLUMN_STEPS {
+        for y in origin.y()..=top {
+            let pos = BlockPos::new(origin.x() + step_x, y, origin.z() + step_z);
+            if predicate(pos) {
+                return Some(pos);
             }
         }
     }
@@ -184,25 +173,24 @@ mod tests {
     }
 
     #[test]
-    fn air_search_bounds_match_vanilla_offsets() {
-        let (min, max) = air_search_bounds(DVec3::new(-0.25, 64.9, 0.25));
+    fn neighbor_column_scans_the_mobs_own_column_first() {
+        // Vanilla `BlockPos.neighborColumn`: own column bottom-up, then north, east, south,
+        // west. The first air position wins.
+        let own_column_air = BlockPos::new(5, 66, 5);
+        let north_air = BlockPos::new(5, 64, 4);
+        let found = scan_order(|pos| pos == north_air || pos == own_column_air);
+        assert_eq!(found, Some(own_column_air));
 
-        assert_eq!(min, BlockPos::new(-2, 64, -1));
-        assert_eq!(max, BlockPos::new(0, 72, 1));
+        let found = scan_order(|pos| pos == BlockPos::new(5, 64, 4));
+        assert_eq!(found, Some(BlockPos::new(5, 64, 4)));
+
+        let found = scan_order(|pos| pos == BlockPos::new(6, 64, 5));
+        assert_eq!(found, Some(BlockPos::new(6, 64, 5)));
+
+        assert_eq!(scan_order(|_| false), None);
     }
 
-    #[test]
-    fn closed_box_scan_uses_vanilla_x_then_y_then_z_order() {
-        let min = BlockPos::new(10, 20, 30);
-        let max = BlockPos::new(12, 22, 32);
-        let expected = BlockPos::new(11, 20, 30);
-        let later_y = BlockPos::new(10, 21, 30);
-        let later_z = BlockPos::new(10, 20, 31);
-
-        let found = first_matching_pos_in_closed_box(min, max, |pos| {
-            pos == expected || pos == later_y || pos == later_z
-        });
-
-        assert_eq!(found, Some(expected));
+    fn scan_order(predicate: impl FnMut(BlockPos) -> bool) -> Option<BlockPos> {
+        neighbor_column(BlockPos::new(5, 64, 5), 64 + 8, predicate)
     }
 }

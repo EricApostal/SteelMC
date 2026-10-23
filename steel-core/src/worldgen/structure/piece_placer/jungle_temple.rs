@@ -5,7 +5,7 @@ use steel_utils::random::Random;
 use steel_utils::random::worldgen_random::WorldgenRandom;
 use steel_utils::{BlockStateId, BoundingBox, Direction};
 
-use crate::worldgen::region::WorldGenRegion;
+use crate::worldgen::template::TemplateLevelAccess;
 use steel_worldgen::structure::jungle_temple::JungleTemplePieceData;
 
 use super::StructurePiecePlacer;
@@ -15,8 +15,8 @@ const JUNGLE_TEMPLE_LOOT: &str = "minecraft:chests/jungle_temple";
 const JUNGLE_TEMPLE_DISPENSER_LOOT: &str = "minecraft:chests/jungle_temple_dispenser";
 
 impl StructurePiecePlacer {
-    pub(super) fn place_jungle_temple_piece(
-        region: &mut WorldGenRegion<'_>,
+    pub(super) fn place_jungle_temple_piece<L: TemplateLevelAccess>(
+        region: &mut L,
         registry: &Registry,
         bounding_box: &mut BoundingBox,
         orientation: Option<Direction>,
@@ -39,8 +39,8 @@ impl StructurePiecePlacer {
     clippy::too_many_lines,
     reason = "jungle temple placement is a direct port of vanilla's linear postProcess"
 )]
-fn place_jungle_temple(
-    placer: &mut ScatteredFeaturePlacer<'_, '_>,
+fn place_jungle_temple<L: TemplateLevelAccess>(
+    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
     data: &mut JungleTemplePieceData,
     random: &mut WorldgenRandom,
 ) {
@@ -242,8 +242,8 @@ fn place_jungle_temple(
     clippy::too_many_arguments,
     reason = "mirrors vanilla StructurePiece.generateBox selector overload"
 )]
-fn moss_box(
-    placer: &mut ScatteredFeaturePlacer<'_, '_>,
+fn moss_box<L: TemplateLevelAccess>(
+    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
     x0: i32,
     y0: i32,
     z0: i32,

@@ -10,7 +10,7 @@
 //!   stable `OldMinecartBehavior` physics implemented here.
 //! - Client-only branches (interpolation start, `reapplyPosition`, rider
 //!   rotation offsets) are server-irrelevant and are not mirrored.
-//! - Vanilla's `EntitySelector.pushableBy` honours team collision rules, which
+//! - Vanilla's `EntitySelector.pushableBy` honors team collision rules, which
 //!   Steel does not model yet; the push/pickup filter here uses vanilla's
 //!   pickable/pushable/spectator test instead.
 
@@ -45,10 +45,26 @@ use super::minecart::MinecartEntity;
 use super::spawner_minecart::SpawnerMinecartEntity;
 use super::tnt_minecart::TntMinecartEntity;
 
-/// Vanilla `OldMinecartBehavior.MAX_SPEED_IN_WATER`.
-pub(super) const MAX_SPEED_IN_WATER: f64 = 0.2;
-/// Vanilla `OldMinecartBehavior.MAX_SPEED_ON_LAND`.
-pub(super) const MAX_SPEED_ON_LAND: f64 = 0.4;
+/// Vanilla `NewMinecartBehavior.getMaxSpeed` divides the rule value by the tick rate.
+const MAX_SPEED_PER_SECOND_DIVISOR: f64 = 20.0;
+
+/// Vanilla `NewMinecartBehavior.getMaxSpeed`: `max_minecart_speed` in blocks per
+/// second, halved in water.
+///
+/// Vanilla reads the rule only while carts use the experimental
+/// `NewMinecartBehavior` (`minecart_improvements` feature flag). Steel has no
+/// feature-flag system and always uses the stable behaviour (see the module
+/// docs), so the rule is honoured here; its default value `8` reproduces the
+/// stable behaviour's `0.4`/`0.2` speeds exactly.
+pub(super) fn default_max_speed(cart: &impl Minecart, world: &World) -> f64 {
+    let speed = f64::from(world.get_game_rule(&vanilla_game_rules::MAX_MINECART_SPEED))
+        / MAX_SPEED_PER_SECOND_DIVISOR;
+    if cart.is_in_water() {
+        speed * 0.5
+    } else {
+        speed
+    }
+}
 /// Vanilla `AbstractMinecart.WATER_SLOWDOWN_FACTOR`.
 pub(super) const WATER_SLOWDOWN_FACTOR: f64 = 0.95;
 /// Vanilla `AbstractMinecart.getAirDrag`.
@@ -231,13 +247,9 @@ pub(super) trait Minecart: Entity + Sized {
         false
     }
 
-    /// Vanilla `OldMinecartBehavior.getMaxSpeed`.
-    fn max_speed(&self, _world: &World) -> f64 {
-        if self.is_in_water() {
-            MAX_SPEED_IN_WATER
-        } else {
-            MAX_SPEED_ON_LAND
-        }
+    /// Vanilla `AbstractMinecart.getMaxSpeed` for the behaviour Steel always uses.
+    fn max_speed(&self, world: &World) -> f64 {
+        default_max_speed(self, world)
     }
 
     /// Vanilla `OldMinecartBehavior.getSlowdownFactor`.

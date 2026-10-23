@@ -75,7 +75,7 @@ fn read_dir_recursive(
 }
 
 /// Reads a tag directory, then applies overlay tag directories in order,
-/// honouring vanilla's `replace` flag.
+/// honoring vanilla's `replace` flag.
 pub(crate) fn read_tags(
     base_dir: &str,
     overlay_dirs: Option<&[&str]>,

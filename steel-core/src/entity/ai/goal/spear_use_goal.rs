@@ -3,11 +3,6 @@
 //!
 //! Vanilla stores the concrete `Monster`; Steel reads the kinetic-weapon component from the
 //! mob's main hand and drives the state machine through the shared navigation.
-//!
-//! Deliberate difference: vanilla scales the charge by
-//! `Mob.chargeSpeedModifier()` when the mob is riding a charging mount. Steel has no
-//! `chargeSpeedModifier` yet, so the multiplier is `1.0` and the mount distance is still
-//! applied exactly as vanilla does.
 
 use glam::DVec3;
 use steel_registry::data_components::vanilla_components::KINETIC_WEAPON;
@@ -16,23 +11,21 @@ use steel_utils::types::InteractionHand;
 use super::random_pos::default_random_pos_away;
 use super::reduced_tick_delay;
 use super::selector::{Goal, GoalControls};
-use crate::entity::{PathfinderMob, SharedEntity};
+use crate::entity::ai::control::rotate_towards;
+use crate::entity::{Mob as _, PathfinderMob, SharedEntity};
 
 /// Vanilla `SpearUseGoal.MAX_FLEEING_TIME`.
 const MAX_FLEEING_TIME: i32 = 50;
-/// Vanilla `SpearUseGoal.tick` reposition distances.
-const MIN_REPOSITION_DISTANCE: i32 = 6;
+/// Vanilla `SpearUseGoal.tick` reposition/cooldown maximum distances.
 const MAX_REPOSITION_DISTANCE: i32 = 7;
-/// Vanilla `SpearUseGoal.tick` cooldown distances.
-const MIN_COOLDOWN_DISTANCE: i32 = 9;
 const MAX_COOLDOWN_DISTANCE: i32 = 11;
+/// Vanilla `SpearUseGoal.tick` vertical distance passed to `getPosAway`.
+const RETREAT_VERTICAL_DISTANCE: i32 = 7;
 /// Vanilla `SpearUseGoal.tick` mount distance added while riding.
 const MOUNT_DISTANCE: i32 = 2;
 /// Vanilla `SpearUseGoal.tick` look speed and pitch clamp.
 const AIM_SPEED: f32 = 30.0;
 const AIM_ANGLE: f32 = 30.0;
-/// Vanilla `SpearUseGoal.tick` unridden speed multiplier.
-const DEFAULT_CHARGE_SPEED_MODIFIER: f32 = 1.0;
 
 /// Vanilla `SpearUseGoal.SpearUseState`.
 struct SpearUseState {
@@ -114,7 +107,25 @@ impl SpearUseGoal {
         }
     }
 
-    /// Vanilla `SpearUseGoal.ableToAttack`: a target and a kinetic weapon in the main hand.
+    /// Vanilla `Mob.lookAt(target, 30.0F, 30.0F)`: rotate the body toward the target by at
+    /// most the given angles this tick.
+    fn look_at_target(mob: &dyn PathfinderMob, target: &SharedEntity) {
+        let mob_pos = mob.position();
+        let target_pos = target.position();
+        let xd = target_pos.x - mob_pos.x;
+        let zd = target_pos.z - mob_pos.z;
+        let yd = target.get_eye_y() - mob.get_eye_y();
+        let horizontal = (xd * xd + zd * zd).sqrt();
+        let y_rot_d = (zd.atan2(xd).to_degrees() as f32) - 90.0;
+        let x_rot_d = -(yd.atan2(horizontal).to_degrees() as f32);
+        let (y_rot, x_rot) = mob.rotation();
+        mob.set_rotation((
+            rotate_towards(y_rot, y_rot_d, AIM_SPEED),
+            rotate_towards(x_rot, x_rot_d, AIM_ANGLE),
+        ));
+    }
+
+    /// Vanilla `SpearUseGoal.able_to_attack`: a target and a kinetic weapon in the main hand.
     fn able_to_attack(mob: &dyn PathfinderMob) -> bool {
         if mob.target().is_none() {
             return false;
@@ -168,7 +179,7 @@ impl Goal for SpearUseGoal {
         mob.stop_using_item();
     }
 
-    fn tick(&mut self, mob: &dyn PathfinderMob, _entity: &SharedEntity) {
+    fn tick(&mut self, mob: &dyn PathfinderMob, entity: &SharedEntity) {
         let Some(target) = mob.target() else {
             return;
         };
@@ -177,13 +188,22 @@ impl Goal for SpearUseGoal {
         };
 
         let target_distance_sqr = mob.position().distance_squared(target.position());
+        let distance = target_distance_sqr.sqrt();
         let mount_distance = if mob.is_passenger() {
             MOUNT_DISTANCE
         } else {
             0
         };
-        let speed_modifier = f64::from(DEFAULT_CHARGE_SPEED_MODIFIER);
+        // Vanilla `getRootVehicle() instanceof Mob ? chargeSpeedModifier() : 1.0F`; the root
+        // vehicle of an unridden mob is the mob itself.
+        let root = mob
+            .root_vehicle()
+            .unwrap_or_else(|| SharedEntity::clone(entity));
+        let speed_modifier = root
+            .as_mob()
+            .map_or(1.0, |vehicle| f64::from(vehicle.charge_speed_modifier()));
 
+        Self::look_at_target(mob, target);
         let target_position = target.position();
         mob.mob_base().controls().lock().look_control.set_look_at(
             DVec3::new(target_position.x, target.get_eye_y(), target_position.z),
@@ -208,13 +228,17 @@ impl Goal for SpearUseGoal {
 
         if state.tick_and_check_engagement() {
             mob.stop_using_item();
-            let distance = target_distance_sqr.sqrt() as i32;
             // Vanilla `LandRandomPos.getPosAway(mob, max(0, 9 + mount - dist),
-            // max(1, 11 + mount - dist), 7, target)`.
+            // max(1, 11 + mount - dist), 7, target)`. Steel only has the
+            // `DefaultRandomPos`-shaped helper (no min/max horizontal pair and no
+            // "move up out of solid, reject water/malus" land pass), so the max distance is
+            // used as the sole horizontal bound.
+            let cooldown_distance =
+                (f64::from(MAX_COOLDOWN_DISTANCE) + f64::from(mount_distance) - distance).max(1.0);
             state.away_pos = default_random_pos_away(
                 mob,
-                (MIN_COOLDOWN_DISTANCE + mount_distance - distance).max(0),
-                (MAX_COOLDOWN_DISTANCE + mount_distance - distance).max(1),
+                cooldown_distance as i32,
+                RETREAT_VERTICAL_DISTANCE,
                 target.position(),
             );
             state.fleeing_time = 1;
@@ -242,13 +266,14 @@ impl Goal for SpearUseGoal {
                 if target_distance_sqr < f64::from(self.target_in_range_radius_sqr)
                     || mob.mob_base().navigation().lock().is_done()
                 {
-                    let distance = target_distance_sqr.sqrt() as i32;
                     // Vanilla `LandRandomPos.getPosAway(mob, 6 + mount - dist,
-                    // 7 + mount - dist, 7, target)`.
+                    // 7 + mount - dist, 7, target)`; max distance only, as above.
+                    let reposition_distance =
+                        f64::from(MAX_REPOSITION_DISTANCE) + f64::from(mount_distance) - distance;
                     state.away_pos = default_random_pos_away(
                         mob,
-                        MIN_REPOSITION_DISTANCE + mount_distance - distance,
-                        MAX_REPOSITION_DISTANCE + mount_distance - distance,
+                        reposition_distance as i32,
+                        RETREAT_VERTICAL_DISTANCE,
                         target.position(),
                     );
                 }

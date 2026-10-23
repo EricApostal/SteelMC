@@ -51,6 +51,8 @@ struct CommandState {
     command: String,
     /// Vanilla `BaseCommandBlock.lastOutput`, absent until a command runs.
     last_output: Option<TextComponent>,
+    /// Vanilla `BaseCommandBlock.trackOutput`, `true` until the editor clears it.
+    track_output: bool,
     /// Vanilla `MinecartCommandBlock.lastActivated`, the last activation tick.
     last_activated: i32,
 }
@@ -60,6 +62,7 @@ impl CommandState {
         Self {
             command: String::new(),
             last_output: None,
+            track_output: true,
             last_activated: 0,
         }
     }
@@ -122,6 +125,17 @@ impl CommandBlockMinecartEntity {
     #[must_use]
     pub fn last_output(&self) -> Option<TextComponent> {
         self.command.lock().last_output.clone()
+    }
+
+    /// Whether the minecart broadcasts its output, vanilla `BaseCommandBlock.isTrackOutput`.
+    #[must_use]
+    pub fn track_output(&self) -> bool {
+        self.command.lock().track_output
+    }
+
+    /// Vanilla `BaseCommandBlock.setTrackOutput`.
+    pub fn set_track_output(&self, track_output: bool) {
+        self.command.lock().track_output = track_output;
     }
 
     /// Sets the last output and mirrors it into synced data, vanilla
@@ -254,6 +268,7 @@ impl Entity for CommandBlockMinecartEntity {
         self.save_minecart_data(nbt);
         let state = self.command.lock();
         nbt.insert("Command", state.command.clone());
+        nbt.insert("TrackOutput", i8::from(state.track_output));
         if let Some(last_output) = &state.last_output {
             nbt.insert("LastOutput", last_output.to_codec_nbt());
         }
@@ -268,11 +283,13 @@ impl Entity for CommandBlockMinecartEntity {
         let last_output = nbt
             .get("LastOutput")
             .and_then(|tag| TextComponent::from_nbt(&tag.to_owned()));
+        let track_output = nbt.byte("TrackOutput").unwrap_or(1) != 0;
 
         {
             let mut state = self.command.lock();
             state.command = command.clone();
             state.last_output = last_output.clone();
+            state.track_output = track_output;
         }
 
         let mut entity_data = self.entity_data.lock();

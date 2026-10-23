@@ -1,8 +1,3 @@
-#![expect(
-    clippy::unwrap_used,
-    reason = "build script must fail immediately on invalid extracted item modifier data"
-)]
-
 //! Build script for the vanilla `item_modifier` registry.
 //!
 //! Vanilla ships no `item_modifier` entries in the built-in data pack, so this

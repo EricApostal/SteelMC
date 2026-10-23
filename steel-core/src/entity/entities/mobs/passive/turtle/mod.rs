@@ -11,9 +11,9 @@
 //! `travelPos`) have no Steel hook; the shared move control and navigation are used
 //! instead, so long-distance swim travel keeps the generic surface preference.
 //!
-//! GAP: `Turtle.thunderHit` (lightning kills turtles instantly) has no call site:
-//! Steel's lightning bolt does not yet notify struck entities, so the override is
-//! omitted rather than dead code.
+//! Deviation: `Turtle.thunderHit` deals `f32::MAX` lightning damage rather than
+//! calling vanilla's `hurtServer` directly, so the strike still passes through
+//! Steel's shared damage pipeline.
 
 use std::sync::{Arc, Weak};
 
@@ -38,7 +38,7 @@ use steel_registry::vanilla_item_tags::ItemTag;
 use steel_registry::vanilla_loot_tables;
 use steel_registry::{
     REGISTRY, TaggedRegistryExt, level_events, sound_events, vanilla_attributes, vanilla_blocks,
-    vanilla_game_rules,
+    vanilla_damage_types, vanilla_game_rules,
 };
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::{InteractionHand, UpdateFlags};
@@ -427,6 +427,14 @@ impl Entity for TurtleEntity {
         false
     }
 
+    fn thunder_hit(&self, world: &Arc<World>, _bolt: &SharedEntity) {
+        self.hurt(
+            world,
+            &DamageSource::environment(&vanilla_damage_types::LIGHTNING_BOLT),
+            f32::MAX,
+        );
+    }
+
     fn next_step(&self) -> f32 {
         self.base().movement_progress().move_dist() + NEXT_STEP_OFFSET
     }
@@ -602,6 +610,20 @@ impl Animal for TurtleEntity {
         // creating offspring, and both parents enter the post-breeding cooldown.
         self.set_has_egg(true);
         self.finalize_spawn_child_from_breeding(world, partner, None);
+    }
+
+    /// Vanilla `Turtle.checkTurtleSpawnRules`.
+    fn check_animal_spawn_rules(
+        level: &dyn LevelReader,
+        _spawn_reason: EntitySpawnReason,
+        pos: BlockPos,
+    ) -> bool
+    where
+        Self: Sized,
+    {
+        pos.y() < level.sea_level() + 4
+            && (egg_is_sand(level, pos) || egg_on_sand(level, pos))
+            && Self::is_bright_enough_to_spawn(level, pos)
     }
 }
 

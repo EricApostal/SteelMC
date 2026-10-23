@@ -10,11 +10,14 @@
 
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
-use steel_utils::locks::SyncRwLock;
+use steel_utils::{Identifier, locks::SyncRwLock};
 
 pub(crate) mod function;
 pub(crate) mod pack;
@@ -23,7 +26,8 @@ pub(crate) mod resource;
 pub(crate) mod schedule;
 
 pub(crate) use function::{
-    Function, FunctionArguments, FunctionLoader, FunctionRegistry, macro_signature, run_function,
+    Function, FunctionArguments, FunctionLoader, FunctionRegistry, InstantiationFailure,
+    macro_signature, run_function,
 };
 pub(crate) use pack::PackError;
 pub(crate) use repository::{
@@ -33,9 +37,18 @@ pub(crate) use repository::{
 pub(crate) use resource::{
     MultiPackResourceManager, PreparableReloadListener, ReloadableResourceManager,
 };
-pub(crate) use schedule::{ScheduleRegistry, ScheduledFunction};
+pub(crate) use schedule::{ScheduleMode, ScheduleRegistry, ScheduledCallback};
+
+use crate::command::{execution::CommandSource, sender::CommandSender};
+use crate::server::Server;
 
 use pack::PackType;
+
+/// Vanilla `ServerFunctionManager.TICK_FUNCTION_TAG`.
+const TICK_FUNCTION_TAG: Identifier = Identifier::vanilla_static("tick");
+
+/// Vanilla `ServerFunctionManager.LOAD_FUNCTION_TAG`.
+const LOAD_FUNCTION_TAG: Identifier = Identifier::vanilla_static("load");
 
 /// The outcome of one `/reload`.
 #[derive(Debug, Clone)]
@@ -58,6 +71,8 @@ pub(crate) struct DatapackManager {
     reload_manager: ReloadableResourceManager,
     functions: Arc<SyncRwLock<FunctionRegistry>>,
     schedules: Arc<SyncRwLock<ScheduleRegistry>>,
+    /// Vanilla `ServerFunctionManager.postReload`: run `#load` on the next tick.
+    post_reload: AtomicBool,
     /// The world directory the repository was built for.
     world_dir: PathBuf,
 }
@@ -92,6 +107,7 @@ impl DatapackManager {
             reload_manager,
             functions,
             schedules,
+            post_reload: AtomicBool::new(true),
             world_dir: world_dir.to_path_buf(),
         })
     }
@@ -169,6 +185,8 @@ impl DatapackManager {
         self.reload_manager.reload(&resources)?;
 
         *self.resources.write() = resources;
+        // Vanilla `ServerFunctionManager.replaceLibrary`: `#load` runs next tick.
+        self.post_reload.store(true, Ordering::Release);
 
         let functions = self.functions.read();
         Ok(ReloadSummary {
@@ -185,7 +203,7 @@ impl DatapackManager {
         Arc::clone(&self.resources.read())
     }
 
-    /// Reads a JSON resource from the enabled packs, honouring load order.
+    /// Reads a JSON resource from the enabled packs, honoring load order.
     #[must_use]
     pub(crate) fn json(&self, location: &steel_utils::Identifier) -> Option<serde_json::Value> {
         let resources = self.resources();
@@ -228,18 +246,108 @@ pub(crate) fn init(world_dir: &Path) -> Result<&'static DatapackManager, PackErr
 pub(crate) fn datapacks() -> &'static DatapackManager {
     DATAPACKS
         .get()
-        .expect("datapack manager is initialised during world load")
+        .expect("datapack manager is initialized during world load")
 }
 
-/// Vanilla `MinecraftServer.tickChildren` hook for `/schedule`.
+/// The installed manager, or `None` before world load.
 ///
-/// Returns the functions that became due at `tick`; the caller runs them so that
-/// command execution stays on the command thread.
-pub(crate) fn take_due_schedules(tick: i64) -> Vec<ScheduledFunction> {
+/// Command suggestion providers and executors reach for this so a completion
+/// request cannot panic in the window before the datapack manager exists.
+#[must_use]
+pub(crate) fn try_datapacks() -> Option<&'static DatapackManager> {
+    DATAPACKS.get()
+}
+
+/// Vanilla `ServerFunctionManager.tick`: `#load` (only on the tick after a reload)
+/// then `#tick`.
+///
+/// Called once per game tick from the server loop before the worlds tick, at the
+/// previous tick's game time, matching `MinecraftServer.tickChildren`'s
+/// "commandFunctions" phase. Both tags use vanilla's game-loop source, so output
+/// stays silent and the vanilla operator level is capped at `function-permission-level`.
+pub(crate) fn tick_tags(server: &Arc<Server>) {
     let Some(manager) = DATAPACKS.get() else {
-        return Vec::new();
+        return;
     };
-    manager.schedules.write().take_due(tick)
+    let source = game_loop_source(server);
+    if manager.post_reload.swap(false, Ordering::AcqRel) {
+        run_tag(&source, &LOAD_FUNCTION_TAG);
+    }
+    run_tag(&source, &TICK_FUNCTION_TAG);
+}
+
+/// Vanilla `ServerLevel.tickTime`'s `server.getScheduledEvents().tick(server, time)`.
+///
+/// Called once per game tick from the server loop right after the game-time advance
+/// and before the block, fluid, and entity tick phases, so a function scheduled for
+/// this tick observes and affects the same tick's world state.
+pub(crate) fn tick(server: &Arc<Server>) {
+    let Some(manager) = DATAPACKS.get() else {
+        return;
+    };
+    let source = game_loop_source(server);
+
+    // Vanilla `ServerLevel.tickTime`: `server.getScheduledEvents().tick(server, time)`.
+    let due = manager
+        .schedules
+        .write()
+        .take_due(server.overworld().game_time());
+    for entry in due {
+        run_callback(&source, entry.callback);
+    }
+}
+
+/// Vanilla `ServerFunctionManager.getGameLoopSender`.
+fn game_loop_source(server: &Arc<Server>) -> Arc<CommandSource> {
+    Arc::new(
+        CommandSource::new(CommandSender::Console, Arc::clone(server))
+            .with_maximum_permission(server.config.function_permission_level)
+            .with_suppressed_output(),
+    )
+}
+
+/// Vanilla `FunctionCallback`/`FunctionTagCallback.handle`.
+fn run_callback(source: &Arc<CommandSource>, callback: ScheduledCallback) {
+    match callback {
+        ScheduledCallback::Function(id) => {
+            let function = DATAPACKS
+                .get()
+                .and_then(|manager| manager.functions.read().get_shared(&id));
+            if let Some(function) = function {
+                execute(source, &function, None);
+            }
+        }
+        ScheduledCallback::Tag(id) => run_tag(source, &id),
+    }
+}
+
+/// Vanilla `ServerFunctionManager.executeTagFunctions`.
+fn run_tag(source: &Arc<CommandSource>, tag: &Identifier) {
+    let Some(manager) = DATAPACKS.get() else {
+        return;
+    };
+    // Clone the functions out so a function that reloads or runs other functions
+    // never re-enters the registry lock.
+    let functions = manager.functions.read().tagged_shared(tag);
+    for function in functions {
+        execute(source, &function, None);
+    }
+}
+
+/// Runs one function, logging the vanilla instantiation failure.
+fn execute(
+    source: &Arc<CommandSource>,
+    function: &Function,
+    arguments: Option<&FunctionArguments>,
+) {
+    if let Err(failure) = run_function(source, function, arguments) {
+        // Vanilla `ServerFunctionManager.execute` swallows instantiation failures.
+        tracing::warn!(
+            function = %failure.id,
+            reason = ?failure.reason,
+            "failed to instantiate function"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -279,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn datapacks_are_not_initialised_in_unit_tests() {
+    fn datapacks_are_not_initialized_in_unit_tests() {
         assert!(std::panic::catch_unwind(super::datapacks).is_err());
     }
 

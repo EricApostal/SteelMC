@@ -7,12 +7,10 @@
 //! [`EvokerWololoSpell`] (blue sheep to red).
 //!
 //! Deliberate differences:
-//! - vanilla renders the spell-colour hand particles in `tick` on the client; Steel has no
+//! - vanilla renders the spell-color hand particles in `tick` on the client; Steel has no
 //!   client, so only the server half runs.
 //! - the summoned vex is not added to the evoker's scoreboard team: Steel's scoreboard teams
 //!   are owned by the scoreboard lane and the evoker has no team accessor yet.
-//! - `NearestAttackableTargetGoal` has no `setUnseenMemoryTicks`, so vanilla's 300-tick
-//!   unseen memory on the player/villager targets is not modelled.
 
 use std::sync::{Arc, Weak};
 
@@ -176,14 +174,16 @@ impl EvokerEntity {
             );
             targets.add_goal(
                 2,
-                NearestAttackableTargetGoal::new_for_players(true, |_, _| true),
+                NearestAttackableTargetGoal::new_for_players(true, |_, _| true)
+                    .with_unseen_memory_ticks(300),
             );
             targets.add_goal(
                 3,
                 NearestAttackableTargetGoal::new(
                     false,
                     super::abstract_illager::can_attack_villager,
-                ),
+                )
+                .with_unseen_memory_ticks(300),
             );
             targets.add_goal(
                 3,

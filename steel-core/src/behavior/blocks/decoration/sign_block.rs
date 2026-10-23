@@ -1,6 +1,10 @@
 //! Sign block behavior implementation.
 //!
 //! Handles sign placement and block entity creation for all sign types.
+//!
+//! Deviation: vanilla `SignBlockEntity.executeClickCommandsIfPresent` (text click
+//! events that run commands) is not run when a sign is used; Steel sign text has no
+//! click-command component (owner: block_entity/sign.rs).
 
 use std::cmp::Ordering;
 use std::sync::{Arc, Weak};
@@ -18,7 +22,8 @@ use steel_registry::blocks::properties::{
 };
 use steel_registry::blocks::shapes::SupportType;
 use steel_registry::{
-    stat::vanilla_stat_types, vanilla_block_entity_types, vanilla_blocks, vanilla_game_events,
+    sound_events, stat::vanilla_stat_types, vanilla_block_entity_types, vanilla_blocks,
+    vanilla_game_events,
 };
 use steel_utils::{
     BlockPos, BlockStateId, Downcast as _,
@@ -199,7 +204,11 @@ fn can_wall_hanging_sign_survive(
     can_attach_clockwise || can_attach_counter
 }
 
-// TODO: Implement dye sign applicators.
+/// Applies a sign applicator item (glow ink sac, ink sac, honeycomb, dye) to the
+/// side of the sign the player is facing.
+///
+/// Vanilla `SignBlock.useItemOn`. The item-side applicators live in
+/// `SignApplicator`; this only routes the interaction and consumes the stack.
 fn try_apply_sign_item(
     state: BlockStateId,
     world: &Arc<World>,
@@ -275,10 +284,19 @@ fn try_open_sign_editor(
         return InteractionResult::Pass;
     };
 
-    // Check 1: Is the sign waxed?
+    // Check 1: Is the sign waxed? Vanilla plays the interaction-fail sound and
+    // still returns success (nothing else can happen).
     if sign.is_waxed() {
-        // TODO: Play waxed sign interaction fail sound
-        return InteractionResult::Success; // Vanilla returns SUCCESS even when waxed
+        // Vanilla `SignBlockEntity.getSignInteractionFailedSoundEvent`: hanging
+        // signs use their own event.
+        let is_hanging = std::ptr::eq(sign.get_type(), &vanilla_block_entity_types::HANGING_SIGN);
+        let sound = if is_hanging {
+            &sound_events::BLOCK_HANGING_SIGN_WAXED_INTERACT_FAIL
+        } else {
+            &sound_events::BLOCK_SIGN_WAXED_INTERACT_FAIL
+        };
+        world.play_block_sound(sound, pos, 1.0, 1.0, None);
+        return InteractionResult::Success;
     }
 
     // Check 2: Is another player editing?
@@ -286,11 +304,11 @@ fn try_open_sign_editor(
         return InteractionResult::Pass;
     }
 
-    // Check 3: Player must have build permission
-    // TODO: Implement may_build check properly
-    // if !player.may_build() {
-    //     return InteractionResult::Pass;
-    // }
+    // Check 3: Player must have build permission (vanilla `Player.mayBuild`,
+    // which is exactly the ability flag).
+    if !player.abilities.lock().may_build {
+        return InteractionResult::Pass;
+    }
 
     // Determine which side the player is facing
     let slot = facing_text_slot(state, pos, player);

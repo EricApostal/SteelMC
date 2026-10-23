@@ -208,19 +208,35 @@ pub(crate) fn process_mob_experience(killer: &dyn Entity, killed: &dyn Entity, a
 }
 
 /// Vanilla `EnchantmentHelper.processEquipmentDropChance`: folds the
-/// `minecraft:equipment_drops` `add`/`multiply` effects of the victim and of the
-/// killer over the equipment drop chance.
+/// `minecraft:equipment_drops` `add`/`multiply` effects over the equipment drop
+/// chance.
+///
+/// Vanilla's `entity` argument is the *killer* — `Mob.dropCustomDeathLoot`
+/// passes `source.getEntity()`, not the dying mob — and this method iterates that
+/// entity's equipment twice: once requiring `enchanted = victim`, `affected =
+/// victim`, then again with `enchanted = attacker`, `affected = victim`. Steel
+/// mirrors both passes (the second reads the killer back out of `damage_source`,
+/// which is the same entity at vanilla's call site).
 pub(crate) fn modify_equipment_drop_chance(
-    victim: &dyn LivingEntity,
+    entity: &dyn LivingEntity,
     damage_source: &DamageSource,
     chance: f32,
 ) -> f32 {
-    let context = EnchantmentDamageContext::from_damage_source(victim.entity_type(), damage_source);
+    let context = EnchantmentDamageContext::from_damage_source(entity.entity_type(), damage_source);
     let mut value = chance;
+    // Vanilla threads the victim's `RandomSource` through every effect.
+    let mut random = WorldgenRandom::from_seed(rand::random());
 
     for slot in EquipmentSlot::ALL {
-        victim.with_equipment_slot(slot, &mut |item| {
-            value = apply_targeted_equipment_drop_effects(item, slot, &context, value);
+        entity.with_equipment_slot(slot, &mut |item| {
+            value = apply_equipment_drop_effects(
+                item,
+                slot,
+                EnchantmentTarget::Victim,
+                &context,
+                &mut random,
+                value,
+            );
         });
     }
 
@@ -229,7 +245,14 @@ pub(crate) fn modify_equipment_drop_chance(
     {
         for slot in EquipmentSlot::ALL {
             living_attacker.with_equipment_slot(slot, &mut |item| {
-                value = apply_targeted_equipment_drop_effects(item, slot, &context, value);
+                value = apply_equipment_drop_effects(
+                    item,
+                    slot,
+                    EnchantmentTarget::Attacker,
+                    &context,
+                    &mut random,
+                    value,
+                );
             });
         }
     }
@@ -237,12 +260,15 @@ pub(crate) fn modify_equipment_drop_chance(
     value
 }
 
-/// Folds the `minecraft:equipment_drops` effects whose `enchanted`/`affected`
-/// targets both select the victim (vanilla `EnchantmentHelper.processEquipmentDropChance`).
-fn apply_targeted_equipment_drop_effects(
+/// Folds the `minecraft:equipment_drops` effects of one item whose `enchanted`
+/// target is `enchanted` and whose `affected` target is the victim (vanilla
+/// `EnchantmentHelper.processEquipmentDropChance`).
+fn apply_equipment_drop_effects(
     item: &ItemStack,
     slot: EquipmentSlot,
+    enchanted: EnchantmentTarget,
     context: &EnchantmentDamageContext<'_>,
+    random: &mut WorldgenRandom,
     input: f32,
 ) -> f32 {
     if item.is_empty() {
@@ -253,7 +279,6 @@ fn apply_targeted_equipment_drop_effects(
     };
 
     let mut value = input;
-    let mut random = WorldgenRandom::from_seed(rand::random());
     for (key, level) in enchantments.iter() {
         if *level == 0 {
             continue;
@@ -266,7 +291,7 @@ fn apply_targeted_equipment_drop_effects(
         }
 
         for effect in enchantment.effects.equipment_drops {
-            if effect.enchanted != EnchantmentTarget::Victim
+            if effect.enchanted != enchanted
                 || effect.affected != EnchantmentTarget::Victim
                 || !post_attack_requirements_match(effect.requirements, context, *level as i32)
             {
@@ -274,7 +299,7 @@ fn apply_targeted_equipment_drop_effects(
             }
             value = effect
                 .effect
-                .process_with_random(*level as i32, &mut random, value);
+                .process_with_random(*level as i32, random, value);
         }
     }
 
@@ -1734,5 +1759,104 @@ mod tests {
         assert_eq!(slowness.duration(), 30);
         assert_eq!(slowness.amplifier(), 3);
         assert!(zombie.mob_effect(vanilla_mob_effects::SLOWNESS).is_none());
+    }
+
+    #[test]
+    fn looting_raises_the_equipment_drop_chance_of_the_killer() {
+        init_vanilla_registry();
+
+        let killer = Arc::new(TestLivingEntity::new(1, &vanilla_entities::PLAYER));
+        killer.equip(
+            EquipmentSlot::MainHand,
+            enchanted_item(
+                &vanilla_items::DIAMOND_SWORD,
+                Identifier::vanilla_static("looting"),
+                3,
+            ),
+        );
+        let source = DamageSource::direct(
+            &vanilla_damage_types::PLAYER_ATTACK,
+            Arc::<TestLivingEntity>::clone(&killer),
+        );
+
+        // Vanilla `looting`: `add` of `0.01 + 0.01 * (level - 1)`, so level 3 adds 0.03.
+        assert_f32_eq(
+            modify_equipment_drop_chance(killer.as_ref(), &source, 0.1),
+            0.13,
+        );
+    }
+
+    #[test]
+    fn equipment_drop_chance_ignores_the_victims_own_enchantments() {
+        init_vanilla_registry();
+
+        // Vanilla `Mob.dropCustomDeathLoot` hands `EnchantmentHelper`
+        // `processEquipmentDropChance` the *killer*, so only the killer's
+        // equipment is ever folded; the dying mob's looting sword changes nothing.
+        let victim = Arc::new(TestLivingEntity::new(2, &vanilla_entities::ZOMBIE));
+        victim.equip(
+            EquipmentSlot::MainHand,
+            enchanted_item(
+                &vanilla_items::DIAMOND_SWORD,
+                Identifier::vanilla_static("looting"),
+                3,
+            ),
+        );
+        let killer = Arc::new(TestLivingEntity::new(1, &vanilla_entities::PLAYER));
+        let source = DamageSource::direct(
+            &vanilla_damage_types::PLAYER_ATTACK,
+            Arc::<TestLivingEntity>::clone(&killer),
+        );
+
+        assert_f32_eq(
+            modify_equipment_drop_chance(killer.as_ref(), &source, 0.1),
+            0.1,
+        );
+    }
+
+    #[test]
+    fn equipment_drop_chance_without_a_living_attacker_is_unchanged() {
+        init_vanilla_registry();
+
+        let victim = Arc::new(TestLivingEntity::new(2, &vanilla_entities::ZOMBIE));
+        let source = DamageSource::environment(&vanilla_damage_types::GENERIC);
+
+        assert_f32_eq(
+            modify_equipment_drop_chance(victim.as_ref(), &source, 0.25),
+            0.25,
+        );
+    }
+
+    #[test]
+    fn mob_experience_is_unchanged_by_vanilla_enchantments() {
+        init_vanilla_registry();
+
+        // No built-in enchantment carries a `minecraft:mob_experience` effect, so
+        // vanilla's `EnchantmentHelper.processMobExperience` is the identity for
+        // them; datapack enchantments may change it.
+        let killer = Arc::new(TestLivingEntity::new(1, &vanilla_entities::PLAYER));
+        killer.equip(
+            EquipmentSlot::MainHand,
+            enchanted_item(
+                &vanilla_items::DIAMOND_SWORD,
+                Identifier::vanilla_static("looting"),
+                3,
+            ),
+        );
+        let victim = Arc::new(TestLivingEntity::new(2, &vanilla_entities::ZOMBIE));
+
+        assert_eq!(
+            process_mob_experience(killer.as_ref(), victim.as_ref(), 5),
+            5
+        );
+
+        // A non-living killer never folds anything (vanilla returns `amount`).
+        let rocket = FireworkRocketEntity::new(
+            &vanilla_entities::FIREWORK_ROCKET,
+            3,
+            DVec3::ZERO,
+            Weak::new(),
+        );
+        assert_eq!(process_mob_experience(&rocket, victim.as_ref(), 7), 7);
     }
 }

@@ -5,6 +5,7 @@
 
 use std::{
     mem,
+    str::FromStr as _,
     sync::{Arc, Weak},
 };
 
@@ -19,7 +20,9 @@ use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::{sound_events, vanilla_block_entity_types};
 use steel_utils::types::{GameType, UpdateFlags};
-use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, locks::SyncMutex};
+use steel_utils::{
+    BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier, locks::SyncMutex,
+};
 
 use crate::block_entity::entities::openers_counter::{
     ContainerOpenersCounter, ContainerViewers, count_viewers,
@@ -48,6 +51,10 @@ pub struct BarrelBlockEntity {
 
 struct BarrelContainer {
     items: Vec<ItemStack>,
+    /// Vanilla `RandomizableContainerBlockEntity.lootTable`.
+    loot_table: Option<Identifier>,
+    /// Vanilla `RandomizableContainerBlockEntity.lootTableSeed`.
+    loot_table_seed: i64,
 }
 
 // SAFETY: This key is owned by Steel and uniquely identifies `BarrelBlockEntity`.
@@ -73,6 +80,8 @@ impl BarrelBlockEntity {
         ));
         let container = Arc::new(SyncMutex::new(BarrelContainer {
             items: vec![ItemStack::empty(); BARREL_SLOTS],
+            loot_table: None,
+            loot_table_seed: 0,
         }));
         let shared_container: SharedContainer =
             Arc::<SyncMutex<BarrelContainer>>::clone(&container);
@@ -108,6 +117,15 @@ impl BlockEntity for BarrelBlockEntity {
         let nbt_view: NbtCompoundView<'_, '_> = nbt.into();
         let mut container = self.container.lock();
         container.items.fill(ItemStack::empty());
+        container.loot_table = nbt_view
+            .string("LootTable")
+            .and_then(|value| Identifier::from_str(&value.to_str()).ok());
+        container.loot_table_seed = nbt_view.long("LootTableSeed").unwrap_or(0);
+
+        // Vanilla `tryLoadLootTable`: a pending loot table replaces the stored items.
+        if container.loot_table.is_some() {
+            return;
+        }
 
         // Load items from NBT using borrowed NBT for proper ItemStack parsing
         if let Some(items_list) = nbt_view.list("Items")
@@ -129,8 +147,18 @@ impl BlockEntity for BarrelBlockEntity {
     }
 
     fn save_additional(&self, nbt: &mut NbtCompound) {
-        // Save items to NBT (only non-empty slots)
         let container = self.container.lock();
+        // Vanilla `trySaveLootTable`: an unopened loot table persists instead of items.
+        if let Some(loot_table) = &container.loot_table {
+            nbt.insert("LootTable", loot_table.to_string());
+            // Vanilla only writes the seed when it is non-zero.
+            if container.loot_table_seed != 0 {
+                nbt.insert("LootTableSeed", container.loot_table_seed);
+            }
+            return;
+        }
+
+        // Save items to NBT (only non-empty slots)
         let mut items: Vec<NbtCompound> = Vec::new();
         for (slot, item) in container.items.iter().enumerate() {
             if !item.is_empty() {
@@ -142,12 +170,6 @@ impl BlockEntity for BarrelBlockEntity {
             }
         }
         nbt.insert("Items", NbtList::Compound(items));
-    }
-
-    fn get_update_tag(&self) -> Option<NbtCompound> {
-        // Barrels don't need to send inventory to clients on chunk load
-        // (unlike signs which display text)
-        None
     }
 
     fn container_ref(&self) -> Option<ContainerRef> {
@@ -171,7 +193,11 @@ impl ContainerViewers for BarrelBlockEntity {
         let pos = self.get_block_pos();
         let state = self.get_block_state();
         // Compute under the counter lock, run the world-writing hooks after.
-        let transition = self.openers.lock().increment(4.0);
+        // Vanilla passes `containerUser.getContainerInteractionRange()`.
+        let transition = self
+            .openers
+            .lock()
+            .increment(player.block_interaction_range());
         ContainerOpenersCounter::apply(self, transition, Some(player), &world, pos, state);
     }
 
@@ -204,8 +230,13 @@ impl ContainerViewers for BarrelBlockEntity {
         };
         let pos = self.get_block_pos();
         let state = self.get_block_state();
-        let open_count = count_viewers(&world, pos, self);
-        let transition = self.openers.lock().recheck(open_count);
+        let max_interaction_range = self.openers.lock().max_interaction_range();
+        let (open_count, max_interaction_range) =
+            count_viewers(&world, pos, self, max_interaction_range);
+        let transition = self
+            .openers
+            .lock()
+            .recheck(open_count, max_interaction_range);
         ContainerOpenersCounter::apply(self, transition, None, &world, pos, state);
     }
 }
@@ -328,6 +359,49 @@ mod tests {
             .set_item(0, ItemStack::with_count(&vanilla_items::STONE, 100));
 
         assert_eq!(barrel.container.lock().get_item(0).count(), 64);
+    }
+
+    #[test]
+    fn loot_table_round_trips_instead_of_items() {
+        let barrel = test_barrel();
+        {
+            let mut container = barrel.container.lock();
+            container.items[0] = ItemStack::with_count(&vanilla_items::STONE, 3);
+            container.loot_table = Some(Identifier::vanilla_static("chests/simple_dungeon"));
+            container.loot_table_seed = 42;
+        }
+
+        let mut nbt = NbtCompound::new();
+        barrel.save_additional(&mut nbt);
+
+        let mut encoded = Vec::new();
+        nbt.write(&mut encoded);
+        let borrowed =
+            simdnbt::borrow::read_compound(&mut std::io::Cursor::new(encoded.as_slice()))
+                .expect("saved barrel NBT should reparse");
+        barrel.load_additional(&borrowed);
+
+        let container = barrel.container.lock();
+        assert_eq!(
+            container.loot_table,
+            Some(Identifier::vanilla_static("chests/simple_dungeon"))
+        );
+        assert_eq!(container.loot_table_seed, 42);
+        assert!(container.items.iter().all(ItemStack::is_empty));
+    }
+
+    #[test]
+    fn zero_loot_table_seed_is_omitted_from_saved_nbt() {
+        let barrel = test_barrel();
+        {
+            let mut container = barrel.container.lock();
+            container.loot_table = Some(Identifier::vanilla_static("chests/simple_dungeon"));
+        }
+
+        let mut nbt = NbtCompound::new();
+        barrel.save_additional(&mut nbt);
+
+        assert!(nbt.get("LootTableSeed").is_none());
     }
 
     #[test]

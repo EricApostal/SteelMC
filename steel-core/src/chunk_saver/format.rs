@@ -59,7 +59,8 @@ pub const REGION_MAGIC: [u8; 4] = *b"STLR";
 /// v21: Matched vanilla scheduled-tick persistence by rebuilding sub-tick order on load.
 /// v22: Preserve Vanilla pending `DUMMY` block entities across chunk stages.
 /// v23: Replaced Noise, Surface, and Carvers with Terrain status; removed persisted carving masks.
-pub const FORMAT_VERSION: u16 = 23;
+/// v24: Persist chunk inhabited time.
+pub const FORMAT_VERSION: u16 = 24;
 
 /// Number of chunks per region side (32×32 = 1024 chunks per region).
 pub const REGION_SIZE: usize = 32;
@@ -388,6 +389,9 @@ pub struct PersistentChunk<'a> {
     pub structure_starts: Vec<PersistentStructureStart>,
     /// References to structures from nearby origin chunks.
     pub structure_references: Vec<PersistentStructureReference>,
+    /// Vanilla `ChunkAccess.inhabitedTime`: ticks spent inside a player's
+    /// simulation distance, feeding `getCurrentDifficultyAt`.
+    pub inhabited_time: i64,
     /// POI occupancy data (ticket state for beds, workstations, etc.).
     pub pois: Vec<PersistentPoi>,
 }

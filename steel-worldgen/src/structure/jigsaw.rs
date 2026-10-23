@@ -128,6 +128,17 @@ const fn java_center(min: i32, max: i32) -> i32 {
 /// feature jigsaw's target and pool (`JigsawBlockEntity.EMPTY_ID`).
 static EMPTY_POOL: Identifier = Identifier::new_static("minecraft", "empty");
 
+/// Vanilla `StructureTemplateManager.getOrCreate` yields an empty template for a
+/// missing NBT file. The vanilla datapack does reference one such template
+/// (`minecraft:ancient_city/walls/intact_horizontal_wall_stairs_5`, used by the
+/// `ancient_city/walls/no_corners` pool), so an unresolved template must still
+/// report vanilla's zero-size bounding box instead of behaving like a missing
+/// element. It has no jigsaws, so it never attaches to a source connector.
+static EMPTY_TEMPLATE: TemplateData = TemplateData {
+    size: [0, 0, 0],
+    jigsaws: Vec::new(),
+};
+
 type PoolTemplateCache<'a> = FxHashMap<Identifier, Vec<&'a PoolElement>>;
 type JigsawRotationCache<'a> = FxHashMap<Identifier, [Option<Vec<TransformedJigsaw<'a>>>; 4]>;
 const CANDIDATE_DEDUPE_THRESHOLD: usize = 16;
@@ -580,11 +591,20 @@ fn element_bounding_box(
         }
         _ => {
             let location = element_location(element)?;
-            let template = templates.get(location)?;
+            let template = template_or_empty(templates, location);
             let size = IVec3::from(template.size);
             Some(rotation.get_bounding_box(pos, size))
         }
     }
+}
+
+/// Vanilla `StructureTemplateManager.getOrCreate`: an unresolved template behaves
+/// like an empty one (zero size, no jigsaws) rather than a missing element.
+fn template_or_empty<'a>(
+    templates: &'a FxHashMap<Identifier, TemplateData>,
+    location: &Identifier,
+) -> &'a TemplateData {
+    templates.get(location).unwrap_or(&EMPTY_TEMPLATE)
 }
 
 fn candidate_bounding_box_at_origin(
@@ -787,8 +807,12 @@ fn start_assembly(
     // Vanilla compares `DimensionPadding.ZERO` by identity, so the default (absent)
     // padding skips the world-height check; steel cannot tell absent from explicit `0`.
     let padding = &config.dimension_padding;
+    // Vanilla `isStartTooCloseToWorldHeightLimits` compares against
+    // `getMaxY() - padding.top`, where `getMaxY()` is inclusive; this context's
+    // `max_y()` is `getMaxY() + 1`.
     if (padding.bottom != 0 || padding.top != 0)
-        && (center_bb.min_y() < min_y + padding.bottom || center_bb.max_y() > max_y - padding.top)
+        && (center_bb.min_y() < min_y + padding.bottom
+            || center_bb.max_y() > max_y - 1 - padding.top)
     {
         return None;
     }
@@ -858,7 +882,11 @@ fn finish_assembly<'a>(
         ),
         IVec3::new(
             center_stub_x + max_dist,
-            (center_stub_y + max_dist).min(max_y - config.dimension_padding.top),
+            // Vanilla builds an AABB whose max Y is exclusive
+            // (`min(centerY + vertical + 1, getMaxY() + 1 - padding.top)`), so the
+            // inclusive upper bound is one lower. `max_y()` here is vanilla's
+            // `getMaxY() + 1`.
+            (center_stub_y + max_dist).min(max_y - 1 - config.dimension_padding.top),
             center_stub_z + max_dist,
         ),
     );

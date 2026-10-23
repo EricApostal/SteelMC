@@ -198,13 +198,18 @@ impl Goal for LlamaFollowCaravanGoal {
         let Some(head) = self_llama.caravan_head() else {
             return;
         };
-        // Vanilla skips the chase when the caravan head is tied to a fence knot
-        // (`getLeashHolder() instanceof LeashFenceKnotEntity`); any leash holder counts here
-        // because Steel has no fence-knot entity yet.
-        if head
-            .as_leashable()
-            .is_some_and(|leashable| leashable.leash_holder().is_some())
-        {
+        // Vanilla checks the moving llama's own leash holder
+        // (`this.llama.getLeashHolder() instanceof LeashFenceKnotEntity`): a llama tied to a
+        // fence knot stays put instead of chasing the caravan head.
+        let tied_to_fence_knot = mob.as_leashable().is_some_and(|leashable| {
+            leashable.leash_holder().is_some_and(|holder| {
+                std::ptr::eq(
+                    holder.entity_type(),
+                    &steel_registry::vanilla_entities::LEASH_KNOT,
+                )
+            })
+        });
+        if tied_to_fence_knot {
             return;
         }
 

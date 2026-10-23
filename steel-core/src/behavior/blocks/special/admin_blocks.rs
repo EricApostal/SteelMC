@@ -4,6 +4,11 @@
 //! All five are vanilla `GameMasterBlock`s: only creative-mode operators with game-master
 //! permission may edit them. The heavy lifting lives in their block entities; the block layer owns
 //! placement, redstone triggering and comparator output, exactly like vanilla.
+//!
+//! Deviation: the structure/jigsaw/test/test-instance editor screens are opened by the vanilla
+//! client from its own block-entity data; Steel sends no dedicated open-editor packet for them
+//! (owner: protocol lane). Only the command-block editor is pushed explicitly, via
+//! `CBlockEntityData`, matching vanilla `ServerPlayer.openCommandBlock`.
 
 use std::sync::{Arc, Weak};
 
@@ -123,16 +128,30 @@ impl BlockBehavior for CommandBlock {
     fn use_without_item(
         &self,
         _state: BlockStateId,
-        _world: &Arc<World>,
-        _pos: BlockPos,
-        _player: &Player,
+        world: &Arc<World>,
+        pos: BlockPos,
+        player: &Player,
         _hit_result: &BlockHitResult,
         _inv: &mut InventoryAccess,
     ) -> InteractionResult {
-        // TODO(Permissions): gate on vanilla op level 2 + creative, then open the command-block
-        // editor. `Player` has no `can_use_game_master_blocks()` yet (owner: Permissions lane) and
-        // the editor GUI is a Protocol-lane packet.
-        InteractionResult::Pass
+        use steel_protocol::packets::game::CBlockEntityData;
+        use steel_utils::serial::OptionalNbt;
+
+        // Vanilla `CommandBlock.useWithoutItem`: only game-master players may open the editor.
+        if !player.can_use_game_master_blocks() {
+            return InteractionResult::Pass;
+        }
+        let Some(entity) = world.get_block_entity(pos) else {
+            return InteractionResult::Pass;
+        };
+        // Vanilla `ServerPlayer.openCommandBlock`: the editor opens on the client once it
+        // receives the block entity's custom-only data.
+        player.connection.send_packet(CBlockEntityData {
+            pos,
+            block_entity_type: entity.get_type().id() as i32,
+            nbt: OptionalNbt(Some(entity.save_custom_only())),
+        });
+        InteractionResult::Success
     }
 
     fn new_block_entity(
@@ -228,15 +247,18 @@ impl BlockBehavior for StructureBlock {
     fn use_without_item(
         &self,
         _state: BlockStateId,
-        _world: &Arc<World>,
-        _pos: BlockPos,
-        _player: &Player,
+        world: &Arc<World>,
+        pos: BlockPos,
+        player: &Player,
         _hit_result: &BlockHitResult,
         _inv: &mut InventoryAccess,
     ) -> InteractionResult {
-        // TODO(Permissions): gate on vanilla op level 2 + creative, then open the structure editor
-        // (Protocol-lane packet).
-        InteractionResult::Pass
+        // Vanilla `StructureBlockEntity.usedBy`: game-master players get success; the editor
+        // screen itself is opened client-side.
+        if !player.can_use_game_master_blocks() || world.get_block_entity(pos).is_none() {
+            return InteractionResult::Pass;
+        }
+        InteractionResult::Success
     }
 
     fn new_block_entity(
@@ -283,15 +305,18 @@ impl BlockBehavior for JigsawBlock {
     fn use_without_item(
         &self,
         _state: BlockStateId,
-        _world: &Arc<World>,
-        _pos: BlockPos,
-        _player: &Player,
+        world: &Arc<World>,
+        pos: BlockPos,
+        player: &Player,
         _hit_result: &BlockHitResult,
         _inv: &mut InventoryAccess,
     ) -> InteractionResult {
-        // TODO(Permissions): gate on vanilla op level 2 + creative, then open the jigsaw editor
-        // (Protocol-lane packet).
-        InteractionResult::Pass
+        // Vanilla `JigsawBlock.useWithoutItem`: game-master players only; the editor screen is
+        // opened client-side.
+        if !player.can_use_game_master_blocks() || world.get_block_entity(pos).is_none() {
+            return InteractionResult::Pass;
+        }
+        InteractionResult::Success
     }
 
     fn new_block_entity(
@@ -339,14 +364,18 @@ impl BlockBehavior for TestBlock {
     fn use_without_item(
         &self,
         _state: BlockStateId,
-        _world: &Arc<World>,
-        _pos: BlockPos,
-        _player: &Player,
+        world: &Arc<World>,
+        pos: BlockPos,
+        player: &Player,
         _hit_result: &BlockHitResult,
         _inv: &mut InventoryAccess,
     ) -> InteractionResult {
-        // TODO(Permissions/Protocol): test-block editor GUI.
-        InteractionResult::Pass
+        // Vanilla `TestBlock.useWithoutItem`: game-master players only; the editor screen is
+        // opened client-side.
+        if !player.can_use_game_master_blocks() || world.get_block_entity(pos).is_none() {
+            return InteractionResult::Pass;
+        }
+        InteractionResult::Success
     }
 
     fn new_block_entity(
@@ -386,14 +415,18 @@ impl BlockBehavior for TestInstanceBlock {
     fn use_without_item(
         &self,
         _state: BlockStateId,
-        _world: &Arc<World>,
-        _pos: BlockPos,
-        _player: &Player,
+        world: &Arc<World>,
+        pos: BlockPos,
+        player: &Player,
         _hit_result: &BlockHitResult,
         _inv: &mut InventoryAccess,
     ) -> InteractionResult {
-        // TODO(Permissions/Protocol): test-instance editor GUI.
-        InteractionResult::Pass
+        // Vanilla `TestInstanceBlock.useWithoutItem`: game-master players only; the editor screen
+        // is opened client-side.
+        if !player.can_use_game_master_blocks() || world.get_block_entity(pos).is_none() {
+            return InteractionResult::Pass;
+        }
+        InteractionResult::Success
     }
 
     fn new_block_entity(

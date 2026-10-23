@@ -1,4 +1,8 @@
 //! End portal frame block implementation.
+//!
+//! Vanilla `EndPortalFrameBlock` has no `useItemOn`: eye insertion and the
+//! 3x3 portal-completion scan live in `EnderEyeItem.useOn`, mirrored by
+//! [`crate::behavior::EnderEyeItem`].
 
 use steel_macros::block_behavior;
 use steel_registry::blocks::BlockRef;
@@ -11,6 +15,7 @@ use steel_utils::{BlockPos, BlockStateId};
 use crate::behavior::block::BlockBehavior;
 use crate::behavior::blocks::redstone::{MAX_REDSTONE_SIGNAL, MIN_REDSTONE_SIGNAL};
 use crate::behavior::context::BlockPlaceContext;
+use crate::entity::ai::path::PathComputationType;
 use crate::world::LevelReader;
 
 /// Behavior for end portal frame blocks.
@@ -43,7 +48,8 @@ impl BlockBehavior for EndPortalFrameBlock {
         Some(
             self.block
                 .default_state()
-                .set_value(HORIZONTAL_FACING, context.horizontal_direction().opposite()),
+                .set_value(HORIZONTAL_FACING, context.horizontal_direction().opposite())
+                .set_value(EYE, false),
         )
     }
 
@@ -59,6 +65,14 @@ impl BlockBehavior for EndPortalFrameBlock {
         _direction: Direction,
     ) -> i32 {
         Self::analog_output_signal(state.get_value(EYE))
+    }
+
+    fn is_pathfindable(
+        &self,
+        _state: BlockStateId,
+        _computation_type: PathComputationType,
+    ) -> bool {
+        false
     }
 }
 

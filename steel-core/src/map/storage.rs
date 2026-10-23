@@ -7,14 +7,13 @@
 //! `minecraft:map_id` component of each filled-map stack.
 
 use std::collections::BTreeMap;
-use std::{io, sync::Arc};
+use std::io;
 
 use serde::{Deserialize, Serialize};
-use steel_protocol::packets::game::CMapItemData;
 use steel_registry::vanilla_map_decoration_types;
 use steel_utils::Identifier;
 use steel_utils::locks::{SyncMutex, SyncRwLock};
-use steel_utils::saved_data::names as saved_data_names;
+use steel_utils::saved_data::{SavedDataManager, names as saved_data_names};
 use uuid::Uuid;
 
 use super::data::{MapItemSavedData, PersistentMapData};
@@ -63,14 +62,14 @@ impl MapStorage {
 
     /// Loads a world's maps from its saved data.
     ///
+    /// Takes the saved-data manager rather than the world so a world can load
+    /// its maps while it is still being constructed.
+    ///
     /// # Errors
     ///
     /// Returns an error when the saved maps cannot be read.
-    pub async fn load(world: &World) -> io::Result<Self> {
-        let persistent: PersistentMaps = world
-            .saved_data
-            .load_or_default(saved_data_names::MAPS)
-            .await?;
+    pub async fn load(saved_data: &SavedDataManager) -> io::Result<Self> {
+        let persistent: PersistentMaps = saved_data.load_or_default(saved_data_names::MAPS).await?;
         let mut inner = MapStorageInner {
             index: persistent.index,
             maps: BTreeMap::new(),
@@ -92,7 +91,7 @@ impl MapStorage {
     /// # Errors
     ///
     /// Returns an error when the saved maps cannot be written.
-    pub async fn save(&self, world: &World) -> io::Result<usize> {
+    pub async fn save(&self, saved_data: &SavedDataManager) -> io::Result<usize> {
         let _save_guard = self.save_lock.lock();
         let inner = self.inner.read();
         let persistent = PersistentMaps {
@@ -103,10 +102,7 @@ impl MapStorage {
                 .map(|(id, map)| (*id, map.to_persistent()))
                 .collect(),
         };
-        world
-            .saved_data
-            .save(saved_data_names::MAPS, &persistent)
-            .await?;
+        saved_data.save(saved_data_names::MAPS, &persistent).await?;
         Ok(persistent.maps.len())
     }
 
@@ -157,57 +153,74 @@ impl MapStorage {
         inner.maps.get_mut(&map_id).map(f)
     }
 
-    /// Vanilla `MapItem.update` viewer half: registers `player` as a viewer,
-    /// marks their player arrow, and returns the queued update packet if any.
+    /// Vanilla `MapItemSavedData.tickCarriedBy` for a carried map: registers the
+    /// viewer, refreshes nearby banner markers, records the viewer's arrow and
+    /// sends the queued map update.
     ///
-    /// The full world-surface color sampling (`updateColors`) runs alongside the
-    /// chunk tick in the behaviour lane; this method records viewer interest and
-    /// produces the already-queued `CMapItemData` for `player`.
+    /// Locked maps still track their viewers; only the rasterizer
+    /// ([`Self::update_colors`]) is skipped for them.
     ///
-    /// Returns `None` when the map id is unknown.
-    pub fn update(&self, world: &World, map_id: i32, player: &Player) -> Option<CMapItemData> {
-        let player_uuid = player.gameprofile.id();
-        let mut inner = self.inner.write();
-        let map = inner.maps.get_mut(&map_id)?;
-        if map.locked {
-            // Locked maps are read-only; viewers keep their last render.
-            return None;
-        }
-        map.check_banners_near_player(world, player);
-        map.track_viewer(player_uuid);
-        let position = player.position();
-        let has_ceiling = world.dimension_type.has_ceiling;
-        let game_time = world.game_time();
-        map.add_decoration(
-            &vanilla_map_decoration_types::PLAYER,
-            &player.gameprofile.name().to_owned(),
-            position.x,
-            position.z,
-            player.rotation().0,
-            None,
-            has_ceiling,
-            game_time,
-        );
-        map.update_packet(map_id, player_uuid)
-    }
-
-    /// Vanilla `MapItemSavedData.getUpdatePacket` followed by `send_packet`.
-    ///
-    /// Returns `true` when a packet was sent.
-    pub fn send_update(&self, map_id: i32, player: &Arc<Player>) -> bool {
+    /// Returns `false` when the map id is unknown.
+    pub fn tick_carried_by(&self, world: &World, map_id: i32, player: &Player) -> bool {
         let player_uuid = player.gameprofile.id();
         let packet = {
             let mut inner = self.inner.write();
             let Some(map) = inner.maps.get_mut(&map_id) else {
                 return false;
             };
+            map.check_banners_near_player(world, player);
+            map.track_viewer(player_uuid);
+            let position = player.position();
+            let has_ceiling = world.dimension_type.has_ceiling;
+            let game_time = world.game_time();
+            map.add_decoration(
+                &vanilla_map_decoration_types::PLAYER,
+                &player.gameprofile.name().to_owned(),
+                position.x,
+                position.z,
+                player.rotation().0,
+                None,
+                has_ceiling,
+                game_time,
+            );
             map.update_packet(map_id, player_uuid)
         };
-        let Some(packet) = packet else {
-            return false;
-        };
-        player.send_packet(packet);
+        if let Some(packet) = packet {
+            player.connection.send_packet(packet);
+        }
         true
+    }
+
+    /// Returns whether the stored map is locked, or `None` for an unknown id.
+    #[must_use]
+    pub fn is_locked(&self, map_id: i32) -> Option<bool> {
+        self.inner.read().maps.get(&map_id).map(|map| map.locked)
+    }
+
+    /// Vanilla `MapItem.update`: rasterizes the terrain around one viewer into
+    /// a held map.
+    pub fn update_colors(&self, world: &World, map_id: i32, player: &Player) {
+        let mut inner = self.inner.write();
+        let Some(map) = inner.maps.get_mut(&map_id) else {
+            return;
+        };
+        if map.locked {
+            return;
+        }
+        let step = map.next_viewer_step(player.gameprofile.id());
+        super::colors::update_colors(map, world, player.position(), step);
+    }
+
+    /// Vanilla `MapItemSavedData.toggleBanner` for one stored map.
+    ///
+    /// Returns `None` when the map id is unknown.
+    pub fn toggle_banner(
+        &self,
+        level: &dyn crate::world::level_reader::LevelReader,
+        map_id: i32,
+        pos: steel_utils::BlockPos,
+    ) -> Option<bool> {
+        self.with_map_mut(map_id, |map| map.toggle_banner(level, pos))
     }
 
     /// Records an item-frame marker for a map, mirroring vanilla's
@@ -286,8 +299,8 @@ mod tests {
             snapshot,
             MapItemSnapshot {
                 map_id: id,
-                // Vanilla `MapItemSavedData.createFresh` snaps the centre to the
-                // 128 * 2^scale block grid centred on the requested position.
+                // Vanilla `MapItemSavedData.createFresh` snaps the center to the
+                // 128 * 2^scale block grid centered on the requested position.
                 center_x: 192,
                 center_z: 192,
                 scale: 2,

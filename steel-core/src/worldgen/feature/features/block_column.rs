@@ -65,7 +65,7 @@ impl FeatureDecorationRunner {
         let mut amount_to_remove = total_height - new_height;
         if prioritize_tip {
             for height in layer_heights {
-                if amount_to_remove == 0 {
+                if amount_to_remove <= 0 {
                     return;
                 }
                 let removed = (*height).min(amount_to_remove);
@@ -74,7 +74,7 @@ impl FeatureDecorationRunner {
             }
         } else {
             for height in layer_heights.iter_mut().rev() {
-                if amount_to_remove == 0 {
+                if amount_to_remove <= 0 {
                     return;
                 }
                 let removed = (*height).min(amount_to_remove);
@@ -82,5 +82,43 @@ impl FeatureDecorationRunner {
                 *height -= removed;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FeatureDecorationRunner;
+
+    #[test]
+    fn block_column_truncation_removes_from_tip_when_prioritized() {
+        let mut layers = [3, 2];
+        FeatureDecorationRunner::truncate_block_column_layers(&mut layers, 5, 4, true);
+        assert_eq!(layers, [2, 2]);
+
+        let mut layers = [1, 1, 1];
+        FeatureDecorationRunner::truncate_block_column_layers(&mut layers, 3, 0, true);
+        assert_eq!(layers, [0, 0, 0]);
+    }
+
+    #[test]
+    fn block_column_truncation_removes_from_base_when_tip_kept() {
+        let mut layers = [3, 2];
+        FeatureDecorationRunner::truncate_block_column_layers(&mut layers, 5, 4, false);
+        assert_eq!(layers, [3, 1]);
+
+        let mut layers = [2, 1, 4];
+        FeatureDecorationRunner::truncate_block_column_layers(&mut layers, 7, 4, false);
+        assert_eq!(layers, [2, 1, 1]);
+    }
+
+    #[test]
+    fn block_column_truncation_is_a_no_op_without_removals() {
+        let mut layers = [2, 3];
+        FeatureDecorationRunner::truncate_block_column_layers(&mut layers, 5, 5, true);
+        assert_eq!(layers, [2, 3]);
+
+        let mut layers = [2, 3];
+        FeatureDecorationRunner::truncate_block_column_layers(&mut layers, 5, 5, false);
+        assert_eq!(layers, [2, 3]);
     }
 }

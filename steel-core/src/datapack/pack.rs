@@ -8,7 +8,7 @@
 //!
 //! **Deviation from vanilla:** only [`PackType::Server`] exists. Steel has no
 //! client resource tree (vanilla's `PackType.CLIENT` covers textures, models and
-//! sounds, which the vanilla client supplies), so modelling it would be dead
+//! sounds, which the vanilla client supplies), so modeling it would be dead
 //! weight. `/datapack` and the reload path are server-only in vanilla too.
 
 use std::{

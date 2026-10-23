@@ -1,10 +1,10 @@
 //! Vanilla `CrossbowAttack`.
 //!
-//! **Dependency**: vanilla releases the bolt through `CrossbowAttackMob.performCrossbowAttack`,
-//! which needs an `Arrow` entity. Steel has no `arrow` factory yet, so only the bolt spawn is
-//! gated on `ENTITIES.has_factory(ARROW)` — exactly like `RangedCrossbowAttackGoal`
-//! (`entity/ai/goal/ranged_crossbow_attack.rs`). The charge/aim/ready state machine below is
-//! the complete vanilla one, so the behavior advances identically either way.
+//! The bolt is released through [`RangedAttackMob::perform_ranged_attack`], the Steel
+//! capability behind vanilla's `CrossbowAttackMob.performCrossbowAttack` /
+//! `RangedAttackMob` bound. A body without that capability (a non-pillager `CrossbowAttackMob`)
+//! simply has nothing to release, exactly like the goal version in
+//! `entity/ai/goal/ranged_crossbow_attack.rs`.
 
 use steel_registry::vanilla_items;
 use steel_utils::Downcast as _;
@@ -67,6 +67,21 @@ impl CrossbowAttack {
             body.downcast_ref::<crate::entity::entities::mobs::illager::PillagerEntity>()
         {
             pillager.set_charging_crossbow(charging);
+        }
+    }
+
+    /// Vanilla `ProjectileUtil.getWeaponHoldingHand`: the main hand when it holds the
+    /// crossbow, otherwise the off hand.
+    fn weapon_holding_hand(body: &SharedEntity) -> InteractionHand {
+        let holds_crossbow_in_main_hand = body.as_living_entity().is_some_and(|living| {
+            living
+                .get_item_in_hand(InteractionHand::MainHand)
+                .is(&vanilla_items::CROSSBOW)
+        });
+        if holds_crossbow_in_main_hand {
+            InteractionHand::MainHand
+        } else {
+            InteractionHand::OffHand
         }
     }
 
@@ -133,7 +148,7 @@ impl Behavior for CrossbowAttack {
         match self.crossbow_state {
             CrossbowState::Uncharged => {
                 if let Some(living) = ctx.body.as_living_entity() {
-                    living.start_using_item(InteractionHand::MainHand);
+                    living.start_using_item(Self::weapon_holding_hand(ctx.body));
                 }
                 self.crossbow_state = CrossbowState::Charging;
                 Self::set_charging_crossbow(ctx.body, true);
@@ -161,27 +176,30 @@ impl Behavior for CrossbowAttack {
                 }
             }
             CrossbowState::ReadyToAttack => {
-                // Vanilla `body.performRangedAttack(target, 1.0F)`: the bolt spawn is
-                // the gated step (see the module docs). The state machine resets
-                // exactly like vanilla, so the charge cycle is unchanged.
-                Self::set_charging_crossbow(ctx.body, false);
+                // Vanilla `body.performRangedAttack(target, 1.0F)`.
+                if let Some(ranged_attack_mob) = ctx.body.as_ranged_attack_mob() {
+                    ranged_attack_mob.perform_ranged_attack(&target, 1.0);
+                }
                 self.crossbow_state = CrossbowState::Uncharged;
             }
         }
     }
 
     fn stop(&mut self, ctx: &mut BehaviorContext<'_>) {
-        if let Some(living) = ctx.body.as_living_entity() {
-            if living.is_using_item() {
-                living.stop_using_item();
-            }
+        if let Some(living) = ctx.body.as_living_entity()
+            && living.is_using_item()
+        {
+            living.stop_using_item();
         }
 
         if Self::is_holding_crossbow(ctx.body) {
             Self::set_charging_crossbow(ctx.body, false);
+            // Vanilla also clears `DataComponents.CHARGED_PROJECTILES` on the use stack.
+            // Steel has no `CrossbowItem` behavior that loads projectiles, so the stack can
+            // never carry charged projectiles here; there is nothing to clear.
         }
 
-        self.crossbow_state = CrossbowState::Uncharged;
-        self.attack_delay = 0;
+        // Vanilla keeps `crossbowState`/`attackDelay` across stop; the next `tick` resumes
+        // the same charge phase, so Steel does too.
     }
 }

@@ -2,10 +2,15 @@
 //! (`net.minecraft.world.level.block.BonemealableFeaturePlacerBlock`).
 //!
 //! Vanilla grows `moss_block` / `pale_moss_block` into a configured feature patch
-//! (`#moss_vegetation` for moss, `#pale_moss_vegetation` for pale moss) when bonemealed. Steel's
-//! feature placement entry point lives in the worldgen lane; this block exposes the full
-//! bonemeal-surface contract (valid target, success, feature name) and delegates the actual
-//! placement to the same feature plumbing that `steel-core/src/worldgen/feature/features/` uses.
+//! (`minecraft:moss_patch_bonemeal` for moss, `minecraft:pale_moss_patch_bonemeal` for pale
+//! moss) when bonemealed. This block exposes the full bonemeal-surface contract (valid target,
+//! success, feature name) and delegates placement to the worldgen feature plumbing.
+//!
+//! Deviation: vanilla `BonemealableFeaturePlacerBlock.performBonemeal` places the configured
+//! feature through `Feature.place` on the live level; Steel's `FeatureDecorationRunner` only
+//! exposes runtime (`LevelAccessor`) placers for tree and huge-mushroom features, so the
+//! `VegetationPatch` kind of `moss_patch_bonemeal`/`pale_moss_patch_bonemeal` cannot be placed
+//! outside chunk generation (owner: worldgen lane, `worldgen/feature/configured.rs`).
 
 use std::sync::Arc;
 
@@ -23,8 +28,8 @@ use crate::world::{LevelReader, World};
 /// `BonemealableFeaturePlacerBlock` behavior.
 ///
 /// Vanilla stores the `Feature` resource key per block at construction time; Steel resolves the
-/// feature name from the block: `moss_block` grows `#moss_vegetation`-equivalent content and
-/// `pale_moss_block` grows the pale-moss patch.
+/// feature name from the block: `moss_block` grows `moss_patch_bonemeal` and `pale_moss_block`
+/// grows `pale_moss_patch_bonemeal`.
 #[block_behavior]
 pub struct BonemealableFeaturePlacerBlock {
     block: BlockRef,
@@ -35,6 +40,15 @@ impl BonemealableFeaturePlacerBlock {
     #[must_use]
     pub const fn new(block: BlockRef) -> Self {
         Self { block }
+    }
+
+    /// Returns the configured feature this block grows (vanilla `feature` field).
+    const fn configured_feature(&self) -> &'static steel_registry::feature::ConfiguredFeature {
+        if std::ptr::eq(self.block, &vanilla_blocks::PALE_MOSS_BLOCK) {
+            &steel_registry::vanilla_configured_features::PALE_MOSS_PATCH_BONEMEAL
+        } else {
+            &steel_registry::vanilla_configured_features::MOSS_PATCH_BONEMEAL
+        }
     }
 }
 
@@ -49,6 +63,7 @@ impl BlockBehavior for BonemealableFeaturePlacerBlock {
 }
 
 impl Bonemealable for BonemealableFeaturePlacerBlock {
+    /// Vanilla `BonemealableFeaturePlacerBlock.isValidBonemealTarget`.
     fn is_valid_bonemeal_target(
         &self,
         _state: BlockStateId,
@@ -58,6 +73,7 @@ impl Bonemealable for BonemealableFeaturePlacerBlock {
         world.get_block_state(pos.above()).is_air()
     }
 
+    /// Vanilla `BonemealableFeaturePlacerBlock.isBonemealSuccess`.
     fn is_bonemeal_success(
         &self,
         _state: BlockStateId,
@@ -68,19 +84,18 @@ impl Bonemealable for BonemealableFeaturePlacerBlock {
         true
     }
 
+    /// Vanilla `BonemealableFeaturePlacerBlock.performBonemeal`.
+    ///
+    /// The configured feature is resolved (see [`Self::configured_feature`]); placing it at
+    /// runtime is not yet supported by the worldgen lane (see the module deviation note).
     fn perform_bonemeal(
         &self,
         _state: BlockStateId,
-        world: &Arc<World>,
+        _world: &Arc<World>,
         _rng: &mut dyn Rng,
-        pos: BlockPos,
+        _pos: BlockPos,
     ) {
-        // TODO(Worldgen): route to the configured-feature placement for the block's feature by
-        // name (`moss_vegetation` under `moss_block`, `pale_moss_vegetation` under
-        // `pale_moss_block`) once the worldgen lane exposes a `place_configured_feature`-style
-        // entry point for block behaviors (vanilla `Feature.place`, `BonemealableBlock` →
-        // `MossPatchFeature`).
-        let _ = (world, pos, &vanilla_blocks::MOSS_BLOCK);
+        let _ = self.configured_feature();
     }
 
     fn bonemeal_action_type(&self) -> BonemealAction {

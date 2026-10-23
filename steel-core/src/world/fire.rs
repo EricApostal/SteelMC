@@ -1,7 +1,7 @@
 //! Vanilla fire spread, aging and burnout.
 //!
 //! Ports `FireBlock.tick` (`/tmp/vanilla/src/world/level/block/FireBlock.java`) together with its
-//! flammability table (`FireBlock.bootStrap`), the `FireBlock.isNearRain` neighbourhood check and
+//! flammability table (`FireBlock.bootStrap`), the `FireBlock.isNearRain` neighborhood check and
 //! the `ServerLevel.canSpreadFireAround` gate. The fire block behavior in
 //! [`crate::behavior::blocks::portal::fire`] schedules the tick and delegates the body here.
 //!
@@ -118,7 +118,7 @@ impl World {
         found
     }
 
-    /// Vanilla `FireBlock.isNearRain`: the position or one of its four horizontal neighbours is
+    /// Vanilla `FireBlock.isNearRain`: the position or one of its four horizontal neighbors is
     /// exposed to rain.
     #[must_use]
     pub fn fire_is_near_rain(&self, pos: BlockPos) -> bool {
@@ -242,7 +242,7 @@ impl World {
         );
     }
 
-    /// Vanilla `LavaFluid.randomTick`: spreads fire to flammable neighbours.
+    /// Vanilla `LavaFluid.randomTick`: spreads fire to flammable neighbors.
     ///
     /// Exposed for the lava fluid behavior, which owns `FluidBehavior::random_tick`.
     pub fn lava_random_tick_fire_spread(self: &Arc<Self>, pos: BlockPos) {
@@ -261,7 +261,7 @@ impl World {
 
                 let state = self.get_block_state(test_pos);
                 if state.is_air() {
-                    if self.has_flammable_neighbours(test_pos) {
+                    if self.has_flammable_neighbors(test_pos) {
                         self.set_block(
                             test_pos,
                             FireBlock::get_state(self.as_ref(), test_pos),
@@ -296,7 +296,7 @@ impl World {
 
     /// Vanilla `FireBlock.getStateForPlacement(BlockGetter, BlockPos)`.
     ///
-    /// Regular fire connects to burnable neighbours only when it cannot rest on a sturdy face.
+    /// Regular fire connects to burnable neighbors only when it cannot rest on a sturdy face.
     #[must_use]
     pub(crate) fn fire_placement_state<L: LevelReader + ?Sized>(
         world: &L,
@@ -344,7 +344,7 @@ impl World {
     }
 
     /// Vanilla `FireBlock.getIgniteOdds(LevelReader, BlockPos)`: the highest ignite odds among the
-    /// neighbours of an empty position.
+    /// neighbors of an empty position.
     #[must_use]
     fn ignite_odds_at<L: LevelReader + ?Sized>(world: &L, pos: BlockPos) -> u8 {
         if !world.get_block_state(pos).is_air() {
@@ -364,7 +364,7 @@ impl World {
     }
 
     /// Vanilla `LavaFluid.hasFlammableNeighbours`.
-    fn has_flammable_neighbours(&self, pos: BlockPos) -> bool {
+    fn has_flammable_neighbors(&self, pos: BlockPos) -> bool {
         Direction::ALL
             .iter()
             .any(|direction| self.is_flammable(pos.relative(*direction)))

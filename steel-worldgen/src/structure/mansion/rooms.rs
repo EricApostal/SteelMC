@@ -15,24 +15,23 @@ pub(super) fn add_room_1x1(
     rng: &mut LegacyRandom,
 ) {
     let mut piece_rot = Rotation::None;
-    let kind;
+    let is_secret = !matches!(
+        door_dir,
+        Some(Direction::East | Direction::North | Direction::West | Direction::South)
+    );
     match door_dir {
-        Some(Direction::East) => kind = "1x1",
-        Some(Direction::North) => {
-            piece_rot = Rotation::CounterClockwise90;
-            kind = "1x1";
-        }
-        Some(Direction::West) => {
-            piece_rot = Rotation::Clockwise180;
-            kind = "1x1";
-        }
-        Some(Direction::South) => {
-            piece_rot = Rotation::Clockwise90;
-            kind = "1x1";
-        }
-        _ => kind = "1x1s",
+        Some(Direction::North) => piece_rot = Rotation::CounterClockwise90,
+        Some(Direction::West) => piece_rot = Rotation::Clockwise180,
+        Some(Direction::South) => piece_rot = Rotation::Clockwise90,
+        _ => {}
     }
-    let name = get_room_name(rng, floor, kind, false);
+    // Vanilla `addRoom1x1` draws `rooms.get1x1(random)` unconditionally and only
+    // then overwrites it with `rooms.get1x1Secret(random)` for the secret room,
+    // so the secret path consumes two draws (5 then 4), not one.
+    let mut name = get_room_name(rng, floor, "1x1", false);
+    if is_secret {
+        name = get_room_name(rng, floor, "1x1s", false);
+    }
     let orient = zero_pos_transform(IVec3::new(1, 0, 0), piece_rot, 7, 7);
     piece_rot = compose_rotation(piece_rot, rotation);
     let orient = rotation.transform_pos(orient, IVec3::ZERO);

@@ -187,8 +187,11 @@ impl Structure for OceanMonumentStructure {
             }
         }
 
-        let surface_y = ctx.surface_y();
-        let biome = ctx.biome_at(ctx.center_block_x(), surface_y, ctx.center_block_z());
+        // Vanilla `onTopOfChunkCenter(context, Heightmap.Types.OCEAN_FLOOR_WG, …)`:
+        // the stub sits at the first occupied *ocean floor* height, i.e.
+        // `getBaseHeight(OCEAN_FLOOR_WG) - 1` (fluids are not opaque).
+        let floor_y = ctx.base_height(ctx.center_block_x(), ctx.center_block_z(), true) - 1;
+        let biome = ctx.biome_at(ctx.center_block_x(), floor_y, ctx.center_block_z());
         if !structure.allowed_biomes.contains(&biome.key) {
             return None;
         }
@@ -198,7 +201,7 @@ impl Structure for OceanMonumentStructure {
         let orientation = random_horizontal_direction(rng);
         let piece = monument_building_piece(west, north, orientation, rng);
         Some(GenerationStub {
-            position: (ctx.center_block_x(), surface_y, ctx.center_block_z()),
+            position: (ctx.center_block_x(), floor_y, ctx.center_block_z()),
             pieces: vec![piece],
         })
     }

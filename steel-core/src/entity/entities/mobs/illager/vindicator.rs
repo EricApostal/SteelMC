@@ -11,6 +11,7 @@ use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::VindicatorEntityData;
 use steel_registry::{sound_events, vanilla_attributes, vanilla_entities, vanilla_items};
 use steel_utils::locks::SyncMutex;
+use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::{Downcast as _, DowncastType, DowncastTypeKey};
 use text_components::TextComponent;
 
@@ -347,7 +348,12 @@ impl Mob for VindicatorEntity {
         spawn_reason: crate::entity::EntitySpawnReason,
         group_data: Option<crate::entity::SpawnGroupData>,
     ) -> Option<crate::entity::SpawnGroupData> {
+        let group_data = self.finalize_spawn_mob_base(world, spawn_reason, group_data);
         self.mob_base().navigation().lock().set_can_open_doors(true);
+        let mut random = LegacyRandom::from_seed(rand::random());
+        let difficulty_modifier = world
+            .current_difficulty_at(self.block_position())
+            .special_multiplier();
         // Vanilla only arms a vindicator that is not already in a raid; raid buffs equip the
         // axe later.
         if self.current_raid(world).is_none() {
@@ -356,7 +362,12 @@ impl Mob for VindicatorEntity {
                 ItemStack::new(&vanilla_items::IRON_AXE),
             );
         }
-        self.finalize_spawn_mob_base(world, spawn_reason, group_data)
+        crate::entity::entities::mobs::spawn_equipment::populate_default_equipment_enchantments(
+            self,
+            &mut random,
+            difficulty_modifier,
+        );
+        group_data
     }
 
     fn requires_custom_persistence(&self) -> bool {

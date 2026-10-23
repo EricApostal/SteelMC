@@ -77,10 +77,10 @@ impl FeatureDecorationRunner {
 
         let fluid_state = Self::fluid_state_from_data(&config.state);
         let block_state = Self::legacy_block_from_fluid_state(registry, fluid_state);
-        let placed = region.set_block_state(origin, block_state, UpdateFlags::UPDATE_CLIENTS);
-        if placed {
-            let _ = region.schedule_fluid_tick_default(origin, fluid_state.fluid_id, 0);
-        }
-        placed
+        // Vanilla ignores `setBlock`'s result here and reports success, but always
+        // schedules the fluid tick.
+        let _ = region.set_block_state(origin, block_state, UpdateFlags::UPDATE_CLIENTS);
+        let _ = region.schedule_fluid_tick_default(origin, fluid_state.fluid_id, 0);
+        true
     }
 }

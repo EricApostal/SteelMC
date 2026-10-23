@@ -9,6 +9,7 @@ use std::mem;
 use std::ptr;
 use std::sync::Arc;
 
+use steel_registry::stat::vanilla_stat_types;
 use steel_registry::vanilla_custom_stats;
 use steel_registry::vanilla_menu_types;
 use steel_utils::locks::IntoShared;
@@ -253,9 +254,19 @@ impl Slot for MerchantResultSlot {
     fn on_take(
         &self,
         guard: &mut ContainerLockGuard,
-        _stack: &ItemStack,
+        stack: &ItemStack,
         player: &Player,
     ) -> Option<ItemStack> {
+        // Vanilla `MerchantResultSlot.checkTakeAchievements` awards the crafted
+        // stat for the taken result before the trade is applied.
+        if !stack.is_empty() {
+            player.award_stat_with_count(
+                &vanilla_stat_types::ITEM_CRAFTED,
+                stack.item(),
+                stack.count(),
+            );
+        }
+
         let container_id = self.container.container_id();
         let Some(container) = guard.get_typed_mut::<MerchantContainer>(container_id) else {
             return None;

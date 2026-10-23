@@ -33,7 +33,7 @@
 //! - Vanilla persists no paddle NBT in this version (paddle state is synced data only),
 //!   so the paddle state round-trips through `DATA_ID_PADDLE_LEFT`/`RIGHT` rather than
 //!   through a saved tag.
-//! - Only vanilla's server bubble-column branch is modelled (`tickBubbleColumn`); the
+//! - Only vanilla's server bubble-column branch is modeled (`tickBubbleColumn`); the
 //!   client-only wobble-angle interpolation has no server analogue.
 //!
 //! Framework gaps this file cannot close (owned elsewhere):

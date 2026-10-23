@@ -74,11 +74,19 @@ pub struct MobEffect {
     pub key: Identifier,
     pub category: MobEffectCategory,
     pub color: RgbColor,
+    /// Vanilla `MobEffect.isInstantaneous`: instantaneous effects (instant
+    /// health, instant damage, saturation) apply their amplifier once.
+    pub is_instantaneous: bool,
     pub particle: MobEffectParticle,
     pub attribute_modifiers: &'static [MobEffectAttributeModifier],
 }
 
 impl MobEffect {
+    /// Vanilla `MobEffect.isInstantaneous`.
+    #[must_use]
+    pub const fn is_instantaneous(&self) -> bool {
+        self.is_instantaneous
+    }
     /// Creates the particle options synchronized for one effect instance.
     #[must_use]
     pub fn create_particle_options(&self, ambient: bool) -> ParticleData {

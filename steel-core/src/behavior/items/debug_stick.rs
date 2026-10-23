@@ -42,7 +42,8 @@ impl DebugStickItem {
 
     /// Mirrors vanilla `DebugStickItem.handleInteraction`'s cycling branch.
     fn handle_interaction(context: &UseOnContext<'_>, state: BlockStateId, pos: BlockPos) -> bool {
-        if !context.player.is_operator() {
+        // Vanilla `DebugStickItem.useOn`: `!player.canUseGameMasterBlocks()`.
+        if !context.player.can_use_game_master_blocks() {
             return false;
         }
 

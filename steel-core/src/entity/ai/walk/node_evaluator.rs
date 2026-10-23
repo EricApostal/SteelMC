@@ -1,9 +1,18 @@
-use super::*;
+use super::{
+    BlockPos, BlockStateExt as _, BlockStateProperties, Direction, FluidState, Identifier, Mob,
+    PathComputationType, PathType, PathTypeSet, PathfindingMalus, WorldAabb, fast_floor,
+};
 
 #[derive(Debug, Clone)]
 pub struct WalkNodeEvaluator {
     settings: MobPathSettings,
     nodes: NodeStore,
+    /// Vanilla `WalkNodeEvaluator.isAmphibious`; `true` for
+    /// `AmphibiousNodeEvaluator` and its subclasses.
+    amphibious: bool,
+    /// Vanilla `Frog.FrogNodeEvaluator.getPathType`: a position whose block below
+    /// carries this tag reports `PathType::Open`.
+    prefer_jump_to_tag: Option<&'static Identifier>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -18,7 +27,7 @@ pub struct AcceptedNodeRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WalkNeighbors {
     /// Vanilla `WalkNodeEvaluator` writes at most 8 nodes; `FlyNodeEvaluator`'s
-    /// 26-neighbourhood reuses the same buffer, so it is sized for the larger set.
+    /// 26-neighborhood reuses the same buffer, so it is sized for the larger set.
     nodes: [Option<i32>; 26],
     len: usize,
 }
@@ -46,6 +55,11 @@ impl WalkNeighbors {
         self.nodes[..self.len].iter().copied().flatten()
     }
 
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<i32> {
+        self.nodes.get(index).copied().flatten()
+    }
+
     pub(super) const fn push(&mut self, node: i32) {
         if self.len < self.nodes.len() {
             self.nodes[self.len] = Some(node);
@@ -60,7 +74,7 @@ impl Default for WalkNeighbors {
     }
 }
 
-const VANILLA_HORIZONTAL_DIRECTIONS: [Direction; 4] = [
+pub(super) const VANILLA_HORIZONTAL_DIRECTIONS: [Direction; 4] = [
     Direction::North,
     Direction::East,
     Direction::South,
@@ -73,7 +87,32 @@ impl WalkNodeEvaluator {
         Self {
             settings,
             nodes: NodeStore::new(),
+            amphibious: false,
+            prefer_jump_to_tag: None,
         }
+    }
+
+    /// Enables vanilla `WalkNodeEvaluator.isAmphibious` behaviour.
+    #[must_use]
+    pub const fn with_amphibious(mut self, amphibious: bool) -> Self {
+        self.amphibious = amphibious;
+        self
+    }
+
+    /// Enables vanilla `Frog.FrogNodeEvaluator.getPathType`'s prefer-jump-to rule.
+    #[must_use]
+    pub const fn with_prefer_jump_to_tag(
+        mut self,
+        prefer_jump_to_tag: Option<&'static Identifier>,
+    ) -> Self {
+        self.prefer_jump_to_tag = prefer_jump_to_tag;
+        self
+    }
+
+    /// Vanilla `WalkNodeEvaluator.isAmphibious`.
+    #[must_use]
+    pub const fn is_amphibious(&self) -> bool {
+        self.amphibious
     }
 
     #[must_use]
@@ -247,11 +286,47 @@ impl WalkNodeEvaluator {
 
     #[must_use]
     pub fn get_floor_level(&self, context: &PathfindingContext<'_>, pos: BlockPos) -> f64 {
-        if self.settings.can_float() && context.get_block_state(pos).get_fluid_state().is_water() {
+        if (self.settings.can_float() || self.amphibious)
+            && context.get_block_state(pos).get_fluid_state().is_water()
+        {
             return f64::from(pos.y()) + 0.5;
         }
 
         Self::floor_level(context.level(), pos)
+    }
+
+    /// Vanilla `WalkNodeEvaluator.getPathType`, including the two subclass hooks
+    /// Steel folds into this evaluator: `AmphibiousNodeEvaluator.getPathType`'s
+    /// water-border classification and `Frog.FrogNodeEvaluator.getPathType`'s
+    /// prefer-jump-to rule.
+    #[must_use]
+    pub fn get_path_type(
+        &self,
+        context: &mut PathfindingContext<'_>,
+        x: i32,
+        y: i32,
+        z: i32,
+    ) -> PathType {
+        if let Some(tag) = self.prefer_jump_to_tag {
+            let below_state = context.get_block_state(BlockPos::new(x, y - 1, z));
+            if below_state.get_block().has_tag(tag) {
+                return PathType::Open;
+            }
+        }
+
+        if self.amphibious && context.get_path_type_from_state(x, y, z) == PathType::Water {
+            for direction in Direction::ALL {
+                let (step_x, step_y, step_z) = direction.offset();
+                if context.get_path_type_from_state(x + step_x, y + step_y, z + step_z)
+                    == PathType::Blocked
+                {
+                    return PathType::WaterBorder;
+                }
+            }
+            return PathType::Water;
+        }
+
+        WalkPathEvaluator::path_type(context, x, y, z)
     }
 
     #[must_use]
@@ -303,7 +378,7 @@ impl WalkNodeEvaluator {
             }
         }
 
-        let current_node_path_type = WalkPathEvaluator::path_type(context, x, y, z);
+        let current_node_path_type = self.get_path_type(context, x, y, z);
         if self.settings.entity_width() > 1 {
             let current_is_cheaper =
                 self.settings.pathfinding_malus(current_node_path_type) < highest_malus;
@@ -325,6 +400,22 @@ impl WalkNodeEvaluator {
         } else {
             highest_malus_path_type
         }
+    }
+
+    /// Vanilla `WalkNodeEvaluator.getCachedPathType`.
+    ///
+    /// Vanilla memoises this per position; Steel computes it directly because
+    /// `PathfindingContext` already caches the block states the result derives
+    /// from, so recomputation is a pure, allocation-free lookup.
+    #[must_use]
+    pub fn get_cached_path_type(
+        &self,
+        context: &mut PathfindingContext<'_>,
+        x: i32,
+        y: i32,
+        z: i32,
+    ) -> PathType {
+        self.get_path_type_of_mob(context, x, y, z)
     }
 
     pub fn find_accepted_node(
@@ -360,7 +451,7 @@ impl WalkNodeEvaluator {
             }
         }
 
-        if path_type == PathType::Walkable {
+        if path_type == PathType::Walkable || (self.amphibious && path_type == PathType::Water) {
             return best;
         }
 
@@ -378,7 +469,7 @@ impl WalkNodeEvaluator {
             return self.try_jump_on(context, collision, request);
         }
 
-        if path_type == PathType::Water && !self.settings.can_float() {
+        if path_type == PathType::Water && !self.amphibious && !self.settings.can_float() {
             return self.try_find_first_non_water_below(context, x, y, z, best);
         }
 
@@ -407,8 +498,7 @@ impl WalkNodeEvaluator {
         for dx in 0..self.settings.entity_width() {
             for dy in 0..self.settings.entity_height() {
                 for dz in 0..self.settings.entity_depth() {
-                    let mut block_type =
-                        WalkPathEvaluator::path_type(context, x + dx, y + dy, z + dz);
+                    let mut block_type = self.get_path_type(context, x + dx, y + dy, z + dz);
                     block_type =
                         self.adjust_path_type_for_mob(context, block_type, &mut mob_on_rail);
                     block_types.insert(block_type);
@@ -443,13 +533,13 @@ impl WalkNodeEvaluator {
         if mob_on_rail.is_none() {
             let mob_position = self.settings.mob_position();
             *mob_on_rail = Some(
-                WalkPathEvaluator::path_type(
+                self.get_path_type(
                     context,
                     mob_position.x(),
                     mob_position.y(),
                     mob_position.z(),
                 ) == PathType::Rail
-                    || WalkPathEvaluator::path_type(
+                    || self.get_path_type(
                         context,
                         mob_position.x(),
                         mob_position.y() - 1,

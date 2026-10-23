@@ -15,12 +15,33 @@ use std::sync::Arc;
 
 use glam::DVec3;
 use steel_registry::game_events::GameEventRef;
+use steel_registry::particle_type::{ParticleData, VibrationParticleOption};
+use steel_registry::position_source::{BlockPositionSource, PositionSource};
 use steel_registry::vanilla_game_events;
+use steel_registry::vanilla_particle_types;
+use steel_registry::vanilla_position_source_types;
 use steel_utils::BlockPos;
 use steel_utils::locks::SyncMutex;
 
 use super::{GameEventContext, GameEventDeliveryMode, GameEventListener};
 use crate::world::World;
+
+/// Builds Vanilla's `new VibrationParticleOption(positionSource, arrivalInTicks)` payload.
+fn vibration_particle(destination: PositionSource, arrival_in_ticks: i32) -> ParticleData {
+    ParticleData::new(
+        &vanilla_particle_types::VIBRATION,
+        VibrationParticleOption::new(destination, arrival_in_ticks),
+    )
+}
+
+/// Vanilla `BlockPositionSource` for a block listener's own position.
+#[must_use]
+pub fn block_position_source(pos: BlockPos) -> PositionSource {
+    PositionSource::new(
+        &vanilla_position_source_types::BLOCK,
+        BlockPositionSource::new(pos),
+    )
+}
 
 /// Vanilla `VibrationSystem.NO_VIBRATION_FREQUENCY`.
 pub const NO_VIBRATION_FREQUENCY: i32 = 0;
@@ -171,7 +192,7 @@ pub fn ignores_vibrations_when_sneaking(event: GameEventRef) -> bool {
         || key == &vanilla_game_events::ITEM_INTERACT_FINISH.key
 }
 
-/// Vanilla `VibrationInfo`: one candidate vibration travelling toward a listener.
+/// Vanilla `VibrationInfo`: one candidate vibration traveling toward a listener.
 #[derive(Clone, Debug)]
 pub struct VibrationInfo {
     /// The game event that produced the vibration.
@@ -272,10 +293,11 @@ pub struct VibrationListenerState {
     current_vibration: Option<VibrationInfo>,
     travel_time_in_ticks: i32,
     selector: VibrationSelector,
+    reload_vibration_particle: bool,
 }
 
 impl VibrationListenerState {
-    /// Returns the vibration currently travelling toward the listener.
+    /// Returns the vibration currently traveling toward the listener.
     #[must_use]
     pub fn current_vibration(&self) -> Option<&VibrationInfo> {
         self.current_vibration.as_ref()
@@ -302,6 +324,17 @@ impl VibrationListenerState {
         self.travel_time_in_ticks = (self.travel_time_in_ticks - 1).max(0);
     }
 
+    /// Vanilla `VibrationSystem.Data.shouldReloadVibrationParticle`.
+    #[must_use]
+    pub const fn should_reload_vibration_particle(&self) -> bool {
+        self.reload_vibration_particle
+    }
+
+    /// Vanilla `VibrationSystem.Data.setReloadVibrationParticle`.
+    pub const fn set_reload_vibration_particle(&mut self, reload: bool) {
+        self.reload_vibration_particle = reload;
+    }
+
     /// Access to the candidate selector.
     pub fn selector_mut(&mut self) -> &mut VibrationSelector {
         &mut self.selector
@@ -317,6 +350,11 @@ pub trait VibrationCallback: Send + Sync {
     fn listener_radius(&self) -> i32 {
         SENSOR_LISTENER_RADIUS
     }
+
+    /// Vanilla `VibrationSystem.User.getPositionSource`.
+    ///
+    /// Every block listener in Vanilla returns a `BlockPositionSource` for its own position.
+    fn position_source(&self) -> PositionSource;
 
     /// Vanilla `VibrationSystem.User.getListenableEvents`.
     ///
@@ -416,20 +454,53 @@ impl VibrationSystemListener {
                 let travel_time = self
                     .callback
                     .calculate_travel_time_in_ticks(candidate.distance);
+                let origin = candidate.pos;
                 state.set_travel_time_in_ticks(travel_time);
                 state.set_current_vibration(Some(candidate));
                 state.selector_mut().start_over();
-                // TODO(Protocol): send the `VibrationParticleOption` particle so clients animate
-                // the in-flight vibration. Vanilla sends it here via `ServerLevel.sendParticles`.
-                drop(state);
+                // Vanilla `trySelectAndScheduleVibration`.
+                world.send_particles(
+                    vibration_particle(self.callback.position_source(), travel_time),
+                    origin,
+                    1,
+                    DVec3::ZERO,
+                    0.0,
+                );
                 self.callback.on_data_changed(world);
-                return;
             }
         }
 
-        let Some(vibration) = state.current_vibration.clone() else {
+        let Some(vibration) = state.current_vibration().cloned() else {
             return;
         };
+
+        // Vanilla `tryReloadVibrationParticle`: re-emit the in-flight particle at its current
+        // interpolated position after a reload, and only clear the flag once a player saw it.
+        if state.should_reload_vibration_particle() {
+            let travel_time = state.travel_time_in_ticks();
+            let initial_travel_time = self
+                .callback
+                .calculate_travel_time_in_ticks(vibration.distance);
+            let destination = position_of(self.listener_pos);
+            let origin = vibration.pos;
+            let alpha = if initial_travel_time > 0 {
+                1.0 - f64::from(travel_time) / f64::from(initial_travel_time)
+            } else {
+                1.0
+            };
+            let particle_pos = origin + (destination - origin) * alpha;
+            let sent = world.send_particles(
+                vibration_particle(self.callback.position_source(), travel_time),
+                particle_pos,
+                1,
+                DVec3::ZERO,
+                0.0,
+            );
+            if sent > 0 {
+                state.set_reload_vibration_particle(false);
+            }
+        }
+
         let changed = state.travel_time_in_ticks() > 0;
         state.decrement_travel_time();
         if state.travel_time_in_ticks() > 0 {

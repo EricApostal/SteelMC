@@ -572,3 +572,256 @@ fn test_survives_explosion_condition() {
         "Expected ~25% survival rate, got {survived}%"
     );
 }
+
+/// A [`LevelView`] over a fixed set of block positions, for
+/// `minecraft:location_check` tests.
+struct FakeLevelView {
+    blocks: Vec<(BlockPos, BlockStateId)>,
+    biome: Option<Identifier>,
+    dimension: Identifier,
+    light: i32,
+    smokey: bool,
+    can_see_sky: bool,
+}
+
+impl FakeLevelView {
+    fn new(dimension: &'static str) -> Self {
+        Self {
+            blocks: Vec::new(),
+            biome: None,
+            dimension: Identifier::vanilla_static(dimension),
+            light: 15,
+            smokey: false,
+            can_see_sky: true,
+        }
+    }
+
+    fn with_block(mut self, pos: BlockPos, state: BlockStateId) -> Self {
+        self.blocks.push((pos, state));
+        self
+    }
+}
+
+impl crate::advancement::predicates::LevelView for FakeLevelView {
+    fn position(&self) -> (f64, f64, f64) {
+        (0.0, 0.0, 0.0)
+    }
+
+    fn dimension(&self) -> &Identifier {
+        &self.dimension
+    }
+
+    fn biome_at(&self, _position: (f64, f64, f64)) -> Option<&Identifier> {
+        self.biome.as_ref()
+    }
+
+    fn structure_at(&self, _position: (f64, f64, f64)) -> Option<&Identifier> {
+        None
+    }
+
+    fn block_state_at(&self, position: (f64, f64, f64)) -> Option<BlockStateId> {
+        let pos = BlockPos::new(position.0 as i32, position.1 as i32, position.2 as i32);
+        self.blocks
+            .iter()
+            .find_map(|(candidate, state)| (*candidate == pos).then_some(*state))
+    }
+
+    fn fluid_at(&self, _position: (f64, f64, f64)) -> Option<&Identifier> {
+        None
+    }
+
+    fn light_at(&self, _position: (f64, f64, f64)) -> i32 {
+        self.light
+    }
+
+    fn is_smokey_at(&self, _position: (f64, f64, f64)) -> bool {
+        self.smokey
+    }
+
+    fn can_see_sky_at(&self, _position: (f64, f64, f64)) -> bool {
+        self.can_see_sky
+    }
+}
+
+fn tall_grass_half(half: &'static str) -> BlockStateId {
+    REGISTRY.blocks.set_property(
+        REGISTRY
+            .blocks
+            .get_base_state_id(&crate::vanilla_blocks::TALL_GRASS),
+        &crate::blocks::properties::BlockStateProperties::DOUBLE_BLOCK_HALF,
+        if half == "upper" {
+            crate::blocks::properties::DoubleBlockHalf::Upper
+        } else {
+            crate::blocks::properties::DoubleBlockHalf::Lower
+        },
+    )
+}
+
+fn tall_grass_location_check() -> LootCondition {
+    LootCondition::LocationCheck {
+        offset_x: 0,
+        offset_y: 1,
+        offset_z: 0,
+        predicate: LocationPredicate {
+            block: Some(BlockPredicate {
+                blocks: Some(HolderSet::Keys(&["tall_grass"])),
+                state: Some(StatePropertiesPredicate {
+                    properties: &[PropertyCheck {
+                        name: "half",
+                        value: "upper",
+                    }],
+                }),
+            }),
+            ..LocationPredicate::default()
+        },
+    }
+}
+
+#[test]
+fn location_check_requires_an_origin() {
+    init_test_registries();
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng);
+
+    // Vanilla `LocationCheck.test`: `context.getOptional(ORIGIN)` must be present.
+    assert!(!tall_grass_location_check().test(&mut ctx));
+}
+
+#[test]
+fn location_check_resolves_the_predicate_at_the_offset_position() {
+    init_test_registries();
+    let view = FakeLevelView::new("overworld")
+        .with_block(BlockPos::new(0, 64, 0), tall_grass_half("lower"))
+        .with_block(BlockPos::new(0, 65, 0), tall_grass_half("upper"));
+    let condition = tall_grass_location_check();
+
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng)
+        .with_origin(0.5, 64.0, 0.5)
+        .with_location(&view);
+    assert!(condition.test(&mut ctx));
+
+    // The upper half does not satisfy `offsetY: 1`; the lower half does not
+    // satisfy the `half: upper` property.
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng)
+        .with_origin(0.5, 65.0, 0.5)
+        .with_location(&view);
+    assert!(!condition.test(&mut ctx));
+}
+
+#[test]
+fn location_check_fails_closed_without_a_level_view() {
+    init_test_registries();
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng).with_origin(0.5, 64.0, 0.5);
+
+    // A constrained predicate cannot be resolved without the level, so it must
+    // not silently pass (the pre-`LevelView` behaviour always passed).
+    assert!(!tall_grass_location_check().test(&mut ctx));
+}
+
+#[test]
+fn location_check_without_a_predicate_only_needs_the_origin() {
+    init_test_registries();
+    let condition = LootCondition::LocationCheck {
+        offset_x: 0,
+        offset_y: 0,
+        offset_z: 0,
+        predicate: LocationPredicate::default(),
+    };
+
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng).with_origin(0.5, 64.0, 0.5);
+    assert!(condition.test(&mut ctx));
+
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng);
+    assert!(!condition.test(&mut ctx));
+}
+
+#[test]
+fn location_check_matches_biomes_and_flags() {
+    init_test_registries();
+    let mut view = FakeLevelView::new("overworld");
+    view.biome = Some(Identifier::vanilla_static("jungle"));
+    view.smokey = true;
+    view.can_see_sky = false;
+
+    let condition = LootCondition::LocationCheck {
+        offset_x: 0,
+        offset_y: 0,
+        offset_z: 0,
+        predicate: LocationPredicate {
+            biomes: Some(HolderSet::Keys(&["jungle"])),
+            dimension: Some(Identifier::vanilla_static("overworld")),
+            smokey: Some(true),
+            can_see_sky: Some(false),
+            light: Some(IntBounds::at_least(7)),
+            ..LocationPredicate::default()
+        },
+    };
+
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng)
+        .with_origin(0.5, 64.0, 0.5)
+        .with_location(&view);
+    assert!(condition.test(&mut ctx));
+
+    // A mismatched dimension fails even when everything else matches.
+    let condition = LootCondition::LocationCheck {
+        offset_x: 0,
+        offset_y: 0,
+        offset_z: 0,
+        predicate: LocationPredicate {
+            dimension: Some(Identifier::vanilla_static("the_nether")),
+            ..LocationPredicate::default()
+        },
+    };
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng)
+        .with_origin(0.5, 64.0, 0.5)
+        .with_location(&view);
+    assert!(!condition.test(&mut ctx));
+}
+
+#[test]
+fn tall_grass_loot_table_encodes_the_double_block_location_check() {
+    init_test_registries();
+
+    let pools = vanilla_loot_tables::BLOCKS_TALL_GRASS.pools;
+    assert_eq!(pools.len(), 2);
+
+    for (index, pool) in pools.iter().enumerate() {
+        let condition = pool
+            .conditions
+            .iter()
+            .find_map(|condition| match condition {
+                LootCondition::AllOf(terms) => terms
+                    .iter()
+                    .find(|term| matches!(term, LootCondition::LocationCheck { .. })),
+                _ => None,
+            })
+            .expect("each tall_grass pool is gated on a location check");
+
+        let LootCondition::LocationCheck {
+            offset_y,
+            predicate,
+            ..
+        } = condition
+        else {
+            unreachable!("the condition was just matched as a location check");
+        };
+        let expected_offset = if index == 0 { 1 } else { -1 };
+        assert_eq!(*offset_y, expected_offset);
+        let block = predicate
+            .block
+            .as_ref()
+            .expect("the location check names the neighboring half");
+        assert_eq!(
+            block.blocks,
+            Some(HolderSet::Keys(&["tall_grass"])),
+            "the location check names the tall grass block"
+        );
+    }
+}

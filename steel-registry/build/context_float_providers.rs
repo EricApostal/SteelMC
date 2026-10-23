@@ -28,13 +28,6 @@ use super::context_int_providers::{
     generate_int_ref, reference_key,
 };
 
-/// The entry static for a float-registry reference (a key like
-/// `cooking/speed_default`, with or without the `minecraft:` namespace).
-pub(crate) fn float_entry_ident(name: &str) -> Ident {
-    let name = reference_key(name);
-    Ident::new(&name.to_shouty_snake_case(), Span::call_site())
-}
-
 pub(crate) fn build() -> TokenStream {
     let provider_dir =
         "../steel-utils/build_assets/builtin_datapacks/minecraft/context_float_provider";

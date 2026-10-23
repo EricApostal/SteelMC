@@ -225,8 +225,8 @@ impl World {
         }
     }
 
-    /// Vanilla `LightningBolt.clearCopperOnLightningStrike`: de-oxidises struck copper and runs
-    /// randomised walks that clean nearby copper and remove wax.
+    /// Vanilla `LightningBolt.clearCopperOnLightningStrike`: de-oxidizes struck copper and runs
+    /// randomized walks that clean nearby copper and remove wax.
     fn clear_copper_on_lightning_strike(self: &Arc<Self>, struck_pos: BlockPos) {
         let struck_state = self.get_block_state(struck_pos);
         let struck_block = struck_state.get_block();

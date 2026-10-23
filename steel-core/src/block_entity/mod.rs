@@ -318,6 +318,13 @@ impl BlockEntityBase {
         self.components.read().clone()
     }
 
+    /// Replaces the stored component map.
+    ///
+    /// Mirrors vanilla `BlockEntity.setComponents`.
+    pub(crate) fn set_components(&self, components: DataComponentMap) {
+        *self.components.write() = components;
+    }
+
     pub(crate) fn is_valid_container_for(&self, player: &Player) -> bool {
         if self.is_removed() {
             return false;
@@ -457,6 +464,14 @@ pub trait BlockEntity: ErasedType + Send + Sync {
         nbt
     }
 
+    /// Returns the component map stored on this block entity.
+    ///
+    /// Mirrors vanilla `BlockEntity.collectComponents`, which
+    /// `ServerGamePacketListenerImpl#addBlockDataToItem` applies to the picked item.
+    fn stored_components(&self) -> DataComponentMap {
+        self.base().stored_components()
+    }
+
     /// Saves entity-specific data and stored components without position/type metadata.
     fn save_without_metadata(&self) -> NbtCompound {
         let mut nbt = self.save_custom_only();
@@ -469,10 +484,9 @@ pub trait BlockEntity: ErasedType + Send + Sync {
 
     /// Saves command-visible data together with vanilla block-entity metadata.
     fn save_with_full_metadata(&self) -> NbtCompound {
-        // TODO: Include stored block-entity components once Steel has Vanilla's
-        // block-entity component foundation. NBT predicates targeting the
-        // `components` field cannot match exactly until then.
-        let mut nbt = self.save_custom_only();
+        // Vanilla `BlockEntity.saveWithFullMetadata` is `saveWithoutMetadata`
+        // followed by `saveMetadata`, so stored components are included.
+        let mut nbt = self.save_without_metadata();
         let pos = self.get_block_pos();
         nbt.insert("id", self.get_type().key.to_string());
         nbt.insert("x", pos.x());

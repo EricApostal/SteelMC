@@ -2,6 +2,7 @@ use super::{
     Identifier, PermissionContext, PermissionExpr, PermissionMetadataSet, PermissionMetadataValue,
     PermissionSet, PermissionState, Player,
 };
+use crate::permission::PermissionLevel;
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct PlayerPermissionState {
@@ -74,6 +75,31 @@ impl Player {
             .is_some_and(|server| server.is_operator(self.gameprofile.id()))
     }
 
+    /// Returns the player's vanilla operator permission level.
+    ///
+    /// Mirrors `MinecraftServer.getProfilePermissions(...).level()`: an explicit
+    /// `ops.json` entry wins, then the operator group, then the server's
+    /// configured `op-permission-level`.
+    #[must_use]
+    pub fn permission_level(&self) -> PermissionLevel {
+        self.server
+            .upgrade()
+            .map_or(PermissionLevel::All, |server| {
+                server.op_level(self.gameprofile.id())
+            })
+    }
+
+    /// Vanilla `Player.canUseGameMasterBlocks`: creative-mode abilities plus the
+    /// `COMMANDS_GAMEMASTER` permission (op level 2).
+    ///
+    /// Gates the `GameMasterBlock` editor/placement items (`GameMasterBlockItem`,
+    /// `DebugStickItem`) exactly like vanilla.
+    #[must_use]
+    pub fn can_use_game_master_blocks(&self) -> bool {
+        self.has_infinite_materials()
+            && self.has_permission(&PermissionExpr::level(PermissionLevel::Gamemasters))
+    }
+
     /// Returns direct permission overrides.
     #[must_use]
     pub fn permission_overrides(&self) -> PermissionSet {
@@ -107,10 +133,7 @@ impl Player {
         permission: &PermissionExpr,
         context: &PermissionContext,
     ) -> bool {
-        self.permissions
-            .lock()
-            .effective
-            .allows_in(permission, context)
+        self.permission_state_in(permission, context) == Some(PermissionState::Allow)
     }
 
     /// Resolves an expression in the player's current world.
@@ -128,10 +151,14 @@ impl Player {
         permission: &PermissionExpr,
         context: &PermissionContext,
     ) -> Option<PermissionState> {
+        // Vanilla resolves a player's permissions through their own
+        // `LevelBasedPermissionSet` (`ServerPlayer.permissions()`), so level
+        // expressions are compared against the player's op level.
+        let level = self.permission_level();
         self.permissions
             .lock()
             .effective
-            .resolve_in(permission, context)
+            .resolve_with_level(permission, context, level)
     }
 
     /// Resolves one permission metadata value in the player's current world.

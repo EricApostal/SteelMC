@@ -7,7 +7,10 @@ use crate::{
     },
     entity::{Entity, ai::path::PathComputationType, dismount_helper},
     player::Player,
-    world::{LevelReader, ScheduledTickAccess, World, village},
+    world::{
+        LevelReader, ScheduledTickAccess, World, explosion::ExplosionInteraction,
+        explosion::bad_respawn_point_damage_source, village,
+    },
 };
 use glam::DVec3;
 use steel_macros::block_behavior;
@@ -23,12 +26,10 @@ use steel_utils::{
 const BED_PART: &EnumProperty<BedPart> = &BlockStateProperties::BED_PART;
 const FACING: &EnumProperty<Direction> = &BlockStateProperties::HORIZONTAL_FACING;
 const OCCUPIED: &BoolProperty = &BlockStateProperties::OCCUPIED;
-/// Behavior for beds
+/// Behavior for beds.
 ///
-/// TODO: Mirror the final step of vanilla `BedBlock.destroyOnUse`: once Steel has a
-/// strict `World::explode` foundation, the bad-respawn-point explosion (and its damage)
-/// must be created after the bed-rule error message and the removal of both halves,
-/// which are implemented in `use_without_item`.
+/// Mirrors vanilla `AbstractBedBlock`/`BedBlock`: sleeping, the stand-up search, and the
+/// `destroyOnUse` bad-respawn-point explosion (radius 5, fire, `BAD_RESPAWN_POINT` damage).
 #[block_behavior]
 pub struct BedBlock {
     pub(super) block: BlockRef,
@@ -325,10 +326,9 @@ impl BlockBehavior for BedBlock {
         };
 
         if world.dimension_type.bed_rule.destroy_on_use {
-            // Vanilla shows the bed rule's error message, then `destroyOnUse` removes both
-            // halves and explodes. Explosions are not implemented yet (`World::explode`
-            // does not exist), so the explosion of the bad respawn point is the remaining
-            // gap here.
+            // Vanilla `AbstractBedBlock.useWithoutItem` moves to the head first, shows the
+            // bed rule's error message, then runs `BedBlock.destroyOnUse`: both halves are
+            // removed and the bad respawn point explodes.
             if let Some(message) = world.dimension_type.bed_rule.error_message {
                 player.send_overlay_message(&message());
             }
@@ -351,6 +351,24 @@ impl BlockBehavior for BedBlock {
                 );
                 world.destroy_block_effect(other_pos, u32::from(other_state.0), None);
             }
+
+            // Vanilla `BedBlock.destroyOnUse`: `level.explode(null,
+            // damageSources().badRespawnPointExplosion(boomPos), null, boomPos, 5.0F,
+            // true, ExplosionInteraction.BLOCK)`.
+            let (boom_x, boom_y, boom_z) = head_pos.get_center();
+            world.explode_full(
+                None,
+                Some(bad_respawn_point_damage_source(DVec3::new(
+                    boom_x, boom_y, boom_z,
+                ))),
+                None,
+                boom_x,
+                boom_y,
+                boom_z,
+                5.0,
+                true,
+                ExplosionInteraction::Block,
+            );
 
             return InteractionResult::SuccessServer;
         }

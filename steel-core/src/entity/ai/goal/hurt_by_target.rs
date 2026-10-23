@@ -68,8 +68,19 @@ impl HurtByTargetGoal {
             position.z + 1.0,
         )
         .inflate_xyz(within, ALERT_RANGE_Y, within);
+        // Vanilla filters on `mob.getClass()`, which matches Java subclasses (a `Zombie`
+        // alerts husks, drowned and zombie villagers too). Steel compares concrete downcast
+        // type keys, so the alert stays within the mob's own Rust type; the vanilla
+        // subclass families are only reproduced where the caller lists the extra types in
+        // `set_alert_others`.
         let mob_type_key = mob.downcast_type_key();
         let mob_uuid = mob.uuid();
+        // Vanilla `this.mob instanceof TamableAnimal ? tamableAnimal.getOwner() : null`; the
+        // cast on `other` is safe because the entity class filter above already matched.
+        // Both sides compare `Option<Uuid>`, so two untamed tamables (`None == None`) match.
+        let mob_owner = mob
+            .as_tameable()
+            .map(|tameable| tameable.owner().map(|owner| owner.uuid()));
 
         for entity in world.get_entities_in_aabb_matching(&search_box, |entity| {
             if entity.uuid() == mob_uuid
@@ -85,7 +96,16 @@ impl HurtByTargetGoal {
                 return false;
             };
 
-            //TODO tamable animal owner check is required here
+            if let Some(mob_owner) = mob_owner {
+                let other_owner = entity
+                    .as_tameable()
+                    .and_then(|tameable| tameable.owner())
+                    .map(|owner| owner.uuid());
+                if other_owner != mob_owner {
+                    return false;
+                }
+            }
+
             other.target().is_none() && !other.is_allied_to(hurt_by_mob.as_ref())
         }) {
             if let Some(other) = entity.as_mob() {

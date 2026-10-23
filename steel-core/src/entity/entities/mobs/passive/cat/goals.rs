@@ -365,7 +365,7 @@ impl Goal for CatRelaxOnOwnerGoal {
                 && let Some(owner_player) = owner.as_player()
                 && owner_player.sleep_counter() >= GIFT_MIN_SLEEP_TICKS
             {
-                log::trace!("cat morning gift skipped: environment attributes are not modelled");
+                log::trace!("cat morning gift skipped: environment attributes are not modeled");
             }
 
             self.on_bed_ticks = 0;

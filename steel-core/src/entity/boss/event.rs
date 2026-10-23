@@ -3,9 +3,8 @@
 //! Steel keeps the vanilla split: [`BossEvent`] is the presentation state and
 //! [`ServerBossEvent`] adds per-player visibility tracking. Vanilla broadcasts
 //! `ClientboundBossEventPacket` from inside the setters; Steel records the same
-//! packet in [`ServerBossEvent::drain_packets`] so a caller that owns the world
-//! (the fight tick, the raid tick, the `/bossbar` command) can hand them to
-//! `Player::send_packet` without the bar holding a world handle.
+//! packet in [`ServerBossEvent::broadcast_pending`], which the bar's owner drives
+//! once per tick, so the methods need no world handle.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -135,6 +134,18 @@ impl BossEvent {
     }
 }
 
+/// One queued wire operation and the players vanilla sends it to.
+///
+/// Vanilla `ServerBossEvent` sends member transitions (`addPlayer`/`removePlayer`) straight to
+/// that one player, while `setProgress` and friends go through `broadcast`, which targets every
+/// currently tracked player. Recording the target here keeps both shapes until
+/// [`ServerBossEvent::broadcast_pending`] runs.
+struct PendingBossPacket {
+    packet: CBossEvent,
+    /// `None` is vanilla `broadcast`: every player tracked when the drain runs.
+    receiver: Option<Arc<Player>>,
+}
+
 /// Vanilla `ServerBossEvent`: a [`BossEvent`] with visible-player tracking.
 ///
 /// Vanilla sends to `ServerPlayer` handles directly; Steel tracks the same
@@ -147,7 +158,7 @@ pub struct ServerBossEvent {
     visible: bool,
     /// Vanilla `SavedData.setDirty` hook used by persisted custom bars.
     dirty: bool,
-    pending: Vec<CBossEvent>,
+    pending: Vec<PendingBossPacket>,
 }
 
 impl ServerBossEvent {
@@ -325,23 +336,26 @@ impl ServerBossEvent {
 
     /// Vanilla `ServerBossEvent.addPlayer`.
     pub fn add_player(&mut self, player: Arc<Player>) {
-        let uuid = player.uuid();
-        let inserted = self.players.insert(uuid, player).is_none();
-        if inserted {
-            self.set_dirty();
-            self.queue(self.add_packet());
+        if self
+            .players
+            .insert(player.uuid(), Arc::clone(&player))
+            .is_some()
+        {
+            return;
         }
+        self.set_dirty();
+        let packet = self.add_packet();
+        self.queue_direct(player, packet);
     }
 
     /// Vanilla `ServerBossEvent.removePlayer`.
     pub fn remove_player(&mut self, uuid: &Uuid) -> bool {
-        if self.players.remove(uuid).is_some() {
-            self.set_dirty();
-            self.queue(CBossEvent::remove(self.event.id()));
-            true
-        } else {
-            false
-        }
+        let Some(player) = self.players.remove(uuid) else {
+            return false;
+        };
+        self.set_dirty();
+        self.queue_direct(player, CBossEvent::remove(self.event.id()));
+        true
     }
 
     /// Vanilla `ServerBossEvent.removeAllPlayers`.
@@ -359,26 +373,50 @@ impl ServerBossEvent {
         }
         self.visible = visible;
         self.set_dirty();
-        if visible {
-            let add = self.add_packet();
-            let count = self.players.len();
-            for _ in 0..count {
-                self.queue(add.clone());
-            }
+        // Vanilla sends one packet per tracked player and ignores the new
+        // visibility flag for these, because it already flipped it.
+        let packet = if visible {
+            self.add_packet()
         } else {
-            let count = self.players.len();
-            for _ in 0..count {
-                self.queue(CBossEvent::remove(self.event.id()));
+            CBossEvent::remove(self.event.id())
+        };
+        let players: Vec<Arc<Player>> = self.players.values().cloned().collect();
+        for player in players {
+            self.pending.push(PendingBossPacket {
+                packet: packet.clone(),
+                receiver: Some(player),
+            });
+        }
+    }
+
+    /// Delivers every queued operation to the players vanilla would have sent it to.
+    ///
+    /// Vanilla `ServerBossEvent` sends from inside its setters; Steel records the same operations
+    /// and hands them to the owner-provided per-tick drain so the bar needs no world handle.
+    pub fn broadcast_pending(&mut self) {
+        let pending = std::mem::take(&mut self.pending);
+        for PendingBossPacket { packet, receiver } in pending {
+            match receiver {
+                Some(player) => player.send_packet(packet),
+                None => {
+                    for player in self.players.values() {
+                        player.send_packet(packet.clone());
+                    }
+                }
             }
         }
     }
 
-    /// Drains the packets recorded since the last call.
+    /// Drains the packets recorded since the last call without delivering them.
     ///
-    /// The caller sends one packet per tracked player, exactly like vanilla
-    /// `ServerBossEvent.broadcast`.
+    /// Prefer [`Self::broadcast_pending`]: this form loses the per-player targeting of
+    /// `addPlayer`/`removePlayer` transitions and is only for callers that send the operations
+    /// themselves.
     pub fn drain_packets(&mut self) -> Vec<CBossEvent> {
         std::mem::take(&mut self.pending)
+            .into_iter()
+            .map(|pending| pending.packet)
+            .collect()
     }
 
     /// Whether any packet is waiting to be drained.
@@ -406,7 +444,7 @@ impl ServerBossEvent {
     fn queue_style(&mut self) {
         let packet =
             CBossEvent::update_style(self.event.id(), self.event.color(), self.event.overlay());
-        self.queue(packet);
+        self.queue_broadcast(packet);
     }
 
     fn queue_properties(&mut self) {
@@ -416,14 +454,28 @@ impl ServerBossEvent {
             self.event.should_play_boss_music(),
             self.event.should_create_world_fog(),
         );
-        self.queue(packet);
+        self.queue_broadcast(packet);
     }
 
-    /// Vanilla `ServerBossEvent.broadcast`: packets are only recorded while the
-    /// bar is visible.
-    fn queue(&mut self, packet: CBossEvent) {
+    /// Vanilla `ServerBossEvent.broadcast`: operations are only recorded while the
+    /// bar is visible, and target every player tracked when the drain runs.
+    fn queue_broadcast(&mut self, packet: CBossEvent) {
         if self.visible {
-            self.pending.push(packet);
+            self.pending.push(PendingBossPacket {
+                packet,
+                receiver: None,
+            });
+        }
+    }
+
+    /// Vanilla `ServerBossEvent.addPlayer`/`removePlayer`: member transitions reach one player
+    /// only, and are also suppressed while the bar is invisible.
+    fn queue_direct(&mut self, player: Arc<Player>, packet: CBossEvent) {
+        if self.visible {
+            self.pending.push(PendingBossPacket {
+                packet,
+                receiver: Some(player),
+            });
         }
     }
 }

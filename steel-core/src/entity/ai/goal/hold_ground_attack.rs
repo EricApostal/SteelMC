@@ -4,6 +4,7 @@
 use glam::DVec3;
 
 use super::selector::{Goal, GoalControls};
+use crate::entity::ai::targeting::TargetingConditions;
 use crate::entity::{PathfinderMob, SharedEntity};
 
 /// Vanilla `HoldGroundAttackGoal.shoutTargeting` range.
@@ -23,7 +24,8 @@ impl HoldGroundAttackGoal {
     #[must_use]
     pub fn new(hostile_radius: f32) -> Self {
         Self {
-            hostile_radius_sqr: f64::from(hostile_radius) * f64::from(hostile_radius),
+            // Vanilla squares the float radius before the double comparison.
+            hostile_radius_sqr: f64::from(hostile_radius * hostile_radius),
         }
     }
 }
@@ -56,7 +58,7 @@ impl Goal for HoldGroundAttackGoal {
         let Some(target) = mob.target() else {
             return;
         };
-        shout_at_nearby_raiders(mob, &target);
+        shout_at_nearby_raiders(mob, &target, true);
         mob.set_aggressive(true);
     }
 
@@ -65,7 +67,7 @@ impl Goal for HoldGroundAttackGoal {
         let Some(target) = mob.target() else {
             return;
         };
-        shout_at_nearby_raiders(mob, &target);
+        shout_at_nearby_raiders(mob, &target, false);
     }
 
     fn requires_update_every_tick(&self) -> bool {
@@ -95,18 +97,26 @@ impl Goal for HoldGroundAttackGoal {
     }
 }
 
-/// Vanilla's shout loop: nearby raiders inherit the leader's target and become aggressive.
-fn shout_at_nearby_raiders(mob: &dyn PathfinderMob, target: &SharedEntity) {
+/// Vanilla's shout loop: nearby raiders inherit the leader's target.
+///
+/// `set_aggressive` mirrors the two call sites: vanilla `start` only shares the target, while
+/// `stop` also marks the shouted raiders aggressive.
+fn shout_at_nearby_raiders(mob: &dyn PathfinderMob, target: &SharedEntity, set_aggressive: bool) {
     let Some(world) = mob.level() else {
         return;
     };
 
-    // Vanilla shouts through `TargetingConditions.forNonCombat().range(8)`.
+    // Vanilla `shoutTargeting`: `forNonCombat().range(8).ignoreLineOfSight().ignoreInvisibilityTesting()`.
+    let shout_targeting = TargetingConditions::for_non_combat()
+        .range(SHOUT_RANGE)
+        .ignore_line_of_sight()
+        .ignore_invisibility_testing();
     let area = mob.bounding_box().inflate(SHOUT_RANGE);
     let nearby = world.get_entities_in_aabb_matching(&area, |entity| {
-        entity
-            .as_raider()
-            .is_some_and(|raider| raider.current_raid_id().is_some())
+        entity.as_raider().is_some()
+            && entity
+                .as_living_entity()
+                .is_some_and(|raider| shout_targeting.test(world.as_ref(), Some(mob), raider))
     });
 
     for entity in nearby {
@@ -114,8 +124,10 @@ fn shout_at_nearby_raiders(mob: &dyn PathfinderMob, target: &SharedEntity) {
             continue;
         }
         if let Some(other) = entity.as_mob() {
-            other.set_target(Some(target));
-            other.set_aggressive(true);
+            let _ = other.set_target(Some(target));
+            if set_aggressive {
+                other.set_aggressive(true);
+            }
         }
     }
 }

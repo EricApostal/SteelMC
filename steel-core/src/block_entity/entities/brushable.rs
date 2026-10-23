@@ -140,7 +140,6 @@ impl BrushableBlockEntity {
         state.brush_count += 1;
         if state.brush_count >= REQUIRED_BRUSHES {
             let mutation = self.brushing_completed_mutation(&mut state);
-            self.set_changed();
             return BrushOutcome {
                 durability_damage: true,
                 mutation,
@@ -158,7 +157,8 @@ impl BrushableBlockEntity {
             mutation.set_block = Some(self.with_dusted(completion_state));
         }
 
-        self.set_changed();
+        // Vanilla `brush` marks the entity changed only through `unpackLootTable`; the brush
+        // counters are not persisted, and the dusted progress lives in the block state.
         BrushOutcome {
             durability_damage: false,
             mutation,
@@ -179,7 +179,6 @@ impl BrushableBlockEntity {
                 mutation.set_block = Some(self.with_dusted(completion_state));
             }
             state.brush_count_resets_at_tick = game_time + RESET_BRUSH_COUNT_TICKS;
-            self.set_changed();
         }
 
         if state.brush_count == 0 {
@@ -362,6 +361,8 @@ impl BlockEntity for BrushableBlockEntity {
     }
 
     fn get_update_tag(&self) -> Option<NbtCompound> {
+        // Vanilla `BrushableBlockEntity.getUpdateTag` always returns a compound (possibly with no
+        // keys), so every block update re-sends the client-side brush data.
         let mut nbt = NbtCompound::new();
         self.state.lock().save_client_data(&mut nbt);
         Some(nbt)

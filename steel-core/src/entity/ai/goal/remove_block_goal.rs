@@ -3,15 +3,11 @@
 //!
 //! Vanilla extends `MoveToBlockGoal`; Steel embeds the landed [`MoveToBlockGoal`] and drives
 //! it through the module-private hooks, exactly as `ZombieAttackGoal` embeds `MeleeAttackGoal`.
-//!
-//! Deliberate difference: vanilla sends an `ItemParticleOption(ParticleTypes.ITEM, Items.EGG)`
-//! spray while eating. Steel has no item-particle payload constructor yet, so only the
-//! vanilla `POOF` burst at the moment the block breaks is sent.
 
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
-use steel_registry::particle_type::ParticleData;
-use steel_registry::vanilla_particle_types;
+use steel_registry::particle_type::{ItemParticleOption, ParticleData};
+use steel_registry::{ItemStackTemplate, vanilla_items, vanilla_particle_types};
 use steel_utils::BlockPos;
 
 use super::move_to_block::MoveToBlockGoal;
@@ -28,10 +24,29 @@ const SEARCH_RANGE: i32 = 24;
 const EAT_BOUNCE_VELOCITY: f64 = 0.3;
 /// Vanilla `RemoveBlockGoal.tick` chew ticks before the block is removed.
 const CHEW_TICKS: i32 = 60;
+/// Vanilla `RemoveBlockGoal.tick` egg-particle count per chew tick.
+const EAT_PARTICLE_COUNT: i32 = 3;
+/// Vanilla `RemoveBlockGoal.tick` egg-particle offset scale (`(nextFloat() - 0.5) * 0.08`).
+const EAT_PARTICLE_SPREAD: f32 = 0.08;
 /// Vanilla `RemoveBlockGoal.tick` puff particle count.
 const BREAK_PARTICLE_COUNT: i32 = 20;
-/// Vanilla `RemoveBlockGoal.tick` puff particle spread.
-const BREAK_PARTICLE_SPREAD: f64 = 0.15;
+/// Vanilla `RemoveBlockGoal.tick` puff particle spread (`nextGaussian() * 0.02`).
+const BREAK_PARTICLE_SPREAD: f64 = 0.02;
+/// Vanilla `RemoveBlockGoal.tick` particle speed for both bursts.
+const PARTICLE_SPEED: f64 = 0.15;
+
+/// Vanilla `Random.nextGaussian` (Marsaglia polar method) for the thread-local RNG.
+fn gaussian() -> f64 {
+    loop {
+        let d = 2.0 * rand::random::<f64>() - 1.0;
+        let e = 2.0 * rand::random::<f64>() - 1.0;
+        let f = d * d + e * e;
+
+        if f < 1.0 && f != 0.0 {
+            return d * (-2.0 * f.ln() / f).sqrt();
+        }
+    }
+}
 
 /// Vanilla `RemoveBlockGoal`.
 pub struct RemoveBlockGoal {
@@ -56,7 +71,7 @@ impl RemoveBlockGoal {
         }
     }
 
-    /// Vanilla `RemoveBlockGoal.getPosWithBlock`: the mob's own block, then its neighbours.
+    /// Vanilla `RemoveBlockGoal.getPosWithBlock`: the mob's own block, then its neighbors.
     fn pos_with_block(&self, pos: BlockPos, level: &dyn LevelReader) -> Option<BlockPos> {
         let matches = |pos: BlockPos| {
             std::ptr::eq(level.get_block_state(pos).get_block(), self.block_to_remove)
@@ -65,7 +80,7 @@ impl RemoveBlockGoal {
             return Some(pos);
         }
 
-        let neighbours = [
+        let neighbors = [
             pos.below(),
             pos.offset(-1, 0, 0),
             pos.offset(1, 0, 0),
@@ -73,7 +88,7 @@ impl RemoveBlockGoal {
             pos.offset(0, 0, 1),
             pos.below().below(),
         ];
-        neighbours.into_iter().find(|neighbour| matches(*neighbour))
+        neighbors.into_iter().find(|neighbour| matches(*neighbour))
     }
 }
 
@@ -155,6 +170,25 @@ impl Goal for RemoveBlockGoal {
                 EAT_BOUNCE_VELOCITY,
                 velocity.z,
             ));
+            // Vanilla `ItemParticleOption(ParticleTypes.ITEM, Items.EGG)` chew spray.
+            world.send_particles(
+                ParticleData::new(
+                    &vanilla_particle_types::ITEM,
+                    ItemParticleOption::new(ItemStackTemplate::new(&vanilla_items::EGG)),
+                ),
+                glam::DVec3::new(
+                    f64::from(eat_pos.x()) + 0.5,
+                    f64::from(eat_pos.y()) + 0.7,
+                    f64::from(eat_pos.z()) + 0.5,
+                ),
+                EAT_PARTICLE_COUNT,
+                glam::DVec3::new(
+                    f64::from((rand::random::<f32>() - 0.5) * EAT_PARTICLE_SPREAD),
+                    f64::from((rand::random::<f32>() - 0.5) * EAT_PARTICLE_SPREAD),
+                    f64::from((rand::random::<f32>() - 0.5) * EAT_PARTICLE_SPREAD),
+                ),
+                PARTICLE_SPEED,
+            );
         }
 
         if self.ticks_since_reached_goal % 2 == 0 {
@@ -168,17 +202,24 @@ impl Goal for RemoveBlockGoal {
 
         if self.ticks_since_reached_goal > CHEW_TICKS {
             world.remove_block(eat_pos, false);
-            world.send_particles(
-                ParticleData::simple(&vanilla_particle_types::POOF),
-                glam::DVec3::new(
-                    f64::from(eat_pos.x()) + 0.5,
-                    f64::from(eat_pos.y()),
-                    f64::from(eat_pos.z()) + 0.5,
-                ),
-                BREAK_PARTICLE_COUNT,
-                glam::DVec3::splat(0.02),
-                BREAK_PARTICLE_SPREAD,
-            );
+            // Vanilla sends one `POOF` particle per gaussian offset, 20 times.
+            for _ in 0..BREAK_PARTICLE_COUNT {
+                world.send_particles(
+                    ParticleData::simple(&vanilla_particle_types::POOF),
+                    glam::DVec3::new(
+                        f64::from(eat_pos.x()) + 0.5,
+                        f64::from(eat_pos.y()),
+                        f64::from(eat_pos.z()) + 0.5,
+                    ),
+                    1,
+                    glam::DVec3::new(
+                        gaussian() * BREAK_PARTICLE_SPREAD,
+                        gaussian() * BREAK_PARTICLE_SPREAD,
+                        gaussian() * BREAK_PARTICLE_SPREAD,
+                    ),
+                    PARTICLE_SPEED,
+                );
+            }
         }
 
         self.ticks_since_reached_goal += 1;

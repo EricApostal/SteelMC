@@ -8,12 +8,10 @@ use crate::behavior::BlockStateBehaviorExt;
 use crate::behavior::{BLOCK_BEHAVIORS, FLUID_BEHAVIORS};
 use crate::physics::shapes::merged_offset_face_occludes;
 use crate::world::World;
-use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::Direction;
 use steel_registry::fluid::FluidRef;
 use steel_registry::vanilla_block_tags::BlockTag;
-use steel_registry::vanilla_blocks;
 use steel_utils::{BlockPos, BlockStateId};
 
 // TODO: Add occlusion cache for performance (vanilla uses 200-entry ThreadLocal LRU)
@@ -40,38 +38,14 @@ pub fn can_pass_through_wall(
 
 /// Checks if a block state can hold any fluid, without world access.
 ///
-/// Vanilla equivalent: `FlowingFluid.canHoldAnyFluid(BlockState)`.
-/// Uses `blocksMotion()` check instead of `has_collision` — vanilla's
-/// `blocksMotion()` = `block != Cobweb && block != BambooSapling && isSolid()`.
+/// Vanilla equivalent: `FlowingFluid.canHoldAnyFluid(BlockState)`:
+/// `block instanceof LiquidBlockContainer || state.is(BlockTags.WASHED_AWAY_BY_FLUIDS)`.
+/// The tag is the authority (it lists air, plants, torches, rails, water/lava, …);
+/// non-solid blocks that are *not* tagged (ladders, sugar cane, bubble columns,
+/// portals, structure voids) reject fluid exactly like vanilla.
 #[must_use]
 pub fn can_hold_any_fluid_state(state: BlockStateId) -> bool {
-    let block = state.get_block();
-
-    // Vanilla: block instanceof LiquidBlockContainer → true
-    if state.is_liquid_container() {
-        return true;
-    }
-
-    // Vanilla: state.blocksMotion() ? false : !(exclusion list)
-    if state.blocks_motion() {
-        return false;
-    }
-
-    // Non-solid blocks that still reject fluid.
-    !is_fluid_excluded_block(block)
-}
-
-/// Returns true if a block is in the vanilla fluid exclusion list.
-fn is_fluid_excluded_block(block: BlockRef) -> bool {
-    block == &vanilla_blocks::LADDER
-        || block == &vanilla_blocks::SUGAR_CANE
-        || block == &vanilla_blocks::BUBBLE_COLUMN
-        || block == &vanilla_blocks::NETHER_PORTAL
-        || block == &vanilla_blocks::END_PORTAL
-        || block == &vanilla_blocks::END_GATEWAY
-        || block == &vanilla_blocks::STRUCTURE_VOID
-        || block.has_tag(&BlockTag::SIGNS)
-        || block.has_tag(&BlockTag::DOORS)
+    state.is_liquid_container() || state.get_block().has_tag(&BlockTag::WASHED_AWAY_BY_FLUIDS)
 }
 
 /// Vanilla equivalent: `FlowingFluid.canHoldSpecificFluid(BlockGetter, BlockPos, BlockState, Fluid)`.

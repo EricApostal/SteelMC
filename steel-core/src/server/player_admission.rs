@@ -307,6 +307,13 @@ impl Server {
         self.broadcast_player_join_message(&player, previous_name.as_deref());
         if player.mark_joined_world() {
             player.send_inventory_to_remote();
+            // Vanilla `PlayerList.placeNewPlayer`: the book is sent once the
+            // player's saved data has been applied.
+            player.send_initial_recipe_book();
+            // Vanilla `PlayerList.placeNewPlayer`: every tracked counter is marked
+            // dirty so the first `RequestStats` (statistics screen) sends the whole
+            // saved state instead of only the counters touched after joining.
+            player.mark_all_stats_dirty();
         }
         self.schedule_domain_restores(&player, residence_token, restores);
         if player.connection.closed() {

@@ -2,11 +2,15 @@
 
 use std::sync::Arc;
 
+use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_protocol::packets::game::SoundSource;
+use steel_registry::particle_type::ParticleData;
 use steel_registry::vanilla_entity_type_tags::EntityTypeTag;
-use steel_registry::{REGISTRY, TaggedRegistryExt, sound_events, vanilla_items};
+use steel_registry::{
+    REGISTRY, TaggedRegistryExt, sound_events, vanilla_items, vanilla_particle_types,
+};
 use steel_utils::Identifier;
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::InteractionHand;
@@ -352,6 +356,26 @@ pub trait AgeableMob: Mob {
             return;
         }
 
+        let Some(world) = self.level() else {
+            return;
+        };
+
+        // Vanilla `AgeableMob.aiStep`: a forced-growth heart puff every fourth tick.
+        let forced_age_timer = self.forced_age_timer();
+        if forced_age_timer > 0 {
+            if forced_age_timer % 4 == 0 {
+                let (x, y, z) = self.random_position(1.0, 0.0, 1.0);
+                world.send_particles(
+                    ParticleData::simple(&vanilla_particle_types::HAPPY_VILLAGER),
+                    DVec3::new(x, y + 0.5, z),
+                    1,
+                    DVec3::ZERO,
+                    0.0,
+                );
+            }
+            self.set_forced_age_timer(forced_age_timer - 1);
+        }
+
         let age = self.get_age();
         if self.can_age_up() {
             self.set_age(age + 1);
@@ -359,10 +383,42 @@ pub trait AgeableMob: Mob {
             self.set_age(age - 1);
         }
 
+        // Vanilla `AgeableMob.makeAgeLockedParticle`.
         let age_lock_particle_timer = self.age_lock_particle_timer();
         if age_lock_particle_timer > 0 {
+            if age_lock_particle_timer % 2 == 0 {
+                let is_age_locked = self.is_age_locked();
+                let y_particle_offset = if is_age_locked { 0.2 } else { 0.0 };
+                let (x, y, z) = self.random_position(1.0, 0.2, 1.0);
+                let height = f64::from(self.base().dimensions().height);
+                world.send_particles(
+                    ParticleData::simple(if is_age_locked {
+                        &vanilla_particle_types::PAUSE_MOB_GROWTH
+                    } else {
+                        &vanilla_particle_types::RESET_MOB_GROWTH
+                    }),
+                    DVec3::new(x, y + height + y_particle_offset, z),
+                    1,
+                    DVec3::ZERO,
+                    0.0,
+                );
+            }
             self.set_age_lock_particle_timer(age_lock_particle_timer - 1);
         }
+    }
+
+    /// Vanilla `Entity.getRandomX`/`getRandomY`/`getRandomZ` for the given spreads.
+    fn random_position(&self, x_spread: f64, y_spread: f64, z_spread: f64) -> (f64, f64, f64) {
+        let dimensions = self.base().dimensions();
+        let position = self.position();
+        let width = f64::from(dimensions.width);
+        let height = f64::from(dimensions.height);
+        let random = || rand::random::<f64>() * 2.0 - 1.0;
+        (
+            position.x + width * random() * x_spread,
+            position.y + height * random() * y_spread,
+            position.z + width * random() * z_spread,
+        )
     }
 
     /// Saves vanilla ageable mob fields.

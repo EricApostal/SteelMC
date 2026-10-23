@@ -74,7 +74,8 @@ impl Goal for AngryAtPlayerTargetGoal {
 
     fn start(&mut self, mob: &dyn PathfinderMob) {
         let _ = mob.set_target(self.target.as_ref());
-        self.target_goal.set_target_mob(self.target.clone());
+        // Vanilla `NearestAttackableTargetGoal.start` sets the target and delegates to
+        // `TargetGoal.start`; this goal never fills `TargetGoal.targetMob`.
         self.target_goal.start();
     }
 

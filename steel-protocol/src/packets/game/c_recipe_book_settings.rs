@@ -94,7 +94,7 @@ impl RecipeBookSettings {
     }
 }
 
-/// Synchronises the player's recipe book settings.
+/// Synchronizes the player's recipe book settings.
 ///
 /// Matches vanilla's `ClientboundRecipeBookSettingsPacket`.
 #[derive(ClientPacket, WriteTo, Clone, Copy, Debug)]

@@ -1,8 +1,3 @@
-#![expect(
-    clippy::unwrap_used,
-    reason = "build script must fail immediately on invalid extracted slot source data"
-)]
-
 //! Build script for the vanilla `slot_source` registry.
 //!
 //! Vanilla ships no `slot_source` entries in the built-in data pack, so this

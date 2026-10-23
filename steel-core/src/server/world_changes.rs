@@ -223,28 +223,41 @@ impl Server {
                     return;
                 }
             };
-        if !is_allowed_to_enter_portal(&source_world, &target_world)
-            || !self.can_teleport_between_worlds(entity.as_ref(), &source_world, &target_world)
+        // Vanilla `ServerPlayer.findRespawnPositionAndUseSpawnBlock` resolves the personal
+        // bed/anchor config first; the shared respawn world only backs the fallback.
+        let personal = entity.as_player().and_then(|player| {
+            player.respawn_config().and_then(|config| {
+                self.worlds
+                    .get(config.respawn_data.dimension())
+                    .filter(|world| world.domain() == source_world.domain())
+                    .cloned()
+                    .map(|world| (world, config))
+            })
+        });
+        // Vanilla gates the transition on its resolved destination world, not the fallback.
+        let gate_world = personal
+            .as_ref()
+            .map_or(&target_world, |(personal_world, _)| personal_world);
+        if !is_allowed_to_enter_portal(&source_world, gate_world)
+            || !self.can_teleport_between_worlds(entity.as_ref(), &source_world, gate_world)
         {
             clear_pending_world_change(&entity, pending_token);
             return;
         }
-        match EndPortalTeleportJob::returning_player(
-            Arc::clone(&entity),
-            source_world,
-            target_world,
-            respawn_data,
-            pending_token,
-        ) {
-            Ok(job) => {
-                self.jobs
-                    .poll_now_or_spawn(Arc::downgrade(self), tick_count, runs_normally, job);
-            }
-            Err(error) => {
-                clear_pending_world_change(&entity, pending_token);
-                log::error!("Failed to schedule End portal player return: {error}");
-            }
-        }
+
+        self.jobs.poll_now_or_spawn(
+            Arc::downgrade(self),
+            tick_count,
+            runs_normally,
+            EndPortalTeleportJob::returning_player(
+                Arc::clone(&entity),
+                source_world,
+                target_world,
+                respawn_data,
+                personal,
+                pending_token,
+            ),
+        );
     }
 
     fn queue_end_portal_entity_return_change(

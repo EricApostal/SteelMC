@@ -2,11 +2,11 @@ use std::ptr;
 
 use super::{
     Arc, BLOCK_BEHAVIORS, BlockLootContext, BlockPos, BlockStateExt, BlockStateId, CLevelEvent,
-    CLevelParticles, CSound, ChunkPos, ConnectionProtocol, DVec3, EncodedPacket, Entity,
-    GLOBAL_SOUND_EVENTS, GameEventContext, ItemStack, LevelReader, LootContext, NetworkConnection,
-    ParticleData, Player, REGISTRY, RandomizationType, RegistryExt, SectionPos, SoundEventRef,
-    SoundSource, UpdateFlags, World, WorldEntityManager, entity_loot_ref, fluid_state_to_block,
-    level_events, vanilla_blocks, vanilla_game_events,
+    CLevelParticles, CSound, ConnectionProtocol, DVec3, EncodedPacket, Entity, GLOBAL_SOUND_EVENTS,
+    GameEventContext, ItemStack, LevelReader, LootContext, NetworkConnection, ParticleData, Player,
+    REGISTRY, RandomizationType, RegistryExt, SoundEventRef, SoundSource, UpdateFlags, World,
+    WorldEntityManager, entity_loot_ref, fluid_state_to_block, level_events, vanilla_blocks,
+    vanilla_game_events,
 };
 use crate::entity::loot_equipment;
 use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
@@ -41,6 +41,42 @@ fn sound_packet_for_player(
         player_pos + delta / distance_squared.sqrt() * 2.0,
         min_volume,
     ))
+}
+
+/// Builds the `ClientboundLevelParticlesPacket` payload for one distribution.
+///
+/// Field order and per-axis speed handling match Vanilla
+/// `ServerLevel.sendParticles`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one builder for Vanilla's sendParticles parameter list"
+)]
+fn particle_packet(
+    particle: ParticleData,
+    override_limiter: bool,
+    always_show: bool,
+    position: DVec3,
+    count: i32,
+    spread: DVec3,
+    speeds: DVec3,
+    randomization_type: RandomizationType,
+) -> CLevelParticles {
+    CLevelParticles {
+        override_limiter,
+        always_show,
+        x: position.x,
+        y: position.y,
+        z: position.z,
+        x_dist: spread.x as f32,
+        y_dist: spread.y as f32,
+        z_dist: spread.z as f32,
+        x_max_speed: speeds.x as f32,
+        y_max_speed: speeds.y as f32,
+        z_max_speed: speeds.z as f32,
+        count,
+        particle,
+        randomization_type,
+    }
 }
 
 impl World {
@@ -112,22 +148,70 @@ impl World {
         spread: DVec3,
         speed: f64,
     ) -> i32 {
-        let packet = CLevelParticles {
+        self.send_particles_with_velocity(
+            particle,
             override_limiter,
             always_show,
-            x: position.x,
-            y: position.y,
-            z: position.z,
-            x_dist: spread.x as f32,
-            y_dist: spread.y as f32,
-            z_dist: spread.z as f32,
-            x_max_speed: speed as f32,
-            y_max_speed: speed as f32,
-            z_max_speed: speed as f32,
+            position,
             count,
+            spread,
+            DVec3::splat(speed),
+            RandomizationType::default(),
+        )
+    }
+
+    /// Sends a particle distribution with a non-default client randomization
+    /// type, matching Vanilla's `sendParticles(..., speed, randomizationType)`
+    /// overload.
+    pub fn send_particles_with_randomization(
+        &self,
+        particle: ParticleData,
+        position: DVec3,
+        count: i32,
+        spread: DVec3,
+        speed: f64,
+        randomization_type: RandomizationType,
+    ) -> i32 {
+        self.send_particles_with_velocity(
             particle,
-            randomization_type: RandomizationType::default(),
-        };
+            false,
+            false,
+            position,
+            count,
+            spread,
+            DVec3::splat(speed),
+            randomization_type,
+        )
+    }
+
+    /// Sends a particle distribution with per-axis maximum speeds, matching
+    /// Vanilla's `sendParticles(..., xSpeed, ySpeed, zSpeed, randomizationType)`
+    /// overload.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors Vanilla ServerLevel.sendParticles"
+    )]
+    pub fn send_particles_with_velocity(
+        &self,
+        particle: ParticleData,
+        override_limiter: bool,
+        always_show: bool,
+        position: DVec3,
+        count: i32,
+        spread: DVec3,
+        speeds: DVec3,
+        randomization_type: RandomizationType,
+    ) -> i32 {
+        let packet = particle_packet(
+            particle,
+            override_limiter,
+            always_show,
+            position,
+            count,
+            spread,
+            speeds,
+            randomization_type,
+        );
         let Ok(encoded) =
             EncodedPacket::from_bare(packet, self.compression, ConnectionProtocol::Play)
         else {
@@ -176,22 +260,16 @@ impl World {
             return false;
         }
 
-        let packet = CLevelParticles {
+        let packet = particle_packet(
+            particle,
             override_limiter,
             always_show,
-            x: position.x,
-            y: position.y,
-            z: position.z,
-            x_dist: spread.x as f32,
-            y_dist: spread.y as f32,
-            z_dist: spread.z as f32,
-            x_max_speed: speed as f32,
-            y_max_speed: speed as f32,
-            z_max_speed: speed as f32,
+            position,
             count,
-            particle,
-            randomization_type: RandomizationType::default(),
-        };
+            spread,
+            DVec3::splat(speed),
+            RandomizationType::default(),
+        );
         let Ok(encoded) =
             EncodedPacket::from_bare(packet, self.compression, ConnectionProtocol::Play)
         else {
@@ -440,6 +518,17 @@ impl World {
         if let Some(radius) = context.explosion_radius() {
             ctx = ctx.with_explosion(radius);
         }
+        // Vanilla loot params always carry the level, which
+        // `minecraft:location_check` resolves its predicate against.
+        let level = crate::entity::loot::loot_level_view(
+            context.world(),
+            (
+                f64::from(context.pos().x()),
+                f64::from(context.pos().y()),
+                f64::from(context.pos().z()),
+            ),
+        );
+        ctx = ctx.with_location(&level);
 
         loot_table.get_random_items(&mut ctx)
     }
@@ -510,11 +599,6 @@ impl World {
         pitch: f32,
         exclude: Option<i32>,
     ) {
-        let chunk = ChunkPos::new(
-            SectionPos::block_to_section_coord(pos.x.floor() as i32),
-            SectionPos::block_to_section_coord(pos.z.floor() as i32),
-        );
-
         // Generate a random seed for sound variations
         let seed = rand::random::<i64>();
         let packet = CSound::new_holder(sound.clone(), source, pos, volume, pitch, seed);
@@ -525,24 +609,25 @@ impl World {
             return;
         };
 
-        // Get players tracking this chunk, then apply vanilla's strict range check.
-        for entity_id in self.player_area_map.get_tracking_players(chunk) {
+        // Vanilla `ServerLevel.playSeededSound` → `PlayerList.broadcast`: every player in this
+        // world except the excluded one, within the sound's volume-scaled range.
+        self.players.iter_players(|_, player| {
+            let entity_id = player.id();
             // Skip excluded player (they hear the sound client-side)
             if exclude == Some(entity_id) {
-                continue;
+                return true;
             }
-            if let Some(player) = self.players.get_by_entity_id(entity_id) {
-                let player_pos = player.position();
-                let dx = player_pos.x - pos.x;
-                let dy = player_pos.y - pos.y;
-                let dz = player_pos.z - pos.z;
-                let dist_sq = dx * dx + dy * dy + dz * dz;
+            let player_pos = player.position();
+            let dx = player_pos.x - pos.x;
+            let dy = player_pos.y - pos.y;
+            let dz = player_pos.z - pos.z;
+            let dist_sq = dx * dx + dy * dy + dz * dz;
 
-                if sound_is_within_range(sound, volume, dist_sq) {
-                    player.connection.send_encoded(encoded.clone());
-                }
+            if sound_is_within_range(sound, volume, dist_sq) {
+                player.connection.send_encoded(encoded.clone());
             }
-        }
+            true
+        });
     }
 
     /// Plays a sound for explicit player targets using vanilla's range fallback.
@@ -626,8 +711,11 @@ impl World {
 #[cfg(test)]
 mod tests {
     use glam::DVec3;
+    use steel_protocol::packets::game::CLevelParticles;
+    use steel_registry::init_vanilla_registry;
+    use steel_registry::vanilla_particle_types;
 
-    use super::sound_packet_for_player;
+    use super::{particle_packet, sound_packet_for_player};
 
     #[test]
     fn sound_range_fallback_matches_vanilla_boundary_and_relocation() {
@@ -643,5 +731,32 @@ mod tests {
             sound_packet_for_player(DVec3::ZERO, DVec3::new(17.0, 0.0, 0.0), 256.0, 1.0, 0.25),
             Some((DVec3::new(15.0, 0.0, 0.0), 0.25))
         );
+    }
+
+    #[test]
+    fn particle_packet_preserves_per_axis_speeds_and_flags() {
+        init_vanilla_registry();
+        let packet: CLevelParticles = particle_packet(
+            steel_registry::particle_type::ParticleData::simple(&vanilla_particle_types::SMOKE),
+            true,
+            true,
+            DVec3::new(1.0, 2.0, 3.0),
+            4,
+            DVec3::new(0.5, 0.0, 0.5),
+            DVec3::new(0.0, 0.2, 0.0),
+            super::RandomizationType::AlternativeWithSpeed,
+        );
+        assert!(packet.override_limiter);
+        assert!(packet.always_show);
+        assert_eq!((packet.x, packet.y, packet.z), (1.0, 2.0, 3.0));
+        assert_eq!(
+            (packet.x_dist, packet.y_dist, packet.z_dist),
+            (0.5, 0.0, 0.5)
+        );
+        assert_eq!(
+            (packet.x_max_speed, packet.y_max_speed, packet.z_max_speed),
+            (0.0, 0.2, 0.0)
+        );
+        assert_eq!(packet.count, 4);
     }
 }

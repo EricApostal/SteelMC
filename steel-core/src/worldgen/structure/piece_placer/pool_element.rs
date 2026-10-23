@@ -5,10 +5,8 @@ use steel_registry::{Registry, RegistryExt};
 use steel_utils::random::worldgen_random::WorldgenRandom;
 use steel_utils::{BlockPos, BoundingBox, Identifier, Rotation};
 
-use crate::worldgen::feature::FeatureDecorationRunner;
-use crate::worldgen::region::WorldGenRegion;
 use crate::worldgen::template::{
-    StructurePlaceSettings, StructureProcessorRandom, StructureTemplate,
+    StructurePlaceSettings, StructureProcessorRandom, StructureTemplate, TemplateLevelAccess,
 };
 use steel_worldgen::structure::{StructureBlockIgnore, StructureMirror};
 
@@ -19,8 +17,8 @@ impl StructurePiecePlacer {
         clippy::too_many_arguments,
         reason = "mirrors StructurePoolElement.place inputs"
     )]
-    pub(super) fn place_pool_element(
-        region: &mut WorldGenRegion<'_>,
+    pub(super) fn place_pool_element<L: TemplateLevelAccess>(
+        region: &mut L,
         registry: &Registry,
         element: &PoolElement,
         position: BlockPos,
@@ -72,8 +70,12 @@ impl StructurePiecePlacer {
             ),
             PoolElement::Empty => true,
             PoolElement::Feature { feature, .. } => {
-                FeatureDecorationRunner::place_structure_pool_feature(
-                    region,
+                // GAP(feature-pool-element-live-level): the placed-feature pipeline
+                // is still generation-only, so a live level falls back to the
+                // `TemplateLevelAccess` default (warn + `false`) and the jigsaw
+                // caller skips the piece. Generalizing the feature runner over
+                // `TemplateLevelAccess` closes this gap.
+                region.place_structure_pool_feature(
                     registry,
                     random,
                     position,
@@ -107,8 +109,8 @@ impl StructurePiecePlacer {
         clippy::too_many_arguments,
         reason = "mirrors SinglePoolElement.place and StructureTemplate.placeInWorld"
     )]
-    fn place_single_pool_element(
-        region: &mut WorldGenRegion<'_>,
+    fn place_single_pool_element<L: TemplateLevelAccess>(
+        region: &mut L,
         registry: &Registry,
         location: &Identifier,
         processors: &ProcessorList,

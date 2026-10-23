@@ -541,5 +541,11 @@ impl NeutralMob for IronGolemEntity {
     }
 }
 
+pub mod copper_golem;
+pub mod snow_golem;
+
+pub use copper_golem::CopperGolemEntity;
+pub use snow_golem::SnowGolemEntity;
+
 #[cfg(test)]
 mod tests;

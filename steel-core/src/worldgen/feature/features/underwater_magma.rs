@@ -23,12 +23,15 @@ impl FeatureDecorationRunner {
                 if random.next_f32() < config.placement_probability_per_valid_position
                     && Self::underwater_magma_valid_placement(region, pos)
                 {
-                    let did_place = region.set_block_state(
+                    // Vanilla maps each surviving position to `1` after writing the
+                    // magma block, ignoring `setBlock`'s result, so a valid position
+                    // always counts towards the returned success value.
+                    let _ = region.set_block_state(
                         pos,
                         vanilla_blocks::MAGMA_BLOCK.default_state(),
                         UpdateFlags::UPDATE_CLIENTS,
                     );
-                    placed |= did_place;
+                    placed = true;
                 }
             },
         );
@@ -63,17 +66,13 @@ impl FeatureDecorationRunner {
     fn underwater_magma_valid_placement(region: &WorldGenRegion<'_>, pos: BlockPos) -> bool {
         let state = region.block_state(pos);
         if Self::underwater_magma_is_water_or_air(state)
-            || Self::underwater_magma_visible_from_outside(region, pos.below(), Direction::Up)
+            || Self::underwater_magma_visible_from_outside(region, pos.below())
         {
             return false;
         }
 
         for direction in Self::VANILLA_HORIZONTAL_DIRECTIONS {
-            if Self::underwater_magma_visible_from_outside(
-                region,
-                pos.relative(direction),
-                direction.opposite(),
-            ) {
+            if Self::underwater_magma_visible_from_outside(region, pos.relative(direction)) {
                 return false;
             }
         }
@@ -85,14 +84,14 @@ impl FeatureDecorationRunner {
         state.get_block() == &vanilla_blocks::WATER || state.is_air()
     }
 
-    fn underwater_magma_visible_from_outside(
-        region: &WorldGenRegion<'_>,
-        pos: BlockPos,
-        covered_direction: Direction,
-    ) -> bool {
-        let state = region.block_state(pos);
-        let face_occlusion_shape = state.get_occlusion_shape();
-        face_occlusion_shape.is_empty()
-            || !shapes::is_face_full(face_occlusion_shape, covered_direction)
+    /// Vanilla `UnderwaterMagmaFeature.isVisibleFromOutside`.
+    ///
+    /// Vanilla reads the neighbour's face occlusion shape for the covered
+    /// direction and then tests it with `Block.isShapeFullBlock`, so the whole
+    /// occlusion shape has to be a full block — a partial shape is always
+    /// considered visible.
+    fn underwater_magma_visible_from_outside(region: &WorldGenRegion<'_>, pos: BlockPos) -> bool {
+        let face_occlusion_shape = region.block_state(pos).get_occlusion_shape();
+        !shapes::is_shape_full_block(face_occlusion_shape)
     }
 }

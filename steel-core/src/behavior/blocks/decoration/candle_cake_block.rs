@@ -11,7 +11,7 @@ use steel_registry::{
     entity_data::ParticleData,
     item_stack::ItemStack,
     items::item::BlockHitResult,
-    sound_events, vanilla_blocks, vanilla_items, vanilla_particle_types,
+    sound_events, vanilla_blocks, vanilla_game_events, vanilla_items, vanilla_particle_types,
 };
 use steel_utils::{
     BlockPos, BlockStateId, Direction,
@@ -26,12 +26,15 @@ use crate::{
     block_entity::SharedBlockEntity,
     entity::{Entity, projectile::Projectile},
     player::Player,
-    world::{ClipHitResult, LevelReader, ScheduledTickAccess, World},
+    world::{ClipHitResult, LevelReader, ScheduledTickAccess, World, game_event::GameEventContext},
 };
 
-/// Behavior for Candle Cakes
-/// TODO:
-/// - [ ] onExplosion
+/// Behavior for candle cakes (vanilla `CandleCakeBlock`).
+///
+/// A cake with a candle on top: right-clicking an unlit cake with flint and steel
+/// is left to those items, clicking the candle while lit with an empty hand
+/// extinguishes it, and any other empty-hand use eats a slice. Explosions that
+/// can trigger blocks extinguish a lit cake before the block is destroyed.
 #[block_behavior]
 pub struct CandleCakeBlock {
     block: BlockRef,
@@ -45,6 +48,32 @@ impl CandleCakeBlock {
     #[must_use]
     pub const fn new(block: BlockRef) -> Self {
         Self { block }
+    }
+
+    /// Vanilla `AbstractCandleBlock.extinguish`: unlight the cake, emit the smoke
+    /// particles at its particle offsets, play the extinguish sound and fire the
+    /// block-change game event.
+    fn extinguish(world: &World, state: BlockStateId, pos: BlockPos, player: Option<&Player>) {
+        world.set_block(pos, state.set_value(LIT, false), UpdateFlags::UPDATE_ALL);
+        for particle_pos in PARTICLE_OFFSETS {
+            world.send_particles(
+                ParticleData::simple(&vanilla_particle_types::SMOKE),
+                DVec3::new(
+                    f64::from(pos.x()) + particle_pos.x,
+                    f64::from(pos.y()) + particle_pos.y,
+                    f64::from(pos.z()) + particle_pos.z,
+                ),
+                1,
+                DVec3::new(0.0, 0.1, 0.0),
+                1.0,
+            );
+        }
+        world.play_block_sound(&sound_events::BLOCK_CANDLE_EXTINGUISH, pos, 1.0, 1.0, None);
+        world.game_event(
+            &vanilla_game_events::BLOCK_CHANGE,
+            pos,
+            &GameEventContext::new(player, Some(state)),
+        );
     }
 }
 
@@ -84,27 +113,7 @@ impl BlockBehavior for CandleCakeBlock {
             && is_empty
             && state.get_value(LIT)
         {
-            world.set_block(pos, state.set_value(LIT, false), UpdateFlags::UPDATE_ALL);
-            for particle_pos in PARTICLE_OFFSETS {
-                world.send_particles(
-                    ParticleData::simple(&vanilla_particle_types::SMOKE),
-                    DVec3::new(
-                        f64::from(pos.x()) + particle_pos.x,
-                        f64::from(pos.y()) + particle_pos.y,
-                        f64::from(pos.z()) + particle_pos.z,
-                    ),
-                    1,
-                    DVec3::new(0.0, 0.1, 0.0),
-                    1.0,
-                );
-            }
-            world.play_block_sound(
-                &sound_events::BLOCK_CANDLE_EXTINGUISH,
-                pos,
-                1.0,
-                1.0,
-                Some(player.id()),
-            );
+            Self::extinguish(world, state, pos, Some(player));
             return InteractionResult::Success;
         }
         InteractionResult::TryEmptyHandInteraction
@@ -182,5 +191,26 @@ impl BlockBehavior for CandleCakeBlock {
 
     fn has_analog_output_signal(&self, _state: BlockStateId) -> bool {
         true
+    }
+
+    /// Vanilla `AbstractCandleBlock.onExplosionHit`: extinguish before the
+    /// explosion destroys the block.
+    ///
+    /// Uses the same `TriggerBlock` check as `default_on_explosion_hit`;
+    /// `ExplosionInfo::can_trigger_blocks` is private to `world::explosion`.
+    fn on_explosion_hit(
+        &self,
+        state: BlockStateId,
+        world: &Arc<World>,
+        pos: BlockPos,
+        explosion: &crate::world::explosion::ExplosionInfo<'_>,
+        on_drop: &mut dyn FnMut(ItemStack, BlockPos),
+    ) {
+        if explosion.block_interaction == crate::world::explosion::BlockInteraction::TriggerBlock
+            && state.get_value(LIT)
+        {
+            Self::extinguish(world, state, pos, None);
+        }
+        crate::world::explosion::default_on_explosion_hit(state, world, pos, explosion, on_drop);
     }
 }

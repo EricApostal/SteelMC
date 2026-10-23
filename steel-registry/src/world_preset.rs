@@ -22,8 +22,8 @@ pub enum WorldPresetGenerator {
 
 /// Biome source referenced by a noise chunk generator.
 ///
-/// Vanilla also serialises inline multi-noise parameter lists; every built-in world preset
-/// uses one of the three forms modelled here.
+/// Vanilla also serializes inline multi-noise parameter lists; every built-in world preset
+/// uses one of the three forms modeled here.
 #[derive(Debug)]
 pub enum PresetBiomeSource {
     /// Vanilla `MultiNoiseBiomeSource` referencing a named `multi_noise` preset.

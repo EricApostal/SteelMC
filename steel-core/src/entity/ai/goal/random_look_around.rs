@@ -2,7 +2,7 @@ use std::f64::consts::TAU;
 
 use glam::DVec3;
 
-use crate::entity::ai::control::{DEFAULT_LOOK_X_MAX_ROT_ANGLE, DEFAULT_LOOK_Y_MAX_ROT_SPEED};
+use crate::entity::ai::control::DEFAULT_LOOK_Y_MAX_ROT_SPEED;
 use crate::entity::ai::goal::selector::{Goal, GoalControls};
 use crate::entity::{PathfinderMob, SharedEntity};
 
@@ -65,7 +65,7 @@ impl Goal for RandomLookAroundGoal {
                 position.z + self.rel_z,
             ),
             DEFAULT_LOOK_Y_MAX_ROT_SPEED,
-            DEFAULT_LOOK_X_MAX_ROT_ANGLE,
+            mob.max_head_x_rot(),
         );
     }
 }

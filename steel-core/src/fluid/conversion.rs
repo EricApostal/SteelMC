@@ -12,7 +12,7 @@ use crate::fluid::collision::{
 use crate::fluid::spread_context::SpreadContext;
 use crate::world::World;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
-use steel_registry::blocks::properties::{BlockStateProperties, Direction};
+use steel_registry::blocks::properties::Direction;
 use steel_registry::fluid::{FluidRef, FluidState};
 use steel_utils::{BlockPos, BlockStateId};
 
@@ -29,12 +29,7 @@ pub fn get_new_liquid(
     let mut max_incoming_amount = 0u8;
     let mut source_count = 0u8;
 
-    for direction in [
-        Direction::North,
-        Direction::South,
-        Direction::East,
-        Direction::West,
-    ] {
+    for direction in Direction::HORIZONTAL {
         let neighbor_pos = direction.relative(pos);
         let neighbor_state = world.get_block_state(neighbor_pos);
         let neighbor_fluid = neighbor_state.get_fluid_state();
@@ -152,12 +147,7 @@ fn get_slope_distance(
     let mut min_distance: u16 = 1000;
 
     // Check all horizontal directions except the one we came from
-    for direction in [
-        Direction::North,
-        Direction::South,
-        Direction::East,
-        Direction::West,
-    ] {
+    for direction in Direction::HORIZONTAL {
         // Skip the direction we came from
         if let Some(from) = from_direction
             && direction == from.opposite()
@@ -209,10 +199,15 @@ fn get_slope_distance(
 
 /// Gets the spread map for a fluid.
 ///
-/// Returns a list of `(Direction, FluidState)` pairs to spread to, filtered to
-/// the directions with the shortest slope distance. For each candidate direction,
-/// the target's existing `FluidState.canBeReplacedWith()` is checked before
-/// adding it to the result.
+/// Returns a list of `(Direction, FluidState)` pairs to spread to. Vanilla keeps
+/// a running `lowest` slope distance while iterating the horizontal directions:
+/// a strictly shorter distance clears the result, an equal-or-shorter distance
+/// inserts when the target's existing fluid allows replacement, and `lowest` is
+/// updated for every accepted candidate even when nothing is inserted.
+///
+/// The result is ordered by vanilla `Direction` ordinal (north, south, west, east),
+/// matching the `EnumMap` vanilla builds, because `spreadToSides` iterates it to
+/// place and schedule the new fluid.
 ///
 /// Vanilla equivalent: `FlowingFluid.getSpread()`.
 #[must_use]
@@ -224,18 +219,14 @@ pub fn get_spread(
     drop_off: u8,
     slope_find_distance: u8,
 ) -> Vec<(Direction, FluidState)> {
-    let mut candidates: Vec<(Direction, FluidState, FluidState, u16)> = Vec::new();
+    let mut result: Vec<(Direction, FluidState)> = Vec::new();
+    let mut lowest: u16 = 1000;
     // Lazily initialized on first use, matching vanilla's SpreadContext init.
     // Shared across all directions so cached block states and hole checks are
     // reused, matching vanilla's single-context-per-getSpread() behavior.
     let mut ctx: Option<SpreadContext<'_>> = None;
 
-    for direction in [
-        Direction::North,
-        Direction::South,
-        Direction::East,
-        Direction::West,
-    ] {
+    for direction in Direction::HORIZONTAL {
         let neighbor = direction.relative(pos);
         let neighbor_state = match &mut ctx {
             Some(ctx) => ctx.get_block_state(neighbor),
@@ -255,23 +246,9 @@ pub fn get_spread(
         let new_fluid = get_new_liquid(world, neighbor, neighbor_state, fluid_id, drop_off);
 
         // Vanilla: canHoldSpecificFluid check after getNewLiquid.
+        // Waterloggable blocks only accept source water (fluid == Fluids::WATER),
+        // which `can_hold_specific_fluid` already enforces.
         if !can_hold_specific_fluid(neighbor_state, new_fluid.fluid_id) {
-            continue;
-        }
-
-        // Vanilla parity: canHoldSpecificFluid passes newFluid.getType() to canPlaceLiquid.
-        // Waterloggable blocks only accept source water (fluid == Fluids.WATER), so flowing
-        // water is rejected. Only allow waterloggable targets when the computed fluid is source.
-        if neighbor_state
-            .try_get_value(&BlockStateProperties::WATERLOGGED)
-            .is_some()
-            && !new_fluid.is_source()
-        {
-            continue;
-        }
-
-        // Skip if no valid fluid would be placed.
-        if new_fluid.is_empty() {
             continue;
         }
 
@@ -294,42 +271,30 @@ pub fn get_spread(
             1000
         };
 
-        // Vanilla inline: if (distance < lowest) result.clear(); if (distance <= lowest) ...
-        candidates.push((direction, new_fluid, neighbor_fluid, distance));
-    }
+        if distance < lowest {
+            result.clear();
+        }
 
-    if candidates.is_empty() {
-        return Vec::new();
-    }
-
-    // Find the minimum slope distance
-    let min_distance = candidates
-        .iter()
-        .map(|(_, _, _, distance)| *distance)
-        .min()
-        .unwrap_or(1000);
-
-    // Return only directions with the minimum distance AND where the existing
-    // fluid at the target allows replacement.
-    candidates
-        .into_iter()
-        .filter(|(direction, new_fluid, existing_fluid, distance)| {
-            if *distance != min_distance {
-                return false;
-            }
-            let neighbor = direction.relative(pos);
-
-            let existing_behavior = FLUID_BEHAVIORS.get_behavior(existing_fluid.fluid_id);
-            existing_behavior.can_be_replaced_with(
-                *existing_fluid,
+        if distance <= lowest {
+            let existing_behavior = FLUID_BEHAVIORS.get_behavior(neighbor_fluid.fluid_id);
+            if existing_behavior.can_be_replaced_with(
+                neighbor_fluid,
                 world,
                 neighbor,
                 new_fluid.fluid_id,
-                *direction,
-            )
-        })
-        .map(|(direction, fluid, _, _)| (direction, fluid))
-        .collect()
+                direction,
+            ) {
+                result.push((direction, new_fluid));
+            }
+        }
+
+        lowest = distance;
+    }
+
+    // Vanilla stores the result in an `EnumMap<Direction, FluidState>`, whose
+    // iteration order is the `Direction` ordinal.
+    result.sort_by_key(|(direction, _)| direction.get_3d_data_value());
+    result
 }
 
 #[cfg(test)]

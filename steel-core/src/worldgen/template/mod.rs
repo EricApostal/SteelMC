@@ -45,7 +45,6 @@ use crate::entity::{
     DEFAULT_MAX_AIR_SUPPLY, ENTITIES, EntityBaseSaveData, EntityFireFreezeState, EntityLoadRequest,
     MAX_ENTITY_TAGS,
 };
-use crate::worldgen::region::WorldGenRegion;
 use steel_worldgen::state_resolver::WorldgenStateResolver;
 use steel_worldgen::structure::{StructureBlockIgnore, StructureMirror};
 
@@ -122,10 +121,13 @@ pub(crate) struct StructurePlaceSettings<'a> {
     pub(crate) liquid_settings: LiquidSettingsData,
 }
 
+mod level_access;
 mod loading;
 mod placement;
 mod processors;
 mod state_transforms;
+
+pub(crate) use level_access::{LiveLevel, TemplateLevelAccess};
 
 #[cfg(test)]
 mod tests;

@@ -10,6 +10,7 @@ use steel_protocol::packets::game::SoundSource;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
+use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entity_data::FoxEntityData;
 use steel_registry::{sound_events, vanilla_attributes, vanilla_entities, vanilla_item_tags};
 use steel_utils::locks::SyncMutex;
@@ -27,7 +28,7 @@ use crate::entity::{
     PathfinderMob, SharedEntity, SpawnGroupData,
 };
 use crate::physics::MoveResult;
-use crate::world::World;
+use crate::world::{LevelReader, World};
 
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
 const XP_REWARD: i32 = 1;
@@ -516,6 +517,22 @@ impl Animal for FoxEntity {
             && item_stack
                 .item()
                 .has_tag(&vanilla_item_tags::ItemTag::FOX_FOOD)
+    }
+
+    /// Vanilla `Fox.checkFoxSpawnRules`.
+    fn check_animal_spawn_rules(
+        level: &dyn LevelReader,
+        _spawn_reason: EntitySpawnReason,
+        pos: BlockPos,
+    ) -> bool
+    where
+        Self: Sized,
+    {
+        level
+            .get_block_state(pos.below())
+            .get_block()
+            .has_tag(&BlockTag::FOXES_SPAWNABLE_ON)
+            && Self::is_bright_enough_to_spawn(level, pos)
     }
 }
 

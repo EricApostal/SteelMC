@@ -9,8 +9,8 @@
 
 use crate::advancement::criterion::{CriterionTrigger, CriterionTriggerInstance};
 use crate::advancement::predicates::{
-    AdvancementContext, Condition, DistancePredicate, HolderSet, IntBounds, LocationPredicate,
-    PlayerView, item_predicate_matches,
+    AdvancementContext, Condition, DistancePredicate, HolderSet, IntBounds, ItemPredicate,
+    LocationPredicate, PlayerView, item_predicate_matches,
 };
 use crate::advancement::triggers::{EventBase, PlayerCondition, TriggerEvent};
 use crate::item_stack::ItemStack;
@@ -45,7 +45,7 @@ pub struct InventoryChangedTriggerInstance {
     /// Vanilla `slots`.
     pub slots: InventoryChangedSlots,
     /// Vanilla `items`: each predicate must match a distinct non-empty slot.
-    pub items: &'static [crate::loot_table::ItemPredicate],
+    pub items: &'static [ItemPredicate],
 }
 
 impl InventoryChangedTriggerInstance {
@@ -156,7 +156,7 @@ pub struct RecipeCraftedTriggerInstance {
     /// Vanilla `recipes`: required recipe holder set.
     pub recipes: HolderSet,
     /// Vanilla `ingredients`: each predicate must consume a distinct used stack.
-    pub ingredients: &'static [crate::loot_table::ItemPredicate],
+    pub ingredients: &'static [ItemPredicate],
 }
 
 impl RecipeCraftedTriggerInstance {
@@ -236,7 +236,7 @@ pub struct ItemDurabilityChangedTriggerInstance {
     /// The shared `player` condition.
     pub player: PlayerCondition,
     /// Vanilla `item`.
-    pub item: Option<crate::loot_table::ItemPredicate>,
+    pub item: Option<ItemPredicate>,
     /// Vanilla `durability`: bounds on `maxDamage - newDurability`.
     pub durability: IntBounds,
     /// Vanilla `delta`: bounds on `damage - newDurability`.
@@ -335,7 +335,7 @@ pub struct PickedUpItemTriggerInstance {
     /// The shared `player` condition.
     pub player: PlayerCondition,
     /// Vanilla `item`.
-    pub item: Option<crate::loot_table::ItemPredicate>,
+    pub item: Option<ItemPredicate>,
     /// Vanilla `entity`: the picker.
     pub entity: Option<Condition>,
 }
@@ -420,7 +420,7 @@ pub struct PlayerInteractedWithEntityTriggerInstance {
     /// The shared `player` condition.
     pub player: PlayerCondition,
     /// Vanilla `item`.
-    pub item: Option<crate::loot_table::ItemPredicate>,
+    pub item: Option<ItemPredicate>,
     /// Vanilla `entity`: the interacted-with entity.
     pub entity: Option<Condition>,
 }
@@ -504,7 +504,7 @@ pub struct ItemTriggerInstance {
     /// The shared `player` condition.
     pub player: PlayerCondition,
     /// Vanilla `item`.
-    pub item: Option<crate::loot_table::ItemPredicate>,
+    pub item: Option<ItemPredicate>,
 }
 
 impl ItemTriggerInstance {
@@ -572,7 +572,7 @@ pub struct TradeTriggerInstance {
     /// Vanilla `villager`.
     pub villager: Option<Condition>,
     /// Vanilla `item`.
-    pub item: Option<crate::loot_table::ItemPredicate>,
+    pub item: Option<ItemPredicate>,
 }
 
 impl TradeTriggerInstance {
@@ -874,6 +874,57 @@ impl CriterionTrigger for ConstructBeaconTrigger {
 
 /// The static `minecraft:construct_beacon` trigger.
 pub static CONSTRUCT_BEACON: ConstructBeaconTrigger = ConstructBeaconTrigger;
+
+/// Instance of an `enchanted_item` criterion (`EnchantedItemTrigger.TriggerInstance`).
+#[derive(Debug, Default)]
+pub struct EnchantedItemTriggerInstance {
+    /// The shared `player` condition.
+    pub player: PlayerCondition,
+    /// Vanilla `item`: the enchanted stack.
+    pub item: Option<ItemPredicate>,
+    /// Vanilla `levels`: bounds on the enchanting level spent.
+    pub levels: IntBounds,
+}
+
+impl EnchantedItemTriggerInstance {
+    /// Vanilla `TriggerInstance.matches(stack, levels)`.
+    #[must_use]
+    pub fn matches(&self, event: &TriggerEvent<'_>) -> bool {
+        let TriggerEvent::EnchantedItem {
+            base,
+            item,
+            levels,
+        } = *event
+        else {
+            return false;
+        };
+        self.player.matches(&base.context(Some(item)))
+            && self
+                .item
+                .as_ref()
+                .is_none_or(|predicate| item_predicate_matches(predicate, item))
+            && self.levels.matches(levels)
+    }
+}
+
+impl CriterionTriggerInstance for EnchantedItemTriggerInstance {
+    fn test(&self, event: &TriggerEvent<'_>) -> bool {
+        self.matches(event)
+    }
+}
+
+/// `CriteriaTriggers.ENCHANTED_ITEM`.
+#[derive(Debug)]
+pub struct EnchantedItemTrigger;
+
+impl CriterionTrigger for EnchantedItemTrigger {
+    fn id(&self) -> Identifier {
+        Identifier::vanilla_static("enchanted_item")
+    }
+}
+
+/// The static `minecraft:enchanted_item` trigger.
+pub static ENCHANTED_ITEM: EnchantedItemTrigger = EnchantedItemTrigger;
 
 /// The player view used by `type_specific/player` predicates.
 pub type TriggerPlayerView<'a> = PlayerView<'a>;

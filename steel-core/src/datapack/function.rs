@@ -14,15 +14,13 @@ use std::{any::Any, collections::HashMap, sync::Arc};
 
 use rustc_hash::FxHashMap;
 use simdnbt::owned::NbtCompound;
-use steel_utils::{Identifier, locks::SyncRwLock};
+use steel_utils::{Identifier, locks::SyncRwLock, translations};
 use text_components::TextComponent;
 
 use crate::command::{
-    brigadier::CommandSyntaxError,
-    execution::{CommandExecutionContext, CommandResultCallback, CommandSource, ExecutionStop},
-    missing_argument,
+    CommandDispatcher,
+    execution::{CommandExecutionContext, CommandSource, ExecutionStop, SteelContextChain},
 };
-use crate::server::Server;
 
 use super::{
     pack::{PackError, PackType},
@@ -219,32 +217,133 @@ impl Function {
         })
     }
 
-    /// Vanilla `InstantiatedFunction.getCommand`: materialises the runnable lines.
+    /// Vanilla `CommandFunction.instantiate`: materializes the runnable lines.
+    ///
+    /// Steel's documented deviation is that a function's lines are parsed here
+    /// rather than during the reload prepare phase, so a syntax error surfaces as
+    /// an instantiation failure instead of a load-time skip.
     ///
     /// # Errors
-    /// Returns a message when a macro line references an unknown argument.
-    pub(crate) fn instantiate(&self, arguments: &FunctionArguments) -> Result<Vec<String>, String> {
+    /// Returns the vanilla instantiation reason when a macro argument is missing or
+    /// a line cannot be parsed.
+    pub(crate) fn instantiate(
+        &self,
+        arguments: Option<&FunctionArguments>,
+        dispatcher: &CommandDispatcher,
+        source: &CommandSource,
+    ) -> Result<Vec<SteelContextChain<CommandSource>>, InstantiationFailure> {
+        let mut chains = Vec::with_capacity(self.entries.len());
+        for command in self.expand_lines(arguments)? {
+            let parse = dispatcher.parse(&command, source.clone());
+            let chain = dispatcher.context_chain(parse).map_err(|error| {
+                InstantiationFailure::new(
+                    self.id.clone(),
+                    translations::COMMANDS_FUNCTION_ERROR_PARSE
+                        .message([
+                            TextComponent::plain(self.id.to_string()),
+                            TextComponent::plain(command.clone()),
+                            error.message_component(),
+                        ])
+                        .component(),
+                )
+            })?;
+            chains.push(chain);
+        }
+        Ok(chains)
+    }
+
+    /// Vanilla `MacroFunction.instantiate`'s textual half: the command lines.
+    ///
+    /// # Errors
+    /// Returns the vanilla instantiation reason when a macro argument is missing.
+    pub(crate) fn expand_lines(
+        &self,
+        arguments: Option<&FunctionArguments>,
+    ) -> Result<Vec<String>, InstantiationFailure> {
+        if !self.macro_names.is_empty() && arguments.is_none() {
+            return Err(self.missing_arguments_failure());
+        }
+
         let mut commands = Vec::with_capacity(self.entries.len());
         for entry in &self.entries {
             match entry {
                 FunctionEntry::Plain(line) => commands.push(line.clone()),
                 FunctionEntry::Macro(template) => {
+                    let arguments = arguments.expect("macro entries always require arguments");
                     let values = template
                         .variables
                         .iter()
                         .map(|name| {
                             arguments
-                                .values
                                 .get(name)
                                 .cloned()
-                                .ok_or_else(|| format!("Macro argument '{name}' is missing"))
+                                .ok_or_else(|| self.missing_argument_failure(name))
                         })
                         .collect::<Result<Vec<_>, _>>()?;
-                    commands.push(template.substitute(&values)?);
+                    commands.push(
+                        template
+                            .substitute(&values)
+                            .map_err(|reason| self.substitute_failure(&values, reason))?,
+                    );
                 }
             }
         }
         Ok(commands)
+    }
+
+    /// Vanilla `commands.function.error.missing_arguments`.
+    fn missing_arguments_failure(&self) -> InstantiationFailure {
+        InstantiationFailure::new(
+            self.id.clone(),
+            translations::COMMANDS_FUNCTION_ERROR_MISSING_ARGUMENTS
+                .message([TextComponent::plain(self.id.to_string())])
+                .component(),
+        )
+    }
+
+    /// Vanilla `commands.function.error.missing_argument`.
+    fn missing_argument_failure(&self, name: &str) -> InstantiationFailure {
+        InstantiationFailure::new(
+            self.id.clone(),
+            translations::COMMANDS_FUNCTION_ERROR_MISSING_ARGUMENT
+                .message([
+                    TextComponent::plain(self.id.to_string()),
+                    TextComponent::plain(name.to_owned()),
+                ])
+                .component(),
+        )
+    }
+
+    /// A macro line whose substitution failed (vanilla reports it per line).
+    fn substitute_failure(&self, values: &[String], reason: String) -> InstantiationFailure {
+        InstantiationFailure::new(
+            self.id.clone(),
+            translations::COMMANDS_FUNCTION_ERROR_PARSE
+                .message([
+                    TextComponent::plain(self.id.to_string()),
+                    TextComponent::plain(values.join(", ")),
+                    TextComponent::plain(reason),
+                ])
+                .component(),
+        )
+    }
+}
+
+/// Vanilla `FunctionInstantiationException`: why a function could not be built.
+#[derive(Debug, Clone)]
+pub(crate) struct InstantiationFailure {
+    /// The function being instantiated.
+    pub(crate) id: Identifier,
+    /// Vanilla's reason component, wrapped by `/function` in
+    /// `commands.function.instantiationFailure`.
+    pub(crate) reason: TextComponent,
+}
+
+impl InstantiationFailure {
+    /// Builds one failure for `id`.
+    #[must_use]
+    pub(crate) const fn new(id: Identifier, reason: TextComponent) -> Self {
+        Self { id, reason }
     }
 }
 
@@ -266,6 +365,12 @@ impl FunctionArguments {
             values.insert(name.to_string(), tag_to_substitution(tag));
         }
         Self { values }
+    }
+
+    /// Vanilla `CompoundTag.get`: one macro argument's textual substitution.
+    #[must_use]
+    pub(crate) fn get(&self, name: &str) -> Option<&String> {
+        self.values.get(name)
     }
 
     /// Vanilla `MacroFunction.instantiate` argument check: every macro name must be present.
@@ -502,10 +607,31 @@ pub(crate) struct FunctionRegistry {
 }
 
 impl FunctionRegistry {
-    /// Looks up a function by id.
+    /// Vanilla `ServerFunctionManager.get`: looks up a function by id.
     #[must_use]
     pub(crate) fn get(&self, id: &Identifier) -> Option<&Function> {
         self.functions.get(id).map(Arc::as_ref)
+    }
+
+    /// Vanilla `ServerFunctionManager.get` for callers that keep the function
+    /// alive across other function runs without holding the registry lock.
+    #[must_use]
+    pub(crate) fn get_shared(&self, id: &Identifier) -> Option<Arc<Function>> {
+        self.functions.get(id).cloned()
+    }
+
+    /// Vanilla `/function #tag`: every function the tag names, in tag order.
+    #[must_use]
+    pub(crate) fn tagged_shared(&self, tag: &Identifier) -> Vec<Arc<Function>> {
+        self.tags
+            .get(tag)
+            .map(|members| {
+                members
+                    .iter()
+                    .filter_map(|id| self.functions.get(id).cloned())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Vanilla `/function #tag`: every function the tag names, in tag order.
@@ -716,57 +842,39 @@ fn resolve_function_tag(
     visiting.pop();
 }
 
-/// Vanilla `FunctionCommand` execution: runs one instantiated function as `source`.
+/// Vanilla `ServerFunctionManager.execute`: runs one function to completion.
 ///
-/// Lines execute on the calling thread against the live dispatcher, exactly like
-/// vanilla's `BuildContexts` queue: a function is a single command invocation, so a
-/// failure is reported with the offending line.
+/// Used by the `#load`/`#tick` tags and `/schedule`, which have no enclosing
+/// command frame. `/function` instead queues its calls into the running
+/// [`CommandExecutionContext`] so nested functions share one command quota.
+///
+/// A suspension would need the server tick to resume, which vanilla also cannot
+/// do for a function run started outside a command; it is logged and abandoned.
 ///
 /// # Errors
-/// Returns the syntax error of the first line that fails to parse or run.
+/// Returns the instantiation reason when a line cannot be built.
 pub(crate) fn run_function(
-    source: &CommandSource,
+    source: &Arc<CommandSource>,
     function: &Function,
-    arguments: &FunctionArguments,
-) -> Result<i32, CommandSyntaxError> {
-    if !function.macro_names.is_empty() && !arguments.has_all_of(&function.macro_names) {
-        return Err(missing_argument("arguments"));
-    }
-    let commands = function.instantiate(arguments).map_err(|message| {
-        CommandSyntaxError::dynamic(format!("Failed to instantiate function: {message}"))
-    })?;
-
-    let server: &Arc<Server> = source.server();
-    let mut result = 0;
-    for command in commands {
-        result += run_command_line(server, source, &command)?;
-    }
-    Ok(result)
-}
-
-/// Runs one command line against `server`'s dispatcher.
-fn run_command_line(
-    server: &Arc<Server>,
-    source: &CommandSource,
-    command: &str,
-) -> Result<i32, CommandSyntaxError> {
-    let dispatcher = server.command_dispatcher();
-    let parse = dispatcher.parse(command, source.clone());
-    let chain = dispatcher.context_chain(parse)?;
-    drop(dispatcher);
+    arguments: Option<&FunctionArguments>,
+) -> Result<(), InstantiationFailure> {
+    let chains = {
+        let dispatcher = source.server().command_dispatcher();
+        function.instantiate(arguments, &dispatcher, source)?
+    };
 
     let mut execution = CommandExecutionContext::for_source(source);
-    execution.queue_initial_command(chain, source.clone(), CommandResultCallback::empty());
-    // Vanilla runs a function's lines to completion; a suspension would need the
-    // server tick to resume, which `/function` in vanilla also cannot do mid-line.
+    execution.queue_initial_function_call(chains, Arc::clone(source));
     match execution.run() {
-        ExecutionStop::Completed => Ok(1),
-        ExecutionStop::Suspended => Err(CommandSyntaxError::dynamic(
-            "Function line suspended; functions cannot suspend in Steel".to_owned(),
-        )),
-        stop => Err(CommandSyntaxError::dynamic(format!(
-            "Function line stopped early ({stop:?})"
-        ))),
+        ExecutionStop::Completed => Ok(()),
+        stop => {
+            tracing::warn!(
+                function = %function.id,
+                ?stop,
+                "function run did not complete in one tick"
+            );
+            Ok(())
+        }
     }
 }
 
@@ -854,8 +962,21 @@ mod tests {
     fn instantiate_reports_missing_macro_argument() {
         let lines = vec!["$say $(name)".to_owned()];
         let function = Function::from_lines(Identifier::vanilla_static("test"), &lines).unwrap();
-        let arguments = FunctionArguments::default();
-        assert!(function.instantiate(&arguments).is_err());
+        // Vanilla `MacroFunction.instantiate` rejects a call without arguments.
+        assert!(function.expand_lines(None).is_err());
+
+        let mut compound = NbtCompound::new();
+        compound.insert("other", "value");
+        let arguments = FunctionArguments::from_compound(&compound);
+        assert!(function.expand_lines(Some(&arguments)).is_err());
+
+        let mut compound = NbtCompound::new();
+        compound.insert("name", "world");
+        let arguments = FunctionArguments::from_compound(&compound);
+        assert_eq!(
+            function.expand_lines(Some(&arguments)).unwrap(),
+            vec!["say world".to_owned()]
+        );
     }
 
     #[test]
@@ -870,6 +991,11 @@ mod tests {
     #[test]
     fn run_function_is_reachable() {
         // Type-level check that the public entry point keeps its signature.
-        let _ = run_function as fn(&_, &Function, &FunctionArguments) -> _;
+        let _ = run_function
+            as fn(
+                &std::sync::Arc<crate::command::execution::CommandSource>,
+                &Function,
+                Option<&FunctionArguments>,
+            ) -> _;
     }
 }

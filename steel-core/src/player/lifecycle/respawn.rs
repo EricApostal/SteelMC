@@ -15,11 +15,13 @@ use crate::{
     player::Player,
 };
 use steel_math::{DEGREE_90, wrap_degrees};
-use steel_protocol::packets::game::{CSound, SoundSource};
+use steel_protocol::packets::game::{CGameRuleValues, CSound, SoundSource};
 use steel_registry::blocks::{
     block_state_ext::BlockStateExt as _, properties::BlockStateProperties,
 };
-use steel_registry::{sound_events, vanilla_blocks};
+use steel_registry::{REGISTRY, sound_events, vanilla_blocks};
+
+use crate::permission::{PermissionExpr, PermissionLevel};
 
 // Bed candidates reach two blocks out and collision checks read one block farther.
 const PERSONAL_RESPAWN_SEARCH_BLOCK_RADIUS: i32 = 3;
@@ -386,7 +388,7 @@ pub(crate) fn personal_respawn_chunk_positions(pos: BlockPos) -> Vec<ChunkPos> {
 /// - a usable respawn anchor takes the stand-up search and consumes one charge for a
 ///   non-forced death respawn, but only when a stand-up position was found;
 /// - an anchor or bed without a stand-up position yields `None` (vanilla does not fall
-///   through to the forced fallback for a recognised spawn block);
+///   through to the forced fallback for a recognized spawn block);
 /// - the forced fallback needs the config block and the block above it to be free.
 ///
 /// `consume_spawn_block` is vanilla's `consumeSpawnBlock`: true for death respawns and
@@ -728,7 +730,7 @@ impl Player {
         self.base.set_boarding_cooldown(0);
     }
 
-    /// Handles client commands, requestStats and `RequestGameRuleValues` are still todo
+    /// Handles client commands, mirroring `ServerGamePacketListenerImpl#handleClientCommand`.
     pub fn handle_client_command(self: &Arc<Self>, action: ClientCommandAction) {
         self.reset_last_action_time();
         match action {
@@ -740,10 +742,37 @@ impl Player {
                 }
             }
             ClientCommandAction::RequestStats => self.send_stats(),
-            ClientCommandAction::RequestGameRuleValues => {
-                // TODO: implement requesting for game rule values
-            }
+            ClientCommandAction::RequestGameRuleValues => self.send_game_rule_values(),
         }
+    }
+
+    /// Sends every available game-rule value, mirroring
+    /// `ServerGamePacketListenerImpl#sendGameRuleValues`.
+    ///
+    /// Vanilla requires the gamemaster permission and serializes each rule through its own codec.
+    pub fn send_game_rule_values(&self) {
+        if !self.has_permission(&PermissionExpr::Level(PermissionLevel::Gamemasters)) {
+            log::warn!(
+                "Player {} tried to request game rule values without required permissions",
+                self.gameprofile.name()
+            );
+            return;
+        }
+
+        let world = self.get_world();
+        let mut values = FxHashMap::default();
+        for (_, rule) in REGISTRY.game_rules.iter() {
+            let value = world.get_erased_game_rule(rule);
+            let serialized = rule.serialize_erased_value(&value);
+            let rendered = match serialized {
+                serde_json::Value::Bool(value) => value.to_string(),
+                serde_json::Value::Number(value) => value.to_string(),
+                serde_json::Value::String(value) => value,
+                other => other.to_string(),
+            };
+            values.insert(rule.key().clone(), rendered);
+        }
+        self.send_packet(CGameRuleValues::new(values));
     }
 
     /// Vanilla accepts a client respawn request only when player health is dead-or-dying.

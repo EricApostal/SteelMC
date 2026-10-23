@@ -11,6 +11,8 @@ use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::PillagerEntityData;
 use steel_registry::{sound_events, vanilla_attributes, vanilla_items};
 use steel_utils::locks::SyncMutex;
+use steel_utils::random::Random as _;
+use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::{DowncastType, DowncastTypeKey};
 
 use super::abstract_illager::{IllagerArmPose, RaiderKeys};
@@ -18,6 +20,7 @@ use crate::entity::ai::goal::{
     FloatGoal, HurtByTargetGoal, LookAtPlayerGoal, NearestAttackableTargetGoal, RandomStrollGoal,
 };
 use crate::entity::damage::DamageSource;
+use crate::entity::entities::mobs::spawn_equipment;
 use crate::entity::raid::RaidSnapshot;
 use crate::entity::raid::raider::{Raider, RaiderBase};
 use crate::entity::{
@@ -272,6 +275,53 @@ impl LivingEntity for PillagerEntity {
 impl Mob for PillagerEntity {
     fn mob_base(&self) -> &MobBase {
         &self.mob_base
+    }
+
+    /// Vanilla `Pillager.getMaxSpawnClusterSize`.
+    fn max_spawn_cluster_size(&self) -> i32 {
+        1
+    }
+
+    /// Vanilla `Pillager.finalizeSpawn`: crossbow in the main hand, then the
+    /// shared weapon/armor enchantment pass, then `Mob`'s follow-range bonus.
+    fn finalize_spawn(
+        &self,
+        world: &Arc<World>,
+        spawn_reason: crate::entity::EntitySpawnReason,
+        group_data: Option<crate::entity::SpawnGroupData>,
+    ) -> Option<crate::entity::SpawnGroupData> {
+        let mut random = LegacyRandom::from_seed(rand::random());
+        let difficulty_modifier = world
+            .current_difficulty_at(self.block_position())
+            .special_multiplier();
+
+        self.living_base
+            .equipment()
+            .lock()
+            .set(EquipmentSlot::MainHand, ItemStack::new(&vanilla_items::CROSSBOW));
+        spawn_equipment::enchant_spawned_weapon(self, &mut random, difficulty_modifier);
+        // Vanilla `Pillager.enchantSpawnedWeapon` adds the raid crossbow roll after
+        // `Mob.enchantSpawnedWeapon`.
+        if random.next_i32_bounded(300) == 0
+            && self
+                .equipment_in_slot(EquipmentSlot::MainHand)
+                .is(&vanilla_items::CROSSBOW)
+        {
+            let mut crossbow = self.equipment_in_slot(EquipmentSlot::MainHand);
+            steel_registry::enchantment::provider::enchant_item_from_provider(
+                &mut crossbow,
+                &steel_utils::Identifier::vanilla_static("pillager_spawn_crossbow"),
+                difficulty_modifier,
+                &mut random,
+            );
+            self.living_base
+                .equipment()
+                .lock()
+                .set(EquipmentSlot::MainHand, crossbow);
+        }
+        spawn_equipment::enchant_spawned_armor(self, &mut random, difficulty_modifier);
+
+        self.finalize_spawn_mob_base(world, spawn_reason, group_data)
     }
 
     fn tick_goal_selectors(&self, entity: &SharedEntity) {

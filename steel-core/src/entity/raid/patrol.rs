@@ -7,7 +7,7 @@
 //! Vanilla keeps its single countdown in memory only (vanilla's `CustomSpawner` has no saved
 //! data at all), so this spawner reports no saved-data name and is not persisted.
 //!
-//! Vanilla's `spawnEnemies` guard is honoured through
+//! Vanilla's `spawnEnemies` guard is honored through
 //! [`CustomSpawner::tick_with_settings`](crate::world::custom_spawner::CustomSpawner::tick_with_settings),
 //! exactly like the other `CustomSpawner` ports.
 //!

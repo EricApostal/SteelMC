@@ -1,4 +1,4 @@
-//! Vanilla `FlyNodeEvaluator`: the 26-neighbourhood flight evaluator.
+//! Vanilla `FlyNodeEvaluator`: the 26-neighborhood flight evaluator.
 //!
 //! Vanilla subclasses `WalkNodeEvaluator` and overrides the start node, the
 //! neighbour set, `findAcceptedNode` and `getPathType`. Steel keeps the same
@@ -87,7 +87,7 @@ impl FlyNodeEvaluator {
     #[must_use]
     pub fn get_path_type(context: &mut PathfindingContext<'_>, x: i32, y: i32, z: i32) -> PathType {
         let mut block_path_type = context.get_path_type_from_state(x, y, z);
-        if block_path_type == PathType::Open && y >= context.level().min_y() + 1 {
+        if block_path_type == PathType::Open && y > context.level().min_y() {
             let below = context.get_path_type_from_state(x, y - 1, z);
             block_path_type = match below {
                 PathType::Fire | PathType::Lava => PathType::Fire,
@@ -146,7 +146,7 @@ impl FlyNodeEvaluator {
             .is_some_and(|node| !node.closed)
     }
 
-    /// Vanilla `FlyNodeEvaluator.getNeighbors`: the full 26-neighbourhood, each
+    /// Vanilla `FlyNodeEvaluator.getNeighbors`: the full 26-neighborhood, each
     /// diagonal gated on the straight legs that lead to it.
     pub fn get_neighbors(
         &mut self,

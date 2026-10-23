@@ -2,7 +2,7 @@ use crate::vanilla_blocks;
 use crate::{
     REGISTRY,
     blocks::{
-        self, BlockRef, BlockStateTickingMetadata,
+        self, BlockRef, BlockStateTickingMetadata, MapColor,
         properties::{Direction, Property},
         shapes::{OffsetVoxelShape, SupportType},
     },
@@ -85,6 +85,10 @@ pub trait BlockStateExt {
     fn is_static_redstone_conductor(&self) -> bool;
     /// Returns if a block can be replaced extracted from the minecraft data
     fn is_replaceable(&self) -> bool;
+
+    /// Vanilla `BlockState.getMapColor`: the palette entry used when this state
+    /// is sampled into a map pixel.
+    fn map_color(&self) -> MapColor;
 }
 
 impl BlockStateExt for BlockStateId {
@@ -269,6 +273,10 @@ impl BlockStateExt for BlockStateId {
 
     fn is_replaceable(&self) -> bool {
         self.get_block().config.replaceable
+    }
+
+    fn map_color(&self) -> MapColor {
+        REGISTRY.blocks.get_map_color(*self)
     }
 }
 

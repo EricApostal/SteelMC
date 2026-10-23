@@ -4,8 +4,11 @@ use steel_macros::block_behavior;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::item_stack::ItemStack;
+use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_enchantment_tags::EnchantmentTag;
-use steel_registry::{REGISTRY, RegistryExt, TaggedRegistryExt, vanilla_blocks};
+use steel_registry::{
+    REGISTRY, RegistryExt, TaggedRegistryExt, vanilla_blocks, vanilla_game_events,
+};
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId};
 
@@ -14,6 +17,7 @@ use crate::block_entity::SharedBlockEntity;
 use crate::chunk::light::LightLayer;
 use crate::player::Player;
 use crate::world::World;
+use crate::world::game_event::GameEventContext;
 
 /// Ice block behavior.
 #[block_behavior]
@@ -37,7 +41,7 @@ impl IceBlock {
     }
 
     /// Melts the ice block at the given position.
-    pub fn melt(_state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
+    pub fn melt(state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
         if world.dimension_type.water_evaporates {
             world.set_block(
                 pos,
@@ -45,8 +49,14 @@ impl IceBlock {
                 UpdateFlags::UPDATE_ALL,
             );
         } else {
-            world.set_block(pos, Self::melts_into(), UpdateFlags::UPDATE_ALL);
-            world.update_neighbors_at(pos, Self::melts_into().get_block());
+            let melted_state = Self::melts_into();
+            world.set_block(pos, melted_state, UpdateFlags::UPDATE_ALL);
+            world.update_neighbors_at(pos, melted_state.get_block());
+            world.game_event(
+                &vanilla_game_events::BLOCK_DESTROY,
+                pos,
+                &GameEventContext::new(None, Some(state)),
+            );
         }
     }
 
@@ -91,8 +101,10 @@ impl BlockBehavior for IceBlock {
             }
 
             let below_state = world.get_block_state(pos.below());
-            if below_state.blocks_motion()
-                || !below_state.get_fluid_state().is_empty()
+            // Vanilla: `belowState.is(BlockTags.ICE_MELTS_WHEN_DESTROYED_ABOVE) || belowState.liquid()`.
+            if below_state
+                .get_block()
+                .has_tag(&BlockTag::ICE_MELTS_WHEN_DESTROYED_ABOVE)
                 || below_state.get_block().config.liquid
             {
                 world.set_block(pos, Self::melts_into(), UpdateFlags::UPDATE_ALL);

@@ -125,6 +125,17 @@ impl MobPathSettings {
         self
     }
 
+    /// Overrides one path type's malus for this search.
+    ///
+    /// Vanilla `AmphibiousNodeEvaluator.prepare` mutates the mob's malus map and
+    /// restores it in `done()`; Steel's settings are a per-search copy, so the
+    /// override lives exactly as long as the search does.
+    #[must_use]
+    pub const fn with_pathfinding_malus(mut self, path_type: PathType, malus: f32) -> Self {
+        self.malus[path_type.index()] = malus;
+        self
+    }
+
     #[must_use]
     pub const fn with_max_up_step(mut self, max_up_step: f32) -> Self {
         self.max_up_step = max_up_step;

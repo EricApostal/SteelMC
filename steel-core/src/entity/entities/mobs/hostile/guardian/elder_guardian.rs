@@ -28,7 +28,7 @@ use crate::world::LevelReader;
 use crate::world::World;
 use steel_protocol::packets::game::{CGameEvent, GameEventType};
 
-use super::guardian::GuardianAttackGoal;
+use super::guardian::{GuardianAttackGoal, tick_guardian_move_control};
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::fluid::FluidStateExt as _;
 
@@ -280,8 +280,6 @@ impl Entity for ElderGuardianEntity {
 
     fn play_step_sound(&self, _pos: BlockPos, _block_state: BlockStateId) {}
 
-    /// Vanilla `Guardian.getWalkTargetValue` favors water.
-
     fn save_additional(&self, nbt: &mut NbtCompound) {
         self.save_mob(nbt);
     }
@@ -363,6 +361,13 @@ impl Mob for ElderGuardianEntity {
         PathfinderMob::tick_pathfinder_path_navigation(self);
     }
 
+    /// Vanilla `ElderGuardian` inherits `Guardian.GuardianMoveControl`.
+    fn tick_move_control(&self) {
+        // `ElderGuardian` has no `setMoving` override; vanilla inherits the
+        // guardian's moving flag through the shared control.
+        let _ = tick_guardian_move_control(self);
+    }
+
     fn ambient_sound(&self) -> Option<SoundEventRef> {
         Some(if self.is_in_water() {
             &sound_events::ENTITY_ELDER_GUARDIAN_AMBIENT
@@ -396,6 +401,7 @@ impl Mob for ElderGuardianEntity {
 impl Monster for ElderGuardianEntity {}
 
 impl PathfinderMob for ElderGuardianEntity {
+    /// Vanilla `Guardian.getWalkTargetValue` favors water.
     fn get_walk_target_value(&self, pos: BlockPos) -> f32 {
         if let Some(world) = self.level()
             && world.get_block_state(pos).get_fluid_state().is_water()

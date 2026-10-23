@@ -162,6 +162,16 @@ impl AdvancementProgress {
             .map(|(id, _criterion)| &**id)
     }
 
+    /// Restores one criterion's progress from saved data.
+    ///
+    /// Mirrors vanilla `AdvancementProgress.deserialize`: unknown criteria are
+    /// ignored, so a criterion removed from the advancement data is dropped.
+    pub fn restore_criterion(&mut self, name: &str, achieved_at: Option<SystemTime>) {
+        if let Some(progress) = self.criteria.get_mut(name) {
+            progress.restore(achieved_at);
+        }
+    }
+
     /// get the completed criteria
     #[inline]
     pub(crate) fn get_completed_criteria(&self) -> impl Iterator<Item = &str> {
@@ -184,6 +194,17 @@ impl CriterionProgress {
     /// revoke the progress
     pub const fn revoke(&mut self) {
         self.0 = None;
+    }
+
+    /// Restores the saved completion time (vanilla stores `null` for unearned criteria).
+    pub const fn restore(&mut self, achieved_at: Option<SystemTime>) {
+        self.0 = achieved_at;
+    }
+
+    /// The completion time, or `None` while the criterion is unearned.
+    #[must_use]
+    pub const fn achieved_at(&self) -> Option<SystemTime> {
+        self.0
     }
 
     /// return whether the criterion has been completed

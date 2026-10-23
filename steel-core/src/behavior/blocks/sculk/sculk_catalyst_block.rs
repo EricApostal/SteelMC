@@ -7,6 +7,7 @@
 
 use std::sync::{Arc, Weak};
 
+use glam::DVec3;
 use steel_macros::block_behavior;
 use steel_protocol::packets::game::SoundSource;
 use steel_registry::block_entity_type::BlockEntityTypeRef;
@@ -14,7 +15,8 @@ use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{BlockStateProperties, BoolProperty};
 use steel_registry::item_stack::ItemStack;
-use steel_registry::{sound_events, vanilla_block_entity_types};
+use steel_registry::particle_type::ParticleData;
+use steel_registry::{sound_events, vanilla_block_entity_types, vanilla_particle_types};
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId, value_providers::IntProvider};
 
@@ -54,7 +56,18 @@ impl SculkCatalystBlock {
         }
         world.set_block(pos, state.set_value(BLOOM, true), UpdateFlags::UPDATE_ALL);
         world.schedule_block_tick_default(pos, block, SCULK_CATALYST_PULSE_TICKS);
-        // TODO(Protocol): Vanilla also sends two `SCULK_SOUL` particles at `y + 1.15`.
+        // Vanilla `SculkCatalystBlockEntity.CatalystListener.bloom`.
+        world.send_particles(
+            ParticleData::simple(&vanilla_particle_types::SCULK_SOUL),
+            DVec3::new(
+                f64::from(pos.x()) + 0.5,
+                f64::from(pos.y()) + 1.15,
+                f64::from(pos.z()) + 0.5,
+            ),
+            2,
+            DVec3::new(0.2, 0.0, 0.2),
+            0.0,
+        );
         world.play_sound(
             &sound_events::BLOCK_SCULK_CATALYST_BLOOM,
             SoundSource::Blocks,

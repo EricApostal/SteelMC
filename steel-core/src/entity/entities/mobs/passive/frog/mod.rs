@@ -32,6 +32,7 @@ use steel_registry::frog_variant::FrogVariantRef;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::shared_structs::pick_spawn_conditioned_entry;
 use steel_registry::sound_event::SoundEventRef;
+use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entity_data::FrogEntityData;
 use steel_registry::vanilla_entity_type_tags::EntityTypeTag;
 use steel_registry::vanilla_item_tags::ItemTag;
@@ -60,7 +61,7 @@ use crate::entity::{
 };
 use crate::physics::{MoveResult, MoverType};
 use crate::player::Player;
-use crate::world::World;
+use crate::world::{LevelReader, World};
 
 const FROG_BABY_PASSENGER_ATTACHMENTS: [EntityAttachmentPoint; 1] =
     [EntityAttachmentPoint::new(0.0, 0.125, -0.08)];
@@ -484,6 +485,22 @@ impl Animal for FrogEntity {
         // variant, and the mother becomes pregnant for the `LAY_SPAWN` activity.
         self.finalize_spawn_child_from_breeding(world, partner, None);
         self.brain.lock().set_memory(&mem::IS_PREGNANT, Some(()));
+    }
+
+    /// Vanilla `Frog.checkFrogSpawnRules`.
+    fn check_animal_spawn_rules(
+        level: &dyn LevelReader,
+        _spawn_reason: EntitySpawnReason,
+        pos: BlockPos,
+    ) -> bool
+    where
+        Self: Sized,
+    {
+        level
+            .get_block_state(pos.below())
+            .get_block()
+            .has_tag(&BlockTag::FROGS_SPAWNABLE_ON)
+            && Self::is_bright_enough_to_spawn(level, pos)
     }
 }
 

@@ -29,8 +29,9 @@ use crate::entity::damage::DamageSource;
 use crate::entity::entities::objects::projectiles::ShulkerBulletEntity;
 use crate::entity::projectile::spawn_projectile;
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySyncedData, LivingEntity,
-    LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, SharedEntity, next_entity_id,
+    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
+    LivingEntity, LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, SharedEntity,
+    SpawnGroupData, next_entity_id,
 };
 use crate::physics::MoveResult;
 use crate::world::World;
@@ -566,6 +567,21 @@ impl Mob for ShulkerEntity {
     /// Vanilla `Shulker.requiresCustomPersistence` keeps shulkers forever.
     fn requires_custom_persistence(&self) -> bool {
         true
+    }
+
+    /// Vanilla `Shulker.finalizeSpawn`: face yaw zero and refresh the
+    /// previous-position snapshot before `Mob`'s spawn rolls.
+    fn finalize_spawn(
+        &self,
+        world: &Arc<crate::world::World>,
+        spawn_reason: EntitySpawnReason,
+        group_data: Option<SpawnGroupData>,
+    ) -> Option<SpawnGroupData> {
+        self.set_rotation((0.0, self.rotation().1));
+        self.set_y_head_rot(0.0);
+        self.set_old_position_to_current();
+        self.base().set_old_rotation_to_current();
+        self.finalize_spawn_mob_base(world, spawn_reason, group_data)
     }
 }
 

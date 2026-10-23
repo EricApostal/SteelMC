@@ -2,10 +2,16 @@
 //!
 //! The crafter opens its 3x3 menu on use and runs a craft on the rising edge of
 //! a redstone neighbor signal, mirroring Vanilla `CrafterBlock`.
+//!
+//! Deviation: Vanilla `CrafterBlock.dispenseFrom` calls
+//! `ItemStack.onCraftedBySystem`, i.e. `Item.onCraftedPostProcess` (the filled
+//! map's `map_post_processing` lock/scale); Steel has no crafted-post-process item
+//! hook (owner: `behavior/item.rs`).
 
 use std::sync::{Arc, Weak};
 
 use steel_macros::block_behavior;
+use steel_registry::advancement::triggers::TriggerEvent;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{
@@ -14,7 +20,7 @@ use steel_registry::blocks::properties::{
 use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_block_entity_types;
 use steel_utils::types::UpdateFlags;
-use steel_utils::{BlockPos, BlockStateId, Downcast as _, translations};
+use steel_utils::{BlockPos, BlockStateId, Downcast as _, Identifier, WorldAabb, translations};
 use text_components::TextComponent;
 
 use crate::behavior::block::{BlockBehavior, BlockEntityCreation};
@@ -22,11 +28,13 @@ use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionRes
 use crate::behavior::{InventoryAccess, PlacementSource};
 use crate::block_entity::entities::{CrafterBlockEntity, hopper_add_item, hopper_container_at};
 use crate::block_entity::{BLOCK_ENTITIES, BlockEntityTicker};
+use crate::entity::living_loot_equipment;
 use crate::entity::projectile::triangle_random;
 use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
 use crate::inventory::menu::kinds::crafter;
 use crate::inventory::recipe_manager;
 use crate::player::Player;
+use crate::player::advancement::triggers::{WorldLevelView, event_base, player_view, raise};
 use crate::world::{LevelReader, ScheduledTickAccess as _, SignalGetter as _, World};
 
 const TRIGGERED: &BoolProperty = &BlockStateProperties::TRIGGERED;
@@ -132,16 +140,23 @@ impl CrafterBlock {
             UpdateFlags::UPDATE_CLIENTS,
         );
 
-        // Vanilla `ItemStack.onCraftedBySystem` only fires item-used advancement
-        // triggers, which Steel has no advancement-criteria dispatch for yet.
+        // Vanilla `ItemStack.onCraftedBySystem` runs `Item.onCraftedPostProcess`
+        // here; Steel has no crafted-post-process item hook (see module docs).
 
         let direction = orientation_front(state.get_value(ORIENTATION));
-        Self::dispense_item(world, pos, results, direction);
+        Self::dispense_item(world, pos, results, direction, recipe.key(), input.items());
 
         if let Some((remainders, _)) = recipe_manager::get_remaining_items(&input) {
             for remainder in remainders {
                 if !remainder.is_empty() {
-                    Self::dispense_item(world, pos, remainder, direction);
+                    Self::dispense_item(
+                        world,
+                        pos,
+                        remainder,
+                        direction,
+                        recipe.key(),
+                        input.items(),
+                    );
                 }
             }
         }
@@ -151,7 +166,14 @@ impl CrafterBlock {
     }
 
     /// Vanilla `CrafterBlock.dispenseItem`.
-    fn dispense_item(world: &Arc<World>, pos: BlockPos, results: ItemStack, direction: Direction) {
+    fn dispense_item(
+        world: &Arc<World>,
+        pos: BlockPos,
+        results: ItemStack,
+        direction: Direction,
+        recipe: &Identifier,
+        ingredients: &[ItemStack],
+    ) {
         let target_pos = direction.relative(pos);
         let target = hopper_container_at(world, target_pos);
         let mut remaining = results;
@@ -226,8 +248,7 @@ impl CrafterBlock {
         );
         let _ = world.spawn_item_with_velocity(spawn, remaining, velocity);
 
-        // Vanilla also triggers `CRAFTER_RECIPE_CRAFTED` for nearby players;
-        // advancement-criteria dispatch is not implemented yet.
+        Self::trigger_crafter_recipe_crafted(world, pos, recipe, ingredients);
 
         world.level_event(LEVEL_EVENT_SOUND_CRAFTER_CRAFT, pos, 0, None);
         world.level_event(
@@ -236,6 +257,42 @@ impl CrafterBlock {
             direction.get_3d_data_value(),
             None,
         );
+    }
+
+    /// Vanilla `CriteriaTriggers.CRAFTER_RECIPE_CRAFTED.trigger` for every
+    /// `ServerPlayer` inside `AABB.ofSize(centerPos, 17, 17, 17)`.
+    fn trigger_crafter_recipe_crafted(
+        world: &Arc<World>,
+        pos: BlockPos,
+        recipe: &Identifier,
+        ingredients: &[ItemStack],
+    ) {
+        let (center_x, center_y, center_z) = pos.get_bottom_center();
+        let center = glam::DVec3::new(center_x, center_y + 0.5, center_z);
+        let search_box = WorldAabb::of_size(center, 17.0, 17.0, 17.0);
+
+        for entity in
+            world.get_entities_in_aabb_matching(&search_box, |entity| entity.as_player().is_some())
+        {
+            let Some(player) = entity.as_player() else {
+                continue;
+            };
+            let origin = player.block_position();
+            let level = WorldLevelView::new(world, origin);
+            let equipment = living_loot_equipment(player);
+            let known = player.recipe_book().unlocked_identifiers().to_vec();
+            let view = player_view(player, &level, Some(&equipment), &known);
+            let event = TriggerEvent::CrafterRecipeCrafted {
+                base: event_base(&view, &level, origin),
+                recipe,
+                ingredients,
+            };
+            raise(
+                player,
+                &Identifier::vanilla_static("crafter_recipe_crafted"),
+                &event,
+            );
+        }
     }
 }
 

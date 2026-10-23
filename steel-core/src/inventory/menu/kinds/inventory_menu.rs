@@ -16,6 +16,7 @@ use steel_utils::locks::{IntoShared, Shared};
 
 use crate::inventory::container::{CraftingContainer, ResultContainer};
 use crate::inventory::prelude::*;
+use crate::inventory::recipe_book_placement::{PlacementGrid, PostPlaceAction, place_recipe};
 use crate::inventory::slots::{ArmorSlot, CraftingHandler};
 use crate::player::Player;
 use crate::player::player_inventory::{PlayerInventory, armor_equipment};
@@ -126,6 +127,12 @@ impl InventoryKind {
     /// Recomputes the result from the current grid contents.
     pub(crate) fn update_result(&self, guard: &mut ContainerLockGuard) {
         self.handler.update_result(guard);
+    }
+
+    /// Recomputes the result for a specific crafting player, applying the
+    /// `limited_crafting` gate (vanilla `slotChangedCraftingGrid`).
+    pub(crate) fn update_result_for(&self, guard: &mut ContainerLockGuard, player: &Player) {
+        self.handler.update_result_for(guard, Some(player));
     }
 
     /// Moves items between the main inventory and hotbar.
@@ -325,9 +332,40 @@ impl MenuKind for InventoryKind {
         &mut self,
         _behavior: &mut MenuBehavior,
         guard: &mut ContainerLockGuard,
-        _player: &Player,
+        player: &Player,
     ) {
-        self.handler.update_result(guard);
+        // Vanilla `InventoryMenu.slotsChanged` → `slotChangedCraftingGrid`, which
+        // applies the `limited_crafting` gate.
+        self.handler.update_result_for(guard, Some(player));
+    }
+
+    /// Vanilla `InventoryMenu.handlePlacement` for the player's 2x2 grid.
+    fn handle_placement(
+        &mut self,
+        guard: &mut ContainerLockGuard,
+        recipe: steel_registry::recipe::UntypedRecipeRef,
+        use_max_items: bool,
+        allow_dropping_items_to_clear: bool,
+        player: &Player,
+    ) -> Option<PostPlaceAction> {
+        let crafting = self.handler.crafting_container();
+        let grid = PlacementGrid {
+            crafting: &crafting,
+            result: Some(&self.result_container),
+            width: 2,
+            height: 2,
+        };
+        let action = place_recipe(
+            guard,
+            &player.inventory,
+            &grid,
+            recipe,
+            use_max_items,
+            allow_dropping_items_to_clear,
+            player,
+        );
+        self.handler.update_result_for(guard, Some(player));
+        Some(action)
     }
 }
 

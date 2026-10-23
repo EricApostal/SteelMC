@@ -1,8 +1,6 @@
-use std::f64::consts::FRAC_PI_2;
-
 use glam::DVec3;
 
-use super::random_pos::default_random_pos_towards;
+use super::random_pos::{HALF_PI, default_random_pos_towards};
 use super::selector::{Goal, GoalControls};
 use crate::entity::{PathfinderMob, SharedEntity};
 
@@ -43,7 +41,7 @@ impl Goal for MoveTowardsTargetGoal {
             return false;
         }
 
-        let Some(position) = default_random_pos_towards(mob, 16, 7, target.position(), FRAC_PI_2)
+        let Some(position) = default_random_pos_towards(mob, 16, 7, target.position(), HALF_PI)
         else {
             return false;
         };

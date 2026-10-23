@@ -11,7 +11,7 @@
 //! - Vanilla `RandomSource.create()` per level is replaced by the project's
 //!   usual per-call `LegacyRandom::from_seed(rand::random())` (`World` has no
 //!   level-random field); vanilla's level random is itself non-deterministic.
-//! - `EntityBasedExplosionDamageCalculator` is not modelled: no Steel entity
+//! - `EntityBasedExplosionDamageCalculator` is not modeled: no Steel entity
 //!   overrides `getBlockExplosionResistance`/`shouldBlockExplode` yet, so the
 //!   base calculator is behaviour-identical (see
 //!   `Entity::ignoreExplosion`/`onExplosionHit` note below).

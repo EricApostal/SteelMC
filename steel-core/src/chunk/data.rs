@@ -2,7 +2,7 @@
 use std::fmt::{self, Formatter};
 use std::sync::{
     Arc, OnceLock, Weak,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicI64, Ordering},
 };
 
 use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
@@ -107,6 +107,10 @@ pub struct Chunk {
     /// Vanilla `ChunkAccess.isLightCorrect`: whether the stored light matches the
     /// current block states. Persisted only when light was actually computed.
     light_correct: AtomicBool,
+    /// Vanilla `ChunkAccess.inhabitedTime`: ticks spent inside a player's
+    /// simulation distance. Feeds `getCurrentDifficultyAt` and is persisted with
+    /// the chunk payload.
+    inhabited_time: AtomicI64,
     /// Full-only runtime state, installed once before Full publication.
     full_runtime: OnceLock<Box<FullChunkRuntime>>,
     /// Generator-owned state retained only between generation stages.
@@ -150,6 +154,7 @@ impl Chunk {
             )),
             light: SyncRwLock::new(ChunkLightData::for_valid_world_height(min_y, height)),
             light_correct: AtomicBool::new(false),
+            inhabited_time: AtomicI64::new(0),
             full_runtime: OnceLock::new(),
             transient_generation_state: SyncMutex::new(TransientGenerationState::default()),
         }
@@ -213,6 +218,7 @@ impl Chunk {
             // Steel only persists light that was computed, so a loaded chunk at
             // `Light` status or later carries vanilla's `IsLightOn` flag.
             light_correct: AtomicBool::new(status >= ChunkStatus::Light),
+            inhabited_time: AtomicI64::new(0),
             full_runtime: OnceLock::new(),
             transient_generation_state: SyncMutex::new(TransientGenerationState::default()),
         };
@@ -252,6 +258,22 @@ impl Chunk {
     #[must_use]
     pub fn is_dirty(&self) -> bool {
         self.dirty.load(Ordering::Acquire)
+    }
+
+    /// Vanilla `ChunkAccess.getInhabitedTime`.
+    #[must_use]
+    pub fn inhabited_time(&self) -> i64 {
+        self.inhabited_time.load(Ordering::Relaxed)
+    }
+
+    /// Vanilla `ChunkAccess.setInhabitedTime`.
+    pub fn set_inhabited_time(&self, ticks: i64) {
+        self.inhabited_time.store(ticks, Ordering::Relaxed);
+    }
+
+    /// Vanilla `LevelChunk.incrementInhabitedTime`.
+    pub fn increment_inhabited_time(&self) {
+        self.inhabited_time.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Rewrites every biome cell of this chunk, mirroring vanilla

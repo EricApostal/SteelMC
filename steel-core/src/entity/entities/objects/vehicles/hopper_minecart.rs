@@ -288,8 +288,13 @@ impl Minecart for HopperMinecartEntity {
         DVec3::new(movement.x * keep, 0.0, movement.z * keep)
     }
 
-    fn on_minecart_destroyed(&self, _world: &World) {
-        // Vanilla drops the cart contents where it was destroyed.
+    fn on_minecart_destroyed(&self, world: &World) {
+        // Vanilla `ContainerEntity.chestVehicleDestroyed` drops the cart contents only while
+        // the `entity_drops` game rule is enabled; the cart item itself is gated separately in
+        // `Minecart::destroy_with_drop`.
+        if !world.get_game_rule(&steel_registry::vanilla_game_rules::ENTITY_DROPS) {
+            return;
+        }
         let stacks: Vec<ItemStack> = self
             .inventory
             .lock()

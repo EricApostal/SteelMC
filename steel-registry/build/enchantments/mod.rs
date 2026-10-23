@@ -332,7 +332,7 @@ struct ParticlePositionSourceJson {
     scale: f32,
 }
 
-fn default_particle_scale() -> f32 {
+const fn default_particle_scale() -> f32 {
     1.0
 }
 

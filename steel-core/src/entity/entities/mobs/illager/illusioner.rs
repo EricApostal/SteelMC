@@ -141,21 +141,24 @@ impl IllusionerEntity {
             );
             targets.add_goal(
                 2,
-                NearestAttackableTargetGoal::new_for_players(true, |_, _| true),
+                NearestAttackableTargetGoal::new_for_players(true, |_, _| true)
+                    .with_unseen_memory_ticks(300),
             );
             targets.add_goal(
                 3,
                 NearestAttackableTargetGoal::new(
                     false,
                     super::abstract_illager::is_target_villager,
-                ),
+                )
+                .with_unseen_memory_ticks(300),
             );
             targets.add_goal(
                 3,
                 NearestAttackableTargetGoal::new(
                     false,
                     super::abstract_illager::is_target_iron_golem,
-                ),
+                )
+                .with_unseen_memory_ticks(300),
             );
         }
 

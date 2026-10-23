@@ -412,6 +412,12 @@ impl Entity for FallingBlockEntity {
             self.tick_server(&world, block);
         }
         self.set_velocity(self.velocity() * DEFAULT_AIR_DRAG);
+        // Vanilla `FallingBlockEntity.tick` tail: while colliding, the falling
+        // block is tracked with absolute position syncs so the client's delta
+        // base cannot drift away from the server.
+        self.set_requires_precise_position(
+            self.horizontal_collision() || self.vertical_collision(),
+        );
     }
 
     fn get_default_gravity(&self) -> f64 {

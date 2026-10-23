@@ -17,8 +17,8 @@ pub struct FlatLayerInfo {
 ///
 /// Vanilla keeps `structure_overrides` as an optional holder set and looks the biome up as an
 /// optional holder that falls back to plains. The extracted vanilla data always names a biome,
-/// so the biome is modelled directly; a missing `structure_overrides` is normalised to an empty
-/// list, and `lakes`/`features` are modelled by their resolved flags (`add_lakes`/`decoration`).
+/// so the biome is modeled directly; a missing `structure_overrides` is normalized to an empty
+/// list, and `lakes`/`features` are modeled by their resolved flags (`add_lakes`/`decoration`).
 #[derive(Debug)]
 pub struct FlatLevelGeneratorSettings {
     /// Biome generated across the flat layers.

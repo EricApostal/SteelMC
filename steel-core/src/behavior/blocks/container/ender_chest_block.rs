@@ -1,4 +1,18 @@
 //! Ender chest block behavior implementation.
+//!
+//! Vanilla `EnderChestBlock` shows the *player's* ender chest inventory; the
+//! block entity only supplies the lid animation and the open/close sounds.
+//!
+//! Deviations:
+//! - Vanilla `EnderChestBlock.useWithoutItem` calls
+//!   `PiglinAi.angerNearbyPiglins(level, player, true)`; Steel has no such helper
+//!   (owner: `entity/ai/behavior/piglin/ai.rs`).
+//! - Vanilla `EnderChestBlock.tick` calls `EnderChestBlockEntity.recheckOpen`
+//!   and its `triggerEvent` drives a `ChestLidController`; Steel's
+//!   `EnderChestBlockEntity` has neither an opener counter nor a lid controller
+//!   (owner: `block_entity/entities/ender_chest.rs`).
+//! - Vanilla `animateTick` emits portal particles on the client; Steel has no
+//!   client-side block ticking.
 
 use std::sync::{Arc, Weak};
 
@@ -7,16 +21,19 @@ use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::BlockStateProperties;
 use steel_registry::{vanilla_block_entity_types, vanilla_custom_stats};
-use steel_utils::{BlockPos, BlockStateId, translations};
+use steel_utils::{BlockPos, BlockStateId, Direction, translations};
 use text_components::TextComponent;
 
 use crate::behavior::InventoryAccess;
-use crate::behavior::block::{BlockBehavior, BlockEntityCreation};
+use crate::behavior::block::{
+    BlockBehavior, BlockEntityCreation, schedule_water_tick_if_waterlogged,
+};
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
 use crate::block_entity::BLOCK_ENTITIES;
+use crate::entity::ai::path::PathComputationType;
 use crate::inventory::menu::kinds::ender_chest;
 use crate::player::Player;
-use crate::world::{World, is_redstone_conductor};
+use crate::world::{ScheduledTickAccess, World, is_redstone_conductor};
 
 /// The ender chest block behavior.
 #[block_behavior]
@@ -82,7 +99,6 @@ impl BlockBehavior for EnderChestBlock {
         );
 
         player.award_custom_stat(&vanilla_custom_stats::OPEN_ENDERCHEST);
-        // TODO: Anger nearby piglins
 
         InteractionResult::Success
     }
@@ -99,5 +115,45 @@ impl BlockBehavior for EnderChestBlock {
             pos,
             state,
         ))
+    }
+
+    /// Vanilla `EnderChestBlock.updateShape` reschedules the water tick while
+    /// waterlogged, then defers to the base behaviour.
+    fn update_shape(
+        &self,
+        state: BlockStateId,
+        world: &dyn ScheduledTickAccess,
+        pos: BlockPos,
+        _direction: Direction,
+        _neighbor_pos: BlockPos,
+        _neighbor_state: BlockStateId,
+    ) -> BlockStateId {
+        schedule_water_tick_if_waterlogged(state, world, pos);
+        state
+    }
+
+    /// Vanilla `BaseEntityBlock.triggerEvent` forwards block events to the block
+    /// entity, where `EnderChestBlockEntity.triggerEvent` drives the lid.
+    fn trigger_event(
+        &self,
+        _state: BlockStateId,
+        world: &Arc<World>,
+        pos: BlockPos,
+        param_a: i32,
+        param_b: i32,
+    ) -> bool {
+        let Some(block_entity) = world.get_block_entity(pos) else {
+            return false;
+        };
+        block_entity.trigger_event(param_a, param_b)
+    }
+
+    /// Vanilla `EnderChestBlock.isPathfindable` always returns `false`.
+    fn is_pathfindable(
+        &self,
+        _state: BlockStateId,
+        _computation_type: PathComputationType,
+    ) -> bool {
+        false
     }
 }

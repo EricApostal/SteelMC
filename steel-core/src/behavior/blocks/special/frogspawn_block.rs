@@ -2,11 +2,11 @@
 //!
 //! Vanilla places frogspawn on `#supports_frogspawn` blocks under a non-empty fluid, schedules a
 //! hatch tick between 3 600 and 12 000 ticks, hatches 2-5 tadpoles, and is destroyed by falling
-//! blocks passing through it. Steel has no tadpole entity yet, so the survival, scheduling,
-//! destruction and sound are complete while the spawn is a reported dependency.
+//! blocks passing through it.
 
 use std::sync::Arc;
 
+use glam::DVec3;
 use steel_macros::block_behavior;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
@@ -14,11 +14,10 @@ use steel_registry::sound_events;
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_blocks;
 use steel_registry::vanilla_entities;
-use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId, Direction};
 
 use crate::behavior::{BlockBehavior, BlockPlaceContext};
-use crate::entity::Entity;
+use crate::entity::{Entity, Mob, add_spawned_entity, create_entity_instance};
 use crate::world::{LevelReader, ScheduledTickAccess, World};
 
 /// Vanilla `FrogspawnBlock.MIN_TADPOLES_SPAWN`.
@@ -63,6 +62,34 @@ impl FrogspawnBlock {
                 .get_block_state(pos.above())
                 .get_fluid_state()
                 .is_empty()
+    }
+
+    /// Vanilla `FrogspawnBlock.getRandomTadpolePositionOffset`: a horizontal offset inside the
+    /// tadpole hitbox (`Mth.clamp(random.nextDouble(), 0.2, 0.7999999970197678)`).
+    fn random_tadpole_position_offset() -> f64 {
+        rand::random::<f64>().clamp(0.2, 0.799_999_997_019_767_8)
+    }
+
+    /// Vanilla `FrogspawnBlock.spawnTadpoles`: `MIN_TADPOLES_SPAWN..=MAX_TADPOLES_SPAWN`
+    /// persistent tadpoles around the block's lower half with a random yaw.
+    fn spawn_tadpoles(world: &Arc<World>, pos: BlockPos) {
+        let amount = rand::random_range(MIN_TADPOLES_SPAWN..=MAX_TADPOLES_SPAWN);
+        for _ in 1..=amount {
+            let spawn_at = DVec3::new(
+                f64::from(pos.x()) + Self::random_tadpole_position_offset(),
+                f64::from(pos.y()) - 0.5,
+                f64::from(pos.z()) + Self::random_tadpole_position_offset(),
+            );
+            let Ok(tadpole) = create_entity_instance(world, &vanilla_entities::TADPOLE, spawn_at)
+            else {
+                continue;
+            };
+            tadpole.snap_to(spawn_at, rand::random_range(1..=360) as f32, 0.0);
+            if let Some(mob) = tadpole.as_mob() {
+                mob.set_persistence_required();
+            }
+            let _ = add_spawned_entity(world, tadpole);
+        }
     }
 }
 
@@ -111,18 +138,10 @@ impl BlockBehavior for FrogspawnBlock {
             return;
         }
 
-        // Vanilla `hatchFrogspawn`: destroy, play `FROGSPAWN_HATCH`, spawn 2-5 tadpoles at
-        // clamped offsets with a random yaw.
+        // Vanilla `FrogspawnBlock.hatchFrogspawn`.
         world.destroy_block(pos, false);
         world.play_block_sound(&sound_events::BLOCK_FROGSPAWN_HATCH, pos, 1.0, 1.0, None);
-        // TODO(Entities): spawn `MIN_TADPOLES_SPAWN..=MAX_TADPOLES_SPAWN` `TADPOLE` entities once
-        // the entity lane registers a factory for `vanilla_entities::TADPOLE` (vanilla
-        // `FrogspawnBlock.spawnTadpoles`).
-        let _ = (
-            &vanilla_entities::TADPOLE,
-            MIN_TADPOLES_SPAWN,
-            MAX_TADPOLES_SPAWN,
-        );
+        Self::spawn_tadpoles(world, pos);
     }
 
     fn entity_inside(
@@ -137,17 +156,5 @@ impl BlockBehavior for FrogspawnBlock {
         if entity.entity_type() == &vanilla_entities::FALLING_BLOCK {
             world.destroy_block(pos, false);
         }
-    }
-
-    fn player_will_destroy(
-        &self,
-        state: BlockStateId,
-        world: &Arc<World>,
-        pos: BlockPos,
-        _player: &crate::player::Player,
-    ) -> BlockStateId {
-        // Vanilla `FrogspawnBlock` drops nothing; the destroy path keeps the fluid state.
-        let _ = (world, pos, UpdateFlags::UPDATE_ALL);
-        state
     }
 }

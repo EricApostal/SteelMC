@@ -52,6 +52,34 @@ impl IntBounds {
         }
     }
 
+    /// A lower-bound-only range (vanilla `MinMaxBounds.Ints` with only `min`).
+    #[must_use]
+    pub const fn at_least(min: i32) -> Self {
+        Self {
+            min: Some(min),
+            max: None,
+        }
+    }
+
+    /// An upper-bound-only range (vanilla `MinMaxBounds.Ints` with only `max`).
+    #[must_use]
+    pub const fn at_most(max: i32) -> Self {
+        Self {
+            min: None,
+            max: Some(max),
+        }
+    }
+
+    /// A closed range; panics at compile time when the generator emits `min > max`.
+    #[must_use]
+    pub const fn range(min: i32, max: i32) -> Self {
+        assert!(min <= max, "MinMaxBounds.Ints requires min <= max");
+        Self {
+            min: Some(min),
+            max: Some(max),
+        }
+    }
+
     #[must_use]
     pub const fn min(&self) -> Option<i32> {
         self.min
@@ -130,6 +158,34 @@ impl DoubleBounds {
         Self {
             min: Some(value),
             max: Some(value),
+        }
+    }
+
+    /// A lower-bound-only range (vanilla `MinMaxBounds.Doubles` with only `min`).
+    #[must_use]
+    pub const fn at_least(min: f64) -> Self {
+        Self {
+            min: Some(min),
+            max: None,
+        }
+    }
+
+    /// An upper-bound-only range (vanilla `MinMaxBounds.Doubles` with only `max`).
+    #[must_use]
+    pub const fn at_most(max: f64) -> Self {
+        Self {
+            min: None,
+            max: Some(max),
+        }
+    }
+
+    /// A closed range; panics at compile time when the generator emits `min > max`.
+    #[must_use]
+    pub const fn range(min: f64, max: f64) -> Self {
+        assert!(min <= max, "MinMaxBounds.Doubles requires min <= max");
+        Self {
+            min: Some(min),
+            max: Some(max),
         }
     }
 

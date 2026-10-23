@@ -326,4 +326,23 @@ impl<'input> StringReader<'input> {
     const fn is_allowed_in_unquoted_string(character: char) -> bool {
         character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.' | '+')
     }
+
+    /// Reads a namespaced identifier, matching vanilla `Identifier.read`.
+    ///
+    /// Accepts vanilla's identifier alphabet; the caller decides whether a bare
+    /// path defaults to `minecraft` and reports a malformed value.
+    pub(crate) fn read_identifier(&mut self) -> &'input str {
+        let start = self.checkpoint();
+        while self.peek().is_some_and(is_allowed_in_identifier) {
+            self.skip();
+        }
+        &self.input[start.byte..self.cursor.byte]
+    }
+}
+
+/// Vanilla `Identifier.isAllowedInIdentifier`.
+const fn is_allowed_in_identifier(character: char) -> bool {
+    character.is_ascii_digit()
+        || character.is_ascii_lowercase()
+        || matches!(character, '_' | ':' | '/' | '.' | '-')
 }

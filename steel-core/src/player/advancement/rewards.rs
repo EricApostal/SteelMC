@@ -5,7 +5,13 @@ use crate::player::Player;
 use steel_registry::advancement::AdvancementRewards;
 use steel_registry::loot_table::LootContext;
 
-/// Grants experience and loot rewards but recipes and functions are not handled yet
+/// Grants experience, loot and recipe rewards.
+///
+/// Recipe rewards are queued rather than awarded inline because `grant_reward`
+/// runs while the caller holds the player's advancement lock, and the award path
+/// raises `recipe_unlocked` (which takes that lock again). The caller flushes them
+/// with `Player::flush_pending_recipe_awards` once the lock is released.
+/// Function rewards are not handled yet.
 pub fn grant_reward(player: &Player, reward: &AdvancementRewards) {
     player.give_experience_points(reward.experience);
 
@@ -34,5 +40,5 @@ pub fn grant_reward(player: &Player, reward: &AdvancementRewards) {
         player.broadcast_inventory_changes();
     }
 
-    //TODO grant recipes and functions when implemented
+    player.queue_recipe_awards(reward.recipes.iter().map(|recipe| recipe.key().clone()));
 }

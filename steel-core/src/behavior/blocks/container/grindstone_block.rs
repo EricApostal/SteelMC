@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use steel_macros::block_behavior;
-use steel_registry::{blocks::BlockRef, items::item::BlockHitResult};
+use steel_registry::{blocks::BlockRef, items::item::BlockHitResult, vanilla_custom_stats};
 use steel_utils::{BlockPos, BlockStateId, Direction, translations};
 use text_components::TextComponent;
 
@@ -66,6 +66,7 @@ impl BlockBehavior for GrindstoneBlock {
             TextComponent::translated(translations::CONTAINER_GRINDSTONE_TITLE.msg()),
             move |context| grindstone(inventory, context.container_id, pos, context.world),
         );
+        player.award_custom_stat(&vanilla_custom_stats::INTERACT_WITH_GRINDSTONE);
         InteractionResult::Success
     }
 }

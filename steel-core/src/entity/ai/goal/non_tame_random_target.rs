@@ -49,7 +49,9 @@ impl Goal for NonTameRandomTargetGoal {
 
     fn can_continue_to_use(&mut self, mob: &dyn PathfinderMob) -> bool {
         // Vanilla `NonTameRandomTargetGoal.canContinueToUse` re-tests the stored
-        // conditions against the current target instead of target memory.
+        // `targetConditions` against its own `target` field instead of falling back to
+        // `TargetGoal.canContinueToUse`; `start` copies that field onto the mob, so Steel
+        // re-tests the mob's live target.
         let Some(target) = mob.target() else {
             return false;
         };

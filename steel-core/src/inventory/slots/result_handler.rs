@@ -26,6 +26,17 @@ pub trait ResultHandler: Send + Sync {
     /// Recalculate the result based on current inputs.
     fn update_result(&self, guard: &mut ContainerLockGuard);
 
+    /// Recalculate the result with the acting player in scope.
+    ///
+    /// Vanilla's crafting menus recompute their result inside
+    /// `slotChangedCraftingGrid`, which can consult the player (`limited_crafting`
+    /// is refused for recipes the player has not unlocked). Handlers whose result
+    /// does not depend on the player keep the default delegation to
+    /// [`update_result`](Self::update_result).
+    fn update_result_for(&self, guard: &mut ContainerLockGuard, _player: Option<&Player>) {
+        self.update_result(guard);
+    }
+
     /// Consume inputs when the result is taken. Return overflow remainders.
     fn on_result_taken(&self, guard: &mut ContainerLockGuard, player: &Player)
     -> Option<ItemStack>;
@@ -45,6 +56,10 @@ impl<T: ResultHandler + ?Sized> ResultHandler for Arc<T> {
 
     fn update_result(&self, guard: &mut ContainerLockGuard) {
         (**self).update_result(guard);
+    }
+
+    fn update_result_for(&self, guard: &mut ContainerLockGuard, player: Option<&Player>) {
+        (**self).update_result_for(guard, player);
     }
 
     fn on_result_taken(

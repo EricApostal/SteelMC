@@ -785,6 +785,7 @@ mod leash;
 mod living_base;
 mod living_entity;
 mod living_reference;
+pub(crate) mod loot;
 mod manager;
 mod mob;
 pub mod mob_effect;

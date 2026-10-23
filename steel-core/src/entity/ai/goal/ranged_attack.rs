@@ -73,16 +73,16 @@ impl RangedAttackGoal {
     /// Vanilla `RangedAttackGoal.tick` distance-scaled attack delay.
     fn attack_delay_for_distance(&self, distance: f32) -> i32 {
         let scaled = distance * (self.attack_interval_max - self.attack_interval_min) as f32;
-        (scaled + self.attack_interval_min as f32) as i32
+        (scaled + self.attack_interval_min as f32).floor() as i32
     }
 
     /// Vanilla `Mth.lerp(distance, min, max)` for the first cooldown tick, where
-    /// `distance` is already the radius-normalized `sqrt(distSqr) / attackRadius`.
-    fn attack_interval_lerp(&self, distance: f32) -> i32 {
-        let delta = f64::from(distance);
+    /// `distance` is `sqrt(distSqr) / attackRadius` evaluated in double precision (vanilla
+    /// promotes the float radius there, unlike the `(float)` cast used for the attack delay).
+    fn attack_interval_lerp(&self, distance: f64) -> i32 {
         let min = f64::from(self.attack_interval_min);
         let max = f64::from(self.attack_interval_max);
-        (min + (max - min) * delta) as i32
+        (min + (max - min) * distance).floor() as i32
     }
 }
 
@@ -169,7 +169,8 @@ impl Goal for RangedAttackGoal {
             }
             self.attack_time = self.attack_delay_for_distance(distance);
         } else if self.attack_time < 0 {
-            self.attack_time = self.attack_interval_lerp(distance);
+            self.attack_time = self
+                .attack_interval_lerp(target_distance_sqr.sqrt() / f64::from(self.attack_radius));
         }
     }
 }

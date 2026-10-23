@@ -258,6 +258,9 @@ impl Server {
             }
             self.tick_jobs(tick_count, runs_normally);
             self.process_player_joins();
+            // Vanilla `ServerBossEvent` broadcasts from inside `/bossbar`; Steel delivers the
+            // queued operations once per tick, after commands and joins.
+            crate::entity::boss::custom::tick_custom_boss_events(&self);
 
             {
                 let server = Arc::clone(&self);
@@ -589,13 +592,19 @@ impl Server {
 
     #[tracing::instrument(level = "trace", skip(self, workers), name = "tick_worlds")]
     pub(super) async fn tick_worlds_game(
-        &self,
+        self: &Arc<Self>,
         workers: &WorldTickWorkers,
         tick_count: u64,
         runs_normally: bool,
     ) -> Result<(), WorldTickWorkerError> {
         if runs_normally {
+            // Vanilla `MinecraftServer.tickChildren` runs the "commandFunctions" phase
+            // (`#load`/`#tick`) before the level ticks, at the previous tick's game time.
+            crate::datapack::tick_tags(self);
+            // Vanilla `ServerLevel.tickTime` advances the level clock and then drains the
+            // `/schedule` queue at the new game time, before block, fluid, and entity ticks.
             self.worlds.advance_domain_game_times();
+            crate::datapack::tick(self);
         }
         self.damage_history.expire();
         let all_timings = workers.tick_all(tick_count, runs_normally).await?;

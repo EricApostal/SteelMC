@@ -7,7 +7,8 @@
 
 use crate::advancement::criterion::{CriterionTrigger, CriterionTriggerInstance};
 use crate::advancement::predicates::{
-    Condition, HolderSet, IntBounds, StatePropertiesPredicate, item_predicate_matches,
+    Condition, HolderSet, IntBounds, ItemPredicate, StatePropertiesPredicate,
+    item_predicate_matches,
 };
 use crate::advancement::triggers::{PlayerCondition, TriggerEvent};
 use steel_utils::{BlockStateId, Identifier};
@@ -122,7 +123,7 @@ pub struct BeeNestDestroyedTriggerInstance {
     /// Vanilla `state`.
     pub state: Option<StatePropertiesPredicate>,
     /// Vanilla `item`: the tool used to destroy the nest.
-    pub item: Option<crate::loot_table::ItemPredicate>,
+    pub item: Option<ItemPredicate>,
     /// Vanilla `num_bees_inside`: bounds on the bees inside.
     pub num_bees_inside: IntBounds,
 }

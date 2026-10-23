@@ -4,10 +4,12 @@
 //! their color buffers, markers and per-viewer dirty tracking in
 //! [`MapItemSavedData`].
 
+pub(crate) mod colors;
 mod data;
 mod decoration;
 mod index;
 mod storage;
+mod world_maps;
 
 pub use data::{
     HALF_MAP_SIZE, MAP_COLOR_BYTES, MAP_SIZE, MAX_SCALE, MapItemSavedData,

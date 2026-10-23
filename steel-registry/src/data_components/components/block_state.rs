@@ -42,6 +42,15 @@ impl BlockItemStateProperties {
     pub fn is_empty(&self) -> bool {
         self.properties.is_empty()
     }
+
+    /// Vanilla `BlockItemStateProperties.with(Property, BlockState)`: stores the
+    /// state's serialized value for `property`.
+    #[must_use]
+    pub fn with_property(&self, property: String, value: String) -> Self {
+        let mut properties = self.properties.clone();
+        properties.insert(property, value);
+        Self { properties }
+    }
 }
 
 impl WriteTo for BlockItemStateProperties {

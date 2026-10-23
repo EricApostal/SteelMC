@@ -116,24 +116,16 @@ impl BlockBehavior for SculkShriekerBlock {
         pos: BlockPos,
         entity: &dyn crate::entity::Entity,
     ) {
-        // Vanilla `stepOn` resolves the stepping entity through `tryGetPlayer` (direct player,
-        // controlling passenger, projectile owner, or item owner). Steel resolves the full rule in
-        // the BE; the block path only handles a direct player step.
-        // TODO(Entity): controlling-passenger and item-owner steps do not shriek yet because
-        // `ItemEntity::get_owner` returns a bare UUID with no entity lookup on `Entity`.
-        if entity.as_player().is_none() {
-            self.default_step_on(state, world, pos, entity);
-            return;
-        }
-        let Some(block_entity) = world.get_block_entity(pos) else {
-            self.default_step_on(state, world, pos, entity);
-            return;
-        };
-        use steel_utils::Downcast as _;
-        if let Some(shrieker) =
-            block_entity.downcast_ref::<crate::block_entity::entities::SculkShriekerBlockEntity>()
-        {
-            shrieker.try_shriek(world, Some(entity.uuid()));
+        // Vanilla `stepOn` resolves the stepping entity through
+        // `SculkShriekerBlockEntity.tryGetPlayer` (direct player, controlling passenger,
+        // projectile owner, or item owner); the BE resolves that rule from the source UUID.
+        if let Some(block_entity) = world.get_block_entity(pos) {
+            use steel_utils::Downcast as _;
+            if let Some(shrieker) = block_entity
+                .downcast_ref::<crate::block_entity::entities::SculkShriekerBlockEntity>(
+            ) {
+                shrieker.try_shriek(world, Some(entity.uuid()));
+            }
         }
         self.default_step_on(state, world, pos, entity);
     }

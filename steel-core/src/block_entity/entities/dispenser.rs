@@ -5,17 +5,30 @@
 //! entity types share [`DispenserContainer`] and the generated implementation
 //! below while staying distinct concrete types (they belong to different
 //! vanilla block entity types and therefore need distinct downcast keys).
+//!
+//! Vanilla's `DispenserBlockEntity` extends `RandomizableContainerBlockEntity`,
+//! so both types persist a pending `LootTable`/`LootTableSeed` and unpack it
+//! when their contents are first read.
 
-use std::mem;
-use std::sync::{Arc, Weak};
+use std::{
+    mem,
+    str::FromStr as _,
+    sync::{Arc, Weak},
+};
 
+use rand::Rng as _;
+use rand::SeedableRng as _;
+use rand::rngs::StdRng;
 use simdnbt::ToNbtTag;
 use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
 use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::item_stack::ItemStack;
-use steel_registry::vanilla_block_entity_types;
-use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, locks::SyncMutex};
+use steel_registry::loot_table::{LootContext, LootTableRef};
+use steel_registry::{REGISTRY, RegistryExt as _, vanilla_block_entity_types};
+use steel_utils::{
+    BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier, locks::SyncMutex,
+};
 
 use crate::block_entity::{BlockEntity, BlockEntityBase};
 use crate::inventory::container::Container;
@@ -31,12 +44,18 @@ pub const DISPENSER_SLOTS: usize = 9;
 /// behavior dispenses items, not in how they store them.
 pub(crate) struct DispenserContainer {
     pub(crate) items: Vec<ItemStack>,
+    /// Vanilla `RandomizableContainerBlockEntity.lootTable`.
+    loot_table: Option<Identifier>,
+    /// Vanilla `RandomizableContainerBlockEntity.lootTableSeed`.
+    loot_table_seed: i64,
 }
 
 impl DispenserContainer {
     fn new() -> Self {
         Self {
             items: vec![ItemStack::empty(); DISPENSER_SLOTS],
+            loot_table: None,
+            loot_table_seed: 0,
         }
     }
 }
@@ -112,6 +131,53 @@ pub fn insert_item_into(container: &mut dyn Container, mut stack: ItemStack) -> 
     stack
 }
 
+/// Vanilla `Util.shuffle`: Fisher-Yates from the end of the slice.
+fn shuffle<T>(values: &mut [T], rng: &mut impl rand::Rng) {
+    for i in (2..=values.len()).rev() {
+        values.swap(i - 1, rng.random_range(0..i));
+    }
+}
+
+/// Vanilla `LootTable.shuffleAndSplitItems`: split oversized stacks so the
+/// generated items spread over the available slots, then shuffle the result.
+fn shuffle_and_split_items(
+    items: Vec<ItemStack>,
+    available_slots: usize,
+    rng: &mut impl rand::Rng,
+) -> Vec<ItemStack> {
+    let mut splittable = Vec::new();
+    let mut result = Vec::new();
+    for stack in items {
+        if stack.is_empty() {
+            continue;
+        }
+        if stack.count() > 1 {
+            splittable.push(stack);
+        } else {
+            result.push(stack);
+        }
+    }
+
+    while available_slots > result.len() + splittable.len() && !splittable.is_empty() {
+        let mut stack = splittable.remove(rng.random_range(0..splittable.len()));
+        let copy = stack.split(rng.random_range(1..=stack.count() / 2));
+        if stack.count() > 1 && rng.random_bool(0.5) {
+            splittable.push(stack);
+        } else {
+            result.push(stack);
+        }
+        if copy.count() > 1 && rng.random_bool(0.5) {
+            splittable.push(copy);
+        } else {
+            result.push(copy);
+        }
+    }
+
+    result.extend(splittable);
+    shuffle(&mut result, rng);
+    result
+}
+
 macro_rules! dispenser_block_entity {
     ($name:ident, $type:ident, $key:literal) => {
         /// A dispenser-family block entity: nine slots plus the vanilla
@@ -166,6 +232,9 @@ macro_rules! dispenser_block_entity {
             /// first. Returns `None` when every slot is empty.
             #[must_use]
             pub fn get_random_slot(&self) -> Option<usize> {
+                // Vanilla `DispenserBlockEntity.getRandomSlot` unpacks the pending
+                // loot table before sampling.
+                self.unpack_loot_table();
                 let container = self.container.lock();
                 let mut replace_slot = None;
                 let mut replace_odds = 1;
@@ -178,6 +247,74 @@ macro_rules! dispenser_block_entity {
                     }
                 }
                 replace_slot
+            }
+
+            /// Vanilla `RandomizableContainer.unpackLootTable(null)`.
+            ///
+            /// Generates the pending table's items and places them with
+            /// `LootTable.fill`'s slot selection, then clears the table. Vanilla runs
+            /// this from every container read (`getItem`, `isEmpty`, `removeItem`,
+            /// `setItem`, `getRandomSlot` and menu creation); Steel's callers invoke it
+            /// explicitly because the container capability is read through
+            /// [`ContainerRef`](crate::inventory::lock::ContainerRef).
+            pub fn unpack_loot_table(&self) {
+                let (loot_table, seed) = {
+                    let mut container = self.container.lock();
+                    let Some(loot_table_key) = container.loot_table.as_ref() else {
+                        return;
+                    };
+                    let Some(loot_table) = REGISTRY.loot_tables.by_key(loot_table_key) else {
+                        return;
+                    };
+                    container.loot_table = None;
+                    (loot_table, container.loot_table_seed)
+                };
+                let pos = self.get_block_pos();
+                let origin = (
+                    f64::from(pos.x()) + 0.5,
+                    f64::from(pos.y()) + 0.5,
+                    f64::from(pos.z()) + 0.5,
+                );
+                if seed == 0 {
+                    self.fill_from_loot_table(loot_table, origin, &mut rand::rng());
+                } else {
+                    self.fill_from_loot_table(
+                        loot_table,
+                        origin,
+                        &mut StdRng::seed_from_u64(seed as u64),
+                    );
+                }
+            }
+
+            /// Vanilla `LootTable.fill` against the dispenser's empty slots.
+            fn fill_from_loot_table<R: rand::Rng>(
+                &self,
+                loot_table: LootTableRef,
+                origin: (f64, f64, f64),
+                rng: &mut R,
+            ) {
+                let items = {
+                    let mut context =
+                        LootContext::new(rng).with_origin(origin.0, origin.1, origin.2);
+                    loot_table.get_random_items(&mut context)
+                };
+                let mut container = self.container.lock();
+                let mut available_slots: Vec<usize> = (0..DISPENSER_SLOTS)
+                    .filter(|&slot| container.items[slot].is_empty())
+                    .collect();
+                shuffle(&mut available_slots, rng);
+                let items = shuffle_and_split_items(items, available_slots.len(), rng);
+                let placed = !items.is_empty();
+                for item in items {
+                    let Some(slot) = available_slots.pop() else {
+                        break;
+                    };
+                    container.set_item(slot, item);
+                }
+                drop(container);
+                if placed {
+                    BlockEntity::set_changed(self);
+                }
             }
 
             /// Vanilla `DispenserBlockEntity.insertItem`: merges `stack` into
@@ -196,6 +333,10 @@ macro_rules! dispenser_block_entity {
             }
 
             fn pre_remove_side_effects(&self, pos: BlockPos, _state: BlockStateId) {
+                // Vanilla `Containers.dropContents` reads the container through
+                // `RandomizableContainerBlockEntity.getItem`, which unpacks a
+                // pending loot table first.
+                self.unpack_loot_table();
                 let items = {
                     let mut container = self.container.lock();
                     mem::replace(
@@ -215,6 +356,15 @@ macro_rules! dispenser_block_entity {
                 let nbt_view: NbtCompoundView<'_, '_> = nbt.into();
                 let mut container = self.container.lock();
                 container.items.fill(ItemStack::empty());
+                container.loot_table = nbt_view
+                    .string("LootTable")
+                    .and_then(|value| Identifier::from_str(&value.to_str()).ok());
+                container.loot_table_seed = nbt_view.long("LootTableSeed").unwrap_or(0);
+
+                // Vanilla `tryLoadLootTable`: a pending loot table replaces the stored items.
+                if container.loot_table.is_some() {
+                    return;
+                }
 
                 if let Some(items_list) = nbt_view.list("Items")
                     && let Some(compounds) = items_list.compounds()
@@ -234,6 +384,16 @@ macro_rules! dispenser_block_entity {
 
             fn save_additional(&self, nbt: &mut NbtCompound) {
                 let container = self.container.lock();
+                // Vanilla `trySaveLootTable`: an unopened loot table persists instead of items.
+                if let Some(loot_table) = &container.loot_table {
+                    nbt.insert("LootTable", loot_table.to_string());
+                    // Vanilla only writes the seed when it is non-zero.
+                    if container.loot_table_seed != 0 {
+                        nbt.insert("LootTableSeed", container.loot_table_seed);
+                    }
+                    return;
+                }
+
                 let mut items: Vec<NbtCompound> = Vec::new();
                 for (slot, item) in container.items.iter().enumerate() {
                     if !item.is_empty()
@@ -338,5 +498,79 @@ mod tests {
 
         assert_eq!(dropper.entity_type().key.path, "dropper");
         assert_eq!(test_dispenser().entity_type().key.path, "dispenser");
+    }
+
+    fn load_nbt(block_entity: &DispenserBlockEntity, nbt: &NbtCompound) {
+        let mut bytes = Vec::new();
+        nbt.write(&mut bytes);
+        let borrowed = simdnbt::borrow::read_compound(&mut std::io::Cursor::new(bytes.as_slice()))
+            .expect("test NBT should reborrow");
+        block_entity.load_additional(&borrowed);
+    }
+
+    #[test]
+    fn pending_loot_table_round_trips_instead_of_items() {
+        let source = test_dispenser();
+        {
+            let mut container = source.container.lock();
+            container.items[0] = ItemStack::new(&vanilla_items::ARROW);
+            container.loot_table = Some(Identifier::vanilla_static("chests/simple_dungeon"));
+            container.loot_table_seed = 42;
+        }
+
+        let mut saved = NbtCompound::new();
+        source.save_additional(&mut saved);
+
+        assert_eq!(
+            saved.string("LootTable").map(ToString::to_string),
+            Some("minecraft:chests/simple_dungeon".to_string())
+        );
+        assert_eq!(saved.long("LootTableSeed"), Some(42));
+        assert!(saved.list("Items").is_none());
+
+        let loaded = test_dispenser();
+        load_nbt(&loaded, &saved);
+        let container = loaded.container.lock();
+        assert_eq!(
+            container.loot_table,
+            Some(Identifier::vanilla_static("chests/simple_dungeon"))
+        );
+        assert_eq!(container.loot_table_seed, 42);
+        assert!(container.items.iter().all(ItemStack::is_empty));
+    }
+
+    #[test]
+    fn zero_loot_table_seed_is_not_persisted() {
+        let dispenser = test_dispenser();
+        {
+            let mut container = dispenser.container.lock();
+            container.loot_table = Some(Identifier::vanilla_static("chests/simple_dungeon"));
+        }
+
+        let mut saved = NbtCompound::new();
+        dispenser.save_additional(&mut saved);
+
+        assert!(saved.long("LootTableSeed").is_none());
+    }
+
+    #[test]
+    fn random_slot_unpacks_the_pending_loot_table() {
+        let dispenser = test_dispenser();
+        {
+            let mut container = dispenser.container.lock();
+            container.loot_table = Some(Identifier::vanilla_static("blocks/stone"));
+            container.loot_table_seed = 7;
+        }
+
+        let slot = dispenser.get_random_slot();
+
+        let container = dispenser.container.lock();
+        assert!(container.loot_table.is_none());
+        assert_eq!(
+            container.items.iter().filter(|item| !item.is_empty()).count(),
+            1
+        );
+        let slot = slot.expect("unpacked loot table should fill a slot");
+        assert!(container.items[slot].is(&vanilla_items::COBBLESTONE));
     }
 }

@@ -321,15 +321,16 @@ impl Mob for CaveSpiderEntity {
         }
     }
 
-    /// Vanilla `CaveSpider.finalizeSpawn` discards the group data (no skeleton jockey, no
-    /// random effect), but still runs the shared mob spawn bonus.
+    /// Vanilla `CaveSpider.finalizeSpawn` returns the group data unchanged and
+    /// never reaches `Mob.finalizeSpawn`, so the cave spider gets no
+    /// random-spawn follow-range or left-handed roll.
     fn finalize_spawn(
         &self,
-        world: &Arc<World>,
-        spawn_reason: EntitySpawnReason,
+        _world: &Arc<World>,
+        _spawn_reason: EntitySpawnReason,
         group_data: Option<SpawnGroupData>,
     ) -> Option<SpawnGroupData> {
-        self.finalize_spawn_mob_base(world, spawn_reason, group_data)
+        group_data
     }
 }
 

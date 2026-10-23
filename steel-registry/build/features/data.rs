@@ -43,7 +43,6 @@ pub struct PlacedFeatureData {
     /// Configured feature reference.
     pub feature: ConfiguredFeatureRef,
     /// Ordered placement modifier chain.
-    #[serde(default)]
     pub placement: Vec<PlacementModifier>,
 }
 
@@ -261,7 +260,7 @@ fn deserialize_configured_feature_kind(
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields)]
             struct OverlayConfigJson {
-                #[serde(deserialize_with = "deserialize_placed_feature_ref_list")]
+                #[serde(deserialize_with = "deserialize_non_empty_placed_features")]
                 features: Vec<PlacedFeatureRef>,
             }
             ConfiguredFeatureKind::Overlay {
@@ -432,6 +431,9 @@ fn deserialize_directions<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<Direction>, D::Error> {
     let values = Vec::<String>::deserialize(deserializer)?;
+    if values.is_empty() {
+        return Err(D::Error::custom("directions must not be empty"));
+    }
     values
         .iter()
         .map(|value| parse_direction(value).map_err(D::Error::custom))
@@ -681,18 +683,50 @@ pub struct RuleBasedStateProviderRule {
 /// `normalize` is modeled as a plain bool (vanilla's `Codec.BOOL` branch,
 /// `true` == `ENABLED`) — the deprecated `"legacy"` string form never
 /// appears in extracted data.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct FeatureNoiseParameters {
-    #[serde(default = "default_base_amplitude")]
     pub base_amplitude: f64,
     pub base_octave: i32,
-    #[serde(default = "default_octave_count")]
     pub octave_count: i32,
-    #[serde(default = "default_normalize")]
     pub normalize: bool,
-    #[serde(default)]
     pub amplitude_modifiers: Vec<f64>,
+}
+
+impl<'de> Deserialize<'de> for FeatureNoiseParameters {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            #[serde(default = "default_base_amplitude")]
+            base_amplitude: f64,
+            base_octave: i32,
+            #[serde(default = "default_octave_count")]
+            octave_count: i32,
+            #[serde(default = "default_normalize")]
+            normalize: bool,
+            #[serde(default)]
+            amplitude_modifiers: Vec<f64>,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        if !raw.amplitude_modifiers.is_empty()
+            && raw.amplitude_modifiers.len() != raw.octave_count.max(0) as usize
+        {
+            return Err(D::Error::custom(format!(
+                "amplitude_modifiers had size {}, but octave_count was {}",
+                raw.amplitude_modifiers.len(),
+                raw.octave_count
+            )));
+        }
+
+        Ok(Self {
+            base_amplitude: raw.base_amplitude,
+            base_octave: raw.base_octave,
+            octave_count: raw.octave_count,
+            normalize: raw.normalize,
+            amplitude_modifiers: raw.amplitude_modifiers,
+        })
+    }
 }
 
 const fn default_base_amplitude() -> f64 {
@@ -713,6 +747,7 @@ pub struct NoiseProvider {
     pub noise: FeatureNoiseParameters,
     pub scale: f32,
     pub seed: i64,
+    #[serde(deserialize_with = "deserialize_non_empty_list")]
     pub states: Vec<BlockStateData>,
 }
 
@@ -725,7 +760,9 @@ pub struct NoiseThresholdProvider {
     pub threshold: f32,
     pub high_chance: f32,
     pub default_state: BlockStateData,
+    #[serde(deserialize_with = "deserialize_non_empty_list")]
     pub low_states: Vec<BlockStateData>,
+    #[serde(deserialize_with = "deserialize_non_empty_list")]
     pub high_states: Vec<BlockStateData>,
 }
 
@@ -777,7 +814,10 @@ pub enum PlacementModifier {
         z: IntProvider,
     },
     #[serde(rename = "minecraft:randomly_selected")]
-    RandomlySelected { placements: Vec<PlacementModifier> },
+    RandomlySelected {
+        #[serde(deserialize_with = "deserialize_non_empty_list")]
+        placements: Vec<PlacementModifier>,
+    },
     #[serde(rename = "minecraft:random_chance")]
     RandomChance { chance: f32 },
     #[serde(rename = "minecraft:cuboid")]
@@ -1043,7 +1083,6 @@ pub struct EndGatewayConfiguration {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EndSpikeConfiguration {
-    #[serde(default)]
     pub spikes: Vec<EndSpike>,
     #[serde(default)]
     pub crystal_invulnerable: bool,
@@ -1095,7 +1134,9 @@ pub struct BlockReplacement {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FossilConfiguration {
+    #[serde(deserialize_with = "deserialize_non_empty_list")]
     pub fossil_structures: Vec<Identifier>,
+    #[serde(deserialize_with = "deserialize_non_empty_list")]
     pub overlay_structures: Vec<Identifier>,
     pub fossil_processors: Identifier,
     pub overlay_processors: Identifier,
@@ -1137,6 +1178,7 @@ pub struct GeodeBlockSettings {
     pub alternate_inner_layer_provider: BlockStateProviderKind,
     pub middle_layer_provider: BlockStateProviderKind,
     pub outer_layer_provider: BlockStateProviderKind,
+    #[serde(deserialize_with = "deserialize_non_empty_list")]
     pub inner_placements: Vec<BlockStateData>,
     #[serde(deserialize_with = "deserialize_tag_identifier")]
     pub cannot_replace: Identifier,
@@ -1339,7 +1381,6 @@ pub struct NetherrackReplaceBlobsConfiguration {
 pub struct OreConfiguration {
     pub targets: Vec<OreTarget>,
     pub size: i32,
-    #[serde(default)]
     pub discard_chance_on_air_exposure: f32,
 }
 
@@ -1396,6 +1437,7 @@ pub struct WeightedRandomPlacedFeature {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SimpleRandomSelectorConfiguration {
+    #[serde(deserialize_with = "deserialize_non_empty_placed_features")]
     pub features: Vec<PlacedFeatureRef>,
 }
 
@@ -1409,11 +1451,22 @@ pub struct CompositeFeatureConfiguration {
 fn deserialize_non_empty_placed_features<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<PlacedFeatureRef>, D::Error> {
-    let features = Vec::<PlacedFeatureRef>::deserialize(deserializer)?;
+    let features = deserialize_placed_feature_ref_list(deserializer)?;
     if features.is_empty() {
         return Err(D::Error::custom("features must not be empty"));
     }
     Ok(features)
+}
+
+/// Vanilla's `ExtraCodecs.nonEmptyList` shape for plain lists.
+fn deserialize_non_empty_list<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Vec<T>, D::Error> {
+    let values = Vec::<T>::deserialize(deserializer)?;
+    if values.is_empty() {
+        return Err(D::Error::custom("list must not be empty"));
+    }
+    Ok(values)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1559,10 +1612,10 @@ pub struct TreeConfiguration {
     pub trunk_placer: TrunkPlacer,
     pub foliage_placer: FoliagePlacer,
     pub minimum_size: FeatureSize,
-    #[serde(default)]
     pub decorators: Vec<TreeDecorator>,
     #[serde(default)]
     pub root_placer: Option<RootPlacer>,
+    #[serde(default)]
     pub ignore_vines: bool,
 }
 
@@ -1615,8 +1668,13 @@ pub struct BendingTrunkPlacer {
     pub base_height: i32,
     pub height_rand_a: i32,
     pub height_rand_b: i32,
+    #[serde(default = "default_min_height_for_leaves")]
     pub min_height_for_leaves: i32,
     pub bend_length: IntProvider,
+}
+
+const fn default_min_height_for_leaves() -> i32 {
+    1
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -12,12 +12,15 @@ use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{BlockStateProperties, BoolProperty, Direction};
+use steel_registry::data_components::vanilla_components;
 use steel_registry::item_stack::ItemStack;
+use steel_registry::loot_table::LootContext;
 use steel_registry::recipe::{
     CachedRecipeCheck, CookingRecipe, RecipeType, SingleItemRecipeInput, TypedRecipeRef,
     vanilla_recipe_types,
 };
-use steel_registry::{REGISTRY, vanilla_block_entity_types, vanilla_items};
+use steel_registry::vanilla_item_tags::ItemTag;
+use steel_registry::{REGISTRY, RegistryExt as _, vanilla_block_entity_types, vanilla_items};
 use steel_utils::locks::IntoShared;
 use steel_utils::{
     BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier, locks::SyncMutex,
@@ -27,7 +30,6 @@ use steel_utils::{
 use crate::block_entity::{BlockEntity, BlockEntityBase};
 use crate::entity::entities::ExperienceOrbEntity;
 use crate::inventory::container::Container;
-use crate::inventory::fuel_values::VANILLA_FUEL_VALUES;
 use crate::inventory::lock::{ContainerRef, SharedContainer};
 use crate::world::World;
 
@@ -39,7 +41,10 @@ pub const SLOT_RESULT: usize = 2;
 const SLOTS_FOR_UP: &[usize] = &[SLOT_INPUT];
 const SLOTS_FOR_DOWN: &[usize] = &[SLOT_RESULT, SLOT_FUEL];
 const SLOTS_FOR_SIDES: &[usize] = &[SLOT_FUEL];
+/// Vanilla `getTotalCookTime(ServerLevel, AbstractFurnaceBlockEntity)` fallback.
 const DEFAULT_COOKING_TIME: i32 = 200;
+/// Vanilla `AbstractFurnaceBlockEntity.DEFAULT_SPEED_MULTIPLIER`.
+const DEFAULT_SPEED_MULTIPLIER: f32 = 1.0;
 const BURN_COOL_SPEED: i32 = 2;
 const LIT: &BoolProperty = &BlockStateProperties::LIT;
 
@@ -64,32 +69,53 @@ impl FurnaceKind {
             Self::Smoker => &vanilla_recipe_types::SMOKING,
         }
     }
+}
 
-    #[must_use]
-    const fn fuel_duration(self, vanilla_duration: i32) -> i32 {
-        match self {
-            Self::Furnace => vanilla_duration,
-            Self::BlastFurnace | Self::Smoker => vanilla_duration / 2,
-        }
-    }
+/// Builds the loot context vanilla hands to a cooking-fuel number provider.
+///
+/// Vanilla's `BaseContainerBlockEntity.getLootContext` supplies the block state,
+/// the block entity, its centre and the container itself; only the block state
+/// is read by the vanilla `cooking/*` providers, whose `minecraft:block/fast_cooking`
+/// condition matches the smoker and blast furnace.
+fn cooking_fuel_context<R: rand::Rng>(rng: &mut R, state: BlockStateId) -> LootContext<'_, R> {
+    let mut context = LootContext::new(rng);
+    context.block_state = Some(state);
+    context
+}
 
-    #[must_use]
-    const fn cooking_time(self, recipe_time: i32) -> i32 {
-        match self {
-            Self::Furnace => recipe_time,
-            Self::BlastFurnace | Self::Smoker => recipe_time / 2,
-        }
-    }
+/// Resolves one `minecraft:cooking_fuel` int provider, mirroring vanilla
+/// `ResolvableInt.getFromItem(..., COOKING_FUEL, CookingFuel::burnTime, ..., 0)`.
+///
+/// The `0` fallback covers a missing component, a missing provider and
+/// `ContextIntProvider.getInt`'s arithmetic-error fallback alike.
+fn resolve_cooking_fuel_time(key: &Identifier, state: BlockStateId) -> i32 {
+    let Some(entry) = REGISTRY.context_int_providers.by_key(key) else {
+        return 0;
+    };
+    let mut rng = rand::rng();
+    let mut context = cooking_fuel_context(&mut rng, state);
+    entry.provider.get_int(&mut context)
+}
+
+/// Resolves one `minecraft:cooking_fuel` float provider, mirroring vanilla
+/// `ResolvableFloat.getFromItem(..., COOKING_FUEL, CookingFuel::speedMultiplier, ..., 1.0F)`.
+fn resolve_cooking_speed_multiplier(key: &Identifier, state: BlockStateId) -> f32 {
+    let Some(entry) = REGISTRY.context_float_providers.by_key(key) else {
+        return DEFAULT_SPEED_MULTIPLIER;
+    };
+    let mut rng = rand::rng();
+    let mut context = cooking_fuel_context(&mut rng, state);
+    entry.provider.get_float(&mut context)
 }
 
 /// Independently lockable furnace inventory and progress data.
 pub struct FurnaceContainer {
-    kind: FurnaceKind,
     items: [ItemStack; FURNACE_SLOTS],
     lit_time_remaining: i32,
     lit_total_time: i32,
     cooking_timer: i32,
     cooking_total_time: i32,
+    speed_multiplier: f32,
     recipes_used: FxHashMap<Identifier, i32>,
     quick_check: CachedRecipeCheck<CookingRecipe, SingleItemRecipeInput>,
 }
@@ -98,6 +124,9 @@ struct FurnaceTickResult {
     changed: bool,
     lit_changed: bool,
     is_lit: bool,
+    /// Crafting remainder that did not fit back into the fuel slot, mirroring
+    /// vanilla `Containers.dropItemStack` in `consumeFuel`.
+    dropped_remainder: Option<ItemStack>,
 }
 
 // SAFETY: This Steel-owned key uniquely identifies furnace inventory/progress storage.
@@ -108,12 +137,12 @@ unsafe impl DowncastType for FurnaceContainer {
 impl FurnaceContainer {
     fn new(kind: FurnaceKind) -> Self {
         Self {
-            kind,
             items: from_fn(|_| ItemStack::empty()),
             lit_time_remaining: 0,
             lit_total_time: 0,
             cooking_timer: 0,
             cooking_total_time: 0,
+            speed_multiplier: DEFAULT_SPEED_MULTIPLIER,
             recipes_used: FxHashMap::default(),
             quick_check: CachedRecipeCheck::new(kind.recipe_type()),
         }
@@ -134,12 +163,43 @@ impl FurnaceContainer {
         self.quick_check.find_match(&REGISTRY.recipes, &input)
     }
 
+    /// Vanilla `getTotalCookTime(ServerLevel, AbstractFurnaceBlockEntity)`.
+    ///
+    /// The `200` fallback bypasses `getTotalCookTime(RecipeHolder, entity)`, so it
+    /// is not scaled by the speed multiplier.
     fn reset_cooking_for_input(&mut self) {
-        let recipe_time = self
-            .recipe_for_input()
-            .map_or(DEFAULT_COOKING_TIME, |recipe| recipe.data().cooking_time);
-        self.cooking_total_time = self.kind.cooking_time(recipe_time);
+        self.cooking_total_time = match self.recipe_for_input() {
+            Some(recipe) => self.total_cook_time(recipe.data().cooking_time),
+            None => DEFAULT_COOKING_TIME,
+        };
         self.cooking_timer = 0;
+    }
+
+    /// Vanilla `getTotalCookTime(RecipeHolder, AbstractFurnaceBlockEntity)`:
+    /// `ceil(cookingTime / speedMultiplier)`, or the raw time when the multiplier
+    /// is not positive.
+    fn total_cook_time(&self, recipe_time: i32) -> i32 {
+        if self.speed_multiplier > 0.0 {
+            (recipe_time as f32 / self.speed_multiplier).ceil() as i32
+        } else {
+            recipe_time
+        }
+    }
+
+    /// Vanilla `AbstractFurnaceBlockEntity.getBurnDuration`.
+    fn burn_duration(&self, state: BlockStateId) -> i32 {
+        self.items[SLOT_FUEL]
+            .get(vanilla_components::COOKING_FUEL)
+            .map_or(0, |fuel| resolve_cooking_fuel_time(&fuel.burn_time, state))
+    }
+
+    /// Vanilla `AbstractFurnaceBlockEntity.getSpeedMultiplier`.
+    fn fuel_speed_multiplier(&self, state: BlockStateId) -> f32 {
+        self.items[SLOT_FUEL]
+            .get(vanilla_components::COOKING_FUEL)
+            .map_or(DEFAULT_SPEED_MULTIPLIER, |fuel| {
+                resolve_cooking_speed_multiplier(&fuel.speed_multiplier, state)
+            })
     }
 
     fn can_burn(&self, result: &ItemStack) -> bool {
@@ -156,16 +216,29 @@ impl FurnaceContainer {
         current.count() + result.count() <= self.get_max_stack_size_for_item(result)
     }
 
-    fn consume_fuel(&mut self) {
-        let fuel_item = self.items[SLOT_FUEL].item();
+    /// Vanilla `consumeFuel`: shrink the fuel stack, then either substitute the
+    /// crafting remainder into the emptied slot or hand it back for dropping.
+    fn consume_fuel(&mut self) -> Option<ItemStack> {
+        let remainder = self.items[SLOT_FUEL].item().get_crafting_remainder();
         self.items[SLOT_FUEL].shrink(1);
+        if remainder.is_empty() {
+            return None;
+        }
         if self.items[SLOT_FUEL].is_empty() {
-            self.items[SLOT_FUEL] = fuel_item.get_crafting_remainder();
+            self.items[SLOT_FUEL] = remainder;
+            None
+        } else {
+            Some(remainder)
         }
     }
 
-    fn burn(&mut self, recipe: TypedRecipeRef<CookingRecipe, SingleItemRecipeInput>) {
-        let result = recipe.data().result.create();
+    /// Vanilla `burn`: add `result` to the output slot, convert a sponge's bucket
+    /// to a water bucket, and consume one input item.
+    fn burn(
+        &mut self,
+        recipe: TypedRecipeRef<CookingRecipe, SingleItemRecipeInput>,
+        result: ItemStack,
+    ) {
         if self.items[SLOT_RESULT].is_empty() {
             self.items[SLOT_RESULT] = result;
         } else {
@@ -181,28 +254,44 @@ impl FurnaceContainer {
         *self.recipes_used.entry(recipe.key().clone()).or_default() += 1;
     }
 
-    fn tick(&mut self) -> FurnaceTickResult {
+    /// Vanilla `AbstractFurnaceBlockEntity.serverTick` without the world writes;
+    /// `state` is the block state the ticker was invoked with.
+    fn tick(&mut self, state: BlockStateId) -> FurnaceTickResult {
         let was_lit = self.lit_time_remaining > 0;
         if was_lit {
             self.lit_time_remaining -= 1;
         }
         let mut is_lit = self.lit_time_remaining > 0;
         let mut changed = false;
+        let mut dropped_remainder = None;
         let has_ingredient = !self.items[SLOT_INPUT].is_empty();
         let has_fuel = !self.items[SLOT_FUEL].is_empty();
 
         if is_lit || (has_fuel && has_ingredient) {
-            if let Some(recipe) = self.recipe_for_input() {
+            if !has_ingredient {
+                // Vanilla resets the timer only when the input slot is empty; a
+                // present-but-unmatched ingredient leaves it untouched.
+                self.cooking_timer = 0;
+            } else if let Some(recipe) = self.recipe_for_input() {
                 let result = recipe.data().result.create();
                 if self.can_burn(&result) {
                     if !is_lit {
-                        let vanilla_duration =
-                            VANILLA_FUEL_VALUES.burn_duration(self.items[SLOT_FUEL].item());
-                        let duration = self.kind.fuel_duration(vanilla_duration);
+                        let duration = self.burn_duration(state);
+                        self.speed_multiplier = self.fuel_speed_multiplier(state);
                         self.lit_time_remaining = duration;
                         self.lit_total_time = duration;
+                        if self.cooking_total_time > 0
+                            && self.cooking_timer < self.cooking_total_time
+                        {
+                            let completion_ratio =
+                                self.cooking_timer as f32 / self.cooking_total_time as f32;
+                            self.cooking_total_time =
+                                self.total_cook_time(recipe.data().cooking_time);
+                            self.cooking_timer =
+                                (completion_ratio * self.cooking_total_time as f32).ceil() as i32;
+                        }
                         if duration > 0 {
-                            self.consume_fuel();
+                            dropped_remainder = self.consume_fuel();
                             is_lit = true;
                             changed = true;
                         }
@@ -210,11 +299,11 @@ impl FurnaceContainer {
 
                     if is_lit {
                         self.cooking_timer += 1;
-                        if self.cooking_timer == self.cooking_total_time {
+                        if self.cooking_timer >= self.cooking_total_time {
                             self.cooking_timer = 0;
                             self.cooking_total_time =
-                                self.kind.cooking_time(recipe.data().cooking_time);
-                            self.burn(recipe);
+                                self.total_cook_time(recipe.data().cooking_time);
+                            self.burn(recipe, result);
                             changed = true;
                         }
                     } else {
@@ -223,8 +312,6 @@ impl FurnaceContainer {
                 } else {
                     self.cooking_timer = 0;
                 }
-            } else {
-                self.cooking_timer = 0;
             }
         } else if self.cooking_timer > 0 {
             self.cooking_timer =
@@ -235,6 +322,7 @@ impl FurnaceContainer {
             changed,
             lit_changed: was_lit != is_lit,
             is_lit,
+            dropped_remainder,
         }
     }
 
@@ -269,17 +357,24 @@ impl Container for FurnaceContainer {
         }
     }
 
+    /// Vanilla `Container.getMaxStackSize` default: neither `BaseContainerBlockEntity`
+    /// nor `AbstractFurnaceBlockEntity` overrides it, so the container reports 99 and
+    /// the effective limit comes from each stack's own maximum.
     fn get_max_stack_size(&self) -> i32 {
-        64
+        99
     }
 
     fn set_changed(&mut self) {}
 
+    /// Vanilla `AbstractFurnaceBlockEntity.canPlaceItem`: the result slot is
+    /// insert-only-by-smelting, and the fuel slot takes anything carrying the
+    /// `minecraft:cooking_fuel` component, or a bucket while the slot holds no
+    /// bucket (so the sponge water-bucket swap can land).
     fn can_place_item(&self, slot: usize, stack: &ItemStack) -> bool {
         match slot {
             SLOT_RESULT => false,
             SLOT_FUEL => {
-                VANILLA_FUEL_VALUES.is_fuel(stack.item())
+                stack.get(vanilla_components::COOKING_FUEL).is_some()
                     || (stack.is(&vanilla_items::BUCKET)
                         && !self.items[SLOT_FUEL].is(&vanilla_items::BUCKET))
             }
@@ -295,6 +390,8 @@ impl Container for FurnaceContainer {
         })
     }
 
+    /// Vanilla `canTakeItemThroughFace`: only the fuel slot, from below, and only
+    /// for `minecraft:furnace_fuel_bottom_takeable` items (bucket/water bucket).
     fn can_take_item_through_face(
         &self,
         slot: usize,
@@ -303,8 +400,7 @@ impl Container for FurnaceContainer {
     ) -> bool {
         direction != Direction::Down
             || slot != SLOT_FUEL
-            || stack.is(&vanilla_items::WATER_BUCKET)
-            || stack.is(&vanilla_items::BUCKET)
+            || stack.item().has_tag(&ItemTag::FURNACE_FUEL_BOTTOM_TAKEABLE)
     }
 }
 
@@ -338,12 +434,19 @@ impl AbstractFurnaceBlockEntity {
         self.container_ref.clone()
     }
 
+    /// Vanilla `AbstractFurnaceBlockEntity.serverTick`: the container performs the
+    /// storage-local half, and the world writes stay here so no container lock is
+    /// held across them.
     fn server_tick(&self, world: &Arc<World>) {
-        let result = self.container.lock().tick();
+        let state = self.base.block_state();
+        let result = self.container.lock().tick(state);
 
+        if let Some(remainder) = result.dropped_remainder {
+            world.drop_item_stack(self.base.pos(), remainder);
+        }
         if result.lit_changed {
-            let state = self.base.block_state().set_value(LIT, result.is_lit);
-            world.set_block(self.base.pos(), state, UpdateFlags::UPDATE_ALL);
+            let lit_state = state.set_value(LIT, result.is_lit);
+            world.set_block(self.base.pos(), lit_state, UpdateFlags::UPDATE_ALL);
         }
         if result.changed || result.lit_changed {
             self.base.set_changed();
@@ -366,10 +469,13 @@ impl AbstractFurnaceBlockEntity {
                 }
             }
         }
-        furnace.cooking_timer = i32::from(nbt.short("cooking_time_spent").unwrap_or(0));
-        furnace.cooking_total_time = i32::from(nbt.short("cooking_total_time").unwrap_or(0));
-        furnace.lit_time_remaining = i32::from(nbt.short("lit_time_remaining").unwrap_or(0));
-        furnace.lit_total_time = i32::from(nbt.short("lit_total_time").unwrap_or(0));
+        furnace.cooking_timer = nbt.int("cooking_time_spent").unwrap_or(0);
+        furnace.cooking_total_time = nbt.int("cooking_total_time").unwrap_or(0);
+        furnace.lit_time_remaining = nbt.int("lit_time_remaining").unwrap_or(0);
+        furnace.lit_total_time = nbt.int("lit_total_time").unwrap_or(0);
+        furnace.speed_multiplier = nbt
+            .float("speed_multiplier")
+            .unwrap_or(DEFAULT_SPEED_MULTIPLIER);
         furnace.recipes_used.clear();
         if let Some(recipes) = nbt.compound("RecipesUsed") {
             for (key, value) in recipes.iter() {
@@ -385,10 +491,11 @@ impl AbstractFurnaceBlockEntity {
 
     fn save_additional(&self, nbt: &mut NbtCompound) {
         let furnace = self.container.lock();
-        nbt.insert("cooking_time_spent", furnace.cooking_timer as i16);
-        nbt.insert("cooking_total_time", furnace.cooking_total_time as i16);
-        nbt.insert("lit_time_remaining", furnace.lit_time_remaining as i16);
-        nbt.insert("lit_total_time", furnace.lit_total_time as i16);
+        nbt.insert("cooking_time_spent", furnace.cooking_timer);
+        nbt.insert("cooking_total_time", furnace.cooking_total_time);
+        nbt.insert("lit_time_remaining", furnace.lit_time_remaining);
+        nbt.insert("lit_total_time", furnace.lit_total_time);
+        nbt.insert("speed_multiplier", furnace.speed_multiplier);
 
         let mut items = Vec::new();
         for (slot, stack) in furnace.items.iter().enumerate() {
@@ -533,9 +640,19 @@ furnace_block_entity!(
 
 #[cfg(test)]
 mod tests {
-    use steel_registry::{init_vanilla_registry, vanilla_items};
+    use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_items};
 
     use super::*;
+
+    /// The block state vanilla's `minecraft:block/fast_cooking` predicate reads
+    /// when resolving a fuel's burn time and speed multiplier.
+    fn block_state(kind: FurnaceKind) -> BlockStateId {
+        match kind {
+            FurnaceKind::Furnace => vanilla_blocks::FURNACE.default_state(),
+            FurnaceKind::BlastFurnace => vanilla_blocks::BLAST_FURNACE.default_state(),
+            FurnaceKind::Smoker => vanilla_blocks::SMOKER.default_state(),
+        }
+    }
 
     fn cook_iron(kind: FurnaceKind, expected_ticks: usize, expected_fuel_time: i32) {
         init_vanilla_registry();
@@ -544,7 +661,7 @@ mod tests {
         furnace.set_item(SLOT_FUEL, ItemStack::new(&vanilla_items::COAL));
 
         for _ in 0..expected_ticks {
-            furnace.tick();
+            furnace.tick(block_state(kind));
         }
 
         assert!(furnace.items[SLOT_INPUT].is_empty());
@@ -592,5 +709,26 @@ mod tests {
             &ItemStack::new(&vanilla_items::WATER_BUCKET),
             Direction::Down,
         ));
+    }
+
+    /// Vanilla derives fuel acceptance and burn time from the
+    /// `minecraft:cooking_fuel` component, so items outside the legacy fuel table
+    /// still burn, and the smoker/blast furnace halve the resolved duration.
+    #[test]
+    fn fuel_slot_and_burn_time_follow_the_cooking_fuel_component() {
+        init_vanilla_registry();
+        let mut furnace = FurnaceContainer::new(FurnaceKind::Furnace);
+        let wool_slab = ItemStack::new(&vanilla_items::BLACK_WOOL_SLAB);
+
+        assert!(furnace.can_place_item(SLOT_FUEL, &wool_slab));
+        assert!(!furnace.can_place_item(SLOT_RESULT, &wool_slab));
+        assert!(!furnace.can_place_item(
+            SLOT_FUEL,
+            &ItemStack::new(&vanilla_items::IRON_ORE)
+        ));
+
+        furnace.set_item(SLOT_FUEL, wool_slab);
+        assert_eq!(furnace.burn_duration(block_state(FurnaceKind::Furnace)), 50);
+        assert_eq!(furnace.burn_duration(block_state(FurnaceKind::Smoker)), 25);
     }
 }

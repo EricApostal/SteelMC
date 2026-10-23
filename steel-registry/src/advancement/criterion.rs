@@ -80,7 +80,7 @@ impl<T: CriterionTriggerInstance, G: CriterionTrigger + ?Sized> Criterion<T, G> 
 }
 
 impl Criterion<ImpossibleInstance, ImpossibleTrigger> {
-    /// The placeholder criterion used until real predicate codegen lands.
+    /// The `minecraft:impossible` criterion, grantable only by commands.
     #[must_use]
     pub fn impossible() -> Self {
         Criterion {

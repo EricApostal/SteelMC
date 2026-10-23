@@ -61,7 +61,7 @@ impl WriteTo for SelectableStonecutterRecipe {
     }
 }
 
-/// Synchronises the recipe property sets and stonecutter options.
+/// Synchronizes the recipe property sets and stonecutter options.
 ///
 /// Matches vanilla's `ClientboundUpdateRecipesPacket`: the `itemSets` map first,
 /// then the stonecutter `SingleInputSet`.

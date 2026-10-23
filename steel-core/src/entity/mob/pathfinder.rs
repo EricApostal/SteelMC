@@ -1,19 +1,21 @@
 use std::sync::Arc;
 
 use glam::DVec3;
-use steel_math::fast_floor;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
-use steel_registry::{vanilla_attributes, vanilla_blocks};
+use steel_registry::vanilla_attributes;
 use steel_utils::{BlockPos, ChunkPos};
 
 use super::{Mob, TARGET_REACH_DISTANCE_SQR};
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::ai::goal::{Goal, GoalControl};
 use crate::entity::ai::navigation::{
-    NavigationPathRequest, NavigationRecomputeRequest, NavigationTickContext,
+    NavigationKind, NavigationPathRequest, NavigationRecomputeRequest, NavigationTickContext,
 };
 use crate::entity::ai::path::Path;
-use crate::entity::ai::walk::{MobPathSettings, WalkNodeEvaluator};
+use crate::entity::ai::walk::{
+    AmphibiousNodeEvaluator, MobNodeEvaluator, MobPathSettings, SwimNodeEvaluator,
+    WalkNodeEvaluator,
+};
 use crate::entity::{Entity, LivingEntity, SharedEntity};
 use crate::physics::WorldCollisionProvider;
 use crate::world::{LevelReader, World};
@@ -26,78 +28,31 @@ pub(super) fn tick_path_navigation_target<M: Mob + ?Sized>(
     game_time: i64,
     can_update_path: bool,
 ) {
-    let (target, speed_modifier) = {
-        let mut navigation = mob.mob_base().navigation().lock();
-        let ground_mob_position =
-            ground_navigation_temp_mob_pos(mob, world.as_ref(), navigation.can_float());
-        let context = NavigationTickContext {
-            ground_mob_position,
-            mob_position: mob.position(),
-            mob_bounding_box_width: mob.bounding_box().width(),
-            mob_speed: mob.get_speed(),
-            game_time,
-        };
-        let next_target = if can_update_path {
-            navigation.next_move_target(context)
-        } else {
-            navigation.next_move_target_without_path_update(context, mob.on_ground())
-        };
-        let Some(target) = next_target else {
-            return;
-        };
-        target
+    let mut navigation = mob.mob_base().navigation().lock();
+    let context = NavigationTickContext {
+        ground_mob_position: navigation.temp_mob_pos(mob, world.as_ref()),
+        mob_position: mob.position(),
+        mob_bounding_box_width: mob.bounding_box().width(),
+        mob_speed: mob.get_speed(),
+        game_time,
     };
-
-    let target_pos = BlockPos::containing(target.x, target.y, target.z);
-    let ground_y = if world.get_block_state(target_pos.below()).is_air() {
-        target.y
+    let next_target = if can_update_path {
+        navigation.next_move_target(context, mob)
     } else {
-        WalkNodeEvaluator::floor_level(world.as_ref(), target_pos)
+        navigation.next_move_target_without_path_update(context, mob.on_ground())
     };
-    mob.set_wanted_position(DVec3::new(target.x, ground_y, target.z), speed_modifier);
-}
-
-fn ground_navigation_temp_mob_pos<M: Mob + ?Sized>(
-    mob: &M,
-    world: &World,
-    can_float: bool,
-) -> DVec3 {
-    let position = mob.position();
-    DVec3::new(
-        position.x,
-        f64::from(ground_navigation_surface_y(mob, world, can_float)),
-        position.z,
-    )
-}
-
-fn ground_navigation_surface_y<M: Mob + ?Sized>(mob: &M, world: &World, can_float: bool) -> i32 {
-    if !mob.is_in_water() || !can_float {
-        return fast_floor(mob.position().y + 0.5);
-    }
-
-    let position = mob.position();
-    let block_y = mob.block_position().y();
-    let mut surface = block_y;
-    let mut state = world.get_block_state(BlockPos::containing(
-        position.x,
-        f64::from(surface),
-        position.z,
-    ));
-    let mut steps = 0;
-    while state.get_block() == &vanilla_blocks::WATER {
-        surface += 1;
-        state = world.get_block_state(BlockPos::containing(
-            position.x,
-            f64::from(surface),
-            position.z,
-        ));
-        steps += 1;
-        if steps > 16 {
-            return block_y;
+    let Some((target, speed_modifier)) = next_target else {
+        // Vanilla `WallClimberNavigation.tick`: a finished path still pushes the
+        // mob toward `pathToPosition` at its exact Y.
+        if let Some((target, speed_modifier)) = navigation.wall_climb_wanted_position(context) {
+            drop(navigation);
+            mob.set_wanted_position(target, speed_modifier);
         }
-    }
-
-    surface
+        return;
+    };
+    let ground_y = navigation.ground_y(world.as_ref(), target);
+    drop(navigation);
+    mob.set_wanted_position(DVec3::new(target.x, ground_y, target.z), speed_modifier);
 }
 
 pub trait PathfinderMob: Mob {
@@ -119,7 +74,7 @@ pub trait PathfinderMob: Mob {
     }
 
     fn can_update_path(&self) -> bool {
-        self.on_ground() || self.is_in_water() || self.is_in_lava() || self.is_passenger()
+        self.mob_base().navigation().lock().can_update_path(self)
     }
 
     fn can_path_to_targets_below_surface(&self) -> bool {
@@ -146,16 +101,19 @@ pub trait PathfinderMob: Mob {
             return;
         };
         let game_time = world.game_time();
+        // Read the flag before locking: `can_update_path` takes the navigation
+        // lock itself.
+        let can_update_path = self.can_update_path();
         let recompute_request = {
             let mut navigation = self.mob_base().navigation().lock();
             navigation.tick();
-            navigation.take_delayed_recompute_request(game_time, self.can_update_path())
+            navigation.take_delayed_recompute_request(game_time, can_update_path)
         };
         if let Some(request) = recompute_request {
             self.recompute_path(request);
         }
 
-        tick_path_navigation_target(self, &world, game_time, self.can_update_path());
+        tick_path_navigation_target(self, &world, game_time, can_update_path);
     }
 
     fn tick_pathfinder_goal_selectors(&self, entity: &SharedEntity)
@@ -175,8 +133,13 @@ pub trait PathfinderMob: Mob {
     }
 
     fn is_stable_destination(&self, pos: BlockPos) -> bool {
-        self.level()
-            .is_some_and(|world| world.get_block_state(pos.below()).is_solid_render())
+        let Some(world) = self.level() else {
+            return false;
+        };
+        self.mob_base()
+            .navigation()
+            .lock()
+            .is_stable_destination(world.as_ref(), pos)
     }
 
     fn create_path_to(&self, target: BlockPos, reach_range: i32) -> Option<Path> {
@@ -192,6 +155,12 @@ pub trait PathfinderMob: Mob {
         }
 
         let target = path_target_for_mob(self, world.as_ref(), target);
+        // Vanilla `WallClimberNavigation.createPath(BlockPos, int)` records the
+        // requested position so `tick` can keep climbing toward it.
+        self.mob_base()
+            .navigation()
+            .lock()
+            .record_wall_climb_target(target);
         let targets = [target];
         self.create_path_to_targets(&world, &targets, reach_range)
     }
@@ -233,6 +202,12 @@ pub trait PathfinderMob: Mob {
         }
 
         let target_pos = path_target_for_mob(self, world.as_ref(), target_pos);
+        // Vanilla `WallClimberNavigation` records the requested position when a
+        // path is created for it, whichever overload created it.
+        self.mob_base()
+            .navigation()
+            .lock()
+            .record_wall_climb_target(target_pos);
         let targets = [target_pos];
         if self
             .mob_base()
@@ -381,7 +356,6 @@ pub trait PathfinderMob: Mob {
 
         let mob_position = self.block_position();
         let settings = MobPathSettings::from_mob(self);
-        let mut evaluator = WalkNodeEvaluator::new(settings);
         let collision_world =
             WorldCollisionProvider::for_path_navigation(world, self.as_entity_event_source());
         let mut collision = |aabb| {
@@ -392,7 +366,28 @@ pub trait PathfinderMob: Mob {
             )
         };
 
-        self.mob_base().navigation().lock().create_path(
+        let mut navigation = self.mob_base().navigation().lock();
+        // Vanilla `PathNavigation.createPathFinder` chooses the evaluator subclass;
+        // Steel's single navigation type carries that choice as `NavigationKind`.
+        let mut evaluator = match navigation.kind() {
+            NavigationKind::Ground | NavigationKind::WallClimber => {
+                MobNodeEvaluator::Walk(WalkNodeEvaluator::new(settings))
+            }
+            NavigationKind::WaterBound => MobNodeEvaluator::Swim(SwimNodeEvaluator::new(
+                settings,
+                navigation.allow_breaching(),
+            )),
+            NavigationKind::Amphibious => {
+                let mut amphibious =
+                    AmphibiousNodeEvaluator::new(settings, navigation.prefers_shallow_swimming());
+                if let Some(tag) = navigation.amphibious_prefer_jump_to() {
+                    amphibious = amphibious.with_prefer_jump_to(tag);
+                }
+                MobNodeEvaluator::Amphibious(amphibious)
+            }
+        };
+
+        navigation.create_path(
             &mut evaluator,
             world.as_ref(),
             &mut collision,

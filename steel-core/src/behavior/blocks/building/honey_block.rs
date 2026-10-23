@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use glam::DVec3;
 use steel_macros::block_behavior;
+use steel_registry::advancement::triggers::TriggerEvent;
 use steel_registry::blocks::{BlockRef, block_state_ext::BlockStateExt as _, shapes::VoxelShape};
 use steel_registry::{sound_events, vanilla_damage_types, vanilla_entities};
 use steel_utils::entity_events::EntityStatus;
-use steel_utils::{BlockLocalAabb, BlockPos, BlockStateId};
+use steel_utils::{BlockLocalAabb, BlockPos, BlockStateId, Identifier};
 
 use crate::entity::DEFAULT_AIR_DRAG;
 use crate::{
@@ -13,7 +14,8 @@ use crate::{
         BlockBehavior, BlockCollisionContext, BlockPlaceContext, EntityFallDamage,
         EntityFallOnContext,
     },
-    entity::{Entity, InsideBlockEffectCollector, damage::DamageSource},
+    entity::{Entity, InsideBlockEffectCollector, damage::DamageSource, living_loot_equipment},
+    player::advancement::triggers::{WorldLevelView, event_base, player_view, raise},
     world::{LevelReader, World},
 };
 
@@ -114,6 +116,31 @@ impl HoneyBlock {
         entity.entity_type() == &vanilla_entities::TNT
     }
 
+    /// Vanilla `HoneyBlock.maybeDoSlideAchievement`: raise
+    /// `minecraft:slide_down_block` for a player at most once every 20 ticks.
+    fn maybe_do_slide_achievement(world: &Arc<World>, entity: &dyn Entity, state: BlockStateId) {
+        if world.game_time() % 20 != 0 {
+            return;
+        }
+        let Some(player) = entity.as_player() else {
+            return;
+        };
+        let origin = player.block_position();
+        let level = WorldLevelView::new(world, origin);
+        let equipment = living_loot_equipment(player);
+        let known = player.recipe_book().unlocked_identifiers().to_vec();
+        let view = player_view(player, &level, Some(&equipment), &known);
+        let event = TriggerEvent::SlideDownBlock {
+            base: event_base(&view, &level, origin),
+            state,
+        };
+        raise(
+            player,
+            &Identifier::vanilla_static("slide_down_block"),
+            &event,
+        );
+    }
+
     fn do_slide_movement(entity: &dyn Entity) {
         entity.set_velocity(Self::velocity_after_slide(entity.velocity()));
         entity.reset_fall_distance();
@@ -198,7 +225,7 @@ impl BlockBehavior for HoneyBlock {
         is_precise: bool,
     ) {
         if Self::is_sliding_down(pos, entity) {
-            // TODO: Award the honey-block slide advancement once advancements exist.
+            Self::maybe_do_slide_achievement(world, entity, state);
             Self::do_slide_movement(entity);
             Self::maybe_do_slide_effects(world, entity);
         }

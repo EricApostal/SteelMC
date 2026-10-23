@@ -1,30 +1,39 @@
 //! Vanilla turtle egg block behavior.
 //!
 //! Turtle eggs are placed in clusters of one to four in a single block space.
-//! While sitting on sand they slowly crack (three stages) and then hatch, and
-//! they are trampled by most living entities that walk or fall onto them.
+//! While sitting on sand they slowly crack (three stages) and then hatch into
+//! baby turtles, and they are trampled by most living entities that walk or fall
+//! onto them.
+//!
+//! Deviation: vanilla `canDestroyEgg` denies players standing in spawn
+//! protection; Steel has no spawn-protection query (owner: server).
 
 use std::sync::Arc;
 
+use glam::DVec3;
 use steel_macros::block_behavior;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::{BlockStateProperties, IntProperty};
+use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_block_tags::BlockTag;
+use steel_registry::vanilla_entity_type_tags::EntityTypeTag;
 use steel_registry::{
-    level_events, sound_events, vanilla_entities, vanilla_game_events, vanilla_game_rules,
-    vanilla_items, vanilla_world_clocks,
+    REGISTRY, RegistryExt as _, TaggedRegistryExt as _, level_events, sound_events,
+    vanilla_entities, vanilla_game_events, vanilla_game_rules, vanilla_items,
 };
 use steel_utils::types::UpdateFlags;
-use steel_utils::{BlockPos, BlockStateId};
+use steel_utils::{BlockPos, BlockStateId, WorldAabb};
 
+use super::eyeblossom_block::float_attribute;
 use crate::behavior::block::{
     BlockBehavior, EntityFallDamage, EntityFallOnContext, default_can_be_replaced,
 };
 use crate::behavior::context::BlockPlaceContext;
 use crate::block_entity::SharedBlockEntity;
-use crate::entity::Entity;
+use crate::entity::entities::TurtleEntity;
+use crate::entity::{AgeableMob, Entity, SharedEntity, next_entity_id};
 use crate::player::Player;
 use crate::world::World;
 use crate::world::game_event::GameEventContext;
@@ -34,14 +43,12 @@ const MAX_HATCH_LEVEL: u8 = 2;
 /// Maximum number of eggs that can occupy a single block space.
 const MAX_EGGS: u8 = 4;
 
-/// Length of one full Minecraft day, in ticks.
-const TICKS_PER_DAY: i64 = 24_000;
-/// Base per-random-tick chance that an egg advances a cracking stage.
+/// Vanilla `EnvironmentAttributes.TURTLE_EGG_HATCH_CHANCE` key.
+const TURTLE_EGG_HATCH_CHANCE_ATTRIBUTE: &str = "minecraft:gameplay/turtle_egg_hatch_chance";
+/// Vanilla `EnvironmentAttributes.TURTLE_EGG_HATCH_CHANCE` default value.
 const BASE_HATCH_CHANCE: f32 = 0.002;
-/// Start (inclusive) of the pre-dawn window where eggs always advance.
-const HATCH_WINDOW_START: i64 = 21_062;
-/// End (exclusive) of the pre-dawn window where eggs always advance.
-const HATCH_WINDOW_END: i64 = 21_905;
+/// Vanilla `TurtleEggBlock.randomTick` baby age (`turtle.setAge(-24000)`).
+const BABY_TURTLE_AGE: i32 = -24_000;
 
 /// One in this many chance to trample an egg while standing on it each tick.
 const STEP_TRAMPLE_ODDS: i32 = 100;
@@ -50,12 +57,6 @@ const FALL_TRAMPLE_ODDS: i32 = 3;
 
 /// Particle count for the "egg placed on sand" effect.
 const TURTLE_EGG_PLACEMENT_PARTICLE_COUNT: i32 = 15;
-
-/// Dimension timeline tag that carries the day timeline. Only dimensions on this
-/// tag (the overworld and its caves variant) apply the pre-dawn hatch boost;
-/// nether and end eggs stay at the base chance, matching vanilla's per-dimension
-/// resolution of the `gameplay/turtle_egg_hatch_chance` attribute.
-const OVERWORLD_TIMELINE_TAG: &str = "#minecraft:in_overworld";
 
 const HATCH: &IntProperty = &BlockStateProperties::HATCH;
 const EGGS: &IntProperty = &BlockStateProperties::EGGS;
@@ -82,42 +83,23 @@ impl TurtleEggBlock {
             .has_tag(&BlockTag::SAND)
     }
 
-    /// Rolls whether an egg should advance its cracking stage this random tick.
-    ///
-    /// In vanilla this chance comes from the `gameplay/turtle_egg_hatch_chance`
-    /// environment attribute: base 0.002, raised to 1.0 by a day-timeline
-    /// `maximum` modifier during the pre-dawn window (ticks 21062 to 21904).
-    /// Vanilla resolves the attribute per dimension, and only dimensions tagged
-    /// `#minecraft:in_overworld` include that day timeline, so eggs in the nether
-    /// or end keep the 0.002 base regardless of the overworld time of day.
-    ///
-    /// Steel's timeline sampler in `world::environment` only handles
-    /// `multiply`/replace modifiers and exposes sky light and sun angle, so it
-    /// cannot resolve this attribute yet; the turtle curve is reproduced inline
-    /// off the overworld day clock, gated on the same timeline tag.
-    // TODO(environment-attributes): replace this inline curve with a single
-    // attribute lookup once the timeline sampler learns the `maximum` modifier
-    // and exposes a public environment-attribute getter.
+    /// Vanilla `TurtleEggBlock.shouldUpdateHatchLevel`: roll the
+    /// `gameplay/turtle_egg_hatch_chance` environment attribute.
     fn should_update_hatch_level(world: &Arc<World>) -> bool {
-        let day_time = world
-            .clock_total_ticks(&vanilla_world_clocks::OVERWORLD)
-            .unwrap_or(0)
-            .rem_euclid(TICKS_PER_DAY);
-
-        let in_hatch_window = (HATCH_WINDOW_START..HATCH_WINDOW_END).contains(&day_time)
-            && world.dimension_type.timelines == Some(OVERWORLD_TIMELINE_TAG);
-        let chance = if in_hatch_window {
-            1.0
-        } else {
-            BASE_HATCH_CHANCE
-        };
-
+        let chance = float_attribute(
+            world,
+            TURTLE_EGG_HATCH_CHANCE_ATTRIBUTE,
+            BASE_HATCH_CHANCE,
+        );
         chance > 0.0 && rand::random::<f32>() < chance
     }
 
     /// Vanilla `TurtleEggBlock.canDestroyEgg`: which entities are able to trample
     /// an egg. Turtles and bats never do, and only living entities can; players
     /// always may, other mobs only when `mobGriefing` is enabled.
+    ///
+    /// Deviation: vanilla also denies players inside spawn protection; Steel has
+    /// no spawn-protection query (owner: server).
     fn can_destroy_egg(world: &Arc<World>, entity: &dyn Entity) -> bool {
         let entity_type = entity.entity_type();
         if entity_type == &vanilla_entities::TURTLE || entity_type == &vanilla_entities::BAT {
@@ -128,6 +110,47 @@ impl TurtleEggBlock {
         }
         entity_type == &vanilla_entities::PLAYER
             || world.get_game_rule(&vanilla_game_rules::MOB_GRIEFING)
+    }
+
+    /// Vanilla `TurtleEggBlock.randomTick`: spawns one baby turtle per egg, each
+    /// nudged 0.2 blocks further along X, with the nest as its home position.
+    fn spawn_hatchling(world: &Arc<World>, pos: BlockPos, index: i32) {
+        let position = DVec3::new(
+            f64::from(pos.x()) + 0.3 + f64::from(index) * 0.2,
+            f64::from(pos.y()),
+            f64::from(pos.z()) + 0.3,
+        );
+        let turtle = Arc::new(TurtleEntity::new(
+            &vanilla_entities::TURTLE,
+            next_entity_id(),
+            position,
+            Arc::downgrade(world),
+        ));
+        AgeableMob::set_age(turtle.as_ref(), BABY_TURTLE_AGE);
+        turtle.set_home_pos(pos);
+        turtle.set_rotation((0.0, 0.0));
+        turtle.base().set_old_position_to_current();
+
+        let entity: SharedEntity = turtle;
+        if let Err(error) = world.try_add_entity(entity) {
+            log::debug!("failed to add hatched turtle: {error}");
+        }
+    }
+
+    /// Vanilla `Zombie` membership used by `TurtleEggBlock.fallOn`.
+    ///
+    /// Vanilla checks `instanceof Zombie`, i.e. zombie, husk, drowned,
+    /// zombified piglin and zombie villager. The `#minecraft:zombies` tag is
+    /// wider (it also holds zombie horses, camel husks, zoglins and zombie
+    /// nautilus, which are not `Zombie` subclasses), so those four are excluded.
+    fn is_zombie(entity_type: EntityTypeRef) -> bool {
+        REGISTRY
+            .entity_types
+            .is_in_tag(entity_type, &EntityTypeTag::ZOMBIES)
+            && entity_type.key != vanilla_entities::ZOMBIE_HORSE.key
+            && entity_type.key != vanilla_entities::CAMEL_HUSK.key
+            && entity_type.key != vanilla_entities::ZOGLIN.key
+            && entity_type.key != vanilla_entities::ZOMBIE_NAUTILUS.key
     }
 
     /// Vanilla `TurtleEggBlock.destroyEgg`: a random chance to remove one egg
@@ -264,17 +287,14 @@ impl BlockBehavior for TurtleEggBlock {
             );
 
             let eggs = state.get_value(EGGS);
-            for _ in 0..eggs {
+            for index in 0..eggs {
                 world.level_event(
                     level_events::PARTICLES_DESTROY_BLOCK,
                     pos,
                     level_events::encode_block_state_data(u32::from(state.0)),
                     None,
                 );
-                // TODO(turtle-entity): spawn one baby Turtle per egg here once the
-                // Turtle entity lands. Vanilla creates it with age -24000, calls
-                // setHomePos(pos), snaps it just above the nest, and adds it to the
-                // world. Wired up in the follow-up entity PR.
+                Self::spawn_hatchling(world, pos, index);
             }
         }
     }
@@ -295,14 +315,8 @@ impl BlockBehavior for TurtleEggBlock {
         context: EntityFallOnContext<'_>,
     ) -> Option<EntityFallDamage> {
         if let Some(entity) = context.source_entity()
-            && entity.entity_type() != &vanilla_entities::ZOMBIE
+            && !Self::is_zombie(entity.entity_type())
         {
-            // Vanilla excludes `instanceof Zombie`, which also covers husks,
-            // drowned, zombie villagers, and zombified piglins. None of those
-            // exist in Steel yet, so this single-type check is currently exact.
-            // TODO(zombie-family): widen this to the whole zombie set (a shared
-            // "is a zombie" predicate or an entity-type tag) once those entities
-            // land, so falling zombies do not double up with their trample AI.
             self.destroy_egg(world, state, pos, entity, FALL_TRAMPLE_ODDS);
         }
         self.default_fall_on(state, world, pos, context)
@@ -372,11 +386,20 @@ mod tests {
         behavior.random_tick(world.get_block_state(pos), world, pos);
         assert_eq!(world.get_block_state(pos).get_value(HATCH), 2);
 
-        // Final advance hatches the egg and removes the block. Spawning the baby
-        // turtle is stubbed until the Turtle entity lands, so only the removal is
-        // asserted here.
+        // Final advance hatches the egg, removes the block and spawns a baby
+        // turtle per egg.
         behavior.random_tick(world.get_block_state(pos), world, pos);
         assert!(world.get_block_state(pos).is_air());
+        let turtles = world.get_entities_in_aabb_matching(
+            &WorldAabb::of_size(DVec3::new(8.5, 64.5, 8.5), 4.0, 4.0, 4.0),
+            |entity| entity.entity_type() == &vanilla_entities::TURTLE,
+        );
+        assert_eq!(turtles.len(), 1);
+        assert!(
+            turtles[0]
+                .as_living_entity()
+                .is_some_and(|turtle| turtle.get_age() < 0)
+        );
     }
 
     #[test]

@@ -20,7 +20,8 @@ use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{BlockStateProperties, ChestType};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
-use steel_registry::{sound_events, vanilla_block_entity_types};
+use steel_registry::vanilla_block_tags::BlockTag;
+use steel_registry::{sound_events, vanilla_block_entity_types, vanilla_blocks};
 use steel_utils::types::GameType;
 use steel_utils::{
     BlockPos, BlockStateId, Direction, DowncastType, DowncastTypeKey, Identifier, locks::SyncMutex,
@@ -237,7 +238,10 @@ impl BlockEntity for ChestBlockEntity {
         // Vanilla `trySaveLootTable`: an unopened loot table persists instead of items.
         if let Some(loot_table) = &container.loot_table {
             nbt.insert("LootTable", loot_table.to_string());
-            nbt.insert("LootTableSeed", container.loot_table_seed);
+            // Vanilla only writes the seed when it is non-zero.
+            if container.loot_table_seed != 0 {
+                nbt.insert("LootTableSeed", container.loot_table_seed);
+            }
             return;
         }
 
@@ -269,15 +273,48 @@ impl BlockEntity for ChestBlockEntity {
     }
 }
 
+/// Vanilla `CopperChestBlock.getHingeSound`: copper chests use the hinge sound of
+/// their oxidation stage, every other chest the wooden one.
+fn hinge_sound(state: BlockStateId, open: bool) -> SoundEventRef {
+    let block = state.get_block();
+    if block.has_tag(&BlockTag::COPPER_CHESTS) {
+        if block == &vanilla_blocks::WEATHERED_COPPER_CHEST
+            || block == &vanilla_blocks::WAXED_WEATHERED_COPPER_CHEST
+        {
+            if open {
+                &sound_events::COPPER_CHEST_WEATHERED_OPEN
+            } else {
+                &sound_events::COPPER_CHEST_WEATHERED_CLOSE
+            }
+        } else if block == &vanilla_blocks::OXIDIZED_COPPER_CHEST
+            || block == &vanilla_blocks::WAXED_OXIDIZED_COPPER_CHEST
+        {
+            if open {
+                &sound_events::COPPER_CHEST_OXIDIZED_OPEN
+            } else {
+                &sound_events::COPPER_CHEST_OXIDIZED_CLOSE
+            }
+        } else if open {
+            &sound_events::COPPER_CHEST_OPEN
+        } else {
+            &sound_events::COPPER_CHEST_CLOSE
+        }
+    } else if open {
+        &sound_events::BLOCK_CHEST_OPEN
+    } else {
+        &sound_events::BLOCK_CHEST_CLOSE
+    }
+}
+
 impl ContainerOpenersHost for ChestBlockEntity {
     /// Vanilla `ChestBlockEntity.openersCounter.onOpen`.
     fn on_open(&self, world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
-        self.play_sound(world, pos, state, &sound_events::BLOCK_CHEST_OPEN);
+        self.play_sound(world, pos, state, hinge_sound(state, true));
     }
 
     /// Vanilla `ChestBlockEntity.openersCounter.onClose`.
     fn on_close(&self, world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
-        self.play_sound(world, pos, state, &sound_events::BLOCK_CHEST_CLOSE);
+        self.play_sound(world, pos, state, hinge_sound(state, false));
     }
 
     /// Vanilla `ChestBlockEntity.signalOpenCount`.
@@ -309,7 +346,11 @@ impl ContainerViewers for ChestBlockEntity {
         let pos = self.get_block_pos();
         let state = self.get_block_state();
         // Compute under the counter lock, run the world-writing hooks after.
-        let transition = self.openers.lock().increment(4.0);
+        // Vanilla passes `containerUser.getContainerInteractionRange()`.
+        let transition = self
+            .openers
+            .lock()
+            .increment(player.block_interaction_range());
         ContainerOpenersCounter::apply(self, transition, Some(player), &world, pos, state);
     }
 
@@ -342,8 +383,13 @@ impl ContainerViewers for ChestBlockEntity {
         };
         let pos = self.get_block_pos();
         let state = self.get_block_state();
-        let open_count = count_viewers(&world, pos, self);
-        let transition = self.openers.lock().recheck(open_count);
+        let max_interaction_range = self.openers.lock().max_interaction_range();
+        let (open_count, max_interaction_range) =
+            count_viewers(&world, pos, self, max_interaction_range);
+        let transition = self
+            .openers
+            .lock()
+            .recheck(open_count, max_interaction_range);
         ContainerOpenersCounter::apply(self, transition, None, &world, pos, state);
     }
 }
@@ -462,6 +508,20 @@ mod tests {
         );
         assert_eq!(container.loot_table_seed, 42);
         assert!(container.items.iter().all(ItemStack::is_empty));
+    }
+
+    #[test]
+    fn zero_loot_table_seed_is_omitted_from_saved_nbt() {
+        let chest = test_chest();
+        {
+            let mut container = chest.container.lock();
+            container.loot_table = Some(Identifier::vanilla_static("chests/simple_dungeon"));
+        }
+
+        let mut nbt = NbtCompound::new();
+        chest.save_additional(&mut nbt);
+
+        assert!(nbt.get("LootTableSeed").is_none());
     }
 
     #[test]

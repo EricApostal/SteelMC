@@ -167,7 +167,7 @@ impl SpawnEggItem {
             return InteractionResult::Fail;
         };
 
-        // Vanilla only honours `entity_data` for operators.
+        // Vanilla only honors `entity_data` for operators.
         let entity_data = stack
             .get(ENTITY_DATA)
             .filter(|_| context.player.is_operator());

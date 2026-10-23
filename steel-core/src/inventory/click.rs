@@ -34,8 +34,8 @@ pub enum Click {
         /// Which mouse button was used.
         button: MouseButton,
     },
-    /// Left/right click outside the window, dropping the carried stack
-    /// (`slot_num == -999` on the wire).
+    /// Left/right click (or shift-click) outside the window, dropping the
+    /// carried stack (`slot_num == -999` on the wire).
     DropCarried {
         /// Left drops the whole stack, right drops a single item.
         button: MouseButton,
@@ -263,7 +263,18 @@ impl Click {
                 }
             }
             ClickType::QuickMove => match button {
-                0 | 1 => Some(Self::QuickMove { slot: slot()? }),
+                // Vanilla's `doClick` handles both click inputs through one
+                // branch, so shift-clicking outside the window also drops the
+                // carried stack.
+                0 | 1 => {
+                    if slot_num == SLOT_CLICKED_OUTSIDE {
+                        Some(Self::DropCarried {
+                            button: mouse_button()?,
+                        })
+                    } else {
+                        Some(Self::QuickMove { slot: slot()? })
+                    }
+                }
                 _ => None,
             },
             ClickType::Swap => {
@@ -339,6 +350,24 @@ mod tests {
         );
         // Unknown mouse button.
         assert_eq!(Click::parse(5, 2, ClickType::Pickup, SLOTS), None);
+        // Vanilla routes both pickup and quick-move through the same branch,
+        // so shift-clicking outside the window drops the carried stack.
+        assert_eq!(
+            Click::parse(SLOT_CLICKED_OUTSIDE, 0, ClickType::QuickMove, SLOTS),
+            Some(Click::DropCarried {
+                button: MouseButton::Left
+            })
+        );
+        assert_eq!(
+            Click::parse(SLOT_CLICKED_OUTSIDE, 1, ClickType::QuickMove, SLOTS),
+            Some(Click::DropCarried {
+                button: MouseButton::Right
+            })
+        );
+        assert_eq!(
+            Click::parse(SLOT_CLICKED_OUTSIDE, 2, ClickType::QuickMove, SLOTS),
+            None
+        );
     }
 
     #[test]

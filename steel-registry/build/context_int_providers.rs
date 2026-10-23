@@ -215,7 +215,7 @@ pub(crate) enum ScoreTargetJson {
     },
 }
 
-fn default_weight() -> i32 {
+const fn default_weight() -> i32 {
     1
 }
 
@@ -327,29 +327,6 @@ pub(crate) fn generate_int_ref(value: &ProviderJson, placement: Placement) -> To
         ProviderJson::Object(object) => {
             let object = generate_int_object(object, placement);
             quote! { &#object }
-        }
-    }
-}
-
-/// Emits the `ContextIntProvider` expression (an owned value) for an inline
-/// provider object.
-fn generate_int_value(value: &ProviderJson, placement: Placement) -> TokenStream {
-    match value {
-        ProviderJson::Number(number) => {
-            let value = int_literal(*number);
-            quote! { ContextIntProvider::Constant(#value) }
-        }
-        ProviderJson::Object(object) => generate_int_object(object, placement),
-        ProviderJson::Reference(name) => {
-            let ident = Ident::new(
-                &reference_key(name).to_shouty_snake_case(),
-                Span::call_site(),
-            );
-            if placement == Placement::Int {
-                quote! { *#ident.provider }
-            } else {
-                quote! { *crate::vanilla_context_int_providers::#ident.provider }
-            }
         }
     }
 }
@@ -598,7 +575,7 @@ fn fallback_or_zero(fallback: Option<&ProviderJson>) -> &ProviderJson {
 }
 
 /// The `value` field of a `constant` provider, or a panic when absent.
-fn constant_number<'a>(object: &'a ProviderObjectJson, provider_type: &str) -> f64 {
+fn constant_number(object: &ProviderObjectJson, provider_type: &str) -> f64 {
     match field(object.value.as_ref(), provider_type, "value") {
         ProviderJson::Number(number) => *number,
         other => panic!("minecraft:{provider_type} value must be a number, got {other:?}"),
@@ -620,7 +597,7 @@ fn int_literal(number: f64) -> i32 {
 }
 
 /// A float provider literal.
-pub(crate) fn float_literal(number: f64) -> f32 {
+pub(crate) const fn float_literal(number: f64) -> f32 {
     #[expect(
         clippy::cast_possible_truncation,
         reason = "vanilla's Codec.FLOAT reads JSON numbers as f32"
@@ -666,11 +643,10 @@ fn generate_condition(condition: &ConditionJson) -> TokenStream {
             quote! { LootCondition::RandomChance(#chance) }
         }
         "minecraft:inverted" => {
-            let term = condition
-                .term
-                .as_deref()
-                .map(generate_condition_ref)
-                .unwrap_or_else(|| panic!("minecraft:inverted is missing term"));
+            let term = condition.term.as_deref().map_or_else(
+                || panic!("minecraft:inverted is missing term"),
+                generate_condition_ref,
+            );
             quote! { LootCondition::Inverted(&#term) }
         }
         "minecraft:any_of" | "minecraft:all_of" => {

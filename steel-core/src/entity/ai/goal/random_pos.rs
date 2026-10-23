@@ -1,5 +1,3 @@
-use std::f64::consts::{FRAC_PI_2, SQRT_2};
-
 use glam::DVec3;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_utils::BlockPos;
@@ -11,6 +9,12 @@ use crate::entity::ai::walk::WalkPathEvaluator;
 use crate::fluid::FluidStateExt as _;
 
 const RANDOM_POS_ATTEMPTS: usize = 10;
+
+/// Vanilla's callers pass `(float) (Math.PI / 2)`; the `float` narrowing is part of the math.
+pub(crate) const HALF_PI: f64 = std::f32::consts::FRAC_PI_2 as f64;
+
+/// Vanilla `Raider.ObtainLeaderBannerGoal` passes `(float) (Math.PI / 10)`.
+pub(crate) const TENTH_PI: f64 = (std::f64::consts::PI / 10.0) as f32 as f64;
 
 pub(crate) fn default_random_pos(
     mob: &dyn PathfinderMob,
@@ -70,7 +74,7 @@ pub(crate) fn default_random_pos_away(
                 0,
                 dir_away.x,
                 dir_away.z,
-                FRAC_PI_2,
+                HALF_PI,
             )
         }?;
         default_random_pos_toward_direction(mob, f64::from(horizontal_dist), restrict, direction)
@@ -91,11 +95,43 @@ pub(crate) fn land_random_pos(
     })
 }
 
+/// Vanilla `LandRandomPos.getPosTowards(mob, xz, y, towardsPos)`: the land search steered
+/// toward `towardsPos`, scored by the walk-target value.
+pub(crate) fn land_random_pos_towards(
+    mob: &dyn PathfinderMob,
+    horizontal_dist: i32,
+    vertical_dist: i32,
+    towards_pos: DVec3,
+) -> Option<DVec3> {
+    let dir = towards_pos - mob.position();
+    let restrict = mob_restricted(mob, f64::from(horizontal_dist));
+    generate_random_pos(mob, || {
+        let direction = {
+            let mut random = LegacyRandom::from_seed(rand::random());
+            generate_random_direction_within_radians(
+                &mut random,
+                0.0,
+                f64::from(horizontal_dist),
+                vertical_dist,
+                0,
+                dir.x,
+                dir.z,
+                HALF_PI,
+            )
+        }?;
+        let pos =
+            land_random_pos_toward_direction(mob, f64::from(horizontal_dist), restrict, direction)?;
+        land_move_pos_up_out_of_solid(mob, pos)
+    })
+}
+
 fn generate_random_pos(
     mob: &dyn PathfinderMob,
     pos_supplier: impl FnMut() -> Option<BlockPos>,
 ) -> Option<DVec3> {
-    generate_random_pos_with_weight(pos_supplier, |pos| mob.get_walk_target_value(pos))
+    generate_random_pos_with_weight(pos_supplier, |pos| {
+        f64::from(mob.get_walk_target_value(pos))
+    })
 }
 
 /// Vanilla `HoverRandomPos.getPos(...)`: a land-biased direction search whose result is
@@ -209,7 +245,7 @@ pub(crate) fn land_random_pos_with_weight(
     mob: &dyn PathfinderMob,
     horizontal_dist: i32,
     vertical_dist: i32,
-    weight: impl Fn(BlockPos) -> f32,
+    weight: impl Fn(BlockPos) -> f64,
 ) -> Option<DVec3> {
     let restrict = mob_restricted(mob, f64::from(horizontal_dist));
     generate_random_pos_with_weight(
@@ -229,9 +265,9 @@ pub(crate) fn land_random_pos_with_weight(
 
 fn generate_random_pos_with_weight(
     mut pos_supplier: impl FnMut() -> Option<BlockPos>,
-    weight: impl Fn(BlockPos) -> f32,
+    weight: impl Fn(BlockPos) -> f64,
 ) -> Option<DVec3> {
-    let mut best_weight = f32::NEG_INFINITY;
+    let mut best_weight = f64::NEG_INFINITY;
     let mut best_pos = None;
 
     for _ in 0..RANDOM_POS_ATTEMPTS {
@@ -274,14 +310,16 @@ fn generate_random_direction_within_radians(
     z_dir: f64,
     max_xz_radians_from_dir: f64,
 ) -> Option<BlockPos> {
-    let y_radians_center = z_dir.atan2(x_dir) - FRAC_PI_2;
-    let y_radians =
-        y_radians_center + (2.0 * f64::from(random.next_f32()) - 1.0) * max_xz_radians_from_dir;
+    let y_radians_center = z_dir.atan2(x_dir) - f64::from(std::f32::consts::FRAC_PI_2);
+    // Vanilla computes the jitter in `float` arithmetic: `2.0F * nextFloat() - 1.0F`.
+    let jitter = f64::from(2.0_f32 * random.next_f32() - 1.0);
+    let y_radians = y_radians_center + jitter * max_xz_radians_from_dir;
+    // Vanilla `Mth.SQRT_OF_TWO` is the `float` square root, widened to `double`.
     let dist = lerp(
         random.next_f64().sqrt(),
         min_horizontal_dist,
         max_horizontal_dist,
-    ) * SQRT_2;
+    ) * f64::from(std::f32::consts::SQRT_2);
     let xt = -dist * y_radians.sin();
     let zt = dist * y_radians.cos();
     if xt.abs() > max_horizontal_dist || zt.abs() > max_horizontal_dist {
@@ -445,7 +483,7 @@ mod tests {
             0,
             1.0,
             0.0,
-            FRAC_PI_2,
+            HALF_PI,
         );
 
         assert_eq!(direction, Some(BlockPos::new(15, -5, 13)));
@@ -463,7 +501,7 @@ mod tests {
             0,
             -1.0,
             0.0,
-            FRAC_PI_2,
+            HALF_PI,
         );
 
         assert_eq!(direction, Some(BlockPos::new(-16, -5, -14)));

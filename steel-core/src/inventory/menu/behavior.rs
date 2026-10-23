@@ -838,6 +838,8 @@ impl MenuBehavior {
             return;
         }
 
+        // Vanilla reads the amount once, before the first take, and reuses it
+        // while the slot refills.
         let amount = if whole_stack {
             slot.get_item(&guard).count
         } else {
@@ -863,7 +865,7 @@ impl MenuBehavior {
                 if current_item.is_empty() || !ItemStack::is_same_item(&current_item, &dropped) {
                     break;
                 }
-                let more_dropped = slot.safe_take(&mut guard, current_item.count, i32::MAX, player);
+                let more_dropped = slot.safe_take(&mut guard, amount, i32::MAX, player);
                 if more_dropped.is_empty() {
                     break;
                 }

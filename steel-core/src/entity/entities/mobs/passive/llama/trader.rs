@@ -31,7 +31,7 @@ pub(crate) const TRADER_LLAMA_DEFAULT_DESPAWN_DELAY: i32 = 47999;
 pub struct TraderLlamaEntity {
     llama: LlamaEntity,
     entity_data: SyncMutex<TraderLlamaEntityData>,
-    /// Vanilla `TraderLlama.despawnDelay`, initialised to 47999.
+    /// Vanilla `TraderLlama.despawnDelay`, initialized to 47999.
     despawn_delay: SyncMutex<i32>,
 }
 

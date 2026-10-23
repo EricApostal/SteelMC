@@ -53,6 +53,12 @@ pub(crate) trait Spellcaster {
 
     /// Vanilla `SpellcasterIllager.getCastingSoundEvent`.
     fn casting_sound(&self) -> SoundEventRef;
+
+    /// Vanilla `Evoker.EvokerCastingSpellGoal.tick` fallback look target: the evoker keeps
+    /// facing its wololo sheep while it has no combat target. Other casters have none.
+    fn spell_look_target(&self) -> Option<SharedEntity> {
+        None
+    }
 }
 
 /// Bridges a `dyn PathfinderMob` back to the [`Spellcaster`] it implements.
@@ -89,6 +95,10 @@ impl Spellcaster for EvokerEntity {
 
     fn casting_sound(&self) -> SoundEventRef {
         EvokerEntity::casting_sound(self)
+    }
+
+    fn spell_look_target(&self) -> Option<SharedEntity> {
+        EvokerEntity::wololo_target(self)
     }
 }
 
@@ -238,10 +248,6 @@ impl<S: SpellcasterSpell + 'static> Goal for SpellcasterUseSpellGoal<S> {
         self.spell.on_stop(mob);
     }
 
-    fn requires_update_every_tick(&self) -> bool {
-        true
-    }
-
     fn tick(&mut self, mob: &dyn PathfinderMob, _entity: &SharedEntity) {
         self.attack_warmup_delay -= 1;
         if self.attack_warmup_delay == 0 {
@@ -276,7 +282,12 @@ impl Goal for SpellcasterCastingSpellGoal {
     }
 
     fn tick(&mut self, mob: &dyn PathfinderMob, _entity: &SharedEntity) {
-        let Some(target) = mob.target() else {
+        // Vanilla `Evoker.EvokerCastingSpellGoal.tick` looks at the combat target and falls
+        // back to the wololo sheep; other casters only have the combat target.
+        let target = mob
+            .target()
+            .or_else(|| caster_of(mob).and_then(Spellcaster::spell_look_target));
+        let Some(target) = target else {
             return;
         };
         let eye = glam::DVec3::new(target.position().x, target.get_eye_y(), target.position().z);
@@ -360,9 +371,13 @@ impl SpellcasterSpell for IllusionerBlindnessSpell {
         if target.id() == self.last_target_id {
             return false;
         }
-        // Vanilla `getCurrentDifficultyAt(...).isHarderThan(Difficulty.NORMAL.ordinal())`.
-        mob.level()
-            .is_some_and(|world| world.difficulty() == Difficulty::Hard)
+        // Vanilla `getCurrentDifficultyAt(blockPosition()).isHarderThan(Difficulty.NORMAL.ordinal())`:
+        // the regional effective difficulty, not just the world's base difficulty.
+        mob.level().is_some_and(|world| {
+            world
+                .current_difficulty_at(mob.block_position())
+                .is_harder_than(f32::from(u8::from(Difficulty::Normal)))
+        })
     }
 
     fn on_start(&mut self, mob: &dyn PathfinderMob) {

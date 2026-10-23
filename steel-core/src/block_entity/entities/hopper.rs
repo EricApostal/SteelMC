@@ -397,7 +397,7 @@ impl Container for HopperContainer {
 ///
 /// Vanilla parity: `HopperBlockEntity.getBlockContainer` as reached through
 /// `getContainerAt`. Blocks whose `WorldlyContainerHolder` capability is not yet
-/// modelled in Steel (composters) and entity containers (hopper/chest minecarts)
+/// modeled in Steel (composters) and entity containers (hopper/chest minecarts)
 /// are not covered here.
 ///
 /// This is a reusable container-transfer helper shared with other

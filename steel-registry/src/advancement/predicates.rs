@@ -8,11 +8,11 @@
 
 use crate::equipment::EquipmentSlot;
 pub use crate::item_predicate::{DoubleBounds, IntBounds};
-use crate::loot_table::{
-    BlockPredicate as LootBlockPredicate, ItemPredicate, PropertyCheck, ToolPredicate,
-};
-use crate::{REGISTRY, RegistryExt, TaggedRegistryExt, item_stack::ItemStack};
+use crate::data_components::components::ItemEnchantments;
+use crate::loot_table::{ItemSetPredicate, PropertyCheck, ToolPredicate};
+use crate::{DyeColor, REGISTRY, RegistryExt, TaggedRegistryExt, item_stack::ItemStack};
 use steel_utils::{BlockPos, BlockStateId, Identifier};
+use text_components::TextComponent;
 
 /// Bounds alias matching vanilla `MinMaxBounds.Ints`.
 pub type IntMinMax = IntBounds;
@@ -90,6 +90,173 @@ impl StatePropertiesPredicate {
     }
 }
 
+/// Vanilla `BlockPredicate`: a required block holder set plus state properties.
+#[derive(Debug, Clone, Default)]
+pub struct BlockPredicate {
+    /// Required blocks (vanilla `blocks`).
+    pub blocks: Option<HolderSet>,
+    /// Required block state properties (vanilla `state`).
+    pub state: Option<StatePropertiesPredicate>,
+}
+
+impl BlockPredicate {
+    /// Vanilla `BlockPredicate.matches(BlockState)`.
+    #[must_use]
+    pub fn matches(&self, state: BlockStateId) -> bool {
+        use crate::blocks::block_state_ext::BlockStateExt;
+        self.blocks
+            .as_ref()
+            .is_none_or(|blocks| blocks.contains_block(&state.get_block().key))
+            && self
+                .state
+                .as_ref()
+                .is_none_or(|expected| expected.matches(state))
+    }
+}
+
+/// A vanilla `DataComponentExactPredicate` entry.
+///
+/// Vanilla's exact predicate holds an arbitrary component value; Steel models
+/// the components that appear in vanilla advancement data.
+#[derive(Debug, Clone)]
+pub enum ExactComponent {
+    /// `minecraft:damage` must equal this value.
+    Damage(i32),
+    /// `minecraft:banner_patterns` must equal this exact layer list.
+    BannerPatterns(&'static [(&'static str, DyeColor)]),
+    /// `minecraft:item_name` must equal this component.
+    ItemName(TextComponent),
+}
+
+impl ExactComponent {
+    /// Vanilla `DataComponentExactPredicate.test(DataComponentGetter)`: the
+    /// component must be present and equal to the expected value.
+    #[must_use]
+    pub fn matches(&self, stack: &ItemStack) -> bool {
+        use crate::data_components::vanilla_components::{
+            BANNER_PATTERNS, DAMAGE, ITEM_NAME,
+        };
+        match self {
+            Self::Damage(expected) => stack.get(DAMAGE) == Some(expected),
+            Self::BannerPatterns(expected) => stack.get(BANNER_PATTERNS).is_some_and(|layers| {
+                layers.layers().len() == expected.len()
+                    && layers
+                        .layers()
+                        .iter()
+                        .zip(expected.iter())
+                        .all(|(layer, (pattern, color))| {
+                            layer.pattern().key.path.as_ref() == *pattern
+                                && layer.color() == *color
+                        })
+            }),
+            Self::ItemName(expected) => stack.get(ITEM_NAME) == Some(expected),
+        }
+    }
+}
+
+/// Vanilla `EnchantmentPredicate`: one required enchantment (or any) with a level range.
+#[derive(Debug, Clone)]
+pub struct EnchantmentPredicate {
+    /// Required enchantments (vanilla `enchantments`); `None` means "any".
+    pub enchantments: Option<HolderSet>,
+    /// Required levels (vanilla `levels`).
+    pub min_level: Option<i32>,
+    pub max_level: Option<i32>,
+}
+
+impl EnchantmentPredicate {
+    /// Vanilla `EnchantmentPredicate.containedIn(ItemEnchantments)`.
+    #[must_use]
+    pub fn contained_in(&self, enchantments: &ItemEnchantments) -> bool {
+        if let Some(required) = &self.enchantments {
+            return enchantments.levels.iter().any(|(key, level)| {
+                required.contains_enchantment(key)
+                    && self.min_level.is_none_or(|min| i32::try_from(*level).unwrap_or(i32::MAX) >= min)
+                    && self.max_level.is_none_or(|max| i32::try_from(*level).unwrap_or(i32::MAX) <= max)
+            });
+        }
+        if self.min_level.is_some() || self.max_level.is_some() {
+            return enchantments.levels.values().any(|level| {
+                let level = i32::try_from(*level).unwrap_or(i32::MAX);
+                self.min_level.is_none_or(|min| level >= min)
+                    && self.max_level.is_none_or(|max| level <= max)
+            });
+        }
+        !enchantments.levels.is_empty()
+    }
+}
+
+/// The vanilla `ItemPredicate` used by advancement criteria.
+///
+/// Mirrors `net.minecraft.advancements.predicates.ItemPredicate`: the item holder
+/// set, count bounds and the `DataComponentMatchers` subset advancement data uses.
+#[derive(Debug, Clone, Default)]
+pub struct ItemPredicate {
+    /// Required items (vanilla `items`).
+    pub items: Option<ItemSetPredicate>,
+    /// Required stack size (vanilla `count`).
+    pub count: Option<IntBounds>,
+    /// Required components by presence only (vanilla `predicates` any-value entries).
+    pub has_components: &'static [Identifier],
+    /// Required exact component values (vanilla `components`).
+    pub exact_components: &'static [ExactComponent],
+    /// `minecraft:enchantments` component predicates.
+    pub enchantments: &'static [EnchantmentPredicate],
+    /// `minecraft:stored_enchantments` component predicates.
+    pub stored_enchantments: &'static [EnchantmentPredicate],
+}
+
+impl ItemPredicate {
+    /// Vanilla `ItemPredicate.test(ItemStack)`.
+    #[must_use]
+    pub fn test(&self, stack: &ItemStack) -> bool {
+        use crate::data_components::vanilla_components::{ENCHANTMENTS, STORED_ENCHANTMENTS};
+        if self
+            .items
+            .as_ref()
+            .is_some_and(|items| !items.test(stack))
+        {
+            return false;
+        }
+        if let Some(count) = &self.count
+            && !count.matches(stack.count())
+        {
+            return false;
+        }
+        if !self.exact_components.iter().all(|exact| exact.matches(stack)) {
+            return false;
+        }
+        if !self.has_components.iter().all(|key| stack.has_component(key)) {
+            return false;
+        }
+        if !self.enchantments.is_empty() {
+            let Some(values) = stack.get(ENCHANTMENTS) else {
+                return false;
+            };
+            if !self
+                .enchantments
+                .iter()
+                .all(|predicate| predicate.contained_in(values))
+            {
+                return false;
+            }
+        }
+        if !self.stored_enchantments.is_empty() {
+            let Some(values) = stack.get(STORED_ENCHANTMENTS) else {
+                return false;
+            };
+            if !self
+                .stored_enchantments
+                .iter()
+                .all(|predicate| predicate.contained_in(values))
+            {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 /// Vanilla `LocationPredicate`.
 #[derive(Debug, Clone, Default)]
 pub struct LocationPredicate {
@@ -104,7 +271,7 @@ pub struct LocationPredicate {
     /// Light level range.
     pub light: Option<IntBounds>,
     /// Required block.
-    pub block: Option<LootBlockPredicate>,
+    pub block: Option<BlockPredicate>,
     /// Required fluid key.
     pub fluid: Option<Identifier>,
     /// `smokey` flag.
@@ -172,19 +339,7 @@ impl LocationPredicate {
             let Some(state) = level.block_state_at(position) else {
                 return false;
             };
-            use crate::blocks::block_state_ext::BlockStateExt;
-            if block
-                .blocks
-                .as_ref()
-                .is_some_and(|blocks| state.get_block().key != *blocks)
-            {
-                return false;
-            }
-            if !block
-                .state
-                .iter()
-                .all(|(name, value)| state.get_property_str(name).is_some_and(|v| v == *value))
-            {
+            if !block.matches(state) {
                 return false;
             }
         }
@@ -266,6 +421,19 @@ impl HolderSet {
             Self::Keys(keys) => keys
                 .iter()
                 .any(|candidate| candidate == &effect.path.as_ref()),
+        }
+    }
+
+    /// Tests an enchantment key against this set.
+    pub fn contains_enchantment(&self, enchantment: &Identifier) -> bool {
+        match self {
+            Self::Tag(tag) => REGISTRY
+                .enchantments
+                .by_key(enchantment)
+                .is_some_and(|definition| REGISTRY.enchantments.is_in_tag(definition, tag)),
+            Self::Keys(keys) => keys
+                .iter()
+                .any(|candidate| candidate == &enchantment.path.as_ref()),
         }
     }
 
@@ -418,6 +586,8 @@ pub struct EntityPredicate {
     pub components: Option<EntityComponentsPredicate>,
     /// `minecraft:vehicle`.
     pub vehicle: Option<Box<EntityPredicate>>,
+    /// `minecraft:passenger`.
+    pub passenger: Option<Box<EntityPredicate>>,
     /// `minecraft:type_specific/player`.
     pub player: Option<Box<PlayerPredicate>>,
     /// `minecraft:type_specific/lightning`.
@@ -439,13 +609,13 @@ pub struct EntityFlagsPredicate {
 /// Vanilla `EntityEquipmentPredicate`.
 #[derive(Debug, Clone, Default)]
 pub struct EntityEquipmentPredicate {
-    pub head: Option<ToolPredicate>,
-    pub chest: Option<ToolPredicate>,
-    pub legs: Option<ToolPredicate>,
-    pub feet: Option<ToolPredicate>,
-    pub body: Option<ToolPredicate>,
-    pub mainhand: Option<ToolPredicate>,
-    pub offhand: Option<ToolPredicate>,
+    pub head: Option<ItemPredicate>,
+    pub chest: Option<ItemPredicate>,
+    pub legs: Option<ItemPredicate>,
+    pub feet: Option<ItemPredicate>,
+    pub body: Option<ItemPredicate>,
+    pub mainhand: Option<ItemPredicate>,
+    pub offhand: Option<ItemPredicate>,
 }
 
 /// The entity data-component predicates actually referenced by vanilla data.
@@ -608,6 +778,8 @@ pub struct EntityView<'a> {
     pub effects: Vec<EffectInstanceView<'a>>,
     pub components: EntityComponentsPredicate,
     pub vehicle: Option<&'a EntityView<'a>>,
+    /// The entity riding this one (vanilla `minecraft:passenger`).
+    pub passenger: Option<&'a EntityView<'a>>,
     pub player: Option<PlayerView<'a>>,
     pub lightning: Option<LightningView<'a>>,
     /// The stack held in the entity's main hand, used by `fishing_rod_hooked`'s
@@ -760,7 +932,7 @@ impl EntityEquipmentPredicate {
         slots.into_iter().all(|(slot, predicate)| {
             predicate.is_none_or(|predicate| {
                 let stack = &equipment[slot.index()];
-                tool_predicate_matches(predicate, stack)
+                item_predicate_matches(predicate, stack)
             })
         })
     }
@@ -853,6 +1025,14 @@ impl EntityPredicate {
                 return false;
             };
             if !vehicle.matches(actual) {
+                return false;
+            }
+        }
+        if let Some(passenger) = &self.passenger {
+            let Some(actual) = entity.passenger else {
+                return false;
+            };
+            if !passenger.matches(actual) {
                 return false;
             }
         }
@@ -1024,7 +1204,9 @@ pub enum Condition {
     },
     /// `minecraft:match_block`.
     MatchBlock {
-        block: Identifier,
+        /// Required blocks (vanilla `blocks`, a holder set or absent for any).
+        blocks: Option<HolderSet>,
+        /// Required state properties.
         properties: &'static [PropertyCheck],
     },
     /// `minecraft:match_tool`.
@@ -1046,13 +1228,27 @@ impl Condition {
                 crate::loot_table::LootContextEntity::This => predicate.matches(ctx.this),
                 _ => false,
             },
-            Self::LocationCheck { predicate, .. } => predicate.matches(ctx.level),
-            Self::MatchBlock { block, properties } => {
+            Self::LocationCheck {
+                offset_x,
+                offset_y,
+                offset_z,
+                predicate,
+            } => predicate.matches_at(
+                ctx.level,
+                (
+                    f64::from(ctx.origin.x() + offset_x),
+                    f64::from(ctx.origin.y() + offset_y),
+                    f64::from(ctx.origin.z() + offset_z),
+                ),
+            ),
+            Self::MatchBlock { blocks, properties } => {
                 use crate::blocks::block_state_ext::BlockStateExt;
                 let Some(state) = ctx.level.block_state() else {
                     return false;
                 };
-                state.get_block().key == *block
+                blocks
+                    .as_ref()
+                    .is_none_or(|blocks| blocks.contains_block(&state.get_block().key))
                     && properties.iter().all(|property| {
                         state
                             .get_property_str(property.name)

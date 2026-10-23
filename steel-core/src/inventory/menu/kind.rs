@@ -66,6 +66,15 @@ pub trait MenuKind: ErasedType + Send + Sync {
         ClickOutcome::Fallthrough
     }
 
+    /// Runs after a click has been fully applied and every container lock has
+    /// been released.
+    ///
+    /// For kinds that publish menu state into entity-owned data — the mount
+    /// menu mirrors its equipment slots into the entity's equipment — this is
+    /// the only safe point to touch the entity: the container contract forbids
+    /// world/entity access while the container mutex is held.
+    fn after_click(&mut self, _player: &Player) {}
+
     /// Runs for each drag phase before default handling. Return
     /// [`ClickOutcome::Consume`] to cancel the drag.
     fn on_drag(
@@ -91,6 +100,21 @@ pub trait MenuKind: ErasedType + Send + Sync {
     /// Returns true if an item may be taken from `slot_index` during pickup-all.
     fn can_take_item_for_pick_all(&self, _carried: &ItemStack, _slot_index: usize) -> bool {
         true
+    }
+
+    /// Applies a recipe-book placement (vanilla `RecipeBookMenu.handlePlacement`).
+    ///
+    /// Returns `None` for menus that are not recipe-book menus, so the caller can
+    /// reject the request the way vanilla only handles `RecipeBookMenu`s.
+    fn handle_placement(
+        &mut self,
+        _guard: &mut ContainerLockGuard,
+        _recipe: steel_registry::recipe::UntypedRecipeRef,
+        _use_max_items: bool,
+        _allow_dropping_items_to_clear: bool,
+        _player: &Player,
+    ) -> Option<crate::inventory::recipe_book_placement::PostPlaceAction> {
+        None
     }
 
     /// Handles a container button click from the client's container-button packet.

@@ -13,13 +13,15 @@ use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::MagmaCubeEntityData;
 use steel_registry::{sound_events, vanilla_attributes, vanilla_entities, vanilla_particle_types};
 use steel_utils::locks::SyncMutex;
+use steel_utils::random::RandomSource;
+use steel_utils::types::Difficulty;
 use steel_utils::{BlockPos, BlockStateId, Downcast as _, DowncastType, DowncastTypeKey};
 
 use crate::entity::ai::goal::{Goal, GoalControls, NearestAttackableTargetGoal};
 use crate::entity::damage::DamageSource;
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySyncedData, LivingEntity,
-    LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, SharedEntity,
+    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
+    LivingEntity, LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, SharedEntity,
 };
 use crate::physics::MoveResult;
 use crate::world::World;
@@ -32,7 +34,7 @@ use super::abstract_cube_mob::{
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
 /// Vanilla `MagmaCube` movement speed base.
 const MAGMA_CUBE_MOVEMENT_SPEED: f64 = 0.2;
-/// Vanilla `MagmaCube.setSize` armour per size.
+/// Vanilla `MagmaCube.setSize` armor per size.
 const MAGMA_CUBE_ARMOR_PER_SIZE: f64 = 3.0;
 /// Vanilla `MagmaCube.getAttackDamage` adds 2 over the shared cube damage.
 const MAGMA_CUBE_ATTACK_DAMAGE_BONUS: f32 = 2.0;
@@ -365,6 +367,22 @@ impl MagmaCubeEntity {
         if Mob::do_hurt_target(self, entity, world, target) {
             self.play_sound(&sound_events::ENTITY_SLIME_ATTACK, 1.0, 1.0);
         }
+    }
+
+    /// Vanilla `MagmaCube.checkMagmaCubeSpawnRules`, the `SpawnPlacements` predicate
+    /// for `EntityType.MAGMA_CUBE`.
+    ///
+    /// Vanilla only requires a non-peaceful difficulty and ignores every other
+    /// parameter.
+    #[must_use]
+    pub fn check_magma_cube_spawn_rules(
+        _entity_type: EntityTypeRef,
+        level: &World,
+        _spawn_reason: EntitySpawnReason,
+        _pos: BlockPos,
+        _random: &mut RandomSource,
+    ) -> bool {
+        level.difficulty() != Difficulty::Peaceful
     }
 }
 
@@ -726,10 +744,6 @@ impl Mob for MagmaCubeEntity {
     fn max_head_x_rot(&self) -> f32 {
         0.0
     }
-
-    // Vanilla `MagmaCube.checkMagmaCubeSpawnRules` only requires a non-peaceful difficulty,
-    // which the natural spawner's difficulty gate already applies; no surface override is
-    // needed, so this mob keeps the shared `Mob::check_mob_spawn_rules` implementation.
 }
 
 impl Monster for MagmaCubeEntity {}

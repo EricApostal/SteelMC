@@ -1,6 +1,13 @@
 //! Barrel block behavior implementation.
 //!
-//! Opens a 27-slot container menu when right-clicked.
+//! Opens a 27-slot container menu when right-clicked. The block entity's
+//! `ContainerOpenersCounter` owns the `OPEN` state, the open/close sounds and
+//! the container game events; it is driven by the menu lifecycle
+//! (`startOpen`/`stopOpen`) and by this block's scheduled `tick` (`recheckOpen`).
+//!
+//! Deviation: Vanilla `BarrelBlock.useWithoutItem` also calls
+//! `PiglinAi.angerNearbyPiglins(level, player, true)`; Steel has no such helper
+//! (owner: `entity/ai/behavior/piglin/ai.rs`).
 
 use std::sync::{Arc, Weak};
 
@@ -76,10 +83,9 @@ impl BlockBehavior for BarrelBlock {
         );
 
         player.award_custom_stat(&vanilla_custom_stats::OPEN_BARREL);
-        // TODO: Anger nearby piglins (PiglinAi.angerNearbyPiglins)
-        // TODO: Implement ContainerOpenersCounter to track open state, play sounds,
-        //       and update OPEN block property. Requires scheduled block ticks (scheduleTick)
-        //       for recheck functionality. See vanilla BarrelBlockEntity and ContainerOpenersCounter.
+        // The `OPEN` state, the open/close sounds and the container game events
+        // come from `BarrelBlockEntity`'s opener counter, which the menu
+        // lifecycle drives through `startOpen`/`stopOpen`.
 
         InteractionResult::Success
     }
@@ -109,6 +115,22 @@ impl BlockBehavior for BarrelBlock {
 
     fn has_analog_output_signal(&self, _state: BlockStateId) -> bool {
         true
+    }
+
+    /// Vanilla `BaseEntityBlock.triggerEvent` forwards block events to the block
+    /// entity. `BarrelBlockEntity` handles none, so this reports `false`.
+    fn trigger_event(
+        &self,
+        _state: BlockStateId,
+        world: &Arc<World>,
+        pos: BlockPos,
+        param_a: i32,
+        param_b: i32,
+    ) -> bool {
+        let Some(block_entity) = world.get_block_entity(pos) else {
+            return false;
+        };
+        block_entity.trigger_event(param_a, param_b)
     }
 
     fn get_analog_output_signal(

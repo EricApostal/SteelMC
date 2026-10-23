@@ -502,13 +502,15 @@ impl FeatureDecorationRunner {
         }
 
         let distance_from_center = dx.abs() + dz.abs();
-        let height_mean = Self::clamped_map_f32(
-            distance_from_center as f32,
+        // Vanilla uses the `double` overload of `Mth.clampedMap` and casts the
+        // result to `float`, so keep the intermediate math in `f64`.
+        let height_mean = Self::clamped_map_f64(
+            f64::from(distance_from_center),
             0.0,
-            config.max_distance_from_center_affecting_height_bias as f32,
-            max_height as f32 / 2.0,
+            f64::from(config.max_distance_from_center_affecting_height_bias),
+            f64::from(max_height) / 2.0,
             0.0,
-        );
+        ) as f32;
         Self::speleothem_random_between_biased(
             random,
             0.0,

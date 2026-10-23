@@ -87,6 +87,15 @@ impl NearestAttackableTargetGoal {
         }
     }
 
+    /// Vanilla `TargetGoal.setUnseenMemoryTicks`, used by the vanilla evoker/illusioner
+    /// registrations (300 ticks).
+    #[must_use]
+    pub(crate) const fn with_unseen_memory_ticks(mut self, unseen_memory_ticks: i32) -> Self {
+        self.target_goal
+            .set_unseen_memory_ticks(unseen_memory_ticks);
+        self
+    }
+
     fn find_target(&mut self, mob: &dyn PathfinderMob) {
         let Some(world) = mob.level() else {
             self.target = None;

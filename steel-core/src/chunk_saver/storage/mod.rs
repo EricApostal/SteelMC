@@ -695,6 +695,7 @@ impl ChunkStorage {
             postprocessing,
             structure_starts,
             structure_references,
+            chunk.inhabited_time(),
             pois,
             pos,
         );
@@ -750,6 +751,7 @@ impl ChunkStorage {
         postprocessing: Vec<Vec<u16>>,
         structure_starts: Vec<PersistentStructureStart>,
         structure_references: Vec<PersistentStructureReference>,
+        inhabited_time: i64,
         pois: Vec<PersistentPoi>,
         chunk_pos: ChunkPos,
     ) -> PersistentChunk<'static> {
@@ -812,6 +814,7 @@ impl ChunkStorage {
             postprocessing,
             structure_starts,
             structure_references,
+            inhabited_time,
             pois,
         }
     }

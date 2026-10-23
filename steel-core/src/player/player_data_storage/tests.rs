@@ -9,7 +9,7 @@ use crate::player::player_data_storage::known_players::{
 use crate::player::player_data_storage::permissions::{
     PlayerPermissionsFile, serialize_player_permissions_file,
 };
-use crate::player::player_data_storage::stats::PlayerStatsFile;
+use crate::player::player_data_storage::stats::{PlayerStatsFile, serialize_player_stats_file};
 use crate::player::player_data_storage::*;
 use std::collections::BTreeMap;
 use std::{
@@ -17,7 +17,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use steel_registry::stat::vanilla_stat_types;
-use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_custom_stats, vanilla_items};
+use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_custom_stats, vanilla_entities, vanilla_items};
 use tokio::fs;
 
 fn temp_storage_root(name: &str) -> PathBuf {
@@ -70,6 +70,8 @@ fn sample_player_file(data_version: i32) -> PlayerDataFile {
         respawn_config: None,
         ender_pearls: Vec::new(),
         ender_items: Vec::new(),
+        advancements: Vec::new(),
+        recipe_book: RecipeBookFile::default(),
     }
 }
 
@@ -680,6 +682,79 @@ fn player_stats_file_roundtrips() {
         assert_eq!(block.to_string(), expected[i].0);
         assert_eq!(count, expected[i].1);
     }
+}
+
+/// Vanilla tracks nine stat types; every one of them must survive the
+/// stats-file round trip, not just `custom`/`mined`.
+#[test]
+fn every_stat_type_round_trips_through_the_stats_file() {
+    init_vanilla_registry();
+
+    let stats = vec![
+        PersistentStat {
+            stat: vanilla_stat_types::BLOCK_MINED.get(&vanilla_blocks::STONE),
+            count: 1,
+        },
+        PersistentStat {
+            stat: vanilla_stat_types::ITEM_CRAFTED.get(&vanilla_items::CRAFTING_TABLE),
+            count: 2,
+        },
+        PersistentStat {
+            stat: vanilla_stat_types::ITEM_USED.get(&vanilla_items::DIAMOND_SWORD),
+            count: 3,
+        },
+        PersistentStat {
+            stat: vanilla_stat_types::ITEM_BROKEN.get(&vanilla_items::DIAMOND_PICKAXE),
+            count: 4,
+        },
+        PersistentStat {
+            stat: vanilla_stat_types::ITEM_PICKED_UP.get(&vanilla_items::DIAMOND),
+            count: 5,
+        },
+        PersistentStat {
+            stat: vanilla_stat_types::ITEM_DROPPED.get(&vanilla_items::DIAMOND),
+            count: 6,
+        },
+        PersistentStat {
+            stat: vanilla_stat_types::ENTITY_KILLED.get(&vanilla_entities::ZOMBIE),
+            count: 7,
+        },
+        PersistentStat {
+            stat: vanilla_stat_types::ENTITY_KILLED_BY.get(&vanilla_entities::CREEPER),
+            count: 8,
+        },
+        PersistentStat {
+            stat: vanilla_stat_types::CUSTOM.get(&vanilla_custom_stats::JUMP),
+            count: 9,
+        },
+    ];
+
+    let file =
+        PlayerStatsFile::from_persistent_stats(&stats).expect("conversion should not have failed");
+    assert_eq!(
+        file.stats.len(),
+        9,
+        "all nine vanilla stat types must be persisted"
+    );
+
+    let serialized = serialize_player_stats_file(&file);
+    let parsed: PlayerStatsFile = toml::from_str(&serialized).expect("stats file should parse");
+    let mut round_tripped = parsed.into_persistent_stats();
+    round_tripped.sort_by_key(|stat| stat.stat.to_string());
+
+    let mut expected = stats;
+    expected.sort_by_key(|stat| stat.stat.to_string());
+
+    let actual: Vec<(String, i32)> = round_tripped
+        .iter()
+        .map(|stat| (stat.stat.to_string(), stat.count))
+        .collect();
+    let expected: Vec<(String, i32)> = expected
+        .iter()
+        .map(|stat| (stat.stat.to_string(), stat.count))
+        .collect();
+
+    assert_eq!(actual, expected);
 }
 
 #[test]

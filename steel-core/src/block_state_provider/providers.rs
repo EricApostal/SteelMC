@@ -14,21 +14,11 @@ use steel_utils::random::{Random, RandomSource, legacy_random::LegacyRandom};
 use steel_utils::{BlockPos, BlockStateId, Direction};
 use steel_worldgen::noise::NormalNoise;
 
-pub(crate) trait NoiseScale: Copy {
-    fn scale_coord(self, coord: i32) -> f64;
-}
-
-impl NoiseScale for f32 {
-    fn scale_coord(self, coord: i32) -> f64 {
-        f64::from(coord as f32 * self)
-    }
-}
-
-impl NoiseScale for f64 {
-    fn scale_coord(self, coord: i32) -> f64 {
-        f64::from(coord) * self
-    }
-}
+/// Vanilla's `NoiseBasedStateProvider.getNoiseValue` multiplies the integer
+/// block coordinate by the provider's `float` scale **in double precision**
+/// (`pos.getX() * scale` where `scale` is the `double` parameter). Scaling in
+/// `f32` first would round differently, so callers widen the stored `f32`
+/// scale before calling [`BlockStateProviderEvaluator::noise_value`].
 
 impl BlockStateProviderEvaluator {
     pub(crate) fn sample_block_state_provider_optional(
@@ -235,7 +225,7 @@ impl BlockStateProviderEvaluator {
         pos: BlockPos,
     ) -> BlockStateId {
         let noise = Self::normal_noise(&provider.noise, provider.seed);
-        let noise_value = Self::noise_value(&noise, pos, provider.scale);
+        let noise_value = Self::noise_value(&noise, pos, f64::from(provider.scale));
         Self::noise_state_by_value(registry, &provider.states, noise_value)
     }
 
@@ -246,7 +236,7 @@ impl BlockStateProviderEvaluator {
         pos: BlockPos,
     ) -> BlockStateId {
         let noise = Self::normal_noise(&provider.noise, provider.seed);
-        let noise_value = Self::noise_value(&noise, pos, provider.scale);
+        let noise_value = Self::noise_value(&noise, pos, f64::from(provider.scale));
         if noise_value < f64::from(provider.threshold) {
             Self::random_block_state_from_data_list(registry, random, &provider.low_states)
         } else if random.next_f32() < provider.high_chance {
@@ -262,7 +252,7 @@ impl BlockStateProviderEvaluator {
         pos: BlockPos,
     ) -> BlockStateId {
         let slow_noise = Self::normal_noise(&provider.slow_noise, provider.seed);
-        let variety_noise = Self::noise_value(&slow_noise, pos, provider.slow_scale);
+        let variety_noise = Self::noise_value(&slow_noise, pos, f64::from(provider.slow_scale));
         let local_variety = map_clamped(
             variety_noise,
             -1.0,
@@ -281,7 +271,7 @@ impl BlockStateProviderEvaluator {
         let mut possible_states = SmallVec::<[BlockStateId; 8]>::with_capacity(capacity);
         for i in 0..local_variety {
             let offset_pos = pos.offset(i * 54_545, 0, i * 34_234);
-            let slow_value = Self::noise_value(&slow_noise, offset_pos, provider.slow_scale);
+            let slow_value = Self::noise_value(&slow_noise, offset_pos, f64::from(provider.slow_scale));
             possible_states.push(Self::noise_state_by_value(
                 registry,
                 &provider.states,
@@ -290,7 +280,7 @@ impl BlockStateProviderEvaluator {
         }
 
         let noise = Self::normal_noise(&provider.noise, provider.seed);
-        let noise_value = Self::noise_value(&noise, pos, provider.scale);
+        let noise_value = Self::noise_value(&noise, pos, f64::from(provider.scale));
         Self::noise_state_by_resolved_value(&possible_states, noise_value)
     }
 
@@ -306,11 +296,11 @@ impl BlockStateProviderEvaluator {
         )
     }
 
-    pub(crate) fn noise_value<S: NoiseScale>(noise: &NormalNoise, pos: BlockPos, scale: S) -> f64 {
+    pub(crate) fn noise_value(noise: &NormalNoise, pos: BlockPos, scale: f64) -> f64 {
         f64::from(noise.get_value(
-            scale.scale_coord(pos.x()),
-            scale.scale_coord(pos.y()),
-            scale.scale_coord(pos.z()),
+            f64::from(pos.x()) * scale,
+            f64::from(pos.y()) * scale,
+            f64::from(pos.z()) * scale,
         ))
     }
 
@@ -339,7 +329,9 @@ impl BlockStateProviderEvaluator {
     }
 
     pub(crate) fn noise_state_index(state_count: usize, noise_value: f64) -> usize {
-        let placement_value = f32::midpoint(1.0_f32, noise_value as f32).clamp(0.0, 0.9999);
+        // Vanilla: `Mth.clamp((1.0F + noiseValue) / 2.0F, 0.0F, 0.9999F)`.
+        // `f32::midpoint` is not bit-identical to `(1.0 + n) / 2.0` for every input.
+        let placement_value = ((1.0_f32 + noise_value as f32) / 2.0).clamp(0.0, 0.9999);
         (placement_value * state_count as f32) as usize
     }
 

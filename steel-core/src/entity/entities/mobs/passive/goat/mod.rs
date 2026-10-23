@@ -39,6 +39,7 @@ use steel_registry::entity_type::{
 use steel_registry::item_stack::ItemStack;
 use steel_registry::registry::RegistryHolder;
 use steel_registry::sound_event::SoundEventRef;
+use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entity_data::GoatEntityData;
 use steel_registry::vanilla_instrument_tags::InstrumentTag;
 use steel_registry::vanilla_item_tags::ItemTag;
@@ -64,7 +65,7 @@ use crate::entity::{
 use crate::physics::MoveResult;
 use crate::player::Player;
 use crate::player::player_inventory::Prediction;
-use crate::world::World;
+use crate::world::{LevelReader, World};
 
 /// Vanilla `Goat.LONG_JUMPING_DIMENSION_SCALE_FACTOR`.
 const LONG_JUMPING_DIMENSION_SCALE_FACTOR: f32 = 0.7;
@@ -629,6 +630,22 @@ impl Animal for GoatEntity {
         };
         let pitch = random_between(0.8, 1.2);
         self.play_sound(sound, 1.0, pitch);
+    }
+
+    /// Vanilla `Goat.checkGoatSpawnRules`.
+    fn check_animal_spawn_rules(
+        level: &dyn LevelReader,
+        _spawn_reason: EntitySpawnReason,
+        pos: BlockPos,
+    ) -> bool
+    where
+        Self: Sized,
+    {
+        level
+            .get_block_state(pos.below())
+            .get_block()
+            .has_tag(&BlockTag::GOATS_SPAWNABLE_ON)
+            && Self::is_bright_enough_to_spawn(level, pos)
     }
 }
 

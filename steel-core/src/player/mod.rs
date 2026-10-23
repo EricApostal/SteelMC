@@ -24,12 +24,14 @@ pub mod player_inventory;
 mod profile;
 pub mod recipe_book;
 mod session;
+mod shoulder;
 mod sleep;
 mod sleep_state;
 mod spam_throttler;
 pub mod stats_counter;
 mod tick_state;
 mod title;
+mod waypoint;
 
 use crate::player::player_inventory::Prediction;
 pub use abilities::{Abilities, DEFAULT_FLYING_SPEED};
@@ -46,6 +48,7 @@ use item_cooldowns::ItemCooldowns;
 use lifecycle::PlayerLifecycleState;
 pub use lifecycle::PlayerRespawnConfig;
 pub(crate) use lifecycle::ResetReason;
+pub(crate) use lifecycle::{personal_respawn_chunk_positions, resolve_personal_respawn};
 pub use movement::PlayerInput;
 use movement::{MovementState, TeleportState};
 use permissions::PlayerPermissionState;
@@ -63,8 +66,9 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 use steel_protocol::packets::game::{
-    CEntityEvent, CPlayerCombatKill, CPlayerLookAt, CRespawn, CSetDefaultSpawnPosition, CSetHealth,
-    CSetHeldSlot, CSetPassengers, ClientCommandAction, LookAtAnchor, RelativeMovement, SoundSource,
+    CEntityEvent, CPlayerCombatEnd, CPlayerCombatEnter, CPlayerCombatKill, CPlayerLookAt, CRespawn,
+    CSetDefaultSpawnPosition, CSetHealth, CSetHeldSlot, CSetPassengers, ClientCommandAction,
+    LookAtAnchor, RelativeMovement, SoundSource,
 };
 use steel_protocol::packets::game::{CLevelEvent, CSetEntityData, CSetExperience};
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
@@ -90,7 +94,6 @@ use arc_swap::ArcSwap;
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::{Difficulty, GameType, InteractionHand};
 use text_components::resolving::TextResolutor;
-use text_components::translation::TranslatedMessage;
 use text_components::{
     Modifier as _, TextComponent,
     interactivity::{ClickEvent, HoverEvent},
@@ -105,8 +108,9 @@ use crate::chunk::chunk_request::{ChunkRequestHandle, ChunkRequestState};
 use crate::config::RuntimeConfig;
 use crate::enchantment_helper;
 use crate::entity::LivingEntityRef;
-use crate::entity::damage::DamageSource;
+use crate::entity::damage::{CombatStateChange, DamageSource};
 use crate::entity::entities::ExperienceOrbEntity;
+use crate::entity::entities::mobs::hostile::warden::WardenSpawnTracker;
 use crate::entity::{
     ActiveItemUseState, DEATH_DURATION, Entity, EntityAnchor, EntityBase, EntityEventSource,
     EntityMoveError, EntityMovementEmission, EntitySyncedData, LivingEntity, LivingEntityBase,
@@ -129,6 +133,7 @@ use crate::player::player_data::{PersistentEnderPearl, PersistentRootVehicle};
 use crate::player::player_inventory::{
     MenuItemDisposition, MenuRemovalStatus, PlayerInventory, PlayerInventorySyncState,
 };
+use crate::scoreboard::{ScoreHolder, TeamVisibility};
 use crate::server::{
     PlayerPacketTransition, Server,
     jobs::{JobPoll, ServerJob, ServerJobContext},
@@ -244,6 +249,22 @@ pub struct Player {
     /// raid. Runtime-only: Steel's command-NBT path only writes player data, so vanilla's
     /// `raid_omen_position` reload is not restored across restarts (reported gap).
     raid_omen_position: SyncMutex<Option<BlockPos>>,
+    /// Vanilla `ServerPlayer.wardenSpawnTracker`: the sculk-shrieker warning escalation.
+    ///
+    /// Runtime-only for now: vanilla stores it under `warden_spawn_tracker` in player data, which
+    /// Steel's player-data payload does not carry yet (reported gap).
+    warden_spawn_tracker: SyncMutex<WardenSpawnTracker>,
+    /// Vanilla `ServerPlayer.shoulderEntityLeft`: the serialized entity perched on the left
+    /// shoulder, empty when the shoulder is free.
+    shoulder_entity_left: SyncMutex<NbtCompound>,
+    /// Vanilla `ServerPlayer.shoulderEntityRight`.
+    shoulder_entity_right: SyncMutex<NbtCompound>,
+    /// Vanilla `ServerPlayer.timeEntitySatOnShoulder`: game time of the last perching, used
+    /// for the 20-tick dismount grace period.
+    time_entity_sat_on_shoulder: SyncMutex<i64>,
+    /// Live locator-bar waypoint connections this player receives, keyed by transmitter UUID
+    /// (vanilla `ServerWaypointManager.connections` row for this player).
+    pub(crate) waypoint_tracks: SyncMutex<waypoint::WaypointTracks>,
 
     /// Player abilities (flight, invulnerability, build permissions, speeds, etc.)
     pub abilities: SyncMutex<Abilities>,
@@ -290,6 +311,12 @@ pub struct Player {
 
     /// The counter keeping track of this player's statistics.
     stats: SyncMutex<StatsCounter>,
+
+    /// Debug-value subscription ids this player asked to receive, vanilla
+    /// `ServerPlayer.requestedDebugSubscriptions`. Empty until the client subscribes.
+    ///
+    /// Reported gap: nothing emits `CDebug*` samples yet, so the set is only the recorded request.
+    debug_subscriptions: SyncMutex<Vec<usize>>,
 
     /// The last action time of this player.
     last_action_time: SyncMutex<Instant>,
@@ -343,30 +370,6 @@ impl PlayerResidenceState {
 }
 
 impl Player {
-    /// Vanilla `ServerPlayer.awardRecipes` entry point for a single recipe.
-    ///
-    /// Returns `false` when the player already knows the recipe.
-    pub fn unlock_recipe(&self, recipe: steel_registry::recipe::UntypedRecipeRef) -> bool {
-        let mut book = self.recipe_book.lock();
-        if book.contains(recipe.key()) {
-            return false;
-        }
-        book.add(recipe.key().clone());
-        true
-    }
-
-    /// Vanilla `ServerPlayer.resetRecipes` entry point for a single recipe.
-    ///
-    /// Returns `false` when the player did not know the recipe.
-    pub fn lock_recipe(&self, id: &steel_utils::Identifier) -> bool {
-        let mut book = self.recipe_book.lock();
-        if !book.contains(id) {
-            return false;
-        }
-        book.remove(id);
-        true
-    }
-
     /// Returns this player's server-side recipe book.
     #[must_use]
     pub fn recipe_book(&self) -> parking_lot::MutexGuard<'_, recipe_book::ServerRecipeBook> {
@@ -666,6 +669,11 @@ impl Player {
             sleep_state: SyncMutex::new(PlayerSleepState::new()),
             respawn_config: SyncMutex::new(None),
             raid_omen_position: SyncMutex::new(None),
+            warden_spawn_tracker: SyncMutex::new(WardenSpawnTracker::fresh()),
+            shoulder_entity_left: SyncMutex::new(NbtCompound::new()),
+            shoulder_entity_right: SyncMutex::new(NbtCompound::new()),
+            time_entity_sat_on_shoulder: SyncMutex::new(0),
+            waypoint_tracks: SyncMutex::new(waypoint::new_tracks()),
             abilities: SyncMutex::new(Abilities::default()),
             block_breaking: SyncMutex::new(BlockBreakingManager::new()),
             living_base,
@@ -681,6 +689,7 @@ impl Player {
             ender_pearls: SyncMutex::new(Vec::new()),
             fishing: SyncMutex::new(None),
             stats: SyncMutex::new(StatsCounter::new()),
+            debug_subscriptions: SyncMutex::new(Vec::new()),
             last_action_time: SyncMutex::new(Instant::now()),
             advancements: SyncMutex::new(PlayerAdvancement::default()), // TODO save the advancement
             recipe_book: SyncMutex::new(recipe_book::ServerRecipeBook::new()),
@@ -869,8 +878,8 @@ impl Player {
             return false;
         }
 
-        // TODO: remove shoulder entities (`removeEntitiesOnShoulder`); Steel has no
-        // shoulder-parrot storage yet.
+        // Vanilla `Player.hurtServer` dismounts shoulder entities before damage is applied.
+        self.remove_entities_on_shoulder();
 
         // Difficulty scaling (vanilla: Player.hurtServer)
         let mut amount = amount;
@@ -967,9 +976,16 @@ impl Player {
             );
         }
 
-        // TODO: combat tracker (getCombatTracker().recordDamage)
         if damage != 0.0 {
             self.cause_food_exhaustion(source.damage_type.exhaustion);
+            // Vanilla `Player.actuallyHurt` records before the health write, so the
+            // entry still sees the victim alive when combat starts.
+            let change = self
+                .living_base
+                .combat_tracker()
+                .lock()
+                .record_damage(self, source, damage);
+            self.apply_combat_state_change(change);
             self.set_health(self.get_health() - damage);
             if damage < f32::MAX {
                 self.award_custom_stat_with_count(
@@ -1012,17 +1028,11 @@ impl Player {
         );
 
         let show_death_messages = world.get_game_rule(&SHOW_DEATH_MESSAGES);
-
-        // TODO: use CombatTracker for multi-arg messages (killer name, item, etc.)
-        let death_key = format!("death.attack.{}", source.damage_type.message_id);
-        let death_message = TranslatedMessage {
-            key: death_key.into(),
-            fallback: None,
-            args: Some(Box::new([TextComponent::plain(
-                self.gameprofile.name().to_owned(),
-            )])),
-        }
-        .component();
+        let death_message = self
+            .living_base
+            .combat_tracker()
+            .lock()
+            .get_death_message(self);
 
         self.send_packet(CPlayerCombatKill {
             player_id: self.id(),
@@ -1033,13 +1043,12 @@ impl Player {
             },
         });
 
-        // TODO: team death message visibility (ALWAYS / HIDE_FOR_OTHER_TEAMS / HIDE_FOR_OWN_TEAM)
         if show_death_messages {
-            world.broadcast_system_chat(CSystemChat {
-                content: death_message,
-                overlay: false,
-            });
+            self.broadcast_death_message(&death_message, &world);
         }
+
+        // Vanilla `ServerPlayer.die` clears the shoulders before the loot drop.
+        self.remove_entities_on_shoulder();
 
         if !world.get_game_rule(&KEEP_INVENTORY) && self.game_mode() != GameType::Spectator {
             let drops = self.inventory.lock().take_death_drops();
@@ -1067,8 +1076,91 @@ impl Player {
         self.clear_fire();
         self.set_ticks_frozen(0);
 
+        // Vanilla `ServerPlayer.die` rechecks combat after the death bookkeeping.
+        let left_combat = self
+            .living_base
+            .combat_tracker()
+            .lock()
+            .recheck_status(self);
+        if left_combat {
+            self.send_combat_end();
+        }
+
         if world.get_game_rule(&IMMEDIATE_RESPAWN) {
             self.respawn();
+        }
+    }
+
+    /// Applies vanilla `onEnterCombat` / `onLeaveCombat` client notifications.
+    fn apply_combat_state_change(&self, change: CombatStateChange) {
+        if change.left_combat {
+            self.send_combat_end();
+        }
+        if change.entered_combat {
+            self.send_packet(CPlayerCombatEnter::new());
+        }
+    }
+
+    /// Vanilla `ServerPlayer.onLeaveCombat`: sends the combat duration.
+    fn send_combat_end(&self) {
+        let duration = self
+            .living_base
+            .combat_tracker()
+            .lock()
+            .get_combat_duration(Entity::tick_count(self));
+        self.send_packet(CPlayerCombatEnd { duration });
+    }
+
+    /// Vanilla `ServerPlayer.die` death-message broadcast, honoring the dying
+    /// player's team death-message visibility.
+    fn broadcast_death_message(&self, message: &TextComponent, world: &World) {
+        let Some(server) = self.server.upgrade() else {
+            // Deviation: detached test players have no server, so vanilla's player-list
+            // broadcast degrades to the world broadcast instead of panicking.
+            world.broadcast_system_chat(CSystemChat {
+                content: message.clone(),
+                overlay: false,
+            });
+            return;
+        };
+        let scoreboard = server.scoreboards.get(world.domain());
+        let holder = ScoreHolder::new(self.gameprofile.name());
+        let team_name = scoreboard.and_then(|scoreboard| scoreboard.holder_team_name(&holder));
+        let visibility = team_name
+            .as_deref()
+            .and_then(|name| scoreboard.and_then(|scoreboard| scoreboard.team(name)))
+            .map_or(TeamVisibility::Always, |team| {
+                team.death_message_visibility()
+            });
+        match visibility {
+            TeamVisibility::Never => {}
+            TeamVisibility::Always => server.broadcast_system_chat(message, None),
+            TeamVisibility::HideForOtherTeams => {
+                for player in server.get_players() {
+                    let is_team_member = scoreboard
+                        .and_then(|scoreboard| {
+                            scoreboard
+                                .holder_team_name(&ScoreHolder::new(player.gameprofile.name()))
+                        })
+                        .is_some_and(|name| Some(name) == team_name);
+                    if is_team_member && player.id() != self.id() {
+                        player.send_message(message);
+                    }
+                }
+            }
+            TeamVisibility::HideForOwnTeam => {
+                for player in server.get_players() {
+                    let is_team_member = scoreboard
+                        .and_then(|scoreboard| {
+                            scoreboard
+                                .holder_team_name(&ScoreHolder::new(player.gameprofile.name()))
+                        })
+                        .is_some_and(|name| Some(name) == team_name);
+                    if !is_team_member {
+                        player.send_message(message);
+                    }
+                }
+            }
         }
     }
 
@@ -1271,6 +1363,24 @@ impl Player {
     /// Vanilla `ServerPlayer.clearRaidOmenPosition`.
     pub fn clear_raid_omen_position(&self) {
         *self.raid_omen_position.lock() = None;
+    }
+
+    /// Vanilla `ServerPlayer.getWardenSpawnTracker`.
+    #[must_use]
+    pub fn warden_spawn_tracker(&self) -> WardenSpawnTracker {
+        *self.warden_spawn_tracker.lock()
+    }
+
+    /// Vanilla `ServerPlayer.getWardenSpawnTracker` for callers that mutate it
+    /// (`WardenSpawnTracker.tryWarn` writes the escalated level back into every participant).
+    pub fn warden_spawn_tracker_mut(&self) -> parking_lot::MutexGuard<'_, WardenSpawnTracker> {
+        self.warden_spawn_tracker.lock()
+    }
+
+    /// Replaces this player's tracker (vanilla `ServerPlayer.restoreFrom` copying the old
+    /// player's tracker, and the `/warden_spawn_tracker` command).
+    pub fn set_warden_spawn_tracker(&self, tracker: WardenSpawnTracker) {
+        *self.warden_spawn_tracker.lock() = tracker;
     }
 
     pub(crate) fn save_command_nbt(&self, nbt: &mut NbtCompound) {
@@ -1849,6 +1959,8 @@ impl LivingEntity for Player {
 
     fn tick_living_entity(&self, entity: &SharedEntity) {
         self.advance_tick();
+        // Vanilla `ServerPlayer.tick` runs the warden spawn tracker before `super.tick()`.
+        self.warden_spawn_tracker.lock().tick();
         self.tick_item_cooldowns();
         self.tick_attack_strength();
         self.tick_throttlers();
@@ -1884,6 +1996,17 @@ impl LivingEntity for Player {
 
         self.default_tick();
         self.detect_equipment_updates();
+        // Vanilla `LivingEntity.tick`: combat status is rechecked every 20 ticks.
+        if Entity::tick_count(self) % 20 == 0 {
+            let left_combat = self
+                .living_base
+                .combat_tracker()
+                .lock()
+                .recheck_status(self);
+            if left_combat {
+                self.send_combat_end();
+            }
+        }
         self.ai_step(entity);
 
         // Vanilla snaps the player back to firstGood after ServerPlayer.doTick().
@@ -1895,6 +2018,7 @@ impl LivingEntity for Player {
         }
         self.refresh_fluid_contact();
 
+        self.tick_waypoints();
         self.tick_ack_block_changes();
 
         self.living_base.decrement_invulnerable_time();
@@ -2207,6 +2331,8 @@ impl LivingEntity for Player {
 
         let result = self.default_ai_step(entity);
         self.set_y_head_rot(self.rotation().0);
+        // Vanilla `Player.aiStep` ends with `handleShoulderEntities`.
+        self.handle_shoulder_entities();
         result
     }
 

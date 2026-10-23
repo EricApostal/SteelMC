@@ -2,7 +2,7 @@
 //! `minecraft:villager_trade` tags that select offers per profession level.
 //!
 //! The default-enabled `trade_rebalance` datapack replaces the `armorer` and
-//! `librarian` level tags, so tag resolution honours vanilla's `replace` flag.
+//! `librarian` level tags, so tag resolution honors vanilla's `replace` flag.
 
 use heck::ToShoutySnakeCase;
 use proc_macro2::{Ident, Span, TokenStream};

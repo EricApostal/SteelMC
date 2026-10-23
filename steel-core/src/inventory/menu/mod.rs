@@ -26,7 +26,7 @@ use std::fmt;
 use std::mem;
 
 use steel_registry::{item_stack::ItemStack, menu_type::MenuTypeRef, mob_effect::MobEffectRef};
-use steel_utils::{Downcast as _, types::GameType};
+use steel_utils::Downcast as _;
 
 use crate::inventory::container::CraftingContainer;
 use crate::inventory::menu::kinds::InventoryKind;
@@ -347,7 +347,8 @@ impl Menu {
             return;
         }
 
-        let has_infinite_materials = player.game_mode() == GameType::Creative;
+        // Vanilla's `doClick` consults the ability flag, not the game mode.
+        let has_infinite_materials = player.has_infinite_materials();
         if let Click::QuickCraft(action) = click {
             let outcome = {
                 let mut guard = self.behavior().lock_all_containers();
@@ -363,9 +364,12 @@ impl Menu {
                 });
             }
         } else {
-            // Any non-quickcraft click resets an in-progress quickcraft.
+            // Vanilla's `doClick` chain: a non-drag click that arrives while a
+            // drag is active only clears the drag state — the click itself is
+            // consumed and never applied.
             if self.behavior().quickcraft().is_some() {
                 self.behavior_mut().reset_quick_craft();
+                return;
             }
 
             // Menu-defined click hook. A consumed click skips default handling.
@@ -414,6 +418,11 @@ impl Menu {
             let mut guard = self.behavior().lock_all_containers();
             self.slots_changed(&mut guard, player);
         }
+
+        // Every container lock is released here, so kinds that publish menu
+        // state into entity-owned data (the mount menu's equipment mirrors)
+        // can safely touch the entity.
+        self.kind_mut().after_click(player);
     }
 
     /// Handles quick move (shift-click).

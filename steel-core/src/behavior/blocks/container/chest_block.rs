@@ -74,7 +74,7 @@ impl TrappedChestBlock {
 }
 
 /// Vanilla `ChestBlock.getConnectedDirection`: the direction of the other half.
-fn connected_direction(state: BlockStateId) -> Direction {
+pub(crate) fn connected_direction(state: BlockStateId) -> Direction {
     let facing = state.get_value(FACING);
     if state.get_value(CHEST_TYPE) == ChestType::Left {
         facing.rotate_y_clockwise()
@@ -196,7 +196,7 @@ fn update_shape(
 ///
 /// Steel has no cat entity yet, so only the "solid block above" half of
 /// vanilla's check exists here; a sitting cat does not currently block a chest.
-fn is_chest_blocked_at(world: &dyn LevelReader, pos: BlockPos) -> bool {
+pub(crate) fn is_chest_blocked_at(world: &dyn LevelReader, pos: BlockPos) -> bool {
     let above = pos.above();
     is_redstone_conductor(world, world.get_block_state(above), above)
 }
@@ -206,7 +206,7 @@ fn is_chest_blocked_at(world: &dyn LevelReader, pos: BlockPos) -> bool {
 ///
 /// Returns `None` when vanilla's blocked check rejects the chest, in which case
 /// no menu is created at all.
-fn combined_refs(
+pub(crate) fn combined_refs(
     world: &dyn LevelReader,
     pos: BlockPos,
     state: BlockStateId,
@@ -250,7 +250,7 @@ fn combined_refs(
     }
 }
 
-fn open_menu(
+pub(crate) fn open_menu(
     state: BlockStateId,
     world: &Arc<World>,
     pos: BlockPos,
@@ -306,7 +306,7 @@ fn combined_signal(first: &dyn Container, second: &dyn Container) -> i32 {
 
 /// Vanilla `ChestBlock.getAnalogOutputSignal`, including the blocked check of
 /// `getContainer(..., ignoreBeingBlocked = false)`.
-fn analog_signal(state: BlockStateId, world: &dyn LevelReader, pos: BlockPos) -> i32 {
+pub(crate) fn analog_signal(state: BlockStateId, world: &dyn LevelReader, pos: BlockPos) -> i32 {
     let Some((first, second)) = combined_refs(world, pos, state) else {
         return 0;
     };

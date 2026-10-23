@@ -357,7 +357,7 @@ fn summonable_entity_argument_suggests_only_registered_factories() {
     // More entity types gain factories as the fleet lands them, so the
     // expectation is derived from the live registry rather than hardcoded.
     let Some(registry) = crate::entity::ENTITIES.get() else {
-        panic!("entity registry should be initialised");
+        panic!("entity registry should be initialized");
     };
     let mut expected = steel_registry::REGISTRY
         .entity_types

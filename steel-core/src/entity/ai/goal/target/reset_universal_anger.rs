@@ -77,6 +77,8 @@ impl Goal for ResetUniversalAngerTargetGoal {
     }
 
     fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
+        // Vanilla's `T extends Mob & NeutralMob` bound guarantees the capability; Steel's
+        // erased goal trait re-checks it so a misplaced registration stays inert.
         mob.as_neutral_mob().is_some()
             && mob
                 .level()

@@ -188,11 +188,13 @@ impl PistonMovingBlockEntity {
 
 impl PistonMovingState {
     // Vanilla's two-argument `EntityGetter.getEntities` applies
-    // `EntitySelector.NO_SPECTATORS` before the piston loop.
-    fn can_move_collided_entity(entity: &dyn Entity, cause_bounce: bool) -> bool {
-        !entity.is_spectator()
-            && entity.piston_push_reaction() != PushReaction::IgnoreEntity
-            && (!cause_bounce || entity.as_player().is_none())
+    // `EntitySelector.NO_SPECTATORS` before the piston loop, and
+    // `PistonMovingBlockEntity.moveCollidedEntities` then skips every entity whose
+    // `getPistonPushReaction()` is `IGNORE_ENTITY`. The slime-block bounce is a
+    // separate `canSimulateMovement` gate that only skips the velocity change, not
+    // the push itself.
+    fn can_move_collided_entity(entity: &dyn Entity) -> bool {
+        !entity.is_spectator() && entity.piston_push_reaction() != PushReaction::IgnoreEntity
     }
 
     const fn movement_direction(self) -> Direction {
@@ -446,10 +448,10 @@ impl PistonMovingState {
         let cause_bounce = self.moved_state.get_block() == &vanilla_blocks::SLIME_BLOCK;
 
         for entity in entities {
-            if !Self::can_move_collided_entity(entity.as_ref(), cause_bounce) {
+            if !Self::can_move_collided_entity(entity.as_ref()) {
                 continue;
             }
-            if cause_bounce {
+            if cause_bounce && entity.can_simulate_movement() {
                 let mut velocity = entity.velocity();
                 let (x, y, z) = movement.offset();
                 match movement.axis() {
@@ -732,20 +734,11 @@ mod tests {
         let world = &world_fixture.world;
         let player = test_player(Arc::clone(world));
 
-        assert!(PistonMovingState::can_move_collided_entity(
-            player.as_ref(),
-            false
-        ));
-        assert!(!PistonMovingState::can_move_collided_entity(
-            player.as_ref(),
-            true
-        ));
+        // Vanilla pushes players regardless of the slime-block bounce gate.
+        assert!(PistonMovingState::can_move_collided_entity(player.as_ref()));
 
         player.restore_game_modes(GameType::Spectator, None);
-        assert!(!PistonMovingState::can_move_collided_entity(
-            player.as_ref(),
-            false
-        ));
+        assert!(!PistonMovingState::can_move_collided_entity(player.as_ref()));
 
         let entity = TestEntity::new(
             8_000,
@@ -753,7 +746,7 @@ mod tests {
             Arc::downgrade(world),
             &vanilla_entities::MINECART,
         );
-        assert!(PistonMovingState::can_move_collided_entity(&entity, true));
+        assert!(PistonMovingState::can_move_collided_entity(&entity));
     }
 
     #[test]

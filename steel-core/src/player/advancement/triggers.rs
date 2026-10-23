@@ -14,10 +14,11 @@ use crate::entity::{Entity, entity_loot_ref, living_loot_equipment};
 use crate::player::Player;
 use crate::world::World;
 use steel_registry::advancement::predicates::{
-    EffectInstanceView, EntityComponentsPredicate, EntityView, EntityViewFlags, LevelView,
-    PlayerView,
+    DamageView, EffectInstanceView, EntityComponentsPredicate, EntityView, EntityViewFlags,
+    LevelView, PlayerView,
 };
 use steel_registry::advancement::triggers::{EventBase, TriggerEvent};
+use steel_registry::item_stack::ItemStack;
 use steel_registry::{REGISTRY, RegistryExt};
 use steel_utils::{BlockPos, BlockStateId, Identifier};
 
@@ -149,6 +150,7 @@ pub fn entity_view<'a>(
             chicken_variant: loot_ref.chicken_variant,
         },
         vehicle: None,
+        passenger: None,
         player: None,
         lightning: None,
         held_item: entity
@@ -159,16 +161,21 @@ pub fn entity_view<'a>(
 
 /// Builds the [`EntityView`] for a player, including its `type_specific/player`
 /// facts.
+///
+/// `unlocked_recipes` is passed in by the caller rather than read here: the recipe
+/// book lives behind a mutex whose guard cannot outlive the call, and the view
+/// borrows its slice for `'a`. Callers snapshot `ServerRecipeBook::known()`.
 #[must_use]
 pub fn player_view<'a>(
     player: &'a Player,
     level: &'a dyn LevelView,
     equipment: Option<&'a steel_registry::loot_table::EntityEquipmentSlots>,
+    unlocked_recipes: &'a [Identifier],
 ) -> EntityView<'a> {
     let mut view = entity_view(player, level, equipment);
     view.player = Some(PlayerView {
         looking_at: None,
-        unlocked_recipes: player.recipe_book().unlocked_identifiers(),
+        unlocked_recipes,
     });
     view
 }
@@ -181,16 +188,22 @@ pub fn raise(player: &Player, trigger: &Identifier, event: &TriggerEvent<'_>) ->
     if criteria.is_empty() {
         return 0;
     }
-    let mut guard = player.advancements.lock();
     let mut granted = 0;
-    for (advancement, name) in criteria {
-        let Some(criterion) = advancement.get_criterion(name) else {
-            continue;
-        };
-        if criterion.test(event) && guard.award(player, advancement, name) {
-            granted += 1;
+    {
+        let mut guard = player.advancements.lock();
+        for (advancement, name) in criteria {
+            let Some(criterion) = advancement.get_criterion(name) else {
+                continue;
+            };
+            if criterion.test(event) && guard.award(player, advancement, name) {
+                granted += 1;
+            }
         }
     }
+    // Vanilla's `AdvancementRewards.grant` awards recipe rewards inline; Steel
+    // defers them because the award path raises `recipe_unlocked`, which takes the
+    // advancement lock again. The lock is released here, so apply them now.
+    player.flush_pending_recipe_awards();
     granted
 }
 
@@ -211,7 +224,8 @@ pub const fn event_base<'a>(
 /// Raises the `tick` trigger for a player (`CriteriaTriggers.TICK`).
 pub fn raise_tick(player: &Player, level: &dyn LevelView, origin: BlockPos) {
     let equipment = living_loot_equipment(player);
-    let view = player_view(player, level, Some(&equipment));
+    let known = player.recipe_book().unlocked_identifiers().to_vec();
+    let view = player_view(player, level, Some(&equipment), &known);
     raise(
         player,
         &Identifier::vanilla_static("tick"),
@@ -223,10 +237,170 @@ pub fn raise_tick(player: &Player, level: &dyn LevelView, origin: BlockPos) {
 pub fn raise_location(player: &Player, world: &Arc<World>, origin: BlockPos) {
     let level = WorldLevelView::new(world, origin);
     let equipment = living_loot_equipment(player);
-    let view = player_view(player, &level, Some(&equipment));
+    let known = player.recipe_book().unlocked_identifiers().to_vec();
+    let view = player_view(player, &level, Some(&equipment), &known);
     raise(
         player,
         &Identifier::vanilla_static("location"),
         &TriggerEvent::Player(event_base(&view, &level, origin)),
     );
+}
+
+/// Raises `minecraft:villager_trade` (`CriteriaTriggers.TRADE`).
+///
+/// Vanilla `AbstractVillager.notifyTrade` fires this with the traded villager and
+/// the offer's result stack.
+pub fn raise_villager_trade(player: &Player, villager: &dyn Entity, result: &ItemStack) -> usize {
+    let Some(world) = player.level() else {
+        return 0;
+    };
+    let origin = villager.block_position();
+    let level = WorldLevelView::new(&world, origin);
+    let equipment = living_loot_equipment(player);
+    let known = player.recipe_book().unlocked_identifiers().to_vec();
+    let player_entity = player_view(player, &level, Some(&equipment), &known);
+    let base = event_base(&player_entity, &level, origin);
+    let villager_equipment = living_loot_equipment(villager);
+    let villager_view = entity_view(villager, &level, Some(&villager_equipment));
+    raise(
+        player,
+        &Identifier::vanilla_static("villager_trade"),
+        &TriggerEvent::VillagerTrade {
+            base,
+            villager: &villager_view,
+            item: result,
+        },
+    )
+}
+
+/// Raises `minecraft:cured_zombie_villager` (`CriteriaTriggers.CURED_ZOMBIE_VILLAGER`).
+///
+/// Vanilla `ZombieVillager.finishConversion` fires this with the curing player,
+/// the zombie villager and the villager it became.
+pub fn raise_cured_zombie_villager(
+    player: &Player,
+    zombie: &dyn Entity,
+    villager: &dyn Entity,
+) -> usize {
+    let Some(world) = player.level() else {
+        return 0;
+    };
+    let origin = zombie.block_position();
+    let level = WorldLevelView::new(&world, origin);
+    let equipment = living_loot_equipment(player);
+    let known = player.recipe_book().unlocked_identifiers().to_vec();
+    let player_entity = player_view(player, &level, Some(&equipment), &known);
+    let base = event_base(&player_entity, &level, origin);
+    let zombie_equipment = living_loot_equipment(zombie);
+    let zombie_view = entity_view(zombie, &level, Some(&zombie_equipment));
+    let villager_equipment = living_loot_equipment(villager);
+    let villager_view = entity_view(villager, &level, Some(&villager_equipment));
+    raise(
+        player,
+        &Identifier::vanilla_static("cured_zombie_villager"),
+        &TriggerEvent::CuredZombieVillager {
+            base,
+            zombie: &zombie_view,
+            villager: &villager_view,
+        },
+    )
+}
+
+/// Raises `minecraft:voluntary_exile` (`CriteriaTriggers.RAID_OMEN`).
+///
+/// Vanilla `Raider.killedRaiderCaptain`-style path: the player killed a raid
+/// captain carrying the ominous banner.
+pub fn raise_voluntary_exile(player: &Player, level: &dyn LevelView, origin: BlockPos) -> usize {
+    let equipment = living_loot_equipment(player);
+    let known = player.recipe_book().unlocked_identifiers().to_vec();
+    let view = player_view(player, level, Some(&equipment), &known);
+    raise(
+        player,
+        &Identifier::vanilla_static("voluntary_exile"),
+        &TriggerEvent::Player(event_base(&view, level, origin)),
+    )
+}
+
+/// Raises `minecraft:hero_of_the_village` (`CriteriaTriggers.RAID_WIN`).
+pub fn raise_hero_of_the_village(
+    player: &Player,
+    level: &dyn LevelView,
+    origin: BlockPos,
+) -> usize {
+    let equipment = living_loot_equipment(player);
+    let known = player.recipe_book().unlocked_identifiers().to_vec();
+    let view = player_view(player, level, Some(&equipment), &known);
+    raise(
+        player,
+        &Identifier::vanilla_static("hero_of_the_village"),
+        &TriggerEvent::Player(event_base(&view, level, origin)),
+    )
+}
+
+/// Builds a [`DamageView`] for a live damage source.
+///
+/// Vanilla's `KilledTrigger` only consults the source's predicate (damage type
+/// tags and the source/direct entities), so the damage amounts are reported as
+/// zero.
+fn damage_view<'a>(
+    source: &'a crate::entity::damage::DamageSource,
+    level: &'a dyn LevelView,
+    source_view: &'a Option<EntityView<'a>>,
+    direct_view: &'a Option<EntityView<'a>>,
+) -> DamageView<'a> {
+    DamageView {
+        original: 0.0,
+        actual: 0.0,
+        blocked: false,
+        source_entity: source_view.as_ref(),
+        direct_entity: direct_view.as_ref(),
+        type_key: Some(&source.damage_type.key),
+        is_direct: source.is_direct(),
+    }
+}
+
+/// Raises `minecraft:player_killed_entity` (`CriteriaTriggers.PLAYER_KILLED_ENTITY`).
+///
+/// Vanilla `ServerPlayer.awardKillScore` fires this with the killed entity and
+/// the killing blow.
+pub fn raise_player_killed_entity(
+    player: &Player,
+    victim: &dyn Entity,
+    killing_blow: &crate::entity::damage::DamageSource,
+) -> usize {
+    let Some(world) = player.level() else {
+        return 0;
+    };
+    let origin = victim.block_position();
+    let level = WorldLevelView::new(&world, origin);
+    let equipment = living_loot_equipment(player);
+    let known = player.recipe_book().unlocked_identifiers().to_vec();
+    let player_entity = player_view(player, &level, Some(&equipment), &known);
+    let base = event_base(&player_entity, &level, origin);
+    let victim_equipment = living_loot_equipment(victim);
+    let victim_view = entity_view(victim, &level, Some(&victim_equipment));
+
+    let source_equipment = killing_blow
+        .causing_entity()
+        .map(|entity| living_loot_equipment(&**entity));
+    let source_view = killing_blow
+        .causing_entity()
+        .map(|entity| entity_view(&**entity, &level, source_equipment.as_ref()));
+    let direct_equipment = killing_blow
+        .direct_entity()
+        .map(|entity| living_loot_equipment(&**entity));
+    let direct_view = killing_blow
+        .direct_entity()
+        .map(|entity| entity_view(&**entity, &level, direct_equipment.as_ref()));
+
+    let damage = damage_view(killing_blow, &level, &source_view, &direct_view);
+    raise(
+        player,
+        &Identifier::vanilla_static("player_killed_entity"),
+        &TriggerEvent::PlayerKilledEntity {
+            base,
+            entity: &victim_view,
+            killing_blow: Some(damage),
+        },
+    )
 }

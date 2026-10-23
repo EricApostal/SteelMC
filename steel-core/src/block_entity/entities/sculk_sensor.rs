@@ -11,11 +11,13 @@ use std::sync::{Arc, Weak};
 
 use glam::DVec3;
 use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
-use simdnbt::owned::NbtCompound;
+use simdnbt::owned::{NbtCompound, NbtTag};
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{BlockStateProperties, Direction, EnumProperty};
 use steel_registry::game_events::GameEventRef;
+use steel_registry::position_source::PositionSource;
 use steel_registry::{REGISTRY, RegistryExt, vanilla_block_entity_types, vanilla_game_events};
+use steel_utils::UuidExt as _;
 use steel_utils::{
     BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier, locks::SyncMutex,
 };
@@ -25,7 +27,7 @@ use crate::block_entity::{BlockEntity, BlockEntityBase};
 use crate::world::game_event::vibration::{
     CALIBRATED_SENSOR_LISTENER_RADIUS, NO_VIBRATION_FREQUENCY, SENSOR_LISTENER_RADIUS,
     VibrationCallback, VibrationInfo, VibrationListenerState, VibrationSystemListener,
-    redstone_strength_for_distance, vibration_frequency_for_event,
+    block_position_source, redstone_strength_for_distance, vibration_frequency_for_event,
 };
 use crate::world::game_event::{GameEventContext, SharedGameEventListener};
 use crate::world::{SignalGetter as _, World};
@@ -33,16 +35,18 @@ use crate::world::{SignalGetter as _, World};
 const FACING: &EnumProperty<Direction> = &BlockStateProperties::HORIZONTAL_FACING;
 
 /// One in-flight vibration as persisted by Vanilla's `VibrationInfo` codec.
-struct PersistedInfo {
+pub(crate) struct PersistedInfo {
     event_key: Identifier,
     distance: f32,
     x: f64,
     y: f64,
     z: f64,
+    source: Option<uuid::Uuid>,
+    projectile_owner: Option<uuid::Uuid>,
 }
 
 /// Vanilla `VibrationSystem.Data` codec fields.
-struct PersistedVibration {
+pub(crate) struct PersistedVibration {
     current: Option<PersistedInfo>,
     travel_time_in_ticks: i32,
 }
@@ -55,12 +59,18 @@ fn persist_vibration(state: &VibrationListenerState) -> PersistedVibration {
             x: info.pos.x,
             y: info.pos.y,
             z: info.pos.z,
+            source: info.uuid,
+            projectile_owner: info.projectile_owner_uuid,
         }),
         travel_time_in_ticks: state.travel_time_in_ticks(),
     }
 }
 
-fn restore_vibration(state: &SyncMutex<VibrationListenerState>, persisted: PersistedVibration) {
+/// Restores a persisted `listener` compound onto `state`.
+pub(crate) fn restore_vibration(
+    state: &SyncMutex<VibrationListenerState>,
+    persisted: PersistedVibration,
+) {
     let mut guard = state.lock();
     let Some(info) = persisted.current else {
         return;
@@ -72,46 +82,64 @@ fn restore_vibration(state: &SyncMutex<VibrationListenerState>, persisted: Persi
         event,
         distance: info.distance,
         pos: DVec3::new(info.x, info.y, info.z),
-        // TODO(Entity): Vanilla persists `source`/`projectile_owner` UUIDs inside `VibrationInfo`
-        // so shriekers can attribute a vibration after reload. Steel has no NBT UUID bridge yet.
-        uuid: None,
-        projectile_owner_uuid: None,
+        uuid: info.source,
+        projectile_owner_uuid: info.projectile_owner,
     }));
     guard.set_travel_time_in_ticks(persisted.travel_time_in_ticks);
 }
 
-/// Writes the `listener` compound shared by both sensor variants.
-fn save_listener_nbt(nbt: &mut NbtCompound, state: &VibrationListenerState) {
+/// Vanilla `UUIDUtil.CODEC` (a four-int array).
+fn insert_uuid(nbt: &mut NbtCompound, key: &str, uuid: uuid::Uuid) {
+    nbt.insert(key, NbtTag::IntArray(uuid.to_int_array().to_vec()));
+}
+
+/// Writes the `listener` compound shared by both sensor variants and the shrieker.
+pub(crate) fn save_listener_nbt(nbt: &mut NbtCompound, state: &VibrationListenerState) {
     let persisted = persist_vibration(state);
     let mut listener = NbtCompound::new();
     if let Some(current) = persisted.current {
         let mut event = NbtCompound::new();
         event.insert("game_event", current.event_key.to_string());
         event.insert("distance", current.distance);
-        event.insert("x", current.x);
-        event.insert("y", current.y);
-        event.insert("z", current.z);
+        // Vanilla `Vec3.CODEC`: `[x, y, z]` doubles.
+        event.insert("pos", NbtTag::Double(vec![current.x, current.y, current.z]));
+        if let Some(source) = current.source {
+            insert_uuid(&mut event, "source", source);
+        }
+        if let Some(projectile_owner) = current.projectile_owner {
+            insert_uuid(&mut event, "projectile_owner", projectile_owner);
+        }
         listener.insert("event", event);
     }
     listener.insert("event_delay", persisted.travel_time_in_ticks);
     nbt.insert("listener", listener);
 }
 
-/// Reads the `listener` compound shared by both sensor variants.
-fn load_listener_nbt(nbt: &NbtCompoundView<'_, '_>) -> PersistedVibration {
+/// Reads the `listener` compound shared by both sensor variants and the shrieker.
+pub(crate) fn load_listener_nbt(nbt: &NbtCompoundView<'_, '_>) -> PersistedVibration {
     let listener = nbt.compound("listener");
     let current = listener.and_then(|listener| {
         let event = listener.compound("event")?;
         let key = event.string("game_event")?;
+        let pos = event
+            .list("pos")
+            .and_then(|pos| pos.doubles())
+            .unwrap_or_default();
         Some(PersistedInfo {
             event_key: key
                 .to_string_lossy()
                 .parse::<Identifier>()
                 .unwrap_or_else(|_| Identifier::new_static("minecraft", "step")),
             distance: event.float("distance").unwrap_or(0.0),
-            x: event.double("x").unwrap_or(0.0),
-            y: event.double("y").unwrap_or(0.0),
-            z: event.double("z").unwrap_or(0.0),
+            x: pos.first().copied().unwrap_or(0.0),
+            y: pos.get(1).copied().unwrap_or(0.0),
+            z: pos.get(2).copied().unwrap_or(0.0),
+            source: event
+                .int_array("source")
+                .and_then(|uuid| uuid::Uuid::from_int_array(&uuid)),
+            projectile_owner: event
+                .int_array("projectile_owner")
+                .and_then(|uuid| uuid::Uuid::from_int_array(&uuid)),
         })
     });
     PersistedVibration {
@@ -139,22 +167,25 @@ impl SensorCallback {
         source_entity: Option<&dyn crate::entity::Entity>,
     ) {
         let state = world.get_block_state(self.pos);
+        // Vanilla `VibrationUser.onReceiveVibration`: both the stored frequency and the computed
+        // power are only updated while the sensor can still activate.
+        if !SculkSensorBlock::can_activate(state) {
+            return;
+        }
         let frequency = vibration_frequency_for_event(event);
         let power = redstone_strength_for_distance(distance, self.radius);
         *self.power.lock() = power;
         *self.frequency.lock() = frequency;
-        if SculkSensorBlock::can_activate(state) {
-            SculkSensorBlock::activate(
-                state.get_block(),
-                world,
-                self.pos,
-                state,
-                power,
-                frequency,
-                source_entity,
-                crate::behavior::blocks::SCULK_SENSOR_ACTIVE_TICKS,
-            );
-        }
+        SculkSensorBlock::activate(
+            state.get_block(),
+            world,
+            self.pos,
+            state,
+            power,
+            frequency,
+            source_entity,
+            crate::behavior::blocks::SCULK_SENSOR_ACTIVE_TICKS,
+        );
     }
 
     fn new(pos: BlockPos, radius: i32) -> Self {
@@ -178,6 +209,10 @@ impl VibrationCallback for SensorCallback {
         self.radius
     }
 
+    fn position_source(&self) -> PositionSource {
+        block_position_source(self.pos)
+    }
+
     fn can_receive_vibration(
         &self,
         world: &Arc<World>,
@@ -186,10 +221,11 @@ impl VibrationCallback for SensorCallback {
         _context: &GameEventContext<'_>,
     ) -> bool {
         // Vanilla `VibrationUser.canReceiveVibration`: a vibration originating at the sensor's own
-        // block is only accepted for block place/destroy.
+        // block is always rejected for block place/destroy, and for every other event the sensor
+        // still has to be able to activate.
         if pos == self.pos
-            && event.key != vanilla_game_events::BLOCK_DESTROY.key
-            && event.key != vanilla_game_events::BLOCK_PLACE.key
+            && (event.key == vanilla_game_events::BLOCK_DESTROY.key
+                || event.key == vanilla_game_events::BLOCK_PLACE.key)
         {
             return false;
         }
@@ -334,6 +370,10 @@ impl VibrationCallback for CalibratedCallback {
         CALIBRATED_SENSOR_LISTENER_RADIUS
     }
 
+    fn position_source(&self) -> PositionSource {
+        block_position_source(self.inner.pos)
+    }
+
     fn can_receive_vibration(
         &self,
         world: &Arc<World>,
@@ -365,21 +405,24 @@ impl VibrationCallback for CalibratedCallback {
     ) {
         let entity = source_uuid.and_then(|uuid| world.get_entity_by_uuid(&uuid));
         let state = world.get_block_state(self.inner.pos);
+        // Vanilla inherits `VibrationUser.onReceiveVibration`: the frequency and power are only
+        // updated (and the sensor only activated) while it can still activate.
+        if !SculkSensorBlock::can_activate(state) {
+            return;
+        }
         let frequency = vibration_frequency_for_event(event);
         let power = redstone_strength_for_distance(distance, self.inner.radius);
         *self.inner.power.lock() = power;
         *self.inner.frequency.lock() = frequency;
-        if SculkSensorBlock::can_activate(state) {
-            crate::behavior::blocks::CalibratedSculkSensorBlock::activate(
-                state.get_block(),
-                world,
-                self.inner.pos,
-                state,
-                power,
-                frequency,
-                entity.as_deref(),
-            );
-        }
+        crate::behavior::blocks::CalibratedSculkSensorBlock::activate(
+            state.get_block(),
+            world,
+            self.inner.pos,
+            state,
+            power,
+            frequency,
+            entity.as_deref(),
+        );
     }
 }
 

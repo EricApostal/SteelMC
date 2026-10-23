@@ -197,6 +197,8 @@ struct CommandAuthorizationContext {
     permission_context: PermissionContext,
     player_permissions: Option<PermissionSet>,
     player_level: PermissionLevel,
+    /// Vanilla `CommandSourceStack.withMaximumPermission` cap on `player_level`.
+    maximum_level: PermissionLevel,
     world_scope: CommandWorldScope,
 }
 
@@ -217,6 +219,7 @@ impl CommandAuthorizationContext {
             permission_context: PermissionContext::for_world(world),
             player_permissions: Some(permissions),
             player_level: level,
+            maximum_level: PermissionLevel::Owners,
             world_scope: CommandWorldScope::Domain(domain),
         }
     }
@@ -226,6 +229,7 @@ impl CommandAuthorizationContext {
             permission_context: PermissionContext::for_world(world),
             player_permissions: None,
             player_level: PermissionLevel::Owners,
+            maximum_level: PermissionLevel::Owners,
             world_scope: CommandWorldScope::Global,
         }
     }
@@ -238,7 +242,31 @@ impl CommandAuthorizationContext {
         let Some(permissions) = &self.player_permissions else {
             return Some(PermissionState::Allow);
         };
-        permissions.resolve_with_level(permission, self.permission_context(), self.player_level)
+        permissions.resolve_with_level(
+            permission,
+            self.permission_context(),
+            self.effective_level(),
+        )
+    }
+
+    /// Vanilla `LevelBasedPermissionSet.union`: the lower level of the two wins.
+    const fn effective_level(&self) -> PermissionLevel {
+        if self
+            .maximum_level
+            .is_equal_or_higher_than(self.player_level)
+        {
+            self.player_level
+        } else {
+            self.maximum_level
+        }
+    }
+
+    /// Vanilla `PermissionSet.union` for a level-based set: keeps the lower cap.
+    fn with_maximum_permission(mut self, level: PermissionLevel) -> Self {
+        if !level.is_equal_or_higher_than(self.maximum_level) {
+            self.maximum_level = level;
+        }
+        self
     }
 
     fn allows_execution_domain(&self, domain: &str) -> bool {
@@ -380,6 +408,18 @@ impl CommandSource {
         source
     }
 
+    /// Vanilla `CommandSourceStack.withMaximumPermission`: caps the vanilla
+    /// operator level this source commands with.
+    ///
+    /// Steel's console and Rcon sources carry no permission set, so the cap only
+    /// lowers a player's level; rule-based Steel grants are unaffected, which lets
+    /// an operator-run function still use Steel's extension commands.
+    pub(crate) fn with_maximum_permission(&self, level: PermissionLevel) -> Self {
+        let mut source = self.clone();
+        source.authorization = source.authorization.with_maximum_permission(level);
+        source
+    }
+
     pub(crate) fn with_world(&self, world: Arc<World>) -> Result<Self, CommandSyntaxError> {
         if !self.allows_execution_domain(world.domain()) {
             return Err(CommandSyntaxError::dynamic(
@@ -436,20 +476,12 @@ impl CommandSource {
         self.position
     }
 
-    #[expect(
-        dead_code,
-        reason = "silent command-source derivation is retained for future vanilla command paths"
-    )]
     pub(crate) fn with_suppressed_output(&self) -> Self {
         let mut source = self.clone();
         source.silent = true;
         source
     }
 
-    #[expect(
-        dead_code,
-        reason = "custom executors need to inspect silent command-source state"
-    )]
     pub(crate) const fn is_silent(&self) -> bool {
         self.silent
     }

@@ -435,16 +435,10 @@ impl ScheduledPlayPacket {
                 player.handle_paddle_boat(packet);
             }
             ScheduledPlayPacketKind::EntityTagQuery(packet) => {
-                player.handle_awaiting_foundation(
-                    "ServerboundEntityTagQueryPacket",
-                    "command-visible entity NBT serialization for arbitrary entities (`save_without_metadata` exists only on block entities, not `entity/entity/mod.rs:3702 save_additional`)",
-                );
+                player.handle_entity_tag_query(packet);
             }
             ScheduledPlayPacketKind::BundleItemSelected(packet) => {
-                player.handle_awaiting_foundation(
-                    "ServerboundSelectBundleItemPacket",
-                    "`containerMenu.setSelectedBundleItemIndex(slot_id, index)` (no bundle-selection API in `steel-core/src/inventory/menu/`)",
-                );
+                player.handle_bundle_item_selected(packet);
             }
             ScheduledPlayPacketKind::ConfigurationAcknowledged => {
                 player.handle_awaiting_foundation(
@@ -453,76 +447,40 @@ impl ScheduledPlayPacket {
                 );
             }
             ScheduledPlayPacketKind::PickItemFromEntity(packet) => {
-                player.handle_awaiting_foundation(
-                    "ServerboundPickItemFromEntityPacket",
-                    "`Entity::get_pick_result()` (no pick-result API on any entity; only `get_clone_item_stack` exists for blocks)",
-                );
+                player.handle_pick_item_from_entity(packet);
             }
             ScheduledPlayPacketKind::SetCommandBlock(packet) => {
-                player.handle_awaiting_foundation(
-                    "ServerboundSetCommandBlockPacket",
-                    "`command_block` block entity type (`CommandBlockEntity` absent from `steel-core/src/block_entity/entities/`)",
-                );
+                player.handle_set_command_block(packet);
             }
             ScheduledPlayPacketKind::SetCommandMinecart(packet) => {
-                player.handle_awaiting_foundation(
-                    "ServerboundSetCommandMinecartPacket",
-                    "command-block-minecart entity (`MinecartCommandBlock` has no factory in `steel-core/src/entity/generated/entities.rs`)",
-                );
+                player.handle_set_command_minecart(packet);
             }
             ScheduledPlayPacketKind::SetStructureBlock(packet) => {
-                player.handle_awaiting_foundation(
-                    "ServerboundSetStructureBlockPacket",
-                    "`structure_block` block entity type (`StructureBlockEntity` absent from `steel-core/src/block_entity/entities/`)",
-                );
+                player.handle_set_structure_block(packet);
             }
             ScheduledPlayPacketKind::SetJigsawBlock(packet) => {
-                player.handle_awaiting_foundation(
-                    "ServerboundSetJigsawBlockPacket",
-                    "jigsaw block entity (`JigsawBlockEntity` absent from `steel-core/src/block_entity/entities/`)",
-                );
+                player.handle_set_jigsaw_block(packet);
             }
             ScheduledPlayPacketKind::SetTestBlock(packet) => {
-                player.handle_awaiting_foundation(
-                    "ServerboundSetTestBlockPacket",
-                    "test block entity (`TestBlockEntity`/`TestInstanceBlockEntity` absent from `steel-core/src/block_entity/entities/`)",
-                );
+                player.handle_set_test_block(packet);
             }
             ScheduledPlayPacketKind::TestInstanceBlockAction(packet) => {
-                player.handle_awaiting_foundation(
-                    "ServerboundTestInstanceBlockActionPacket",
-                    "test-instance block entity (`TestInstanceBlockEntity` absent from `steel-core/src/block_entity/entities/`)",
-                );
+                player.handle_test_instance_block_action(packet);
             }
             ScheduledPlayPacketKind::JigsawGenerate(packet) => {
-                player.handle_awaiting_foundation(
-                    "ServerboundJigsawGeneratePacket",
-                    "jigsaw structure generation (`JigsawBlockEntity` absent; no structure-start placement API in `world/`)",
-                );
+                player.handle_jigsaw_generate(packet);
             }
             ScheduledPlayPacketKind::DebugSubscriptionRequest(packet) => {
-                player.handle_awaiting_foundation(
-                    "ServerboundDebugSubscriptionRequestPacket",
-                    "server→client debug-value subscription tracking (no subscription store; `CDebug*` send packets exist but nobody tracks subscriptions)",
-                );
+                player.handle_debug_subscription_request(packet);
             }
             ScheduledPlayPacketKind::PlaceRecipe(packet) => {
-                player.handle_awaiting_foundation(
-                    "ServerboundPlaceRecipePacket",
-                    "recipe-book placement (`RecipeBookMenu.handlePlacement` — owned by Menus lane, `steel-core/src/inventory/menu/`; `CUpdateRecipes` item sets + `CPlaceGhostRecipe` exist)",
-                );
+                player.handle_place_recipe(packet);
             }
             ScheduledPlayPacketKind::RecipeBookChangeSettings(packet) => {
-                player.handle_awaiting_foundation(
-                    "ServerboundRecipeBookChangeSettingsPacket",
-                    "player recipe-book state (`RecipeBook` struct with per-book open/filtering settings on `Player`; only `CRecipeBookSettings`/`RecipeBookType` wire types exist)",
-                );
+                player.handle_recipe_book_change_settings(&packet);
             }
             ScheduledPlayPacketKind::RecipeBookSeenRecipe(packet) => {
-                player.handle_awaiting_foundation(
-                    "ServerboundRecipeBookSeenRecipePacket",
-                    "player recipe-book highlight state (`RecipeBook.removeHighlight(display)`; see RecipeBook lane above)",
-                );
+                player.handle_recipe_book_seen_recipe(&packet);
             }
             ScheduledPlayPacketKind::ChatCommandSigned(packet) => {
                 player.handle_awaiting_foundation(

@@ -13,8 +13,9 @@
 use std::sync::Arc;
 
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
-use steel_utils::{BlockPos, BlockStateId};
+use steel_utils::{BlockPos, BlockStateId, WorldAabb};
 
+use crate::entity::Entity as _;
 use crate::player::Player;
 use crate::world::World;
 use crate::world::game_event::GameEventContext;
@@ -93,24 +94,44 @@ impl OpenerTransition {
 /// Counts the players that still have `host`'s container open and are in range.
 ///
 /// Mirrors vanilla `ContainerOpenersCounter.getEntitiesWithContainerOpen` +
-/// `recheckOpeners` counting. Callers must not hold the counter lock.
+/// `recheckOpeners` counting: the search radius is the counter's own
+/// `maxInteractionRange` plus vanilla's fixed 4.0 buffer, so every candidate is
+/// tested against the same range. Spectators never count.
+///
+/// Returns the open count and the largest container interaction range among the
+/// matching players, which vanilla stores back into `maxInteractionRange`.
+///
+/// Callers must not hold the counter lock.
 pub fn count_viewers<H: ContainerOpenersHost + ?Sized>(
     world: &Arc<World>,
     pos: BlockPos,
     host: &H,
-) -> i32 {
+    max_interaction_range: f64,
+) -> (i32, f64) {
     let mut open_count = 0;
+    let mut max_viewer_range = 0.0_f64;
+    // Vanilla `new AABB(pos).inflate(this.maxInteractionRange + 4.0)`.
+    let search_box = WorldAabb::new(
+        f64::from(pos.x()),
+        f64::from(pos.y()),
+        f64::from(pos.z()),
+        f64::from(pos.x()) + 1.0,
+        f64::from(pos.y()) + 1.0,
+        f64::from(pos.z()) + 1.0,
+    )
+    .inflate(max_interaction_range + 4.0);
     world.players.iter_players(|_, player| {
         if player.game_mode() == steel_utils::types::GameType::Spectator
-            || !player.is_within_block_interaction_range_with_buffer(pos, 4.0)
+            || !search_box.intersects(player.bounding_box())
             || !host.is_own_container(player)
         {
             return true;
         }
         open_count += 1;
+        max_viewer_range = max_viewer_range.max(player.block_interaction_range());
         true
     });
-    open_count
+    (open_count, max_viewer_range)
 }
 
 /// Tracks how many players currently have one container open.
@@ -136,7 +157,17 @@ impl ContainerOpenersCounter {
         self.open_count
     }
 
+    /// Vanilla `ContainerOpenersCounter.maxInteractionRange`: the largest
+    /// container interaction range seen among the counted players.
+    #[must_use]
+    pub const fn max_interaction_range(&self) -> f64 {
+        self.max_interaction_range
+    }
+
     /// Vanilla `incrementOpeners` bookkeeping.
+    ///
+    /// `interaction_range` is vanilla's `containerUser.getContainerInteractionRange()`,
+    /// which for a player is their block interaction range.
     pub fn increment(&mut self, interaction_range: f64) -> OpenerTransition {
         let previous = self.open_count;
         self.open_count += 1;
@@ -167,16 +198,17 @@ impl ContainerOpenersCounter {
     }
 
     /// Vanilla `recheckOpeners` bookkeeping for an already-counted viewer list.
-    pub fn recheck(&mut self, open_count: i32) -> OpenerTransition {
+    ///
+    /// `max_interaction_range` is stored unconditionally, exactly like vanilla,
+    /// because it is recomputed from the players that still count as viewers.
+    pub fn recheck(&mut self, open_count: i32, max_interaction_range: f64) -> OpenerTransition {
         let previous = self.open_count;
         let was_open = previous != 0;
         let is_open = open_count != 0;
         if previous != open_count {
             self.open_count = open_count;
-            if !is_open {
-                self.max_interaction_range = 0.0;
-            }
         }
+        self.max_interaction_range = max_interaction_range;
         OpenerTransition {
             previous,
             current: open_count,

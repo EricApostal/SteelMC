@@ -1,8 +1,9 @@
 use super::{
-    BlockPredicateJson, DamageSourcePredicateJson, EnchantmentOptionsJson, EntityEquipmentJson,
-    EntityFlagsJson, EntityPredicateJson, EquipmentSlotJson, FromStr, Ident, Identifier,
-    LevelRangeJson, LocationPredicateJson, NumberProviderJson, NumberProviderObjectJson,
-    PredicateJson, Span, ToShoutySnakeCase, TokenStream, generate_condition, quote,
+    BlockPredicateJson, DamageSourcePredicateJson, DoubleBoundsJson, EnchantmentOptionsJson,
+    EntityEquipmentJson, EntityFlagsJson, EntityPredicateJson, EquipmentSlotJson, FromStr,
+    HolderSetJson, Ident, Identifier, LevelRangeJson, LocationPredicateJson, NumberProviderJson,
+    NumberProviderObjectJson, PositionPredicateJson, PredicateJson, Span, ToShoutySnakeCase,
+    TokenStream, generate_condition, quote,
 };
 
 pub(crate) fn generate_number_provider(value: &NumberProviderJson) -> TokenStream {
@@ -22,24 +23,17 @@ pub(crate) fn generate_number_provider(value: &NumberProviderJson) -> TokenStrea
             "minecraft:uniform" => {
                 let min = object.min.as_ref().and_then(constant_of);
                 let max = object.max.as_ref().and_then(constant_of);
-                match (min, max) {
-                    (Some(min), Some(max)) => {
-                        quote! { NumberProvider::Uniform { min: #min, max: #max } }
-                    }
-                    _ => {
-                        let min = provider_or_default(
-                            &object.min,
-                            quote! { NumberProvider::Constant(0.0) },
-                        );
-                        let max = provider_or_default(
-                            &object.max,
-                            quote! { NumberProvider::Constant(1.0) },
-                        );
-                        quote! {
-                            NumberProvider::UniformProviders {
-                                min: &#min,
-                                max: &#max,
-                            }
+                if let (Some(min), Some(max)) = (min, max) {
+                    quote! { NumberProvider::Uniform { min: #min, max: #max } }
+                } else {
+                    let min =
+                        provider_or_default(&object.min, quote! { NumberProvider::Constant(0.0) });
+                    let max =
+                        provider_or_default(&object.max, quote! { NumberProvider::Constant(1.0) });
+                    quote! {
+                        NumberProvider::UniformProviders {
+                            min: &#min,
+                            max: &#max,
                         }
                     }
                 }
@@ -47,22 +41,15 @@ pub(crate) fn generate_number_provider(value: &NumberProviderJson) -> TokenStrea
             "minecraft:binomial" => {
                 let trials = object.n.as_ref().and_then(constant_of);
                 let chance = object.p.as_ref().and_then(constant_of);
-                match (trials, chance) {
-                    (Some(trials), Some(chance)) => {
-                        let n = trials as i32;
-                        quote! { NumberProvider::Binomial { n: #n, p: #chance } }
-                    }
-                    _ => {
-                        let n = provider_or_default(
-                            &object.n,
-                            quote! { NumberProvider::Constant(1.0) },
-                        );
-                        let p = provider_or_default(
-                            &object.p,
-                            quote! { NumberProvider::Constant(0.5) },
-                        );
-                        quote! { NumberProvider::BinomialProviders { n: &#n, p: &#p } }
-                    }
+                if let (Some(trials), Some(chance)) = (trials, chance) {
+                    let n = trials as i32;
+                    quote! { NumberProvider::Binomial { n: #n, p: #chance } }
+                } else {
+                    let n =
+                        provider_or_default(&object.n, quote! { NumberProvider::Constant(1.0) });
+                    let p =
+                        provider_or_default(&object.p, quote! { NumberProvider::Constant(0.5) });
+                    quote! { NumberProvider::BinomialProviders { n: &#n, p: &#p } }
                 }
             }
             "minecraft:add" | "add" => {
@@ -188,11 +175,10 @@ pub(crate) fn generate_number_provider(value: &NumberProviderJson) -> TokenStrea
                 let on_true = object.on_true.as_ref().unwrap_or_else(|| {
                     panic!("minecraft:conditional number provider is missing `on_true`")
                 });
-                let on_false = object
-                    .on_false
-                    .as_ref()
-                    .map(generate_number_provider)
-                    .unwrap_or_else(|| quote! { &NumberProvider::Constant(0.0) });
+                let on_false = object.on_false.as_ref().map_or_else(
+                    || quote! { &NumberProvider::Constant(0.0) },
+                    generate_number_provider,
+                );
                 let condition = generate_condition(condition);
                 let on_true = generate_number_provider(on_true);
                 quote! {
@@ -212,11 +198,10 @@ pub(crate) fn generate_number_provider(value: &NumberProviderJson) -> TokenStrea
                     let value = generate_number_provider(&case.value);
                     quote! { (&#condition, #value) }
                 });
-                let default = object
-                    .default
-                    .as_ref()
-                    .map(generate_number_provider)
-                    .unwrap_or_else(|| quote! { &NumberProvider::Constant(0.0) });
+                let default = object.default.as_ref().map_or_else(
+                    || quote! { &NumberProvider::Constant(0.0) },
+                    generate_number_provider,
+                );
                 quote! {
                     NumberProvider::Dispatcher {
                         cases: &[#(#cases),*],
@@ -252,11 +237,10 @@ pub(crate) fn generate_number_provider(value: &NumberProviderJson) -> TokenStrea
                     panic!("minecraft:score number provider is missing `score`")
                 });
                 let scale = object.scale.unwrap_or(1.0);
-                let fallback = object
-                    .fallback
-                    .as_ref()
-                    .map(generate_number_provider)
-                    .unwrap_or_else(|| quote! { &NumberProvider::Constant(0.0) });
+                let fallback = object.fallback.as_ref().map_or_else(
+                    || quote! { &NumberProvider::Constant(0.0) },
+                    generate_number_provider,
+                );
                 quote! {
                     NumberProvider::Score {
                         target: #target,
@@ -274,11 +258,10 @@ pub(crate) fn generate_number_provider(value: &NumberProviderJson) -> TokenStrea
                     panic!("minecraft:storage number provider is missing `path`")
                 });
                 let storage = generate_identifier_token(storage);
-                let fallback = object
-                    .fallback
-                    .as_ref()
-                    .map(generate_number_provider)
-                    .unwrap_or_else(|| quote! { &NumberProvider::Constant(0.0) });
+                let fallback = object.fallback.as_ref().map_or_else(
+                    || quote! { &NumberProvider::Constant(0.0) },
+                    generate_number_provider,
+                );
                 quote! {
                     NumberProvider::Storage {
                         storage: #storage,
@@ -354,26 +337,23 @@ fn aggregate_inputs(object: &NumberProviderObjectJson, provider_type: &str) -> V
 
 /// The required operands of a binary provider (`left`/`right`, e.g. `minecraft:div`).
 fn binary_inputs(object: &NumberProviderObjectJson) -> (TokenStream, TokenStream) {
-    let left = object
-        .left
-        .as_ref()
-        .map(generate_number_provider)
-        .unwrap_or_else(|| panic!("number provider is missing `left`"));
-    let right = object
-        .right
-        .as_ref()
-        .map(generate_number_provider)
-        .unwrap_or_else(|| panic!("number provider is missing `right`"));
+    let left = object.left.as_ref().map_or_else(
+        || panic!("number provider is missing `left`"),
+        generate_number_provider,
+    );
+    let right = object.right.as_ref().map_or_else(
+        || panic!("number provider is missing `right`"),
+        generate_number_provider,
+    );
     (left, right)
 }
 
 /// The required operand of a unary provider (`input`, e.g. `minecraft:abs`).
 fn unary_input(object: &NumberProviderObjectJson, provider_type: &str) -> TokenStream {
-    object
-        .input
-        .as_ref()
-        .map(generate_number_provider)
-        .unwrap_or_else(|| panic!("minecraft:{provider_type} number provider is missing `input`"))
+    object.input.as_ref().map_or_else(
+        || panic!("minecraft:{provider_type} number provider is missing `input`"),
+        generate_number_provider,
+    )
 }
 
 /// The score holder of a `minecraft:score` provider: either a bare holder-name
@@ -451,10 +431,13 @@ fn generate_level_based_value_ref_token(amount: &serde_json::Value) -> TokenStre
     let object = amount.as_object().unwrap_or_else(|| {
         panic!("minecraft:enchantment_level `amount` must be a number or object")
     });
-    let provider_type = object
-        .get("type")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_else(|| panic!("minecraft:enchantment_level `amount` object is missing `type`"));
+    assert!(
+        object
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .is_some(),
+        "minecraft:enchantment_level `amount` object is missing `type`"
+    );
     /// Recursively generates a `LevelBasedValue` token for one `amount` shape.
     fn generate(value: &serde_json::Value) -> TokenStream {
         if let Some(constant) = value.as_f64() {
@@ -1005,42 +988,187 @@ pub(super) fn generate_damage_source_predicate(
     }
 }
 
-pub(super) fn generate_block_predicate(predicate: &BlockPredicateJson) -> TokenStream {
-    let blocks = if let Some(b) = &predicate.blocks {
-        let b = b.strip_prefix("minecraft:").unwrap_or(b);
-        quote! { Some(Identifier::vanilla_static(#b)) }
-    } else {
-        quote! { None }
+/// A vanilla `HolderSet` token: `#tag`, one key, or a key list.
+fn generate_holder_set(set: &HolderSetJson) -> TokenStream {
+    let key = |value: &str| {
+        let key = value.strip_prefix("minecraft:").unwrap_or(value);
+        quote! { #key }
     };
 
-    let state: Vec<TokenStream> = predicate.state.as_ref().map_or_default(|props| {
-        props
-            .iter()
-            .map(|(name, value)| {
-                quote! { (#name, #value) }
-            })
-            .collect()
-    });
-
-    quote! {
-        BlockPredicate {
-            blocks: #blocks,
-            state: &[#(#state),*],
+    match set {
+        HolderSetJson::Single(value) => {
+            if let Some(tag) = value.strip_prefix('#') {
+                let tag = generate_identifier_token(tag);
+                quote! { HolderSet::Tag(#tag) }
+            } else {
+                let key = key(value);
+                quote! { HolderSet::Keys(&[#key]) }
+            }
+        }
+        HolderSetJson::List(values) => {
+            let keys: Vec<TokenStream> = values
+                .iter()
+                .map(|value| {
+                    assert!(
+                        !value.starts_with('#'),
+                        "vanilla holder sets cannot mix tags into a key list: {value}"
+                    );
+                    key(value)
+                })
+                .collect();
+            quote! { HolderSet::Keys(&[#(#keys),*]) }
         }
     }
 }
 
-pub(super) fn generate_location_predicate(predicate: &LocationPredicateJson) -> TokenStream {
-    let block = if let Some(b) = &predicate.block {
-        let block_pred = generate_block_predicate(b);
-        quote! { Some(#block_pred) }
-    } else {
-        quote! { None }
+fn generate_block_predicate(predicate: &BlockPredicateJson) -> TokenStream {
+    let blocks = predicate.blocks.as_ref().map_or_else(
+        || quote! { None },
+        |set| {
+            let set = generate_holder_set(set);
+            quote! { Some(#set) }
+        },
+    );
+
+    let state = predicate.state.as_ref().map_or_else(
+        || quote! { None },
+        |props| {
+            let properties: Vec<TokenStream> = props
+                .iter()
+                .map(|(name, value)| {
+                    quote! { PropertyCheck { name: #name, value: #value } }
+                })
+                .collect();
+            quote! {
+                Some(StatePropertiesPredicate {
+                    properties: &[#(#properties),*],
+                })
+            }
+        },
+    );
+
+    quote! {
+        BlockPredicate {
+            blocks: #blocks,
+            state: #state,
+        }
+    }
+}
+
+/// Vanilla `MinMaxBounds.Doubles` token.
+fn generate_double_bounds(bounds: &DoubleBoundsJson) -> TokenStream {
+    match bounds {
+        DoubleBoundsJson::Exact(value) => quote! { DoubleBounds::exactly(#value) },
+        DoubleBoundsJson::Bounds { min, max } => match (min, max) {
+            (Some(min), Some(max)) => quote! { DoubleBounds::range(#min, #max) },
+            (Some(min), None) => quote! { DoubleBounds::at_least(#min) },
+            (None, Some(max)) => quote! { DoubleBounds::at_most(#max) },
+            (None, None) => quote! { DoubleBounds::ANY },
+        },
+    }
+}
+
+/// Vanilla `MinMaxBounds.Ints` token.
+fn generate_int_bounds(bounds: &LevelRangeJson) -> TokenStream {
+    match bounds {
+        LevelRangeJson::Exact(value) => quote! { IntBounds::exactly(#value) },
+        LevelRangeJson::Bounds { min, max } => match (min, max) {
+            (Some(min), Some(max)) => quote! { IntBounds::range(#min, #max) },
+            (Some(min), None) => quote! { IntBounds::at_least(#min) },
+            (None, Some(max)) => quote! { IntBounds::at_most(#max) },
+            (None, None) => quote! { IntBounds::ANY },
+        },
+    }
+}
+
+fn generate_position_predicate(predicate: &PositionPredicateJson) -> TokenStream {
+    let axis = |bounds: &Option<DoubleBoundsJson>| {
+        bounds.as_ref().map_or_else(
+            || quote! { None },
+            |bounds| {
+                let bounds = generate_double_bounds(bounds);
+                quote! { Some(#bounds) }
+            },
+        )
     };
+    let x = axis(&predicate.x);
+    let y = axis(&predicate.y);
+    let z = axis(&predicate.z);
+
+    quote! { PositionPredicate { x: #x, y: #y, z: #z } }
+}
+
+pub(super) fn generate_location_predicate(predicate: &LocationPredicateJson) -> TokenStream {
+    let position = predicate.position.as_ref().map_or_else(
+        || quote! { None },
+        |position| {
+            let position = generate_position_predicate(position);
+            quote! { Some(#position) }
+        },
+    );
+    let biomes = predicate.biomes.as_ref().map_or_else(
+        || quote! { None },
+        |set| {
+            let set = generate_holder_set(set);
+            quote! { Some(#set) }
+        },
+    );
+    let structures = predicate.structures.as_ref().map_or_else(
+        || quote! { None },
+        |set| {
+            let set = generate_holder_set(set);
+            quote! { Some(#set) }
+        },
+    );
+    let dimension = predicate.dimension.as_deref().map_or_else(
+        || quote! { None },
+        |dimension| {
+            let dimension = generate_identifier_token(dimension);
+            quote! { Some(#dimension) }
+        },
+    );
+    let light = predicate.light.as_ref().map_or_else(
+        || quote! { None },
+        |bounds| {
+            let bounds = generate_int_bounds(bounds);
+            quote! { Some(#bounds) }
+        },
+    );
+    let block = predicate.block.as_ref().map_or_else(
+        || quote! { None },
+        |block| {
+            let block = generate_block_predicate(block);
+            quote! { Some(#block) }
+        },
+    );
+    let fluid = predicate.fluid.as_deref().map_or_else(
+        || quote! { None },
+        |fluid| {
+            let fluid = generate_identifier_token(fluid);
+            quote! { Some(#fluid) }
+        },
+    );
+    let smokey = predicate.smokey.map_or_else(
+        || quote! { None },
+        |value| {
+            quote! { Some(#value) }
+        },
+    );
+    let can_see_sky = predicate
+        .can_see_sky
+        .map_or_else(|| quote! { None }, |value| quote! { Some(#value) });
 
     quote! {
         LocationPredicate {
+            position: #position,
+            biomes: #biomes,
+            structures: #structures,
+            dimension: #dimension,
+            light: #light,
             block: #block,
+            fluid: #fluid,
+            smokey: #smokey,
+            can_see_sky: #can_see_sky,
         }
     }
 }

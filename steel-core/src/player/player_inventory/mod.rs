@@ -126,14 +126,31 @@ enum DeferredMenuAction {
 
 type MenuFactory = Box<dyn for<'a> FnOnce(MenuOpenContext<'a>) -> Menu + Send + 'static>;
 
+/// Which clientbound packet opens the menu's screen.
+///
+/// Vanilla mount inventories (`HorseInventoryMenu`) have no menu type; the
+/// client builds them from `ClientboundMountScreenOpenPacket`'s entity id and
+/// column count instead of a `COpenScreen`.
+enum MenuOpenScreen {
+    /// The standard `COpenScreen`, using the built menu's declared type.
+    Menu,
+    /// `CMountScreenOpen` for an entity mount inventory.
+    Mount {
+        entity_id: i32,
+        inventory_columns: i32,
+    },
+}
+
 struct PendingMenuOpen {
     title: TextComponent,
     create: MenuFactory,
+    screen: MenuOpenScreen,
 }
 
 struct PreparedMenu {
     title: TextComponent,
     menu: Menu,
+    screen: MenuOpenScreen,
 }
 
 enum OpenMenuUnavailable {

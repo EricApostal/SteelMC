@@ -94,40 +94,42 @@ impl BellBlockEntity {
 
     fn refresh_nearby_entities(&self, world: &World) {
         let game_time = world.game_time();
+        let pos = self.get_block_pos();
         let should_search = {
             let state = self.state.lock();
             state.nearby_entities.is_none()
                 || game_time > state.last_ring_timestamp + ENTITY_SEARCH_INTERVAL
         };
 
-        if !should_search {
-            return;
-        }
+        if should_search {
+            let bounds = WorldAabb::new(
+                f64::from(pos.x()),
+                f64::from(pos.y()),
+                f64::from(pos.z()),
+                f64::from(pos.x() + 1),
+                f64::from(pos.y() + 1),
+                f64::from(pos.z() + 1),
+            )
+            .inflate(SEARCH_RADIUS);
+            let entities = world
+                .get_entities_in_aabb(&bounds)
+                .into_iter()
+                .filter(|entity| entity.as_living_entity().is_some())
+                .collect::<Vec<_>>();
 
-        let pos = self.get_block_pos();
-        let bounds = WorldAabb::new(
-            f64::from(pos.x()),
-            f64::from(pos.y()),
-            f64::from(pos.z()),
-            f64::from(pos.x() + 1),
-            f64::from(pos.y() + 1),
-            f64::from(pos.z() + 1),
-        )
-        .inflate(SEARCH_RADIUS);
-        let entities = world
-            .get_entities_in_aabb(&bounds)
-            .into_iter()
-            .filter(|entity| entity.as_living_entity().is_some())
-            .collect::<Vec<_>>();
+            let mut state = self.state.lock();
+            state.nearby_entities = Some(entities);
+            state.last_ring_timestamp = game_time;
+        }
 
         // Vanilla `BellBlockEntity.updateEntities` records `HEARD_BELL_TIME` on every
         // living entity within 32 blocks, which is what makes villagers react (and wake
-        // up) through their brain.
-        village::bell::notify_heard_bell(world, pos, &entities);
-
-        let mut state = self.state.lock();
-        state.nearby_entities = Some(entities);
-        state.last_ring_timestamp = game_time;
+        // up) through their brain. The loop runs on every call, including the calls that
+        // reuse the entity list cached by the 60-tick search gate.
+        let entities = self.state.lock().nearby_entities.clone();
+        if let Some(entities) = entities {
+            village::bell::notify_heard_bell(world, pos, &entities);
+        }
     }
 
     fn is_raider_near(entity: &SharedEntity, pos: BlockPos, radius: f64) -> bool {
@@ -204,7 +206,7 @@ impl BlockEntity for BellBlockEntity {
         state.shaking = true;
         true
     }
-    // TODO: make bell sleep when not used
+
     fn tick(&self, world: &Arc<World>) {
         let pos = self.get_block_pos();
         let mut state = self.state.lock();

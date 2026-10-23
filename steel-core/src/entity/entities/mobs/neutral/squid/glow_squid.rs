@@ -11,17 +11,19 @@ use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::particle_type::ParticleData;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::GlowSquidEntityData;
-use steel_registry::{sound_events, vanilla_attributes};
+use steel_registry::{sound_events, vanilla_attributes, vanilla_blocks};
 use steel_utils::locks::SyncMutex;
+use steel_utils::random::RandomSource;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
+use crate::entity::ai::path::PathType;
 use crate::entity::damage::DamageSource;
 use crate::entity::{
-    AgeableMob, AgeableMobBase, Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySyncedData,
-    LivingEntity, LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity,
+    AgeableMob, AgeableMobBase, Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason,
+    EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity,
 };
 use crate::physics::MoveResult;
-use crate::world::World;
+use crate::world::{LevelReader, World};
 
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
 const XP_REWARD: i32 = 1;
@@ -68,6 +70,11 @@ impl GlowSquidEntity {
         let mob_base = MobBase::new();
         mob_base.set_xp_reward(XP_REWARD);
         let ageable_base = AgeableMobBase::new();
+        // Vanilla `AgeableWaterCreature`: `setPathfindingMalus(WATER, 0.0F)`.
+        mob_base
+            .pathfinding_malus()
+            .lock()
+            .set(PathType::Water, 0.0);
         let mut entity_data = GlowSquidEntityData::new();
         living_base.initialize_synced_data(&mut entity_data);
         entity_data.dark_ticks_remaining.set(0);
@@ -149,6 +156,24 @@ impl GlowSquidEntity {
             DVec3::ZERO,
             0.0,
         );
+    }
+
+    /// Vanilla `GlowSquid.checkGlowSquidSpawnRules`, the `SpawnPlacements` predicate
+    /// for `EntityType.GLOW_SQUID`.
+    ///
+    /// Vanilla ignores `entity_type`, `spawnReason` and `random`; the position must
+    /// be at least 33 blocks below sea level, fully dark and inside water.
+    #[must_use]
+    pub fn check_glow_squid_spawn_rules(
+        _entity_type: EntityTypeRef,
+        level: &World,
+        _spawn_reason: EntitySpawnReason,
+        pos: BlockPos,
+        _random: &mut RandomSource,
+    ) -> bool {
+        pos.y() <= level.sea_level() - 33
+            && level.raw_brightness(pos, 0) == 0
+            && level.get_block_state(pos).get_block() == &vanilla_blocks::WATER
     }
 }
 

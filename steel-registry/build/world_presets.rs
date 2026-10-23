@@ -177,8 +177,7 @@ pub(crate) fn build() -> TokenStream {
 
         let mut dimensions: Vec<_> = preset.dimensions.iter().collect();
         // Stable sort: non-builtin dimensions keep the sorted `BTreeMap` order.
-        dimensions
-            .sort_by(|(a, _), (b, _)| dimension_rank(a.as_str()).cmp(&dimension_rank(b.as_str())));
+        dimensions.sort_by_key(|(a, _)| dimension_rank(a.as_str()));
 
         let dimensions = dimensions
             .into_iter()

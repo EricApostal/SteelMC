@@ -266,8 +266,6 @@ impl Entity for HoglinEntity {
         self.play_sound(&sound_events::ENTITY_HOGLIN_STEP, 0.15, 1.0);
     }
 
-    /// Vanilla `Hoglin.getWalkTargetValue` favors crimson nylium and avoids repellents.
-
     fn save_additional(&self, nbt: &mut NbtCompound) {
         self.save_mob(nbt);
         self.save_ageable_mob(nbt);
@@ -514,6 +512,7 @@ impl Animal for HoglinEntity {
 }
 
 impl PathfinderMob for HoglinEntity {
+    /// Vanilla `Hoglin.getWalkTargetValue` favors crimson nylium and avoids repellents.
     fn get_walk_target_value(&self, pos: BlockPos) -> f32 {
         if let Some(world) = self.level() {
             // BLOCKED(HoglinAi.isPosNearNearestRepellent): the repellent check lives in the
