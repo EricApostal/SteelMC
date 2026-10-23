@@ -4,19 +4,24 @@ use super::super::prelude::*;
 use super::super::runner::FeatureDecorationRunner;
 
 impl FeatureDecorationRunner {
+    /// Vanilla `CoralClawFeature.place`: places the configured placed feature
+    /// at the origin, then walks claw branches placing that same feature.
     pub(in crate::worldgen::feature) fn place_coral_claw_feature(
         region: &mut WorldGenRegion<'_>,
         registry: &Registry,
         random: &mut WorldgenRandom,
         origin: BlockPos,
+        feature: &PlacedFeatureRef,
+        biome_zoom_seed: i64,
     ) -> bool {
-        let Some(coral) = Self::random_block_from_tag(registry, random, &BlockTag::CORAL_BLOCKS)
-        else {
-            return false;
-        };
-
-        let state = coral.default_state();
-        if !Self::place_coral_block(region, registry, random, origin, state) {
+        if !Self::place_placed_feature_ref(
+            region,
+            registry,
+            random,
+            origin,
+            feature,
+            biome_zoom_seed,
+        ) {
             return false;
         }
 
@@ -49,10 +54,19 @@ impl FeatureDecorationRunner {
                 inway_length = random.next_i32_bounded(3) + 3;
             }
 
-            for _ in 0..sideway_length {
-                if !Self::place_coral_block(region, registry, random, pos, state) {
-                    break;
-                }
+            // Vanilla: `for (i = 0; i < sidewayLength && place(mutPos); i++)`.
+            let mut i = 0;
+            while i < sideway_length
+                && Self::place_placed_feature_ref(
+                    region,
+                    registry,
+                    random,
+                    pos,
+                    feature,
+                    biome_zoom_seed,
+                )
+            {
+                i += 1;
                 pos = pos.relative(segment_direction);
             }
 
@@ -60,7 +74,14 @@ impl FeatureDecorationRunner {
 
             for _ in 0..inway_length {
                 pos = pos.relative(claw_direction);
-                if !Self::place_coral_block(region, registry, random, pos, state) {
+                if !Self::place_placed_feature_ref(
+                    region,
+                    registry,
+                    random,
+                    pos,
+                    feature,
+                    biome_zoom_seed,
+                ) {
                     break;
                 }
 
@@ -108,22 +129,27 @@ impl FeatureDecorationRunner {
         true
     }
 
+    /// Vanilla `CoralTreeFeature.place`: places the configured placed feature
+    /// along the trunk and branches instead of re-implementing the block writes.
     pub(in crate::worldgen::feature) fn place_coral_tree_feature(
         region: &mut WorldGenRegion<'_>,
         registry: &Registry,
         random: &mut WorldgenRandom,
         origin: BlockPos,
+        feature: &PlacedFeatureRef,
+        biome_zoom_seed: i64,
     ) -> bool {
-        let Some(coral) = Self::random_block_from_tag(registry, random, &BlockTag::CORAL_BLOCKS)
-        else {
-            return false;
-        };
-
-        let state = coral.default_state();
         let mut pos = origin;
         let trunk_height = random.next_i32_bounded(3) + 1;
         for _ in 0..trunk_height {
-            if !Self::place_coral_block(region, registry, random, pos, state) {
+            if !Self::place_placed_feature_ref(
+                region,
+                registry,
+                random,
+                pos,
+                feature,
+                biome_zoom_seed,
+            ) {
                 return true;
             }
             pos = pos.above();
@@ -139,7 +165,14 @@ impl FeatureDecorationRunner {
             let mut segment_length = 0;
 
             for j in 0..branch_height {
-                if !Self::place_coral_block(region, registry, random, pos, state) {
+                if !Self::place_placed_feature_ref(
+                    region,
+                    registry,
+                    random,
+                    pos,
+                    feature,
+                    biome_zoom_seed,
+                ) {
                     break;
                 }
                 segment_length += 1;

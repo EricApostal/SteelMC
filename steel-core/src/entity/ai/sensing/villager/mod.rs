@@ -15,8 +15,12 @@ pub(crate) mod villager_babies;
 pub(crate) mod villager_hostiles;
 
 use steel_registry::vanilla_attributes;
+use steel_utils::{BlockPos, BlockStateId};
 
 use crate::entity::SharedEntity;
+use crate::entity::ai::brain::memory::MemoryStore;
+use crate::entity::ai::brain::memory::module_type as mem;
+use crate::entity::ai::brain::memory::nearest_visible::NearestVisibleLivingEntities;
 use crate::entity::ai::brain::sensor::SensorType;
 use crate::entity::ai::targeting::TargetingConditions;
 use crate::world::World;
@@ -131,6 +135,132 @@ fn is_memory_target(
     attack_target.is_some_and(|attack_target| attack_target.id() == target.id())
 }
 
+/// Vanilla `AgeableMob.isAdult()`: `!isBaby()`. Both `Hoglin.isAdult` and
+/// `AbstractPiglin.isAdult` are this exact expression.
+#[must_use]
+pub(crate) fn is_adult(entity: &SharedEntity) -> bool {
+    entity
+        .as_living_entity()
+        .is_some_and(|living| !living.is_baby())
+}
+
+/// Vanilla `NearestLivingEntitySensor.doTick`: refresh `NEAREST_LIVING_ENTITIES`
+/// (follow-range box, nearest first) and the `NEAREST_VISIBLE_LIVING_ENTITIES`
+/// cache the other sensors query.
+///
+/// Shared by [`nearest_living`], `WardenEntitySensor` and
+/// `BreezeAttackEntitySensor`, which all extend this sensor in vanilla.
+pub(crate) fn scan_nearest_living_entities(
+    level: &World,
+    body: &SharedEntity,
+    memories: &mut MemoryStore,
+) {
+    let Some(follow_range) = follow_range(body) else {
+        return;
+    };
+
+    let aabb = body
+        .bounding_box()
+        .inflate_xyz(follow_range, follow_range, follow_range);
+    let body_id = body.id();
+    let mut living_entities = level.get_entities_in_aabb_matching(&aabb, |mob| {
+        mob.id() != body_id && mob.is_alive() && mob.as_living_entity().is_some()
+    });
+    living_entities.sort_by(|first, second| {
+        body.distance_to_sqr(first.position())
+            .total_cmp(&body.distance_to_sqr(second.position()))
+    });
+
+    // Vanilla `Sensor.isEntityTargetable` is evaluated lazily against the live
+    // brain; the nearest-visible cache cannot reach the memory store, so the
+    // `ATTACK_TARGET` snapshot taken here stands in for it.
+    let attack_target = memories.get(&mem::ATTACK_TARGET);
+    let visible_entities = NearestVisibleLivingEntities::new(
+        living_entities.clone(),
+        visible_test(body, follow_range, attack_target),
+    );
+
+    memories.set(&mem::NEAREST_LIVING_ENTITIES, living_entities);
+    memories.set(&mem::NEAREST_VISIBLE_LIVING_ENTITIES, visible_entities);
+}
+
+/// Vanilla `NearestVisibleLivingEntities` line-of-sight test (non-combat targeting).
+fn visible_test(
+    body: &SharedEntity,
+    follow_range: f64,
+    attack_target: Option<SharedEntity>,
+) -> impl Fn(&SharedEntity) -> bool + Send + Sync + 'static {
+    let world = body.level();
+    let body = body.clone();
+
+    move |target: &SharedEntity| {
+        let Some(world) = world.as_deref() else {
+            return false;
+        };
+
+        is_entity_targetable(world, &body, target, follow_range, attack_target.as_ref())
+    }
+}
+
+/// Vanilla `LevelReader.findBlocksInBoxByManhattanDistance(origin, rangeXZ, rangeY)`
+/// followed by `filterState(...).findFirst()`: the first block in vanilla's
+/// manhattan ordering whose state matches `matches`.
+///
+/// Used by `HoglinSpecificSensor`/`PiglinSpecificSensor` for `NEAREST_REPELLENT`
+/// (`8` blocks horizontally, `4` vertically).
+pub(crate) fn find_nearest_block_by_manhattan(
+    level: &World,
+    origin: BlockPos,
+    range_xz: i32,
+    range_y: i32,
+    matches: impl Fn(BlockStateId) -> bool,
+) -> Option<BlockPos> {
+    for_each_manhattan_pos(origin, range_xz, range_y, |pos| {
+        matches(level.get_block_state(pos))
+    })
+}
+
+/// Vanilla `BlockPos.withinBoxByManhattanDistance(origin, reachX, reachY, reachZ)`
+/// iteration order, stopping at the first position `visit` accepts.
+fn for_each_manhattan_pos(
+    origin: BlockPos,
+    reach_xz: i32,
+    reach_y: i32,
+    mut visit: impl FnMut(BlockPos) -> bool,
+) -> Option<BlockPos> {
+    let reach_x = reach_xz;
+    let reach_z = reach_xz;
+    let max_depth = reach_x + reach_y + reach_z;
+
+    for depth in 0..=max_depth {
+        let max_x = reach_x.min(depth);
+        for x in -max_x..=max_x {
+            let max_y = reach_y.min(depth - x.abs());
+            for y in -max_y..=max_y {
+                let z = depth - x.abs() - y.abs();
+                if z > reach_z {
+                    continue;
+                }
+
+                let pos = origin.offset(x, y, z);
+                if visit(pos) {
+                    return Some(pos);
+                }
+
+                // Vanilla mirrors every non-zero z offset onto the negative side
+                // immediately after yielding the positive one.
+                if z != 0 {
+                    let mirrored = origin.offset(x, y, -z);
+                    if visit(mirrored) {
+                        return Some(mirrored);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
 #[cfg(test)]
 mod tests {
     use super::*;

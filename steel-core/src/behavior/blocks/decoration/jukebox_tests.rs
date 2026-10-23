@@ -424,6 +424,10 @@ fn insertion_consumption_ejection_and_no_duplication_match_vanilla() {
     assert_eq!(dropped_items(world, pos).len(), 1);
 
     player.restore_game_modes(GameType::Creative, Some(GameType::Survival));
+    player
+        .abilities
+        .lock()
+        .update_for_game_mode(GameType::Creative);
     let pigstep = ItemStack::new(&vanilla_items::MUSIC_DISC_PIGSTEP);
     let pigstep_output = song_comparator(&pigstep);
     assert_ne!(cat_output, pigstep_output);

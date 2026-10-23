@@ -214,7 +214,17 @@ impl KineticWeapon {
         self.contact_cooldown_ticks
     }
 
+    /// Vanilla `KineticWeapon.computeDamageUseDuration`: the wind-up delay plus the damage
+    /// condition's maximum duration.
     #[must_use]
+    pub fn compute_damage_use_duration(&self) -> i32 {
+        self.delay_ticks
+            + self
+                .damage_conditions
+                .as_ref()
+                .map_or(0, KineticWeaponCondition::max_duration_ticks)
+    }
+
     pub const fn delay_ticks(&self) -> i32 {
         self.delay_ticks
     }

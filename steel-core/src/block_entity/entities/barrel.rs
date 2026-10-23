@@ -8,17 +8,29 @@ use std::{
     sync::{Arc, Weak},
 };
 
+use glam::DVec3;
 use simdnbt::ToNbtTag;
 use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
 use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
+use steel_protocol::packets::game::SoundSource;
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+use steel_registry::blocks::properties::BlockStateProperties;
 use steel_registry::item_stack::ItemStack;
-use steel_registry::vanilla_block_entity_types;
+use steel_registry::sound_event::SoundEventRef;
+use steel_registry::{sound_events, vanilla_block_entity_types};
+use steel_utils::types::{GameType, UpdateFlags};
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, locks::SyncMutex};
 
-use crate::block_entity::{BlockEntity, BlockEntityBase};
+use crate::block_entity::entities::openers_counter::{
+    ContainerOpenersCounter, ContainerViewers, count_viewers,
+};
+use crate::block_entity::{
+    BlockEntity, BlockEntityBase, BlockEntityLifecycleExt as _, ContainerOpenersHost,
+};
 use crate::inventory::container::Container;
 use crate::inventory::lock::{ContainerRef, SharedContainer};
-use crate::world::World;
+use crate::player::Player;
+use crate::world::{LevelAccessor as _, World};
 
 /// Number of slots in a barrel (3 rows of 9).
 pub const BARREL_SLOTS: usize = 27;
@@ -30,6 +42,8 @@ pub struct BarrelBlockEntity {
     base: Arc<BlockEntityBase>,
     container: Arc<SyncMutex<BarrelContainer>>,
     container_ref: ContainerRef,
+    /// Vanilla `BarrelBlockEntity.openersCounter`.
+    openers: SyncMutex<ContainerOpenersCounter>,
 }
 
 struct BarrelContainer {
@@ -66,6 +80,7 @@ impl BarrelBlockEntity {
             container_ref: ContainerRef::owned_by_block_entity(shared_container, Arc::clone(&base)),
             base,
             container,
+            openers: SyncMutex::new(ContainerOpenersCounter::new()),
         }
     }
 }
@@ -137,6 +152,125 @@ impl BlockEntity for BarrelBlockEntity {
 
     fn container_ref(&self) -> Option<ContainerRef> {
         Some(self.container_ref.clone())
+    }
+
+    fn container_viewers(&self) -> Option<&dyn ContainerViewers> {
+        Some(self)
+    }
+}
+
+impl ContainerViewers for BarrelBlockEntity {
+    /// Vanilla `BarrelBlockEntity.startOpen`.
+    fn start_open(&self, player: &Player) {
+        if self.is_removed() || player.game_mode() == GameType::Spectator {
+            return;
+        }
+        let Some(world) = self.get_level() else {
+            return;
+        };
+        let pos = self.get_block_pos();
+        let state = self.get_block_state();
+        // Compute under the counter lock, run the world-writing hooks after.
+        let transition = self.openers.lock().increment(4.0);
+        ContainerOpenersCounter::apply(self, transition, Some(player), &world, pos, state);
+    }
+
+    /// Vanilla `BarrelBlockEntity.stopOpen`.
+    fn stop_open(&self, player: &Player) {
+        if self.is_removed() || player.game_mode() == GameType::Spectator {
+            return;
+        }
+        let Some(world) = self.get_level() else {
+            return;
+        };
+        let pos = self.get_block_pos();
+        let state = self.get_block_state();
+        let transition = self.openers.lock().decrement();
+        ContainerOpenersCounter::apply(self, transition, Some(player), &world, pos, state);
+    }
+
+    fn open_count(&self) -> i32 {
+        self.openers.lock().open_count()
+    }
+
+    /// Vanilla `BarrelBlockEntity.recheckOpen`, driven from the block's
+    /// scheduled tick.
+    fn recheck_open(&self) {
+        if self.is_removed() {
+            return;
+        }
+        let Some(world) = self.get_level() else {
+            return;
+        };
+        let pos = self.get_block_pos();
+        let state = self.get_block_state();
+        let open_count = count_viewers(&world, pos, self);
+        let transition = self.openers.lock().recheck(open_count);
+        ContainerOpenersCounter::apply(self, transition, None, &world, pos, state);
+    }
+}
+
+impl ContainerOpenersHost for BarrelBlockEntity {
+    /// Vanilla `BarrelBlockEntity.openersCounter.onOpen`.
+    fn on_open(&self, world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
+        self.play_sound(world, pos, state, &sound_events::BLOCK_BARREL_OPEN);
+        world.set_block_state(
+            pos,
+            state.set_value(&BlockStateProperties::OPEN, true),
+            UpdateFlags::UPDATE_ALL,
+        );
+    }
+
+    /// Vanilla `BarrelBlockEntity.openersCounter.onClose`.
+    fn on_close(&self, world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
+        self.play_sound(world, pos, state, &sound_events::BLOCK_BARREL_CLOSE);
+        world.set_block_state(
+            pos,
+            state.set_value(&BlockStateProperties::OPEN, false),
+            UpdateFlags::UPDATE_ALL,
+        );
+    }
+
+    fn opener_count_changed(
+        &self,
+        _world: &Arc<World>,
+        _pos: BlockPos,
+        _state: BlockStateId,
+        _previous: i32,
+        _current: i32,
+    ) {
+        // Vanilla's barrel counter has no opener-count callback.
+    }
+
+    fn is_own_container(&self, player: &Player) -> bool {
+        player.has_open_container(&self.container_ref)
+    }
+}
+
+impl BarrelBlockEntity {
+    /// Vanilla `BarrelBlockEntity.playSound`: emits from the faced side.
+    fn play_sound(
+        &self,
+        world: &Arc<World>,
+        pos: BlockPos,
+        state: BlockStateId,
+        sound: SoundEventRef,
+    ) {
+        let direction = state.get_value(&BlockStateProperties::FACING);
+        let (dx, dy, dz) = direction.offset();
+        let position = DVec3::new(
+            f64::from(pos.x()) + 0.5 + f64::from(dx) / 2.0,
+            f64::from(pos.y()) + 0.5 + f64::from(dy) / 2.0,
+            f64::from(pos.z()) + 0.5 + f64::from(dz) / 2.0,
+        );
+        world.play_sound_at(
+            sound,
+            SoundSource::Blocks,
+            position,
+            0.5,
+            rand::random::<f32>() * 0.1 + 0.9,
+            None,
+        );
     }
 }
 

@@ -121,6 +121,11 @@ pub struct AdvancementRegistry {
     pub(crate) by_key: FxHashMap<Identifier, usize>,
     pub(crate) roots: Vec<usize>,
     pub(crate) tasks: Vec<usize>,
+    /// Every criterion grouped by the id of the trigger that grants it.
+    ///
+    /// Vanilla `PlayerAdvancements` keeps one listener list per trigger; Steel
+    /// precomputes the same mapping once the tree is loaded.
+    by_trigger: FxHashMap<Identifier, Vec<(AdvancementRef, String)>>,
 }
 
 impl AdvancementRegistry {
@@ -233,6 +238,7 @@ impl AdvancementRegistry {
     pub(crate) fn update_tree(&mut self) {
         let advancements = self.unloaded_advancement.drain().collect();
         self.register_all(advancements);
+        self.rebuild_trigger_index();
         for advancement_idx in self.roots.clone() {
             let node = self.adv_nodes.get(advancement_idx);
             let Some(node) = node else {
@@ -248,6 +254,26 @@ impl AdvancementRegistry {
         }
     }
 
+    /// Rebuilds the trigger-to-criteria index from the loaded advancements.
+    fn rebuild_trigger_index(&mut self) {
+        self.by_trigger.clear();
+        for advancement in &self.advancements {
+            for (name, criterion) in &advancement.criteria {
+                self.by_trigger
+                    .entry(criterion.id())
+                    .or_default()
+                    .push((advancement, name.clone()));
+            }
+        }
+    }
+
+    /// Every criterion listening to `trigger`, in registration order.
+    #[must_use]
+    pub fn criteria_for_trigger(&self, trigger: &Identifier) -> &[(AdvancementRef, String)] {
+        self.by_trigger.get(trigger).map_or(&[], Vec::as_slice)
+    }
+
+    /// Every advancement that has any progress recorded for `player`'s criteria.
     #[must_use]
     pub fn root(&'static self, advancement_node: AdvancementNodeRef) -> AdvancementNodeRef {
         let mut advancement_node = advancement_node;

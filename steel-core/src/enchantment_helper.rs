@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use item_in_use::EnchantedItemInUse;
 
+use steel_registry::enchantment::EnchantmentRef;
 use steel_registry::enchantment_effect::{
     DamageSourcePredicate, EnchantmentEffectComponent, EnchantmentEffectRequirements,
     EnchantmentEntityEffect, EnchantmentEntityTarget, EnchantmentTarget, EntityPredicate,
@@ -12,11 +13,15 @@ use steel_registry::enchantment_effect::{
 use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::{REGISTRY, RegistryExt, TaggedRegistryExt, vanilla_entities, vanilla_items};
+use steel_utils::Identifier;
+use steel_utils::random::worldgen_random::WorldgenRandom;
 
+use crate::entity::attribute::AttributeModifier;
 use crate::entity::damage::DamageSource;
 use crate::entity::{Entity, LivingEntity, MobEffectInstance, SharedEntity};
 use crate::inventory::equipment::EquipmentSlot;
 use crate::world::World;
+use steel_registry::attribute::AttributeRef;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct EnchantmentDamageContext<'a> {
@@ -112,6 +117,205 @@ pub(crate) fn modify_damage(
     damage: f32,
 ) -> f32 {
     apply_value_effects(item, EnchantmentEffectComponent::Damage, context, damage)
+}
+
+/// Vanilla `EnchantmentHelper.forEachModifier(ItemStack, EquipmentSlot, BiConsumer)`:
+/// visits every attribute modifier the stack's `minecraft:attributes`
+/// enchantment effects grant while the stack is worn in `slot`.
+///
+/// Vanilla applies these as *transient* modifiers when equipment changes
+/// (`LivingEntity.detectEquipmentUpdates`), which is where Steel calls this
+/// (see `LivingBase::refresh_equipment_attribute_modifiers`); the modifier id
+/// carries the slot suffix, exactly like `EnchantmentAttributeEffect.idForSlot`.
+pub(crate) fn for_each_enchantment_attribute_modifier(
+    item: &ItemStack,
+    slot: EquipmentSlot,
+    mut consumer: impl FnMut(AttributeRef, AttributeModifier),
+) {
+    if item.is_empty() {
+        return;
+    }
+    let Some(enchantments) = item.get_enchantments() else {
+        return;
+    };
+
+    for (key, level) in enchantments.iter() {
+        if *level == 0 {
+            continue;
+        }
+        let Some(enchantment) = REGISTRY.enchantments.by_key(key) else {
+            continue;
+        };
+        if !enchantment.matching_slot(slot) {
+            continue;
+        }
+
+        for effect in enchantment.effects.attributes {
+            consumer(
+                effect.attribute,
+                AttributeModifier {
+                    id: Identifier::new(
+                        effect.id.namespace.clone(),
+                        format!("{}/{}", effect.id.path, slot.name()),
+                    ),
+                    amount: f64::from(effect.amount.calculate(*level as i32)),
+                    operation: effect.operation,
+                },
+            );
+        }
+    }
+}
+
+/// Vanilla `EnchantmentHelper.getEnchantmentLevel`: the best level of
+/// `enchantment` across the slots the enchantment supports.
+pub(crate) fn get_enchantment_level<V: LivingEntity + ?Sized>(
+    enchantment: EnchantmentRef,
+    entity: &V,
+) -> i32 {
+    let mut best_level = 0;
+    for slot in EquipmentSlot::ALL {
+        if !enchantment.matching_slot(slot) {
+            continue;
+        }
+        entity.with_equipment_slot(slot, &mut |item| {
+            best_level = best_level.max(item.get_enchantment_level(&enchantment.key));
+        });
+    }
+
+    best_level
+}
+
+/// Vanilla `EnchantmentHelper.processMobExperience`: folds every equipped
+/// `minecraft:mob_experience` effect of `killer` over the dropped amount.
+pub(crate) fn process_mob_experience(killer: &dyn Entity, killed: &dyn Entity, amount: i32) -> i32 {
+    let Some(living_killer) = killer.as_living_entity() else {
+        return amount;
+    };
+
+    let mut value = amount as f32;
+    for slot in EquipmentSlot::ALL {
+        living_killer.with_equipment_slot(slot, &mut |item| {
+            value = apply_entity_value_effects(
+                item,
+                EnchantmentEffectComponent::MobExperience,
+                killed,
+                value,
+            );
+        });
+    }
+
+    value as i32
+}
+
+/// Vanilla `EnchantmentHelper.processEquipmentDropChance`: folds the
+/// `minecraft:equipment_drops` `add`/`multiply` effects of the victim and of the
+/// killer over the equipment drop chance.
+pub(crate) fn modify_equipment_drop_chance(
+    victim: &dyn LivingEntity,
+    damage_source: &DamageSource,
+    chance: f32,
+) -> f32 {
+    let context = EnchantmentDamageContext::from_damage_source(victim.entity_type(), damage_source);
+    let mut value = chance;
+
+    for slot in EquipmentSlot::ALL {
+        victim.with_equipment_slot(slot, &mut |item| {
+            value = apply_targeted_equipment_drop_effects(item, slot, &context, value);
+        });
+    }
+
+    if let Some(attacker) = damage_source.causing_entity()
+        && let Some(living_attacker) = attacker.as_living_entity()
+    {
+        for slot in EquipmentSlot::ALL {
+            living_attacker.with_equipment_slot(slot, &mut |item| {
+                value = apply_targeted_equipment_drop_effects(item, slot, &context, value);
+            });
+        }
+    }
+
+    value
+}
+
+/// Folds the `minecraft:equipment_drops` effects whose `enchanted`/`affected`
+/// targets both select the victim (vanilla `EnchantmentHelper.processEquipmentDropChance`).
+fn apply_targeted_equipment_drop_effects(
+    item: &ItemStack,
+    slot: EquipmentSlot,
+    context: &EnchantmentDamageContext<'_>,
+    input: f32,
+) -> f32 {
+    if item.is_empty() {
+        return input;
+    }
+    let Some(enchantments) = item.get_enchantments() else {
+        return input;
+    };
+
+    let mut value = input;
+    let mut random = WorldgenRandom::from_seed(rand::random());
+    for (key, level) in enchantments.iter() {
+        if *level == 0 {
+            continue;
+        }
+        let Some(enchantment) = REGISTRY.enchantments.by_key(key) else {
+            continue;
+        };
+        if !enchantment.matching_slot(slot) {
+            continue;
+        }
+
+        for effect in enchantment.effects.equipment_drops {
+            if effect.enchanted != EnchantmentTarget::Victim
+                || effect.affected != EnchantmentTarget::Victim
+                || !post_attack_requirements_match(effect.requirements, context, *level as i32)
+            {
+                continue;
+            }
+            value = effect
+                .effect
+                .process_with_random(*level as i32, &mut random, value);
+        }
+    }
+
+    value
+}
+
+/// Vanilla `Enchantment.modifyEntityFilteredValue` for one item: folds the
+/// component's conditional value effects over `input` using `entity` predicates.
+fn apply_entity_value_effects(
+    item: &ItemStack,
+    component: EnchantmentEffectComponent,
+    entity: &dyn Entity,
+    input: f32,
+) -> f32 {
+    if item.is_empty() {
+        return input;
+    }
+    let Some(enchantments) = item.get_enchantments() else {
+        return input;
+    };
+
+    let mut value = input;
+    let mut random = WorldgenRandom::from_seed(rand::random());
+    for (key, level) in enchantments.iter() {
+        if *level == 0 {
+            continue;
+        }
+        let Some(enchantment) = REGISTRY.enchantments.by_key(key) else {
+            continue;
+        };
+        let level = *level as i32;
+
+        for effect in enchantment.effects.value_effects(component) {
+            if !entity_requirements_match(effect.requirements, entity, level) {
+                continue;
+            }
+            value = effect.effect.process_with_random(level, &mut random, value);
+        }
+    }
+
+    value
 }
 
 pub(crate) fn modify_knockback(
@@ -502,6 +706,9 @@ fn entity_effect_is_supported(effect: &EnchantmentEntityEffect) -> bool {
         EnchantmentEntityEffect::ApplyExhaustion { .. }
         | EnchantmentEntityEffect::ApplyImpulse { .. }
         | EnchantmentEntityEffect::PlaySound { .. }
+        | EnchantmentEntityEffect::SummonEntity { .. }
+        | EnchantmentEntityEffect::SpawnParticles { .. }
+        | EnchantmentEntityEffect::Attribute(_)
         | EnchantmentEntityEffect::Unsupported { .. } => false,
         EnchantmentEntityEffect::ChangeItemDamage { .. }
         | EnchantmentEntityEffect::DamageEntity { .. }
@@ -591,6 +798,9 @@ fn apply_supported_entity_effect(
         | EnchantmentEntityEffect::ApplyExhaustion { .. }
         | EnchantmentEntityEffect::ApplyImpulse { .. }
         | EnchantmentEntityEffect::PlaySound { .. }
+        | EnchantmentEntityEffect::SummonEntity { .. }
+        | EnchantmentEntityEffect::SpawnParticles { .. }
+        | EnchantmentEntityEffect::Attribute(_)
         | EnchantmentEntityEffect::Unsupported { .. } => false,
     }
 }
@@ -624,6 +834,9 @@ fn post_piercing_entity_effect_is_supported(effect: &EnchantmentEntityEffect) ->
             matches!(to_apply, MobEffectSelection::Single(_))
         }
         EnchantmentEntityEffect::DamageEntity { .. }
+        | EnchantmentEntityEffect::SummonEntity { .. }
+        | EnchantmentEntityEffect::SpawnParticles { .. }
+        | EnchantmentEntityEffect::Attribute(_)
         | EnchantmentEntityEffect::Unsupported { .. } => false,
     }
 }
@@ -676,7 +889,10 @@ fn apply_supported_post_piercing_entity_effect(
             pitch,
         } => {
             let index = (level - 1).clamp(0, sounds.len() as i32 - 1) as usize;
-            user.play_sound(sounds[index], *volume, *pitch);
+            let mut random = WorldgenRandom::from_seed(rand::random());
+            let volume = volume.sample(&mut random);
+            let pitch = pitch.sample(&mut random);
+            user.play_sound(sounds[index], volume, pitch);
             false
         }
         EnchantmentEntityEffect::Ignite { .. } | EnchantmentEntityEffect::ApplyMobEffect { .. } => {
@@ -691,6 +907,9 @@ fn apply_supported_post_piercing_entity_effect(
             )
         }
         EnchantmentEntityEffect::DamageEntity { .. }
+        | EnchantmentEntityEffect::SummonEntity { .. }
+        | EnchantmentEntityEffect::SpawnParticles { .. }
+        | EnchantmentEntityEffect::Attribute(_)
         | EnchantmentEntityEffect::Unsupported { .. } => false,
     }
 }

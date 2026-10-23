@@ -21,15 +21,16 @@ use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::ItemRef;
 use steel_registry::vanilla_entity_data::EnderPearlEntityData;
-use steel_registry::vanilla_game_rules::{ENDER_PEARLS_VANISH_ON_DEATH, SPAWN_MOBS};
+use steel_registry::vanilla_game_rules::{
+    ENDER_PEARLS_VANISH_ON_DEATH, SPAWN_MOBS, SPAWN_MONSTERS,
+};
 use steel_registry::{sound_events, vanilla_damage_types, vanilla_entities, vanilla_items};
 use steel_utils::ChunkPos;
 use steel_utils::locks::SyncMutex;
-use steel_utils::{BlockPos, Downcast as _, DowncastType, DowncastTypeKey};
+use steel_utils::{BlockPos, DowncastType, DowncastTypeKey, types::Difficulty};
 
 use crate::chunk::chunk_map::ENDER_PEARL_TICKET_TIMEOUT;
 use crate::entity::damage::DamageSource;
-use crate::entity::entities::EndermiteEntity;
 use crate::entity::{
     ENTITIES, Entity, EntityBase, EntityBaseLoad, EntitySyncedData, LivingEntity, Projectile,
     ProjectileBase, ProjectileHit, RemovalReason, SharedEntity, ThrowableItemProjectile,
@@ -90,17 +91,10 @@ impl EnderPearlEntity {
         }
     }
 
-    /// Resolves the owner as an online player, including cached cross-world refs.
-    fn owner_player(&self) -> Option<SharedEntity> {
-        let owner = self.get_owner()?;
-        owner.as_player()?;
-        Some(owner)
-    }
-
     /// Removes this pearl from its owner's persistence set when it hits or is
     /// discarded (vanilla `ThrownEnderpearl.onRemoval` deregistration).
     fn deregister_from_owner(&self) {
-        if let Some(owner) = self.owner_player()
+        if let Some(owner) = self.get_owner()
             && let Some(player) = owner.as_player()
         {
             player.deregister_ender_pearl(self.uuid());
@@ -123,7 +117,7 @@ impl EnderPearlEntity {
             return;
         }
 
-        let Some(owner) = self.owner_player() else {
+        let Some(owner) = self.get_owner() else {
             return;
         };
         let Some(player) = owner.as_player() else {
@@ -145,7 +139,7 @@ impl EnderPearlEntity {
     /// Vanilla `ThrownEnderpearl.tick` owner-death short-circuit: a pearl whose
     /// owner is a dead player vanishes when the gamerule is set.
     fn should_vanish_on_owner_death(&self, world: &Arc<World>) -> bool {
-        let Some(owner) = self.owner_player() else {
+        let Some(owner) = self.get_owner() else {
             return false;
         };
         let Some(player) = owner.as_player() else {
@@ -171,13 +165,43 @@ impl EnderPearlEntity {
     /// Returns whether the owner may be teleported to: if still in the
     /// pearl's world they must be alive and not sleeping, otherwise a
     /// cross-dimension teleport requires portal permission.
-    fn is_allowed_to_teleport_owner(world: &Arc<World>, player: &Player) -> bool {
-        let player_world = player.get_world();
-        if Arc::ptr_eq(&player_world, world) {
-            return LivingEntity::is_alive(player) && !player.is_sleeping();
+    fn is_allowed_to_teleport_owner(world: &Arc<World>, owner: &dyn Entity) -> bool {
+        let same_world = owner
+            .level()
+            .is_some_and(|owner_world| Arc::ptr_eq(&owner_world, world));
+        if same_world {
+            return match owner.as_living_entity() {
+                Some(living) => LivingEntity::is_alive(living) && !living.is_sleeping(),
+                None => Entity::is_alive(owner),
+            };
         }
 
-        player.can_use_portal(true)
+        owner.can_use_portal(true)
+    }
+
+    /// Spawns the 5% endermite at the owner's position (vanilla
+    /// `ThrownEnderpearl.onHit` spawn gate and `snapTo`).
+    fn spawn_teleport_endermite(&self, world: &Arc<World>, owner: &dyn Entity) {
+        if !world.get_game_rule(&SPAWN_MOBS)
+            || !world.get_game_rule(&SPAWN_MONSTERS)
+            || world.difficulty() == Difficulty::Peaceful
+            || rand::random::<f32>() >= ENDERMITE_SPAWN_CHANCE
+        {
+            return;
+        }
+
+        let Some(endermite) = ENTITIES.create(
+            &vanilla_entities::ENDERMITE,
+            next_entity_id(),
+            owner.position(),
+            Arc::downgrade(world),
+        ) else {
+            return;
+        };
+        endermite.set_rotation(owner.rotation());
+        if let Err(error) = world.try_add_entity(endermite) {
+            log::debug!("failed to spawn endermite from ender pearl: {error}");
+        }
     }
 
     /// Teleports the owning player and applies the pearl's effects.
@@ -188,21 +212,8 @@ impl EnderPearlEntity {
         player: &Player,
         teleport_pos: DVec3,
     ) {
-        if world.get_game_rule(&SPAWN_MOBS) && rand::random::<f32>() < ENDERMITE_SPAWN_CHANCE {
-            let endermite = ENTITIES.create(
-                &vanilla_entities::ENDERMITE,
-                next_entity_id(),
-                teleport_pos,
-                Arc::downgrade(world),
-            );
-            if let Some(endermite) = endermite {
-                if let Some(endermite_entity) = endermite.as_ref().downcast_ref::<EndermiteEntity>()
-                {
-                    endermite_entity.set_player_spawned(true);
-                }
-                let _ = world.try_add_entity(endermite);
-            }
-        }
+        self.spawn_teleport_endermite(world, player);
+
         if self.is_on_portal_cooldown() {
             player.reset_portal_cooldown();
         }
@@ -212,24 +223,71 @@ impl EnderPearlEntity {
             position: teleport_pos,
             rotation: (0.0, 0.0),
             velocity: DVec3::ZERO,
-            relatives: RelativeMovement::ROTATION.union(RelativeMovement::DELTA),
+            // Vanilla keeps the owner's rotation and resets velocity to zero.
+            relatives: RelativeMovement::ROTATION,
             portal_cooldown: player.portal_cooldown(),
+            as_passenger: false,
+            post_transition: TeleportPostTransition::do_nothing(),
+        };
+        if let Some(new_owner) = change_entity_world(Arc::clone(owner), &transition) {
+            if let Some(new_player) = new_owner.as_player() {
+                new_player.reset_fall_distance();
+                new_player.reset_current_impulse_context();
+
+                let damage = DamageSource::environment(&vanilla_damage_types::ENDER_PEARL);
+                new_player.hurt(world, &damage, TELEPORT_DAMAGE);
+            }
+        } else {
+            log::debug!("failed to teleport ender pearl owner {}", self.id());
+        }
+
+        // Vanilla plays the teleport sound even when the transition fails.
+        world.play_sound_at(
+            &sound_events::ENTITY_PLAYER_TELEPORT,
+            SoundSource::Players,
+            teleport_pos,
+            1.0,
+            1.0,
+            None,
+        );
+    }
+
+    /// Teleports a non-player owner (vanilla `ThrownEnderpearl.onHit` else
+    /// branch): no damage, no endermite, absolute rotation kept.
+    fn teleport_non_player_owner(
+        &self,
+        world: &Arc<World>,
+        owner: &SharedEntity,
+        teleport_pos: DVec3,
+    ) {
+        let (yaw, pitch) = owner.rotation();
+        let transition = TeleportTransition {
+            target_world: Arc::clone(world),
+            position: teleport_pos,
+            rotation: (yaw, pitch),
+            velocity: DVec3::ZERO,
+            relatives: RelativeMovement::NONE,
+            portal_cooldown: owner.portal_cooldown(),
             as_passenger: false,
             post_transition: TeleportPostTransition::do_nothing(),
         };
         let Some(new_owner) = change_entity_world(Arc::clone(owner), &transition) else {
             log::debug!("failed to teleport ender pearl owner {}", self.id());
-            return;
-        };
-        let Some(new_player) = new_owner.as_player() else {
+            world.play_sound_at(
+                &sound_events::ENTITY_PLAYER_TELEPORT,
+                SoundSource::Players,
+                teleport_pos,
+                1.0,
+                1.0,
+                None,
+            );
             return;
         };
 
-        new_player.reset_fall_distance();
-        new_player.reset_current_impulse_context();
-
-        let damage = DamageSource::environment(&vanilla_damage_types::ENDER_PEARL);
-        new_player.hurt(world, &damage, TELEPORT_DAMAGE);
+        new_owner.reset_fall_distance();
+        if let Some(living) = new_owner.as_living_entity() {
+            living.reset_current_impulse_context();
+        }
 
         world.play_sound_at(
             &sound_events::ENTITY_PLAYER_TELEPORT,
@@ -355,11 +413,14 @@ impl Projectile for EnderPearlEntity {
         }
 
         let teleport_pos = self.old_position();
-        if let Some(owner) = self.owner_player()
-            && let Some(player) = owner.as_player()
-            && Self::is_allowed_to_teleport_owner(&world, player)
+        if let Some(owner) = self.get_owner()
+            && Self::is_allowed_to_teleport_owner(&world, owner.as_ref())
         {
-            self.teleport_owner(&world, &owner, player, teleport_pos);
+            if let Some(player) = owner.as_player() {
+                self.teleport_owner(&world, &owner, player, teleport_pos);
+            } else {
+                self.teleport_non_player_owner(&world, &owner, teleport_pos);
+            }
         }
         self.deregister_from_owner();
         self.set_removed(RemovalReason::Discarded);
@@ -373,12 +434,13 @@ impl ThrowableItemProjectile for EnderPearlEntity {
         &vanilla_items::ENDER_PEARL
     }
 
+    /// Vanilla `ThrowableItemProjectile.setItem`: the rendered stack is clamped to one.
     fn set_item(&self, item: ItemStack) {
         self.entity_data
             .lock()
             .throwable_item_projectile
             .item_stack
-            .set(item);
+            .set(item.copy_with_count(1));
     }
 
     fn get_item(&self) -> ItemStack {

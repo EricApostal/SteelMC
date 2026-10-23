@@ -42,13 +42,6 @@ impl FeatureDecorationRunner {
         origin: BlockPos,
         biome_zoom_seed: i64,
     ) -> bool {
-        if !region.can_write_to_chunk(
-            SectionPos::block_to_section_coord(origin.x()),
-            SectionPos::block_to_section_coord(origin.z()),
-        ) {
-            return false;
-        }
-
         let placer = Self::configured_feature_placer(kind);
         let mut context = ConfiguredFeaturePlaceContext {
             region,
@@ -93,6 +86,7 @@ impl FeatureDecorationRunner {
             ConfiguredFeatureKind::EndPodium { .. } => place_end_podium,
             ConfiguredFeatureKind::EndSpike(_) => place_end_spike,
             ConfiguredFeatureKind::FallenTree(_) => place_fallen_tree,
+            ConfiguredFeatureKind::FillLayer(_) => place_fill_layer,
             ConfiguredFeatureKind::Fossil(_) => place_fossil,
             ConfiguredFeatureKind::FreezeTopLayer => place_freeze_top_layer,
             ConfiguredFeatureKind::Geode(_) => place_geode,
@@ -120,6 +114,7 @@ impl FeatureDecorationRunner {
             ConfiguredFeatureKind::RandomSelector(_) => place_random_selector,
             ConfiguredFeatureKind::WeightedRandomSelector(_) => place_weighted_random_selector,
             ConfiguredFeatureKind::RootSystem(_) => place_root_system,
+            ConfiguredFeatureKind::ReplaceSingleBlock(_) => place_replace_single_block,
             ConfiguredFeatureKind::ScatteredOre(_) => place_scattered_ore,
             ConfiguredFeatureKind::SculkPatch(_) => place_sculk_patch,
             ConfiguredFeatureKind::SeaPickle(_) => place_sea_pickle,
@@ -163,6 +158,37 @@ const fn place_no_op(
     _kind: &ConfiguredFeatureKind,
 ) -> bool {
     true
+}
+
+fn place_fill_layer(
+    context: &mut ConfiguredFeaturePlaceContext<'_, '_>,
+    kind: &ConfiguredFeatureKind,
+) -> bool {
+    let ConfiguredFeatureKind::FillLayer(config) = kind else {
+        panic!("fill_layer placer received wrong configured feature kind");
+    };
+    FeatureDecorationRunner::place_fill_layer_feature(
+        context.region,
+        context.registry,
+        config,
+        context.origin,
+    )
+}
+
+fn place_replace_single_block(
+    context: &mut ConfiguredFeaturePlaceContext<'_, '_>,
+    kind: &ConfiguredFeatureKind,
+) -> bool {
+    let ConfiguredFeatureKind::ReplaceSingleBlock(targets) = kind else {
+        panic!("replace_single_block placer received wrong configured feature kind");
+    };
+    FeatureDecorationRunner::place_replace_single_block_feature(
+        context.region,
+        context.registry,
+        context.random,
+        targets,
+        context.origin,
+    )
 }
 
 fn place_projected_random_patchy_square(
@@ -411,12 +437,18 @@ fn place_template(
     };
     let size = template.size(Rotation::None);
     let position = template_feature_position(context.origin, rotation, size);
+    // Vanilla `TemplateFeature` adds every processor from the config's
+    // `StructureProcessorList` before placing; the slice must outlive `settings`.
+    let processors: &[steel_registry::structure_processor::StructureProcessorKind] = config
+        .processors
+        .as_ref()
+        .map_or(&[], |list| list.processors.as_slice());
     let settings = StructurePlaceSettings {
         mirror: StructureMirror::None,
         rotation,
         rotation_pivot: BlockPos::ZERO,
         bounding_box: template_feature_bounding_box(context.region),
-        processors: &[],
+        processors,
         block_ignore: StructureBlockIgnore::None,
         late_block_ignore: StructureBlockIgnore::None,
         replace_jigsaws: false,
@@ -432,6 +464,7 @@ fn place_template(
         position,
         &settings,
         context.random,
+        // Vanilla `TemplateFeature.placeInWorld(..., 3)`.
         UpdateFlags::UPDATE_ALL,
     )
 }
@@ -678,7 +711,7 @@ fn place_coral_claw(
     context: &mut ConfiguredFeaturePlaceContext<'_, '_>,
     kind: &ConfiguredFeatureKind,
 ) -> bool {
-    let ConfiguredFeatureKind::CoralClaw { .. } = kind else {
+    let ConfiguredFeatureKind::CoralClaw { feature } = kind else {
         panic!("coral_claw placer received wrong configured feature kind");
     };
     FeatureDecorationRunner::place_coral_claw_feature(
@@ -686,6 +719,8 @@ fn place_coral_claw(
         context.registry,
         context.random,
         context.origin,
+        feature,
+        context.biome_zoom_seed,
     )
 }
 
@@ -708,7 +743,7 @@ fn place_coral_tree(
     context: &mut ConfiguredFeaturePlaceContext<'_, '_>,
     kind: &ConfiguredFeatureKind,
 ) -> bool {
-    let ConfiguredFeatureKind::CoralTree { .. } = kind else {
+    let ConfiguredFeatureKind::CoralTree { feature } = kind else {
         panic!("coral_tree placer received wrong configured feature kind");
     };
     FeatureDecorationRunner::place_coral_tree_feature(
@@ -716,6 +751,8 @@ fn place_coral_tree(
         context.registry,
         context.random,
         context.origin,
+        feature,
+        context.biome_zoom_seed,
     )
 }
 

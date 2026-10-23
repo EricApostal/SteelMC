@@ -8,6 +8,8 @@ use std::sync::OnceLock;
 use rustc_hash::FxHashMap;
 use steel_utils::Identifier;
 
+use crate::RegistryTags;
+
 pub mod data;
 
 pub use data::*;
@@ -30,6 +32,7 @@ pub type ConfiguredFeatureEntryRef = &'static ConfiguredFeature;
 pub struct ConfiguredFeatureRegistry {
     features_by_id: Vec<ConfiguredFeatureEntryRef>,
     features_by_key: FxHashMap<Identifier, usize>,
+    tags: RegistryTags,
     allows_registering: bool,
 }
 
@@ -40,6 +43,7 @@ impl ConfiguredFeatureRegistry {
         Self {
             features_by_id: Vec::new(),
             features_by_key: FxHashMap::default(),
+            tags: RegistryTags::default(),
             allows_registering: true,
         }
     }
@@ -94,6 +98,14 @@ impl crate::RegistryEntry for ConfiguredFeature {
         self.id.get().copied()
     }
 }
+
+// Vanilla 26.3 registers the `worldgen/feature` tag category against configured
+// features (`Registries.FEATURE`), which is this registry.
+crate::impl_tagged_registry!(
+    ConfiguredFeatureRegistry,
+    features_by_key,
+    "Configured Feature"
+);
 
 /// A placed feature registry entry.
 #[derive(Debug)]

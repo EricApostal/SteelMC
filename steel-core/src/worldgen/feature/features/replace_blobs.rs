@@ -36,7 +36,7 @@ impl FeatureDecorationRunner {
             }
 
             if region.block_state(pos).get_block() == target_block {
-                let _ = region.set_block_state(pos, replacement, UpdateFlags::UPDATE_CLIENTS);
+                let _ = region.set_block_state(pos, replacement, UpdateFlags::UPDATE_ALL);
                 replaced_any = true;
             }
 

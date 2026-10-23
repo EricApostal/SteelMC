@@ -91,6 +91,12 @@ impl StructureTemplate {
                         rotated.clone_into(value);
                     }
                 }
+                // Vanilla `CrafterBlock`/`JigsawBlock` rotate their `FrontAndTop` property.
+                "orientation" => {
+                    if let Some(rotated) = Self::rotate_front_and_top(value, rotation) {
+                        rotated.clone_into(value);
+                    }
+                }
                 "north" | "east" | "south" | "west" => {
                     let from = Self::direction_from_property_name(name);
                     let source = Self::inverse_rotate_direction(rotation, from);
@@ -155,6 +161,13 @@ impl StructureTemplate {
                         mirrored_shape.clone_into(value);
                     } else if let Some(mirrored_shape) = Self::mirror_rail_shape(value, mirror) {
                         mirrored_shape.clone_into(value);
+                    }
+                }
+                // Vanilla mirrors `FrontAndTop` with the mirror's octahedral group
+                // (`INVERT_X`/`INVERT_Z`), which reflects both front and top.
+                "orientation" => {
+                    if let Some(mirrored) = Self::mirror_front_and_top(value, mirror) {
+                        mirrored.clone_into(value);
                     }
                 }
                 "north" | "east" | "south" | "west" => {
@@ -319,6 +332,63 @@ impl StructureTemplate {
             },
             StructureMirror::None => None,
         }
+    }
+
+    /// Rotates a `FrontAndTop` property value (`CrafterBlock`/`JigsawBlock`), matching
+    /// vanilla's `rotation.rotation().rotate(orientation)`.
+    pub(super) fn rotate_front_and_top(value: &str, rotation: Rotation) -> Option<&'static str> {
+        let (front, top) = Self::parse_front_and_top(value)?;
+        Self::front_and_top_name(rotation.rotate(front), rotation.rotate(top))
+    }
+
+    /// Mirrors a `FrontAndTop` property value, matching vanilla's
+    /// `mirror.rotation().rotate(orientation)` (`INVERT_Z` for left/right, `INVERT_X`
+    /// for front/back).
+    pub(super) fn mirror_front_and_top(
+        value: &str,
+        mirror: StructureMirror,
+    ) -> Option<&'static str> {
+        let (front, top) = Self::parse_front_and_top(value)?;
+        let reflect = |direction: Direction| match mirror {
+            StructureMirror::LeftRight => match direction {
+                BlockPropertyDirection::North => BlockPropertyDirection::South,
+                BlockPropertyDirection::South => BlockPropertyDirection::North,
+                other => other,
+            },
+            StructureMirror::FrontBack => match direction {
+                BlockPropertyDirection::East => BlockPropertyDirection::West,
+                BlockPropertyDirection::West => BlockPropertyDirection::East,
+                other => other,
+            },
+            StructureMirror::None => direction,
+        };
+        Self::front_and_top_name(reflect(front), reflect(top))
+    }
+
+    pub(super) fn parse_front_and_top(value: &str) -> Option<(Direction, Direction)> {
+        let (front, top) = value.split_once('_')?;
+        Some((Self::parse_direction(front)?, Self::parse_direction(top)?))
+    }
+
+    pub(super) const fn front_and_top_name(
+        front: Direction,
+        top: Direction,
+    ) -> Option<&'static str> {
+        Some(match (front, top) {
+            (BlockPropertyDirection::Down, BlockPropertyDirection::East) => "down_east",
+            (BlockPropertyDirection::Down, BlockPropertyDirection::North) => "down_north",
+            (BlockPropertyDirection::Down, BlockPropertyDirection::South) => "down_south",
+            (BlockPropertyDirection::Down, BlockPropertyDirection::West) => "down_west",
+            (BlockPropertyDirection::Up, BlockPropertyDirection::East) => "up_east",
+            (BlockPropertyDirection::Up, BlockPropertyDirection::North) => "up_north",
+            (BlockPropertyDirection::Up, BlockPropertyDirection::South) => "up_south",
+            (BlockPropertyDirection::Up, BlockPropertyDirection::West) => "up_west",
+            (BlockPropertyDirection::West, BlockPropertyDirection::Up) => "west_up",
+            (BlockPropertyDirection::East, BlockPropertyDirection::Up) => "east_up",
+            (BlockPropertyDirection::North, BlockPropertyDirection::Up) => "north_up",
+            (BlockPropertyDirection::South, BlockPropertyDirection::Up) => "south_up",
+            _ => return None,
+        })
     }
 
     pub(super) fn parse_stair_shape(shape: &str) -> Option<&'static str> {

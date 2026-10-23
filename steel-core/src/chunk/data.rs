@@ -104,6 +104,9 @@ pub struct Chunk {
     pub sky_light_sources: SyncRwLock<ChunkSkyLightSources>,
     /// Chunk-owned light sections and section emptiness maps.
     pub light: SyncRwLock<ChunkLightData>,
+    /// Vanilla `ChunkAccess.isLightCorrect`: whether the stored light matches the
+    /// current block states. Persisted only when light was actually computed.
+    light_correct: AtomicBool,
     /// Full-only runtime state, installed once before Full publication.
     full_runtime: OnceLock<Box<FullChunkRuntime>>,
     /// Generator-owned state retained only between generation stages.
@@ -146,6 +149,7 @@ impl Chunk {
                 min_y, height,
             )),
             light: SyncRwLock::new(ChunkLightData::for_valid_world_height(min_y, height)),
+            light_correct: AtomicBool::new(false),
             full_runtime: OnceLock::new(),
             transient_generation_state: SyncMutex::new(TransientGenerationState::default()),
         }
@@ -206,6 +210,9 @@ impl Chunk {
                 min_y, height,
             )),
             light: SyncRwLock::new(light),
+            // Steel only persists light that was computed, so a loaded chunk at
+            // `Light` status or later carries vanilla's `IsLightOn` flag.
+            light_correct: AtomicBool::new(status >= ChunkStatus::Light),
             full_runtime: OnceLock::new(),
             transient_generation_state: SyncMutex::new(TransientGenerationState::default()),
         };
@@ -245,6 +252,28 @@ impl Chunk {
     #[must_use]
     pub fn is_dirty(&self) -> bool {
         self.dirty.load(Ordering::Acquire)
+    }
+
+    /// Rewrites every biome cell of this chunk, mirroring vanilla
+    /// `ChunkAccess.fillBiomesFromNoise`.
+    ///
+    /// `resolver` receives absolute quart coordinates and the biome currently
+    /// stored in the cell, and returns the biome to store. Returns the number of
+    /// cells whose biome changed and marks the chunk dirty when any did.
+    pub fn fill_biomes_from_noise(
+        &self,
+        mut resolver: impl FnMut(i32, i32, i32, u16) -> u16,
+    ) -> usize {
+        let changed = self.sections.fill_biomes_from_noise(
+            self.min_y,
+            self.pos.0.x * 4,
+            self.pos.0.y * 4,
+            &mut resolver,
+        );
+        if changed > 0 {
+            self.mark_dirty();
+        }
+        changed
     }
 
     /// Marks this chunk as needing persistence.
@@ -411,6 +440,17 @@ impl Chunk {
     #[must_use]
     pub fn block_light_sources(&self) -> Vec<BlockPos> {
         self.sections.block_light_sources(self.pos, self.min_y)
+    }
+
+    /// Vanilla `ChunkAccess.isLightCorrect`.
+    #[must_use]
+    pub fn is_light_correct(&self) -> bool {
+        self.light_correct.load(Ordering::Acquire)
+    }
+
+    /// Vanilla `ChunkAccess.setLightCorrect`.
+    pub fn set_light_correct(&self, correct: bool) {
+        self.light_correct.store(correct, Ordering::Release);
     }
 
     /// Returns committed chunk light data.

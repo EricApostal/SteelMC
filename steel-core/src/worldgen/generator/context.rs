@@ -9,7 +9,7 @@ use steel_worldgen::density_functions::{
 
 use crate::world::World;
 use crate::worldgen::generator::{
-    ChunkGenerator, EmptyChunkGenerator, FlatChunkGenerator, VanillaGenerator,
+    ChunkGenerator, DebugChunkGenerator, EmptyChunkGenerator, FlatChunkGenerator, VanillaGenerator,
 };
 
 /// Type alias for overworld generator.
@@ -32,6 +32,7 @@ pub enum ChunkGeneratorType {
     Overworld(OverworldGenerator),
     Nether(NetherGenerator),
     End(EndGenerator),
+    Debug(DebugChunkGenerator),
     //Custom(Box<dyn ChunkGenerator>),
 }
 

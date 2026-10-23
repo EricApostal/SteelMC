@@ -14,19 +14,22 @@ use crate::behavior::{
 use crate::entity::Entity;
 use crate::fluid::FluidStateExt;
 use crate::world::RaytraceAction;
+use glam::DVec3;
 use steel_macros::item_behavior;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::Direction;
 use steel_registry::fluid::FluidState;
 use steel_registry::item_stack::ItemStack;
-use steel_registry::level_events;
+use steel_registry::particle_type::{ParticleData, SimpleParticleOptions};
+use steel_registry::sound_event::SoundEventRef;
 use steel_registry::sound_events;
 use steel_registry::stat::vanilla_stat_types;
 use steel_registry::vanilla_blocks;
 use steel_registry::vanilla_fluids;
 use steel_registry::vanilla_game_events;
 use steel_registry::vanilla_items;
+use steel_registry::vanilla_particle_types;
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId};
 
@@ -51,12 +54,14 @@ impl ItemBehavior for BucketItem {
     fn use_item(&self, context: &mut UseItemContext) -> InteractionResult {
         match self.fluid_block {
             None => use_empty_bucket(context),
-            Some(fluid_block) => use_filled_bucket(fluid_block, context),
+            Some(fluid_block) => use_filled_bucket(fluid_block, None, context).0,
         }
     }
 }
 
-fn filled_bucket_success_stack(context: &UseItemContext) -> ItemStack {
+/// Vanilla `BucketItem.getEmptySuccessItem`: the stack left after emptying a
+/// bucket (`Items.BUCKET`), or the original stack for infinite-materials users.
+pub(crate) fn empty_success_stack(context: &UseItemContext) -> ItemStack {
     if context.player.has_infinite_materials() {
         context
             .inv
@@ -164,12 +169,22 @@ fn use_empty_bucket(context: &mut UseItemContext) -> InteractionResult {
     InteractionResult::Fail
 }
 
-// TODO: Refactor into smaller helpers once all bucket types are implemented
+/// Mirrors vanilla `BucketItem.emptyContents` together with the placement
+/// position chosen by `BucketItem.use`, returning the position where the
+/// contents were actually placed.
+///
+/// `MobBucketItem` needs that position for its `checkExtraContent` mob spawn,
+/// and passes its own empty sound so `playEmptySound` matches vanilla's
+/// per-entity override.
 #[expect(
     clippy::too_many_lines,
     reason = "mirrors vanilla's emptyContents flow; splitting would obscure the sequential placement logic"
 )]
-fn use_filled_bucket(fluid_block: BlockRef, context: &mut UseItemContext) -> InteractionResult {
+pub(crate) fn use_filled_bucket(
+    fluid_block: BlockRef,
+    empty_sound: Option<SoundEventRef>,
+    context: &mut UseItemContext,
+) -> (InteractionResult, Option<BlockPos>) {
     // Raytrace to find target block
     let (start, end) = context.player.get_ray_endpoints();
     let (ray_block, ray_dir) = context.world.raytrace(start, end, |pos, world| {
@@ -185,12 +200,12 @@ fn use_filled_bucket(fluid_block: BlockRef, context: &mut UseItemContext) -> Int
 
     // Vanilla returns PASS when raytrace misses (allows other handlers to try)
     let (Some(clicked_pos), Some(direction)) = (ray_block, ray_dir) else {
-        return InteractionResult::Pass;
+        return (InteractionResult::Pass, None);
     };
 
     // If the block is out of bounds, return fail
     if !context.world.is_in_valid_bounds(clicked_pos) {
-        return InteractionResult::Fail;
+        return (InteractionResult::Fail, None);
     }
 
     let item = context.inv.with_item(|item| item.clone());
@@ -198,7 +213,7 @@ fn use_filled_bucket(fluid_block: BlockRef, context: &mut UseItemContext) -> Int
         .player
         .may_use_item_at(direction.relative(clicked_pos), direction, &item)
     {
-        return InteractionResult::Fail;
+        return (InteractionResult::Fail, None);
     }
 
     let clicked_state = context.world.get_block_state(clicked_pos);
@@ -239,13 +254,31 @@ fn use_filled_bucket(fluid_block: BlockRef, context: &mut UseItemContext) -> Int
             return false;
         }
 
-        // Vanilla parity: in worlds where water evaporates (e.g. the Nether),
-        // water buckets fizz out without placing any fluid.
-        // TODO: Per-position environment attributes (vanilla uses EnvironmentAttributes.WATER_EVAPORATES per-pos)
+        // Vanilla `BucketItem.emptyContents`: in worlds where water evaporates
+        // (e.g. the Nether) a water bucket fizzes out without placing a fluid —
+        // the extinguish sound plus a large-smoke burst at the block corner.
+        //
+        // Vanilla reads `EnvironmentAttributes.WATER_EVAPORATES` per position;
+        // Steel's environment attributes cover only the sky/weather set, so this
+        // uses the dimension-type flag, which is equal for every vanilla
+        // dimension.
         if is_water_bucket && context.world.dimension_type.water_evaporates {
-            context
-                .world
-                .level_event(level_events::PARTICLES_WATER_EVAPORATING, pos, 0, None);
+            context.world.play_block_sound(
+                &sound_events::BLOCK_FIRE_EXTINGUISH,
+                pos,
+                0.5,
+                // Java: `2.6F + (random.nextFloat() - random.nextFloat()) * 0.8F`.
+                2.6 + (rand::random::<f32>() - rand::random::<f32>()) * 0.8,
+                // Vanilla `level.playSound(user, pos, ...)` excludes the placing player.
+                Some(context.player.id()),
+            );
+            context.world.send_particles(
+                ParticleData::new(&vanilla_particle_types::LARGE_SMOKE, SimpleParticleOptions),
+                DVec3::new(f64::from(pos.x()), f64::from(pos.y()), f64::from(pos.z())),
+                8,
+                DVec3::new(1.0, 1.0, 1.0),
+                0.0,
+            );
             return true;
         }
 
@@ -253,7 +286,7 @@ fn use_filled_bucket(fluid_block: BlockRef, context: &mut UseItemContext) -> Int
         if is_water_bucket && is_liquid_container {
             let source_water = FluidState::source(&vanilla_fluids::WATER);
             behavior.place_liquid(context.world, pos, state, source_water);
-            play_empty_sound_and_event(context, pos, true);
+            play_empty_sound_and_event(context, pos, true, empty_sound);
             return true;
         }
 
@@ -267,7 +300,7 @@ fn use_filled_bucket(fluid_block: BlockRef, context: &mut UseItemContext) -> Int
             };
 
             if is_same_fluid && fluid_state.is_source() {
-                play_empty_sound_and_event(context, pos, is_water_bucket);
+                play_empty_sound_and_event(context, pos, is_water_bucket, empty_sound);
                 return true;
             }
 
@@ -295,7 +328,7 @@ fn use_filled_bucket(fluid_block: BlockRef, context: &mut UseItemContext) -> Int
                     .world
                     .schedule_fluid_tick_default(pos, fluid_ref, tick_delay);
 
-                play_empty_sound_and_event(context, pos, is_water_bucket);
+                play_empty_sound_and_event(context, pos, is_water_bucket, empty_sound);
 
                 return true;
             }
@@ -313,9 +346,9 @@ fn use_filled_bucket(fluid_block: BlockRef, context: &mut UseItemContext) -> Int
 
     // Attempt Primary (with sneak check)
     if try_place_fluid(primary_pos, true) {
-        let result_stack = filled_bucket_success_stack(context);
+        let result_stack = empty_success_stack(context);
         create_filled_result(context, result_stack, true);
-        return InteractionResult::Success;
+        return (InteractionResult::Success, Some(primary_pos));
     }
 
     // Attempt Secondary (Fallback — no sneak check, matching vanilla hitResult=null).
@@ -323,20 +356,27 @@ fn use_filled_bucket(fluid_block: BlockRef, context: &mut UseItemContext) -> Int
     // when the primary attempt fails, regardless of bucket type.
     let secondary_pos = direction.relative(clicked_pos);
     if try_place_fluid(secondary_pos, false) {
-        let result_stack = filled_bucket_success_stack(context);
+        let result_stack = empty_success_stack(context);
         create_filled_result(context, result_stack, true);
-        return InteractionResult::Success;
+        return (InteractionResult::Success, Some(secondary_pos));
     }
 
-    InteractionResult::Fail
+    (InteractionResult::Fail, None)
 }
 
-fn play_empty_sound_and_event(context: &UseItemContext, pos: BlockPos, is_water_bucket: bool) {
-    let sound_event = if is_water_bucket {
+fn play_empty_sound_and_event(
+    context: &UseItemContext,
+    pos: BlockPos,
+    is_water_bucket: bool,
+    empty_sound: Option<SoundEventRef>,
+) {
+    // Vanilla `MobBucketItem` overrides `BucketItem.playEmptySound` with its
+    // own per-entity sound; every other bucket keeps the fluid default.
+    let sound_event = empty_sound.unwrap_or(if is_water_bucket {
         &sound_events::ITEM_BUCKET_EMPTY
     } else {
         &sound_events::ITEM_BUCKET_EMPTY_LAVA
-    };
+    });
     context.world.play_block_sound(
         sound_event,
         pos,

@@ -1,18 +1,22 @@
 //! Illager (raid) entity implementations.
 //!
-//! `Pillager` is implemented; `Vindicator`, `Evoker`, `Illusioner`, `Ravager` and `Witch`
-//! are the remaining work of the raid slice (see `local://raid-checkpoint.md`).
-//!
-//! Vanilla sources for the remaining five:
-//! `/tmp/vanilla/src/world/entity/monster/illager/{Vindicator,Evoker,Illusioner}.java`,
-//! `/tmp/vanilla/src/world/entity/monster/{Ravager,Witch}.java`, with goal lists in the spec
-//! at `local://village-behaviour-spec.md`.
+//! Vanilla sources: `/tmp/vanilla/src/world/entity/monster/illager/{Pillager,Vindicator,
+//! Evoker,Illusioner}.java` and `/tmp/vanilla/src/world/entity/monster/{Ravager,Witch}.java`
+//! (`Witch` lives in `mobs/hostile/witch`). `abstract_illager` holds the shared
+//! `AbstractIllager`/`SpellcasterIllager` data, and `raider_goals` wires the goals every
+//! raider registers.
 
 pub mod abstract_illager;
+mod evoker;
+mod illusioner;
 mod pillager;
 mod raider_goals;
+mod ravager;
 mod vindicator;
 
 pub use abstract_illager::{IllagerArmPose, IllagerSpell, RaiderKeys};
+pub use evoker::EvokerEntity;
+pub use illusioner::IllusionerEntity;
 pub use pillager::PillagerEntity;
+pub use ravager::RavagerEntity;
 pub use vindicator::VindicatorEntity;

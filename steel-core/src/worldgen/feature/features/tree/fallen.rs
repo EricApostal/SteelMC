@@ -179,7 +179,7 @@ impl FeatureDecorationRunner {
             state = state.set_value(&BlockStateProperties::AXIS, axis);
         }
 
-        placement.set_trunk(region, pos, state);
+        placement.set_fallen_trunk(region, pos, state);
         Self::mark_above_for_postprocessing(region, pos);
     }
 }

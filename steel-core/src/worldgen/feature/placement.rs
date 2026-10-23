@@ -24,7 +24,11 @@ impl FeatureDecorationRunner {
 
         loop {
             let mut found_any = false;
-            for _ in 0..count.sample(random) {
+            // Vanilla re-samples `count.sample(random)` on every loop-condition
+            // evaluation (`i < this.count.sample(random)`), not once per layer.
+            let mut i = 0;
+            while i < count.sample(random) {
+                i += 1;
                 let x = origin.x() + random.next_i32_bounded(16);
                 let z = origin.z() + random.next_i32_bounded(16);
                 let start_y = region.height_at(HeightmapType::MotionBlocking, x, z);

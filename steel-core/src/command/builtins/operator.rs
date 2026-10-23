@@ -1,4 +1,15 @@
-//! Vanilla operator commands backed by Steel's built-in `op` permission group.
+//! Vanilla operator commands on Steel's operator-level model.
+//!
+//! Mirrors `OpCommand` / `DeOpCommands`: both require vanilla `LEVEL_ADMINS`
+//! (op level 3), grant or revoke an `ops.json` entry at the configured
+//! `op-permission-level`, and let the tick-stage permission refresh republish
+//! the target's client permission level and command tree.
+//!
+//! Deliberate difference: Steel's named permission keys are an additional grant
+//! source, so granting also assigns the built-in `op` group (and revoking removes
+//! it). Without that, key-gated commands would stay hidden from an operator whose
+//! only grant is the `ops.json` level. `/op` reports success when either store
+//! changed, exactly like vanilla reports on an `ops.json` change.
 
 use std::{convert::Infallible, sync::Arc};
 
@@ -16,16 +27,18 @@ use super::super::{
     registration::CommandRegistration,
 };
 use crate::{
-    permission::{OP_GROUP, PermissionSubjectState},
+    permission::{OP_GROUP, PermissionLevel, PermissionSubjectState},
     server::Server,
 };
 
 pub(super) fn op_registration() -> CommandRegistration<CommandSource> {
     CommandRegistration::new(Identifier::vanilla_static("op"), |_| op_command())
+        .at_level(PermissionLevel::Admins)
 }
 
 pub(super) fn deop_registration() -> CommandRegistration<CommandSource> {
     CommandRegistration::new(Identifier::vanilla_static("deop"), |_| deop_command())
+        .at_level(PermissionLevel::Admins)
 }
 
 fn op_command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
@@ -104,17 +117,41 @@ async fn run_operation(
     argument: GameProfileArgument,
     action: OperatorAction,
 ) -> Result<OperatorCommandResult, CommandSyntaxError> {
+    let server = Arc::clone(source.server());
     let targets = argument.resolve(source).await?;
     let mut changed_names = Vec::new();
     for target in targets {
-        if update_operator_group(source.server(), target.uuid, action).await? {
+        if update_operator(&server, target.uuid, &target.name, action).await? {
             changed_names.push(target.name);
         }
     }
     if changed_names.is_empty() {
         return Err(CommandSyntaxError::dynamic(action.failed()));
     }
+    if matches!(action, OperatorAction::Revoke) {
+        // Vanilla `DeOpCommands.deopPlayers` re-checks the allowlist after deopping.
+        server.kick_unlisted_players();
+    }
     Ok(OperatorCommandResult { changed_names })
+}
+
+/// Applies one `/op` or `/deop` to both operator stores.
+///
+/// Returns whether anything changed, matching vanilla's `list.op`/`list.deop`
+/// boolean. The permission edit always runs so the tick-stage refresh republishes
+/// the target's client permission level and command tree.
+async fn update_operator(
+    server: &Arc<Server>,
+    uuid: uuid::Uuid,
+    name: &str,
+    action: OperatorAction,
+) -> Result<bool, CommandSyntaxError> {
+    let entry_changed = match action {
+        OperatorAction::Grant => server.add_operator(uuid, name).await,
+        OperatorAction::Revoke => server.remove_operator(uuid).await,
+    };
+    let group_changed = update_operator_group(server, uuid, action).await?;
+    Ok(entry_changed || group_changed)
 }
 
 async fn update_operator_group(

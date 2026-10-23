@@ -2,28 +2,67 @@ use glam::IVec3;
 use rustc_hash::FxHashMap;
 use steel_registry::biome::BiomeRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
+use steel_registry::feature::data::{
+    BlockStateData, ConfiguredFeatureKind, ConfiguredFeatureRef, FillLayerConfiguration,
+    PlacedFeatureData,
+};
 use steel_registry::template_pool::{TemplateData, TemplatePoolData};
-use steel_registry::{REGISTRY, RegistryExt, vanilla_biomes};
+use steel_registry::{REGISTRY, RegistryEntry, RegistryExt, vanilla_biomes, vanilla_blocks};
 use steel_utils::random::RandomSource;
 use steel_utils::{BlockStateId, ChunkPos, Identifier};
 
 use crate::chunk::Chunk;
+use crate::worldgen::feature::{FeatureDecorationRunner, StagedFeature};
 use crate::worldgen::generator::{
     ChunkGenerator, GenerationChunk, TerrainPhase, xoroshiro_worldgen_region_random,
 };
 use crate::worldgen::region::WorldGenRegion;
 use crate::worldgen::structure::{StructureGenerator, create_structures};
+use steel_worldgen::biomes::obfuscate_biome_seed;
 use steel_worldgen::noise::Beardifier;
 use steel_worldgen::structure::{ColumnBlock, StructureGenerationContext};
 
+/// Vanilla `GenerationStep.Decoration` ordinals used by flat settings.
+const STEP_LAKES: usize = 1;
+const STEP_UNDERGROUND_STRUCTURES: usize = 3;
+const STEP_SURFACE_STRUCTURES: usize = 4;
+const STEP_TOP_LAYER_MODIFICATION: usize = 10;
+
+/// Runtime inputs for a flat generator, mirroring vanilla
+/// `FlatLevelGeneratorSettings` after `updateLayers`.
+pub struct FlatGeneratorSettings {
+    /// Block layers from world bottom upwards; `None` for layers vanilla replaces with
+    /// a `minecraft:fill_layer` top-layer-modification feature.
+    pub layers: Vec<Option<BlockStateId>>,
+    /// Biome generated across the flat layers (vanilla `settings.getBiome()`).
+    pub biome: BiomeRef,
+    /// World seed for structure placement and decoration seeding.
+    pub seed: i64,
+    /// Sea level for this flat generator's dimension type.
+    pub sea_level: i32,
+    /// Vanilla `features` flag (`FlatLevelGeneratorSettings.decoration`).
+    pub features: bool,
+    /// Vanilla `lakes` flag (`FlatLevelGeneratorSettings.addLakes`).
+    pub lakes: bool,
+    /// Optional structure engine from flat structure overrides.
+    pub structure_generator: Option<StructureGenerator>,
+}
+
 /// A chunk generator that generates a flat world.
 ///
-/// Uses a fixed biome (plains) for all positions, matching vanilla's
-/// `FlatLevelSource` with `FixedBiomeSource`.
+/// Mirrors vanilla's `FlatLevelSource`: a `FixedBiomeSource` for the configured biome
+/// plus layer-by-layer terrain, with biome decoration driven by
+/// `FlatLevelGeneratorSettings.adjustGenerationSettings`.
 pub struct FlatChunkGenerator {
     /// Block layers from world bottom upwards.
-    pub layers: Vec<BlockStateId>,
-    /// The biome ID for plains (cached at construction).
+    ///
+    /// `None` marks a layer that is not `MOTION_BLOCKING`-opaque: vanilla removes it
+    /// from the terrain layers and places it with a top-layer-modification
+    /// `fill_layer` feature instead.
+    pub layers: Vec<Option<BlockStateId>>,
+    /// The single biome this generator produces.
+    biome: BiomeRef,
+    /// Cached registry id of [`Self::biome`].
     biome_id: u16,
     /// World seed for structure placement.
     seed: i64,
@@ -31,6 +70,10 @@ pub struct FlatChunkGenerator {
     sea_level: i32,
     /// Optional structure engine from flat structure overrides.
     structure_generator: Option<StructureGenerator>,
+    /// Decoration runner built from the adjusted flat feature stages.
+    feature_runner: FeatureDecorationRunner,
+    /// Obfuscated seed for `BiomeManager` biome zoom fuzzing.
+    biome_zoom_seed: i64,
 }
 
 impl FlatChunkGenerator {
@@ -47,30 +90,138 @@ impl FlatChunkGenerator {
     /// Creates a new flat generator with explicit block layers from bottom upwards.
     #[must_use]
     pub fn new_layers(layers: Vec<BlockStateId>) -> Self {
-        Self::new_layers_with_structures(layers, 0, Self::SEA_LEVEL, None)
+        Self::from_settings(FlatGeneratorSettings {
+            layers: layers.into_iter().map(Some).collect(),
+            biome: &vanilla_biomes::PLAINS,
+            seed: 0,
+            sea_level: Self::SEA_LEVEL,
+            features: false,
+            lakes: false,
+            structure_generator: None,
+        })
     }
 
-    /// Creates a flat generator with optional structure generation.
+    /// Creates a flat generator from vanilla flat settings.
+    ///
+    /// Applies `FlatLevelGeneratorSettings.adjustGenerationSettings` up front, exactly
+    /// like vanilla's `ChunkGenerator.validate()` forces the memoized generation
+    /// settings getter before any chunk is generated: non-opaque layers are removed
+    /// from the terrain and re-added as `fill_layer` features.
     #[must_use]
-    pub(crate) fn new_layers_with_structures(
-        layers: Vec<BlockStateId>,
-        seed: i64,
-        sea_level: i32,
-        structure_generator: Option<StructureGenerator>,
-    ) -> Self {
-        let biome_id = REGISTRY
-            .biomes
-            .id_from_key(&Identifier::vanilla("plains".to_string()))
-            .unwrap_or(0) as u16;
+    pub fn from_settings(settings: FlatGeneratorSettings) -> Self {
+        let FlatGeneratorSettings {
+            mut layers,
+            biome,
+            seed,
+            sea_level,
+            features,
+            lakes,
+            structure_generator,
+        } = settings;
+
+        let biome_id = biome.try_id().map_or(0, |id| id as u16);
+        let void_gen = layers
+            .iter()
+            .all(|layer| layer.is_some_and(|state| state.get_block() == &vanilla_blocks::AIR));
+        let stages = adjusted_feature_stages(biome, &mut layers, features, lakes, void_gen);
+        let feature_runner =
+            FeatureDecorationRunner::new_with_feature_stages(biome, stages, &REGISTRY);
 
         Self {
             layers,
+            biome,
             biome_id,
             seed,
             sea_level,
             structure_generator,
+            feature_runner,
+            biome_zoom_seed: obfuscate_biome_seed(seed),
         }
     }
+
+    /// The biome this flat generator produces at every position.
+    #[must_use]
+    pub const fn biome(&self) -> BiomeRef {
+        self.biome
+    }
+}
+
+/// Vanilla `Heightmap.Types.MOTION_BLOCKING.isOpaque()`: the block is in
+/// `minecraft:blocks_motion_in_heightmap`, or the state carries a fluid.
+fn motion_blocking_opaque(state: BlockStateId) -> bool {
+    state
+        .get_block()
+        .has_tag(&Identifier::vanilla_static("blocks_motion_in_heightmap"))
+        || state.has_fluid()
+}
+
+/// Vanilla `FlatLevelGeneratorSettings.adjustGenerationSettings`.
+///
+/// Builds the decorated biome's feature stages: lava lakes are added when `lakes` is
+/// set, the biome's own stages are copied when `features` is set (minus
+/// `UNDERGROUND_STRUCTURES`, `SURFACE_STRUCTURES`, and `LAKES` when lakes were added),
+/// and every non-`MOTION_BLOCKING`-opaque layer becomes an inline `fill_layer` feature
+/// in `TOP_LAYER_MODIFICATION`. Those layers are cleared to `None` so terrain skips
+/// them, matching vanilla mutating `layers` inside the (memoized) getter.
+fn adjusted_feature_stages(
+    biome: BiomeRef,
+    layers: &mut [Option<BlockStateId>],
+    features: bool,
+    lakes: bool,
+    void_gen: bool,
+) -> Vec<Vec<StagedFeature>> {
+    let mut stages: Vec<Vec<StagedFeature>> = (0..=STEP_TOP_LAYER_MODIFICATION)
+        .map(|_| Vec::new())
+        .collect();
+
+    if lakes {
+        for key in ["lake_lava_underground", "lake_lava_surface"] {
+            stages[STEP_LAKES].push(StagedFeature::registry(Identifier::vanilla_static(key)));
+        }
+    }
+
+    let decoration = (!void_gen || biome.key == vanilla_biomes::THE_VOID.key) && features;
+    if decoration {
+        for (step, stage) in biome.features.iter().enumerate() {
+            if step == STEP_UNDERGROUND_STRUCTURES || step == STEP_SURFACE_STRUCTURES {
+                continue;
+            }
+            if lakes && step == STEP_LAKES {
+                continue;
+            }
+            let Some(target) = stages.get_mut(step) else {
+                continue;
+            };
+            target.extend(stage.iter().cloned().map(StagedFeature::registry));
+        }
+    }
+
+    for (index, layer) in layers.iter_mut().enumerate() {
+        let Some(state) = *layer else {
+            continue;
+        };
+        if motion_blocking_opaque(state) {
+            continue;
+        }
+        *layer = None;
+        let block = state.get_block();
+        stages[STEP_TOP_LAYER_MODIFICATION].push(StagedFeature::Inline(Box::new(
+            PlacedFeatureData {
+                feature: ConfiguredFeatureRef::Inline(Box::new(ConfiguredFeatureKind::FillLayer(
+                    FillLayerConfiguration {
+                        height: index as i32,
+                        state: BlockStateData {
+                            block,
+                            properties: &[],
+                        },
+                    },
+                ))),
+                placement: Vec::new(),
+            },
+        )));
+    }
+
+    stages
 }
 
 struct FlatGenerationContext<'a> {
@@ -84,7 +235,7 @@ struct FlatGenerationContext<'a> {
     sea_level: i32,
     min_y: i32,
     height: i32,
-    layers: &'a [BlockStateId],
+    layers: &'a [Option<BlockStateId>],
     biome: BiomeRef,
     template_pools: &'a FxHashMap<Identifier, TemplatePoolData>,
     templates: &'a FxHashMap<Identifier, TemplateData>,
@@ -94,7 +245,7 @@ struct FlatGenerationContext<'a> {
 impl FlatGenerationContext<'_> {
     fn state_at_y(&self, y: i32) -> Option<BlockStateId> {
         let relative_y = y.checked_sub(self.min_y)? as usize;
-        self.layers.get(relative_y).copied()
+        self.layers.get(relative_y).copied().flatten()
     }
 
     fn is_opaque_at_y(&self, y: i32, ocean_floor: bool) -> bool {
@@ -220,7 +371,7 @@ impl ChunkGenerator for FlatChunkGenerator {
     }
 
     fn noise_biome(&self, _quart_x: i32, _quart_y: i32, _quart_z: i32) -> BiomeRef {
-        &vanilla_biomes::PLAINS
+        self.biome
     }
 
     fn spawn_height(&self, min_y: i32, height: i32) -> i32 {
@@ -253,7 +404,7 @@ impl ChunkGenerator for FlatChunkGenerator {
             min_y: chunk.min_y(),
             height: (chunk.sections().sections.len() * 16) as i32,
             layers: &self.layers,
-            biome: &vanilla_biomes::PLAINS,
+            biome: self.biome,
             template_pools: structure_generator.template_pools(),
             templates: structure_generator.templates(),
             surface_y_cache: None,
@@ -296,6 +447,9 @@ impl ChunkGenerator for FlatChunkGenerator {
         for x in 0..16 {
             for z in 0..16 {
                 for (relative_y, block) in self.layers.iter().enumerate().take(max_relative_y) {
+                    let Some(block) = block else {
+                        continue;
+                    };
                     chunk.set_relative_block(x, relative_y, z, *block);
                 }
             }
@@ -315,5 +469,8 @@ impl ChunkGenerator for FlatChunkGenerator {
         xoroshiro_worldgen_region_random(world_seed, center)
     }
 
-    fn apply_biome_decorations(&self, _region: &mut WorldGenRegion<'_>) {}
+    fn apply_biome_decorations(&self, region: &mut WorldGenRegion<'_>) {
+        self.feature_runner
+            .decorate_flat(region, &REGISTRY, self.seed, self.biome_zoom_seed);
+    }
 }

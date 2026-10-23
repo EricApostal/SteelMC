@@ -193,6 +193,16 @@ impl ChunkMap {
 
             world.unregister_full_chunk_ticks(pos);
             world.on_entity_chunk_unload_finalized(pos);
+            // Vanilla `ThreadedLevelLightEngine.updateChunkStatus`: drop this
+            // column's light enable/retain flags, queued layers, and section
+            // states once the chunk is finalized.
+            let context = &self.world_gen_context;
+            if let Ok(range) = crate::chunk::light::LightSectionRange::from_world_height(
+                context.min_y(),
+                context.height(),
+            ) {
+                self.release_light_column(pos, range);
+            }
             if has_chunk {
                 let map_clone = Arc::clone(self);
                 self.task_tracker.spawn_on(

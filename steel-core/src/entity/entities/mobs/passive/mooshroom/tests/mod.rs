@@ -12,12 +12,12 @@ use steel_registry::{
 use steel_utils::ChunkPos;
 use steel_utils::Identifier;
 use steel_utils::types::InteractionHand;
-use uuid::Uuid;
 
 use crate::behavior::init_behaviors;
 use crate::entity::living_base::MobEffectInstance;
 use crate::entity::{Entity, LivingEntity, Mob, next_entity_id};
 use crate::test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk};
+use crate::entity::entities::LightningBoltEntity;
 use steel_utils::WorldAabb;
 
 use super::*;
@@ -158,15 +158,27 @@ fn mooshroom_thunder_hit_swaps_variant() {
         MushroomCowEntity::new(&vanilla_entities::MOOSHROOM, 1, DVec3::ZERO, Weak::new());
     assert_eq!(mooshroom.variant(), MooshroomVariant::Red);
 
-    let bolt1 = Uuid::new_v4();
-    mooshroom.thunder_hit(bolt1);
+    let world_fixture = fresh_test_world("mooshroom_thunder_hit");
+    let world = &world_fixture.world;
+    let bolt1: SharedEntity = Arc::new(LightningBoltEntity::new(
+        &vanilla_entities::LIGHTNING_BOLT,
+        2,
+        DVec3::ZERO,
+        Weak::new(),
+    ));
+    mooshroom.thunder_hit(world, &bolt1);
     assert_eq!(mooshroom.variant(), MooshroomVariant::Brown);
 
-    mooshroom.thunder_hit(bolt1);
+    mooshroom.thunder_hit(world, &bolt1);
     assert_eq!(mooshroom.variant(), MooshroomVariant::Brown);
 
-    let bolt2 = Uuid::new_v4();
-    mooshroom.thunder_hit(bolt2);
+    let bolt2: SharedEntity = Arc::new(LightningBoltEntity::new(
+        &vanilla_entities::LIGHTNING_BOLT,
+        3,
+        DVec3::ZERO,
+        Weak::new(),
+    ));
+    mooshroom.thunder_hit(world, &bolt2);
     assert_eq!(mooshroom.variant(), MooshroomVariant::Red);
 }
 

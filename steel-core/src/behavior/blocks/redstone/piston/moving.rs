@@ -3,6 +3,7 @@
 use std::sync::{Arc, Weak};
 
 use steel_macros::block_behavior;
+use steel_registry::{vanilla_blocks};
 use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
@@ -10,7 +11,7 @@ use steel_registry::blocks::properties::{
     BlockStateProperties, BoolProperty, Direction, EnumProperty,
 };
 use steel_registry::item_stack::ItemStack;
-use steel_registry::{vanilla_block_entity_types, vanilla_blocks};
+use steel_registry::vanilla_block_entity_types;
 use steel_utils::{BlockPos, BlockStateId, Downcast as _};
 
 use crate::behavior::{
@@ -40,7 +41,8 @@ impl MovingPistonBlock {
 
 impl BlockBehavior for MovingPistonBlock {
     fn get_state_for_placement(&self, _context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
-        Some(vanilla_blocks::MOVING_PISTON.default_state())
+        // Vanilla's moving piston has no placement state (no item exists for it).
+        None
     }
 
     fn new_block_entity(

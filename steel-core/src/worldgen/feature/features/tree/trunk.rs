@@ -9,6 +9,7 @@ use std::f64::consts::PI;
 use super::super::super::prelude::*;
 use super::super::super::runner::FeatureDecorationRunner;
 use super::{FoliageAttachment, TreePlacement, abs_i32};
+use steel_math::trig;
 
 const FANCY_TRUNK_HEIGHT_SCALE: f64 = 0.618;
 const FANCY_CLUSTER_DENSITY_MAGIC: f64 = 1.382;
@@ -429,8 +430,8 @@ impl FeatureDecorationRunner {
             let mut branch_z = 0;
 
             for branch_step in 0..5 {
-                branch_x = (1.5_f32 + angle.cos() * branch_step as f32) as i32;
-                branch_z = (1.5_f32 + angle.sin() * branch_step as f32) as i32;
+                branch_x = (1.5_f32 + trig::cos(f64::from(angle)) * branch_step as f32) as i32;
+                branch_z = (1.5_f32 + trig::sin(f64::from(angle)) * branch_step as f32) as i32;
                 let pos = origin.offset(branch_x, branch_height - 3 + branch_step / 2, branch_z);
                 let _ = Self::place_tree_log(region, registry, random, pos, config, placement);
             }

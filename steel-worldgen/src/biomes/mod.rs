@@ -1,14 +1,18 @@
 mod biome_source;
 mod climate_sampler;
 mod nether_climate_sampler;
+mod spawn_target;
 
 use sha2::{Digest, Sha256};
 
 pub use biome_source::{
-    BiomeSourceKind, ChunkBiomeSampler, EndBiomeSource, NetherBiomeSource, OverworldBiomeSource,
+    BiomeSourceKind, CheckerboardChunkBiomeSampler, CheckerboardColumnBiomeSource,
+    ChunkBiomeSampler, EndBiomeSource, FixedBiomeSource, FixedChunkBiomeSampler, NetherBiomeSource,
+    OverworldBiomeSource,
 };
 pub use climate_sampler::OverworldClimateSampler;
 pub use nether_climate_sampler::NetherClimateSampler;
+pub use spawn_target::{find_spawn_position, spawn_target_fitness};
 
 /// Hashes the world seed into the value biome sampling actually uses, so
 /// nearby seeds don't produce visibly correlated biome layouts.

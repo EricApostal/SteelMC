@@ -14,9 +14,13 @@ use super::{
     ItemPredicate, PermissionGroupName, ScoreHolderArgument, ScoreHolderWildcard,
     SteelArgumentType, StructureOrTagKey, WorldArgument,
     argument::{
-        ComponentValue, CoordinateAxes, DomainValue, EnchantmentValue, EntityTypeValue,
-        GameModeValue, IdentifierValue, ItemStackValue, NbtPathValue, ObjectiveValue,
-        SteelArgumentValue, TimeValue, TimelineValue, WorldClockValue,
+        AngleValue, AttributeValue, ColumnPos, ColumnPosValue, ComponentValue, CoordinateAxes,
+        DomainValue, EnchantmentValue, EntityTypeValue, FloatRange, GameModeValue, HexColorValue,
+        IdentifierValue, ItemStackValue, MessageValue, MobEffectValue, NbtPathValue, NbtTagValue,
+        ObjectiveCriteriaValue, ObjectiveValue, Operation, OperationValue, ParticleValue,
+        ScoreboardSlotValue, SlotRange, SlotsValue, SteelArgumentValue, StyleValue,
+        SwingAnimationValue, TeamColorValue, TeamValue, TemplateMirrorValue, TemplateRotationValue,
+        TimeValue, TimelineValue, UuidValue, WorldClockValue, resolve_message,
     },
     selector::EntitySelector,
 };
@@ -31,16 +35,26 @@ use crate::{
     entity::{EntityAnchor, SharedEntity},
     permission::{PermissionMetadataExpression, PermissionRuleExpression},
     player::Player,
-    scoreboard::ScoreHolder,
+    scoreboard::{DisplaySlot, ScoreHolder, TeamColor},
 };
+use simdnbt::owned::NbtTag;
 use steel_registry::advancement::registry::AdvancementRef;
+use steel_registry::attribute::AttributeRef;
 use steel_registry::damage_type::DamageTypeRef;
+use steel_registry::data_components::vanilla_components::SwingAnimationType;
+use steel_registry::mob_effect::MobEffectRef;
+use steel_registry::particle_type::ParticleTypeRef;
 use steel_registry::{
     enchantment::EnchantmentRef, entity_type::EntityTypeRef, item_stack::ItemStack,
     timeline::TimelineRef, world_clock::WorldClockRef,
 };
-use steel_utils::{DowncastType, Identifier, nbt::NbtPath, translations, types::GameType};
+use steel_utils::{
+    DowncastType, Identifier, Rotation, nbt::NbtPath, translations, types::GameType,
+};
+use steel_worldgen::structure::StructureMirror;
 use text_components::TextComponent;
+use text_components::format::Format;
+use uuid::Uuid;
 
 /// Runtime model interpreted by Steel's tick-owned command scheduler.
 pub(crate) struct SteelCommandRuntime;
@@ -400,6 +414,133 @@ where
     ) -> Result<&PermissionGroupName, CommandSyntaxError> {
         self.typed_argument(name)
     }
+
+    /// Returns a parsed packed opaque ARGB colour.
+    pub(crate) fn hex_color(&self, name: &str) -> Result<i32, CommandSyntaxError> {
+        self.typed_argument::<HexColorValue>(name)
+            .map(|value| value.0)
+    }
+
+    /// Returns a parsed mob effect.
+    pub(crate) fn mob_effect(&self, name: &str) -> Result<MobEffectRef, CommandSyntaxError> {
+        self.typed_argument::<MobEffectValue>(name)
+            .map(|value| value.0)
+    }
+
+    /// Returns the registered particle type selected by a particle argument.
+    pub(crate) fn particle(&self, name: &str) -> Result<ParticleTypeRef, CommandSyntaxError> {
+        self.typed_argument::<ParticleValue>(name)
+            .map(|value| value.0)
+    }
+
+    /// Returns a parsed attribute.
+    pub(crate) fn attribute(&self, name: &str) -> Result<AttributeRef, CommandSyntaxError> {
+        self.typed_argument::<AttributeValue>(name)
+            .map(|value| value.0)
+    }
+
+    /// Returns a parsed scoreboard operation.
+    pub(crate) fn operation(&self, name: &str) -> Result<Operation, CommandSyntaxError> {
+        self.typed_argument::<OperationValue>(name)
+            .map(|value| value.0)
+    }
+
+    /// Returns a validated vanilla objective criteria name.
+    pub(crate) fn objective_criteria(&self, name: &str) -> Result<&str, CommandSyntaxError> {
+        self.typed_argument::<ObjectiveCriteriaValue>(name)
+            .map(|value| value.0.as_ref())
+    }
+
+    /// Returns a parsed scoreboard display slot.
+    pub(crate) fn scoreboard_slot(&self, name: &str) -> Result<DisplaySlot, CommandSyntaxError> {
+        self.typed_argument::<ScoreboardSlotValue>(name)
+            .map(|value| value.0)
+    }
+
+    /// Returns the scoreboard team name, mirroring vanilla `getTeam`'s existence check.
+    pub(crate) fn team_argument(&self, name: &str) -> Result<&str, CommandSyntaxError> {
+        let team = self.typed_argument::<TeamValue>(name)?.0.as_ref();
+        if self
+            .source()
+            .selector_team_names()
+            .iter()
+            .any(|existing| existing == team)
+        {
+            return Ok(team);
+        }
+        Err(CommandSyntaxError::dynamic(
+            translations::TEAM_NOT_FOUND
+                .message([team.to_owned()])
+                .component(),
+        ))
+    }
+
+    /// Returns a parsed team colour.
+    pub(crate) fn team_color(&self, name: &str) -> Result<TeamColor, CommandSyntaxError> {
+        self.typed_argument::<TeamColorValue>(name)
+            .map(|value| value.0)
+    }
+
+    /// Returns a parsed UUID.
+    pub(crate) fn uuid(&self, name: &str) -> Result<Uuid, CommandSyntaxError> {
+        self.typed_argument::<UuidValue>(name).map(|value| value.0)
+    }
+
+    /// Returns a parsed inclusive double range.
+    pub(crate) fn double_range(&self, name: &str) -> Result<FloatRange, CommandSyntaxError> {
+        self.typed_argument::<FloatRange>(name).copied()
+    }
+
+    /// Returns a parsed SNBT value.
+    pub(crate) fn nbt_tag(&self, name: &str) -> Result<&NbtTag, CommandSyntaxError> {
+        self.typed_argument::<NbtTagValue>(name)
+            .map(|value| &value.0)
+    }
+
+    /// Returns a parsed swing animation.
+    pub(crate) fn swing_animation(
+        &self,
+        name: &str,
+    ) -> Result<SwingAnimationType, CommandSyntaxError> {
+        self.typed_argument::<SwingAnimationValue>(name)
+            .map(|value| value.0)
+    }
+
+    /// Returns a parsed generic resource location.
+    pub(crate) fn identifier_argument(
+        &self,
+        name: &str,
+    ) -> Result<&Identifier, CommandSyntaxError> {
+        self.typed_argument::<IdentifierValue>(name)
+            .map(|value| &value.0)
+    }
+
+    /// Returns a parsed vanilla slot range.
+    pub(crate) fn slots(&self, name: &str) -> Result<&SlotRange, CommandSyntaxError> {
+        self.typed_argument::<SlotsValue>(name)
+            .map(|value| &value.0)
+    }
+
+    /// Returns a parsed structure mirror.
+    pub(crate) fn template_mirror(
+        &self,
+        name: &str,
+    ) -> Result<StructureMirror, CommandSyntaxError> {
+        self.typed_argument::<TemplateMirrorValue>(name)
+            .map(|value| value.0)
+    }
+
+    /// Returns a parsed structure rotation.
+    pub(crate) fn template_rotation(&self, name: &str) -> Result<Rotation, CommandSyntaxError> {
+        self.typed_argument::<TemplateRotationValue>(name)
+            .map(|value| value.0)
+    }
+
+    /// Returns a parsed chat style.
+    pub(crate) fn style(&self, name: &str) -> Result<&Format, CommandSyntaxError> {
+        self.typed_argument::<StyleValue>(name)
+            .map(|value| &value.0)
+    }
 }
 
 impl<S> SteelSuggestionContext<'_, S> {
@@ -417,6 +558,29 @@ impl<S> SteelSuggestionContext<'_, S> {
 }
 
 impl SteelCommandContext<CommandSource> {
+    /// Returns the yaw selected by a vanilla angle argument, wrapped like vanilla.
+    pub(crate) fn angle(&self, name: &str) -> Result<f32, CommandSyntaxError> {
+        let angle = self.typed_argument::<AngleValue>(name)?.0;
+        let (yaw, _pitch) = self.source().rotation();
+        Ok(angle.resolve(yaw))
+    }
+
+    /// Returns the greedy message with its entity selectors resolved to display names.
+    pub(crate) fn message(&self, name: &str) -> Result<TextComponent, CommandSyntaxError> {
+        let message = &self.typed_argument::<MessageValue>(name)?.0;
+        resolve_message(message, self.source())
+    }
+
+    /// Returns the validated column position of a two-dimensional coordinate argument.
+    pub(crate) fn column_pos(&self, name: &str) -> Result<ColumnPos, CommandSyntaxError> {
+        let coordinates = self.typed_argument::<ColumnPosValue>(name)?.0;
+        let block = coordinates.block_pos(self.source());
+        Ok(ColumnPos {
+            x: block.x(),
+            z: block.z(),
+        })
+    }
+
     pub(crate) fn score_holders(
         &self,
         name: &str,

@@ -355,7 +355,13 @@ impl World {
         }
     }
 
-    pub(super) fn clip_shape(
+    /// Vanilla `VoxelShape.clip(Vec3, Vec3, BlockPos)`.
+    ///
+    /// Exposed crate-wide because item behaviors that re-clip an existing hit
+    /// result against a block's collision shape (vanilla
+    /// `CushionItem.recalculateContextForSpecialCollisionShapes`) need the same
+    /// shape intersection the world clip uses.
+    pub(crate) fn clip_shape(
         block_pos: BlockPos,
         from: DVec3,
         to: DVec3,

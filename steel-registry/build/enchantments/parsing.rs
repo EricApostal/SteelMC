@@ -1,9 +1,10 @@
 use super::{
     DamageSourcePredicateJson, DamageSourceTagPredicateJson, EnchantmentTargetJson,
     EntityEffectJson, EntityFlagsPredicateJson, EntityPredicateJson, EntityTargetJson,
-    EntityTypePredicateJson, EntityTypeSpecificPredicateJson, EntityVehiclePredicateJson, GameType,
-    Ident, Identifier, ItemHolderSetJson, LevelBasedValueJson, MobEffectSelectionJson,
-    PlayerPredicateJson, RequirementsJson, Span, TokenStream, quote,
+    EntityTypePredicateJson, EntityTypeSetJson, EntityTypeSpecificPredicateJson,
+    EntityVehiclePredicateJson, FloatProviderJson, GameType, Ident, Identifier, ItemHolderSetJson,
+    LevelBasedValueJson, MobEffectSelectionJson, ParticlePositionSourceJson,
+    ParticleVelocitySourceJson, PlayerPredicateJson, RequirementsJson, Span, TokenStream, quote,
 };
 
 pub(super) fn slot_to_tokens(slot: &str) -> TokenStream {
@@ -204,8 +205,8 @@ pub(super) fn parse_entity_effect_json(
             }
             Ok(EntityEffectJson::PlaySound {
                 sounds: parse_sound_list_json(object_field(object, "sound")?)?,
-                volume: parse_f32_field(object, "volume")?,
-                pitch: parse_f32_field(object, "pitch")?,
+                volume: parse_float_provider_json(object_field(object, "volume")?)?,
+                pitch: parse_float_provider_json(object_field(object, "pitch")?)?,
             })
         }
         "minecraft:ignite" => {
@@ -246,10 +247,135 @@ pub(super) fn parse_entity_effect_json(
                 )?)?,
             })
         }
+        "minecraft:summon_entity" => {
+            for key in object.keys() {
+                if !matches!(key.as_str(), "type" | "entity" | "join_team") {
+                    return Err(format!("unsupported summon_entity effect field `{key}`"));
+                }
+            }
+            Ok(EntityEffectJson::SummonEntity {
+                entity_types: parse_entity_type_set_json(object_field(object, "entity")?)?,
+                join_team: optional_bool_field(object, "join_team")?.unwrap_or(false),
+            })
+        }
+        "minecraft:spawn_particles" => {
+            for key in object.keys() {
+                if !matches!(
+                    key.as_str(),
+                    "type"
+                        | "particle"
+                        | "horizontal_position"
+                        | "vertical_position"
+                        | "horizontal_velocity"
+                        | "vertical_velocity"
+                        | "speed"
+                ) {
+                    return Err(format!("unsupported spawn_particles effect field `{key}`"));
+                }
+            }
+            let speed = match object.get("speed") {
+                Some(value) => parse_float_provider_json(value)?,
+                None => FloatProviderJson::Constant(0.0),
+            };
+            Ok(EntityEffectJson::SpawnParticles {
+                particle: parse_particle_options_json(object_field(object, "particle")?)?,
+                horizontal_position: parse_particle_position_source_json(object_field(
+                    object,
+                    "horizontal_position",
+                )?)?,
+                vertical_position: parse_particle_position_source_json(object_field(
+                    object,
+                    "vertical_position",
+                )?)?,
+                horizontal_velocity: parse_particle_velocity_source_json(object_field(
+                    object,
+                    "horizontal_velocity",
+                )?)?,
+                vertical_velocity: parse_particle_velocity_source_json(object_field(
+                    object,
+                    "vertical_velocity",
+                )?)?,
+                speed,
+            })
+        }
+        "minecraft:attribute" => Ok(EntityEffectJson::Attribute(
+            serde_json::from_value(value.clone())
+                .map_err(|error| format!("invalid attribute effect: {error}"))?,
+        )),
         _ => Ok(EntityEffectJson::Unsupported {
             effect_type: parse_identifier(&effect_type)?,
         }),
     }
+}
+
+/// Parses vanilla `ParticleOptions` (`{"type":"minecraft:soul"}` and the
+/// option-carrying forms) down to the particle type id.
+///
+/// Vanilla keeps the per-particle option payload (dust colour, block state, …)
+/// on the effect; enchantment data in the vanilla datapack only uses
+/// option-free particles, so only the `type` field is decoded here and the
+/// payload is documented as unsupported rather than silently dropped at runtime.
+pub(super) fn parse_particle_options_json(value: &serde_json::Value) -> Result<Identifier, String> {
+    match value {
+        serde_json::Value::String(raw) => parse_identifier(raw),
+        serde_json::Value::Object(object) => {
+            let raw = object
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "particle `type` must be a string".to_owned())?;
+            parse_identifier(raw)
+        }
+        _ => Err("particle must be an object with a `type` field".to_owned()),
+    }
+}
+
+/// Parses vanilla `HolderSet<EntityType>` (`"minecraft:x"`, `"#minecraft:x"` or a list).
+pub(super) fn parse_entity_type_set_json(
+    value: &serde_json::Value,
+) -> Result<EntityTypeSetJson, String> {
+    match value {
+        serde_json::Value::String(raw) => {
+            if let Some(tag) = raw.strip_prefix('#') {
+                return Ok(EntityTypeSetJson::Tag(parse_identifier(tag)?));
+            }
+            Ok(EntityTypeSetJson::Direct(vec![parse_identifier(raw)?]))
+        }
+        serde_json::Value::Array(entries) => entries
+            .iter()
+            .map(|entry| {
+                let raw = entry
+                    .as_str()
+                    .ok_or_else(|| "summon_entity entity entries must be strings".to_owned())?;
+                parse_identifier(raw)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(EntityTypeSetJson::Direct),
+        _ => Err("summon_entity `entity` must be a string or string array".to_owned()),
+    }
+}
+
+/// Parses vanilla `SpawnParticlesEffect.PositionSource`.
+pub(super) fn parse_particle_position_source_json(
+    value: &serde_json::Value,
+) -> Result<ParticlePositionSourceJson, String> {
+    serde_json::from_value(value.clone())
+        .map_err(|error| format!("invalid particle position source: {error}"))
+}
+
+/// Parses vanilla `SpawnParticlesEffect.VelocitySource`.
+pub(super) fn parse_particle_velocity_source_json(
+    value: &serde_json::Value,
+) -> Result<ParticleVelocitySourceJson, String> {
+    serde_json::from_value(value.clone())
+        .map_err(|error| format!("invalid particle velocity source: {error}"))
+}
+
+/// Parses a vanilla `FloatProvider` (`constant` inline form or a typed object).
+pub(super) fn parse_float_provider_json(
+    value: &serde_json::Value,
+) -> Result<FloatProviderJson, String> {
+    serde_json::from_value(value.clone())
+        .map_err(|error| format!("invalid float provider: {error}"))
 }
 
 pub(super) fn parse_vec3_json(value: &serde_json::Value) -> Result<[f64; 3], String> {
@@ -284,17 +410,6 @@ pub(super) fn parse_sound_list_json(value: &serde_json::Value) -> Result<Vec<Ide
             .collect(),
         _ => Err("play_sound `sound` must be a string or string array".to_owned()),
     }
-}
-
-pub(super) fn parse_f32_field(
-    object: &serde_json::Map<String, serde_json::Value>,
-    field: &str,
-) -> Result<f32, String> {
-    let value = object_field(object, field)?;
-    let number = value
-        .as_f64()
-        .ok_or_else(|| format!("`{field}` must be a number"))?;
-    Ok(number as f32)
 }
 
 pub(super) fn parse_entity_type_predicate(raw: &str) -> Result<EntityTypePredicateJson, String> {

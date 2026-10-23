@@ -142,6 +142,12 @@ impl Player {
         self.send_packet(packet);
     }
 
+    /// Returns whether the player is allowed to fly right now.
+    #[must_use]
+    pub fn may_fly(&self) -> bool {
+        self.abilities.lock().may_fly
+    }
+
     /// Returns true if the player is flying (creative/spectator flight).
     #[must_use]
     pub fn is_flying(&self) -> bool {
@@ -177,16 +183,12 @@ impl Player {
     }
 
     /// Handles the player abilities packet from the client.
-    /// This is sent when the player starts or stops flying.
+    ///
+    /// Vanilla `ServerGamePacketListenerImpl.handlePlayerAbilities` never trusts
+    /// the client with more flight than the server allows; a client that claims
+    /// flight without permission is corrected by the per-tick flight check.
     pub fn handle_player_abilities(&self, packet: SPlayerAbilities) {
-        let mut abilities = self.abilities.lock();
-
-        if abilities.may_fly {
-            abilities.flying = packet.is_flying();
-        } else if packet.is_flying() {
-            // Client tried to fly but isn't allowed - resync abilities
-            drop(abilities);
-            self.send_abilities();
-        }
+        let may_fly = self.may_fly();
+        self.abilities.lock().flying = packet.is_flying() && may_fly;
     }
 }

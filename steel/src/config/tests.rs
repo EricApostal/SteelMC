@@ -70,6 +70,10 @@ fn packaged_config_matches_the_runtime_config_defaults() {
         use_favicon,
         favicon,
         enforce_secure_chat,
+        white_list,
+        enforce_whitelist,
+        op_permission_level,
+        function_permission_level,
         chat_spam_threshold_seconds,
         command_spam_threshold_seconds,
         compression,
@@ -97,6 +101,13 @@ fn packaged_config_matches_the_runtime_config_defaults() {
     assert_eq!(use_favicon, defaults.use_favicon);
     assert_eq!(favicon, defaults.favicon);
     assert_eq!(enforce_secure_chat, defaults.enforce_secure_chat);
+    assert_eq!(white_list, defaults.white_list);
+    assert_eq!(enforce_whitelist, defaults.enforce_whitelist);
+    assert_eq!(op_permission_level, defaults.op_permission_level);
+    assert_eq!(
+        function_permission_level,
+        defaults.function_permission_level
+    );
     assert_eq!(
         chat_spam_threshold_seconds,
         defaults.chat_spam_threshold_seconds

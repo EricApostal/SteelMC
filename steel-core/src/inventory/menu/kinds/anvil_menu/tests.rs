@@ -139,6 +139,10 @@ fn sacrifice_enchantments_conflict_with_earlier_merges() {
 fn rename_only_result_preserves_unused_second_input() {
     let (_world, player, _pos, mut menu) = test_anvil("anvil_menu_rename_only");
     player.restore_game_modes(GameType::Creative, None);
+    player
+        .abilities
+        .lock()
+        .update_for_game_mode(GameType::Creative);
     let Some(kind) = menu.kind().downcast_ref::<AnvilKind>() else {
         panic!("anvil builder should create an anvil menu");
     };
@@ -298,6 +302,10 @@ fn partial_result_overflow_is_discarded() {
     let (world_fixture, player, _pos, mut menu) = test_anvil("anvil_menu_partial_result_overflow");
     let world = &world_fixture.world;
     player.restore_game_modes(GameType::Creative, None);
+    player
+        .abilities
+        .lock()
+        .update_for_game_mode(GameType::Creative);
     let Some(kind) = menu.kind().downcast_ref::<AnvilKind>() else {
         panic!("anvil builder should create an anvil menu");
     };

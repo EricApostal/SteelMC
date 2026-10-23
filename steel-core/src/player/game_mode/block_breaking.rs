@@ -224,8 +224,9 @@ impl BlockBreakingManager {
                     return;
                 }
 
-                // Creative mode: instant break
-                if player.game_mode() == GameType::Creative {
+                // Creative instant break is driven by the instabuild ability in
+                // vanilla `ServerPlayerGameMode.handleBlockBreakAction`.
+                if player.get_abilities().instabuild {
                     self.destroy_and_ack(player, world, pos);
                     return;
                 }
@@ -444,10 +445,12 @@ impl BlockBreakingManager {
                 }
             }
 
-            // Handle drops (skip for creative/spectator)
+            // Vanilla `ServerPlayerGameMode.destroyBlock` skips loot when
+            // `preventsBlockDrops()` (instabuild) is set; spectators never reach
+            // this path because `block_action_restricted` rejects the break.
             let game_mode = player.game_mode();
             if game_mode != GameType::Spectator
-                && game_mode != GameType::Creative
+                && !player.prevents_block_drops()
                 && has_correct_tool
             {
                 player.award_stat(&vanilla_stat_types::BLOCK_MINED, state.get_block());
@@ -524,8 +527,9 @@ fn get_destroy_progress(player: &Player, block_state: BlockStateId) -> f32 {
 
     let destroy_time = block.config.destroy_time;
 
-    // Instant break for creative
-    if player.game_mode() == GameType::Creative {
+    // Instant break follows the instabuild ability, matching the creative-destroy
+    // branch of vanilla `ServerPlayerGameMode.handleBlockBreakAction`.
+    if player.get_abilities().instabuild {
         return 1.0;
     }
 

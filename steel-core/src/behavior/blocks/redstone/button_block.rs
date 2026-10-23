@@ -274,6 +274,9 @@ impl BlockBehavior for ButtonBlock {
             MIN_REDSTONE_SIGNAL
         }
     }
+
+    // Server-side explosion press awaits a Steel explosion-block pipeline
+    // (vanilla `onExplosionHit`); client-local particles are omitted.
 }
 
 #[cfg(test)]

@@ -152,8 +152,8 @@ impl BlockBehavior for LeverBlock {
         }
     }
 
-    // Client-local interaction/ambient dust particles are omitted. Explosion
-    // toggling awaits Steel's shared block-explosion callback foundation.
+    // Server-side explosion toggling awaits a Steel explosion-block pipeline
+    // (vanilla `onExplosionHit`); client-local dust particles are omitted.
 }
 
 #[cfg(test)]

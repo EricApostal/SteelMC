@@ -92,6 +92,7 @@ impl BlockBehavior for RepeaterBlock {
             return REGISTRY.blocks.get_default_state_id(&vanilla_blocks::AIR);
         }
 
+        // Server-only port: Vanilla's `!level.isClientSide()` guard has no counterpart here.
         let facing = state.get_value(HORIZONTAL_FACING);
         if direction.get_axis() == facing.get_axis() {
             state

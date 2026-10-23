@@ -1,7 +1,38 @@
-use super::{
-    Arc, BlockPos, BlockStateExt, ChunkGenerator, ChunkPos, Direction, HeightmapType, SectionPos,
-    World, is_offset_face_full, vanilla_dimension_types,
+//! Spawn-point selection for the world's global spawn, plus the natural and
+//! custom spawner subsystems.
+//!
+//! Steel splits vanilla's spawn-related code the same way vanilla does:
+//! `Level`/`ServerLevel` world-spawn search lives here, `NaturalSpawner` and
+//! the per-type placement table live in [`natural`] and [`placement`], and the
+//! per-level `CustomSpawner` implementations live in
+//! [`crate::world::levelgen`].
+
+use std::sync::Arc;
+
+use steel_registry::RegistryEntry as _;
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+use steel_registry::blocks::properties::Direction;
+use steel_registry::blocks::shapes::is_offset_face_full;
+use steel_registry::vanilla_dimension_types;
+use steel_utils::{BlockPos, ChunkPos, SectionPos};
+
+use crate::chunk::heightmap::HeightmapType;
+use crate::world::World;
+use crate::worldgen::ChunkGenerator;
+
+pub mod difficulty;
+pub mod local_mob_cap;
+pub mod natural;
+pub mod placement;
+pub mod spawn_util;
+
+pub use difficulty::{ChunkInhabitedTimes, DifficultyInstance, MOON_BRIGHTNESS_PER_PHASE};
+pub use local_mob_cap::LocalMobCapCalculator;
+pub use natural::{NaturalSpawner, PotentialCalculator, SpawnState};
+pub use placement::{
+    SpawnPlacementType, SpawnPlacements, SpawnPlacementsData, is_valid_empty_spawn_block,
 };
+pub use spawn_util::{SpawnStrategy, try_spawn_mob};
 
 const fn chunk_min_block_x(pos: ChunkPos) -> i32 {
     pos.0.x << 4

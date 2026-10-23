@@ -235,3 +235,151 @@ pub use world_border::{
     CInitializeBorder, CSetBorderCenter, CSetBorderLerpSize, CSetBorderSize,
     CSetBorderWarningDelay, CSetBorderWarningDistance,
 };
+
+// §8 parity packets.
+mod c_add_transient_block;
+mod c_boss_event;
+mod c_chunks_biomes;
+mod c_custom_chat_completions;
+mod c_debug_block_value;
+mod c_debug_chunk_value;
+mod c_debug_entity_value;
+mod c_debug_event;
+mod c_debug_sample;
+mod c_delete_chat;
+mod c_explode;
+mod c_game_rule_values;
+mod c_game_test_highlight_pos;
+mod c_low_disk_space_warning;
+mod c_map_item_data;
+mod c_mount_screen_open;
+mod c_move_minecart_along_track;
+mod c_open_book;
+mod c_place_ghost_recipe;
+mod c_player_combat_end;
+mod c_player_combat_enter;
+mod c_player_rotation;
+mod c_projectile_power;
+mod c_recipe_book_add;
+mod c_recipe_book_remove;
+mod c_recipe_book_settings;
+mod c_reset_score;
+mod c_server_data;
+mod c_set_display_objective;
+mod c_set_objective;
+mod c_set_player_team;
+mod c_set_score;
+mod c_set_simulation_distance;
+mod c_sound_entity;
+mod c_start_configuration;
+mod c_tag_query;
+mod c_test_instance_block_status;
+mod c_update_recipes;
+mod c_waypoint;
+mod recipe_display;
+mod s_block_entity_tag_query;
+mod s_bundle_item_selected;
+mod s_configuration_acknowledged;
+mod s_debug_subscription_request;
+mod s_edit_book;
+mod s_entity_tag_query;
+mod s_jigsaw_generate;
+mod s_lock_difficulty;
+mod s_paddle_boat;
+mod s_pick_item_from_entity;
+mod s_place_recipe;
+mod s_recipe_book_change_settings;
+mod s_recipe_book_seen_recipe;
+mod s_set_command_block;
+mod s_set_command_minecart;
+mod s_set_game_rule;
+mod s_set_jigsaw_block;
+mod s_set_structure_block;
+mod s_set_test_block;
+mod s_teleport_to_entity;
+mod s_test_instance_block_action;
+
+pub use c_add_transient_block::CAddTransientBlock;
+pub use c_boss_event::{BossBarColor, BossBarOverlay, BossEventOperation, CBossEvent};
+pub use c_chunks_biomes::{CChunksBiomes, ChunkBiomeData, TWO_MEGABYTES};
+pub use c_custom_chat_completions::{CCustomChatCompletions, CustomChatCompletionsAction};
+pub use c_debug_block_value::{CDebugBlockValue, DebugSubscriptionUpdate};
+pub use c_debug_chunk_value::CDebugChunkValue;
+pub use c_debug_entity_value::CDebugEntityValue;
+pub use c_debug_event::{CDebugEvent, DebugSubscriptionEvent};
+pub use c_debug_sample::{CDebugSample, RemoteDebugSampleType};
+pub use c_delete_chat::CDeleteChat;
+pub use c_explode::{CExplode, ExplosionBlockParticle};
+pub use c_game_rule_values::CGameRuleValues;
+pub use c_game_test_highlight_pos::CGameTestHighlightPos;
+pub use c_low_disk_space_warning::CLowDiskSpaceWarning;
+pub use c_map_item_data::{CMapItemData, MapDecoration, MapPatch};
+pub use c_mount_screen_open::CMountScreenOpen;
+pub use c_move_minecart_along_track::{CMoveMinecartAlongTrack, MinecartStep};
+pub use c_open_book::COpenBook;
+pub use c_place_ghost_recipe::CPlaceGhostRecipe;
+pub use c_player_combat_end::CPlayerCombatEnd;
+pub use c_player_combat_enter::CPlayerCombatEnter;
+pub use c_player_rotation::CPlayerRotation;
+pub use c_projectile_power::CProjectilePower;
+pub use c_recipe_book_add::{CRecipeBookAdd, RecipeBookAddEntry};
+pub use c_recipe_book_remove::CRecipeBookRemove;
+pub use c_recipe_book_settings::{
+    CRecipeBookSettings, RecipeBookSettings, RecipeBookType, RecipeBookTypeSettings,
+};
+pub use c_reset_score::CResetScore;
+pub use c_server_data::CServerData;
+pub use c_set_display_objective::{CSetDisplayObjective, ScoreboardDisplaySlot};
+pub use c_set_objective::{CSetObjective, NumberFormat, ObjectiveMethod, ObjectiveRenderType};
+pub use c_set_player_team::{
+    CSetPlayerTeam, CollisionRule, NameTagVisibility, TeamAction, TeamColor, TeamOptionFlags,
+    TeamParameters,
+};
+pub use c_set_score::CSetScore;
+pub use c_set_simulation_distance::CSetSimulationDistance;
+pub use c_sound_entity::CSoundEntity;
+pub use c_start_configuration::CStartConfiguration;
+pub use c_tag_query::CTagQuery;
+pub use c_test_instance_block_status::CTestInstanceBlockStatus;
+pub use c_update_recipes::{CUpdateRecipes, RecipePropertySetEntry, SelectableStonecutterRecipe};
+pub use c_waypoint::{
+    CWaypoint, TrackedWaypoint, TrackedWaypointData, TrackedWaypointKind, WaypointIcon,
+    WaypointIdentifier, WaypointOperation,
+};
+pub use recipe_display::{
+    ComponentTypeRef, ItemHolder, ItemHolderSet, RecipeDisplay, RecipeDisplayEntry,
+    RecipeDisplayId, SlotDisplay, TrimPatternHolder,
+};
+pub use s_block_entity_tag_query::SBlockEntityTagQuery;
+pub use s_bundle_item_selected::SBundleItemSelected;
+pub use s_configuration_acknowledged::SConfigurationAcknowledged;
+pub use s_debug_subscription_request::{MAX_DEBUG_SUBSCRIPTIONS, SDebugSubscriptionRequest};
+pub use s_edit_book::{
+    MAX_BOOK_PAGE_COUNT, MAX_BOOK_PAGE_LENGTH, MAX_BOOK_TITLE_LENGTH, SEditBook,
+};
+pub use s_entity_tag_query::SEntityTagQuery;
+pub use s_jigsaw_generate::SJigsawGenerate;
+pub use s_lock_difficulty::SLockDifficulty;
+pub use s_paddle_boat::SPaddleBoat;
+pub use s_pick_item_from_entity::SPickItemFromEntity;
+pub use s_place_recipe::SPlaceRecipe;
+pub use s_recipe_book_change_settings::SRecipeBookChangeSettings;
+pub use s_recipe_book_seen_recipe::SRecipeBookSeenRecipe;
+pub use s_set_command_block::{
+    CommandBlockMode, MAX_COMMAND_BLOCK_COMMAND_LENGTH, SSetCommandBlock,
+};
+pub use s_set_command_minecart::{MAX_COMMAND_MINECART_COMMAND_LENGTH, SSetCommandMinecart};
+pub use s_set_game_rule::{
+    MAX_GAME_RULE_ENTRIES, MAX_GAME_RULE_VALUE_LENGTH, SSetGameRule, SSetGameRuleEntry,
+};
+pub use s_set_jigsaw_block::{MAX_JIGSAW_STRING_LENGTH, SSetJigsawBlock};
+pub use s_set_structure_block::{
+    MAX_STRUCTURE_DATA_LENGTH, MAX_STRUCTURE_NAME_LENGTH, MAX_STRUCTURE_OFFSET, MAX_STRUCTURE_SIZE,
+    Mirror, SSetStructureBlock, StructureBlockUpdateType,
+};
+pub use s_set_test_block::{MAX_TEST_MESSAGE_LENGTH, SSetTestBlock};
+pub use s_teleport_to_entity::STeleportToEntity;
+pub use s_test_instance_block_action::{
+    STestInstanceBlockAction, TestInstanceBlockAction, TestInstanceBlockData,
+    TestInstanceBlockStatus,
+};

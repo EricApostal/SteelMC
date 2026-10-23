@@ -22,6 +22,7 @@ pub struct MoveToBlockGoal {
     move_to_target: MoveToTarget,
     speed_modifier: f64,
     next_start_tick: i32,
+    next_start_tick_fn: Box<dyn Fn(&dyn PathfinderMob) -> i32 + Send + Sync>,
     try_ticks: i32,
     max_stay_ticks: i32,
     reached_target: bool,
@@ -60,6 +61,7 @@ impl MoveToBlockGoal {
             move_to_target: Box::new(|pos| pos.above()),
             speed_modifier,
             next_start_tick: 0,
+            next_start_tick_fn: Box::new(Self::default_next_start_tick),
             try_ticks: 0,
             max_stay_ticks: 0,
             reached_target: false,
@@ -101,6 +103,38 @@ impl MoveToBlockGoal {
         self
     }
 
+    /// Vanilla `MoveToBlockGoal.nextStartTick` field, for subclasses that own the countdown
+    /// (`RemoveBlockGoal`).
+    #[must_use]
+    pub(crate) const fn next_start_tick(&self) -> i32 {
+        self.next_start_tick
+    }
+
+    /// Overrides vanilla's `MoveToBlockGoal.nextStartTick(mob)` recomputation, as subclasses
+    /// such as `CatLieOnBlockGoal` do.
+    #[must_use]
+    pub(crate) fn with_next_start_tick(
+        mut self,
+        next_start_tick: impl Fn(&dyn PathfinderMob) -> i32 + Send + Sync + 'static,
+    ) -> Self {
+        self.next_start_tick_fn = Box::new(next_start_tick);
+        self
+    }
+
+    /// Sets vanilla `MoveToBlockGoal.nextStartTick`.
+    pub(crate) const fn set_next_start_tick(&mut self, next_start_tick: i32) {
+        self.next_start_tick = next_start_tick;
+    }
+
+    /// Vanilla `MoveToBlockGoal.findNearestBlock`, for subclasses that drive the search.
+    pub(crate) fn find_nearest_block_public(
+        &mut self,
+        mob: &dyn PathfinderMob,
+        level: &dyn LevelReader,
+    ) -> bool {
+        self.find_nearest_block(mob, level)
+    }
+
     #[must_use]
     pub(crate) const fn block_pos(&self) -> BlockPos {
         self.block_pos
@@ -111,7 +145,8 @@ impl MoveToBlockGoal {
         self.reached_target
     }
 
-    fn next_start_tick(_mob: &dyn PathfinderMob) -> i32 {
+    /// Vanilla `MoveToBlockGoal.nextStartTick(mob)` default.
+    pub(crate) fn default_next_start_tick(_mob: &dyn PathfinderMob) -> i32 {
         reduced_tick_delay(INTERVAL_TICKS + rand::random_range(0..200))
     }
 
@@ -161,7 +196,7 @@ impl Goal for MoveToBlockGoal {
             return false;
         }
 
-        self.next_start_tick = Self::next_start_tick(mob);
+        self.next_start_tick = (self.next_start_tick_fn)(mob);
         let Some(world) = mob.level() else {
             return false;
         };

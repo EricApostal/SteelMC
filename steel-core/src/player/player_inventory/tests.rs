@@ -1927,6 +1927,10 @@ fn creative_crafting_grid_updates_the_result_slot() {
     init_vanilla_registry();
     let player = test_player(Arc::clone(test_world()));
     assert!(player.change_game_mode_state(GameType::Creative));
+    player
+        .abilities
+        .lock()
+        .update_for_game_mode(GameType::Creative);
     let crafting = player.inventory_crafting_handler();
 
     player.handle_set_creative_mode_slot(SSetCreativeModeSlot {

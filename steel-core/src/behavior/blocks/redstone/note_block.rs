@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use glam::DVec3;
 use steel_macros::block_behavior;
 use steel_protocol::packets::game::SoundSource;
 use steel_registry::blocks::BlockRef;
@@ -9,15 +10,16 @@ use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{
     BlockStateProperties, BoolProperty, Direction, EnumProperty, IntProperty, NoteBlockInstrument,
 };
-use steel_registry::sound_event::SoundEventRef;
+use steel_registry::sound_event::{SoundEventHolder, SoundEventRef};
 use steel_registry::vanilla_item_tags::ItemTag;
 use steel_registry::{sound_events, vanilla_custom_stats, vanilla_game_events};
 use steel_utils::types::{InteractionHand, UpdateFlags};
-use steel_utils::{BlockPos, BlockStateId};
+use steel_utils::{BlockPos, BlockStateId, Downcast as _};
 
 use crate::behavior::{
     BlockBehavior, BlockHitResult, BlockPlaceContext, InteractionResult, InventoryAccess,
 };
+use crate::block_entity::entities::SkullBlockEntity;
 use crate::entity::Entity;
 use crate::player::Player;
 use crate::world::game_event::GameEventContext;
@@ -230,9 +232,26 @@ impl BlockBehavior for NoteBlock {
         _param_b: i32,
     ) -> bool {
         let instrument = state.get_value(NOTEBLOCK_INSTRUMENT);
-        let Some(sound) = Self::sound_event(instrument) else {
-            // Custom player-head sounds require the skull block entity's note-block sound.
-            return false;
+        let holder = if instrument.has_custom_sound() {
+            // Custom player-head instruments play the skull's stored note-block sound.
+            let Some(skull) = world.get_block_entity(pos.above()) else {
+                return false;
+            };
+            let Some(sound_id) = skull
+                .downcast_ref::<SkullBlockEntity>()
+                .and_then(SkullBlockEntity::get_note_block_sound)
+            else {
+                return false;
+            };
+            SoundEventHolder::Direct {
+                sound_id,
+                fixed_range: None,
+            }
+        } else {
+            let Some(sound) = Self::sound_event(instrument) else {
+                return false;
+            };
+            SoundEventHolder::Registry(sound)
         };
         let pitch = if instrument.is_tunable() {
             Self::pitch_from_note(state.get_value(NOTE))
@@ -240,7 +259,18 @@ impl BlockBehavior for NoteBlock {
             1.0
         };
 
-        world.play_sound(sound, SoundSource::Records, pos, NOTE_VOLUME, pitch, None);
+        world.play_sound_holder_at(
+            &holder,
+            SoundSource::Records,
+            DVec3::new(
+                f64::from(pos.x()) + 0.5,
+                f64::from(pos.y()) + 0.5,
+                f64::from(pos.z()) + 0.5,
+            ),
+            NOTE_VOLUME,
+            pitch,
+            None,
+        );
         // The block-event packet makes the client create Vanilla's local note particle.
         true
     }

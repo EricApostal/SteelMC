@@ -32,6 +32,8 @@ use crate::{
             Weapon,
         },
     },
+    enchantment::EnchantmentRef,
+    enchantment::table::EnchantmentRandom as _,
     enchantment_effect::EnchantmentEffectComponent,
     equipment::EquipmentSlot,
     item_stack_template::ItemStackTemplate,
@@ -703,33 +705,74 @@ impl ItemStack {
         // self.set_component(DAMAGE, damage_value);
     }
 
-    /// Enchants this item randomly with enchantments from the given options.
-    pub const fn enchant_randomly<R: rand::Rng>(
+    /// Vanilla `EnchantRandomlyFunction.run` / `enchantItem`:
+    /// picks a uniform random enchantment from `options` (books ignore the
+    /// `only_compatible` filter), rolls a level in
+    /// `[getMinLevel(), getMaxLevel()]` and applies it with `ItemStack.enchant`.
+    pub fn enchant_randomly<R: rand::Rng>(
         &mut self,
-        _options: &crate::loot_table::EnchantmentOptions,
-        _rng: &mut R,
+        options: &crate::loot_table::EnchantmentOptions,
+        only_compatible: bool,
+        include_additional_cost_component: bool,
+        rng: &mut R,
     ) {
-        // TODO: Implement when enchantment registry and system are ready
-        // 1. Get list of valid enchantments from options (tag or list)
-        // 2. Filter to enchantments that can apply to this item
-        // 3. Pick one randomly
-        // 4. Pick a random level for that enchantment
-        // 5. Add to ENCHANTMENTS component
+        let mut candidates: Vec<EnchantmentRef> =
+            crate::enchantment::table::enchantments_in_options(options);
+        if !self.is(&crate::vanilla_items::BOOK) && only_compatible {
+            candidates.retain(|enchantment| enchantment.can_enchant_stack(self));
+        }
+
+        if candidates.is_empty() {
+            // Vanilla `EnchantRandomlyFunction` logs instead of enchanting here.
+            return;
+        }
+
+        let mut random = crate::enchantment::table::RandRngAdapter(rng);
+        let index = random.next_int(candidates.len() as i32) as usize;
+        let enchantment = candidates[index];
+        let level = crate::enchantment::table::random_enchantment_level(&mut random, enchantment);
+
+        if self.is(&crate::vanilla_items::BOOK) {
+            self.set_item(&crate::vanilla_items::ENCHANTED_BOOK.key);
+        }
+        self.upgrade_enchantment(enchantment.key.clone(), level as u32);
+
+        if include_additional_cost_component {
+            crate::enchantment::table::apply_additional_trade_cost(self, level, &mut random);
+        }
     }
 
-    /// Enchants this item as if using an enchanting table at the given level.
-    pub const fn enchant_with_levels<R: rand::Rng>(
+    /// Vanilla `EnchantWithLevelsFunction.run` /
+    /// `EnchantmentHelper.enchantItem(random, itemStack, levels, options)`:
+    /// applies `selectEnchantment` results (empty when the item is not
+    /// enchantable) and, when requested, the additional-cost component
+    /// (`include_additional_cost_component`).
+    ///
+    /// **Deviation from vanilla:** Steel's `LootContext` does not model
+    /// `LootContextParams.ADDITIONAL_COST_COMPONENT_ALLOWED`, and `NumberProvider`
+    /// trade data always allows the modified villager cost when the loot entry
+    /// requests the component, so the write happens unconditionally here.
+    pub fn enchant_with_levels<R: rand::Rng>(
         &mut self,
-        _level: i32,
-        _options: &crate::loot_table::EnchantmentOptions,
-        _rng: &mut R,
+        level: i32,
+        options: &crate::loot_table::EnchantmentOptions,
+        include_additional_cost_component: bool,
+        rng: &mut R,
     ) {
-        // TODO: Implement when enchantment registry and system are ready
-        // This simulates the enchanting table algorithm:
-        // 1. Calculate modified level based on item enchantability
-        // 2. Generate list of possible enchantments for that level
-        // 3. Filter by options (tag or list)
-        // 4. Apply enchantments with proper weights
+        let source = crate::enchantment::table::enchantments_in_options(options);
+        *self = crate::enchantment::table::enchant_item(
+            &mut crate::enchantment::table::RandRngAdapter(rng),
+            self.clone(),
+            level,
+            &source,
+        );
+
+        if include_additional_cost_component && !self.is_empty() && level > 0 {
+            self.set(
+                crate::data_components::vanilla_components::ADDITIONAL_TRADE_COST,
+                level,
+            );
+        }
     }
 
     /// Copies components from a source (block entity, attacker, etc.) to this item.

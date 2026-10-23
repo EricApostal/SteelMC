@@ -35,6 +35,14 @@ use_favicon = true
 favicon = "config/favicon.png"
 # Whether to enforce secure chat
 enforce_secure_chat = false
+# Whether the allowlist (whitelist.json) gates logins
+white_list = true
+# Whether allowlist changes kick players who are not allowlisted
+enforce_whitelist = false
+# Vanilla op level (0-4) granted by /op
+op_permission_level = 4
+# Vanilla op level (0-4) command functions run with
+function_permission_level = 2
 # Vanilla chat spam threshold window in seconds
 chat_spam_threshold_seconds = 10
 # Vanilla command spam threshold window in seconds

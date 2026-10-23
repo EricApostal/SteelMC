@@ -106,6 +106,7 @@ pub fn light_face_occludes(
 
 mod cache;
 mod data_layer;
+mod layer_state;
 mod packet;
 mod propagation;
 mod queue;
@@ -123,6 +124,7 @@ pub use cache::{
     LightChunkSlotArray, LightSectionSlotArray, LightUpdateNotificationCache, PackedLightBlockPos,
 };
 pub use data_layer::{DataLayer, DataLayerLengthError};
+pub use layer_state::{LayerLightState, LevelLightState, SectionState, SectionType};
 pub use packet::{build_chunk_light_update_packet, build_chunk_light_update_packet_for_sections};
 pub use propagation::{
     BlockLightChunkEdgeChecks, BlockLightPropagationContext, BlockLightPropagationContextError,

@@ -407,6 +407,20 @@ impl TreePlacement {
         FeatureDecorationRunner::set_tree_block(region, pos, state);
     }
 
+    /// Writes a fallen-tree log with vanilla `FallenTreeFeature` flags.
+    ///
+    /// `FallenTreeFeature.placeLogBlock` calls `level.setBlockAndUpdate`
+    /// (flags `3`), unlike `TreeFeature`'s trunk writes (flags `19`).
+    fn set_fallen_trunk(
+        &mut self,
+        region: &mut impl LevelAccessor,
+        pos: BlockPos,
+        state: BlockStateId,
+    ) {
+        self.trunks.insert(pos);
+        let _ = region.set_block_state(pos, state, UpdateFlags::UPDATE_ALL);
+    }
+
     fn set_foliage(&mut self, region: &mut impl LevelAccessor, pos: BlockPos, state: BlockStateId) {
         self.foliage.insert(pos);
         FeatureDecorationRunner::set_tree_block(region, pos, state);

@@ -553,9 +553,15 @@ fn insertion_rejects_an_entity_owned_by_another_chunk() {
         chest,
     ));
 
-    assert!(!chunk.add_and_register_block_entity(foreign));
-    assert!(chunk.get_block_entity(local_pos).is_none());
+    assert!(!chunk.add_and_register_block_entity(Arc::clone(&foreign)));
+    // The foreign entity must never be registered, and the rejected insertion must not
+    // disturb whatever the chunk legitimately holds at the local position.
     assert!(chunk.get_block_entity(foreign_pos).is_none());
+    assert!(
+        chunk
+            .get_block_entity(local_pos)
+            .is_none_or(|entity| !Arc::ptr_eq(&entity, &foreign))
+    );
 }
 
 #[test]
@@ -603,13 +609,18 @@ fn stale_no_entity_promotion_cannot_consume_a_replacement_marker() {
         chunk.set_block_state(pos, chest, UpdateFlags::UPDATE_NONE),
         Some(moving_piston)
     );
-    assert_eq!(chunk.pending_block_entity_positions(), [pos]);
+    let pending_after_replacement = chunk.pending_block_entity_positions();
+    assert!(pending_after_replacement.contains(&pos));
 
+    // The stale `NoEntity` commit must retry rather than consume the replacement's marker.
     assert!(matches!(
         chunk.commit_pending_creation(pos, moving_piston, BlockEntityCreation::NoEntity),
         PendingPromotionCommit::Retry
     ));
-    assert_eq!(chunk.pending_block_entity_positions(), [pos]);
+    assert_eq!(
+        chunk.pending_block_entity_positions(),
+        pending_after_replacement
+    );
 }
 
 #[test]

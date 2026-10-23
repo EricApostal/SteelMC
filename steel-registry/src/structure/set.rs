@@ -66,6 +66,21 @@ pub enum PlacementData {
         frequency: f32,
         /// Frequency reduction method name.
         frequency_reduction_method: FrequencyMethodData,
+        /// Exclusion zone: (`other_set` key, `chunk_count`). Vanilla's
+        /// `concentric_rings` extends `AbstractSpreadingStructurePlacement`, so
+        /// it accepts the same optional exclusion zone.
+        exclusion_zone: Option<ExclusionZoneData>,
+        /// Block offset from the placement chunk used by `/locate`.
+        locate_offset: IVec3,
+    },
+    /// Origin-chunk placement (`minecraft:dimension_origin`).
+    DimensionOrigin {
+        /// Unique seed modifier.
+        salt: i32,
+        /// Generation probability. Default: 1.0.
+        frequency: f32,
+        /// Frequency reduction method name.
+        frequency_reduction_method: FrequencyMethodData,
         /// Block offset from the placement chunk used by `/locate`.
         locate_offset: IVec3,
     },

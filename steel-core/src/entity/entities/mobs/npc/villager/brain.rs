@@ -222,7 +222,7 @@ mod tests {
     use super::*;
     use crate::entity::ai::brain::memory::MemoryModuleTypeRef;
     use crate::entity::entities::PigEntity;
-    use crate::test_support::fresh_test_world;
+    use crate::test_support::{advance_test_game_time_to, fresh_test_world};
 
     fn test_brain(profession: VillagerProfessionRef, is_baby: bool) -> Brain {
         init_vanilla_registry();
@@ -355,8 +355,11 @@ mod tests {
         apply_activity_transitions(&mut brain, &world.world, &body);
         assert!(brain.is_active(Activity::Panic));
 
-        // Clearing the threat lets the schedule take over again.
+        // Clearing the threat lets the schedule take over again. Vanilla refreshes
+        // the scheduled activity at most once every 20 ticks, so the clock has to
+        // move past that delay for the switch to happen.
         brain.erase_memory(&mem::NEAREST_HOSTILE);
+        advance_test_game_time_to(&world.world, world.world.game_time() + 21);
         apply_activity_transitions(&mut brain, &world.world, &body);
         assert!(!brain.is_active(Activity::Panic));
 

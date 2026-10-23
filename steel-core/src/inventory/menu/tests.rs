@@ -76,6 +76,7 @@ fn perform_partial_swap(world_name: &'static str, game_mode: GameType) -> Partia
     insert_ready_full_chunk(world, ChunkPos::new(0, 0));
     let player = TestPlayerBuilder::new(Arc::clone(world), "SwapTester", 1).build();
     player.restore_game_modes(game_mode, None);
+    player.abilities.lock().update_for_game_mode(game_mode);
     player.base().set_position_local(DVec3::new(0.5, 64.0, 0.5));
     {
         let mut inventory = player.inventory.lock();

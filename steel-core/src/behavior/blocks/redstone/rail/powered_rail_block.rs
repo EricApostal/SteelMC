@@ -50,7 +50,8 @@ impl PoweredRailBlock {
         let mut y = pos.y();
         let mut z = pos.z();
         let mut check_below = true;
-        let expected_shape = match state.get_value(RAIL_SHAPE) {
+        let current = state.get_value(RAIL_SHAPE);
+        let expected_shape = match current {
             RailShape::NorthSouth => {
                 z += if forward { 1 } else { -1 };
                 RailShape::NorthSouth
@@ -99,10 +100,13 @@ impl PoweredRailBlock {
                 }
                 RailShape::NorthSouth
             }
+            // Vanilla leaves corner shapes unchanged and continues the search;
+            // corners are unreachable here because powered/activator rails use
+            // the straight-only `shape` property.
             RailShape::SouthEast
             | RailShape::SouthWest
             | RailShape::NorthWest
-            | RailShape::NorthEast => return false,
+            | RailShape::NorthEast => current,
         };
 
         let next = BlockPos::new(x, y, z);
@@ -140,6 +144,8 @@ impl PoweredRailBlock {
                 shape,
                 RailShape::EastWest | RailShape::AscendingEast | RailShape::AscendingWest
             ),
+            // Vanilla only rejects a perpendicular straight/ascending partner;
+            // every other shape is checked for power and recursed into.
             RailShape::AscendingEast
             | RailShape::AscendingWest
             | RailShape::AscendingNorth
@@ -147,7 +153,7 @@ impl PoweredRailBlock {
             | RailShape::SouthEast
             | RailShape::SouthWest
             | RailShape::NorthWest
-            | RailShape::NorthEast => true,
+            | RailShape::NorthEast => false,
         };
         if incompatible || !state.get_value(POWERED) {
             return false;

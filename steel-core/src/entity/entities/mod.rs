@@ -4,21 +4,61 @@ pub mod mobs;
 pub mod objects;
 
 pub use mobs::ambient::BatEntity;
+pub use mobs::bosses::{
+    EnderDragonEntity, EnderDragonPartEntity, EnderDragonPartKind, EnderDragonPhase,
+    EnderDragonPhaseManager,
+};
+pub use mobs::hostile::{
+    BlazeEntity, CaveSpiderEntity, CreakingEntity, CreeperEntity, ElderGuardianEntity,
+    EndermanEntity, EndermiteEntity, GhastEntity, GuardianEntity, HoglinEntity, MagmaCubeEntity,
+    PhantomEntity, SilverfishEntity, SlimeEntity, SpiderEntity, VexEntity, WardenEntity,
+    WitchEntity, WitherBossEntity, ZoglinEntity, ZombifiedPiglinEntity, breeze::BreezeEntity,
+    shulker::ShulkerEntity,
+};
 pub use mobs::golem::IronGolemEntity;
-pub use mobs::hostile::EndermiteEntity;
-pub use mobs::illager::{PillagerEntity, VindicatorEntity};
+pub use mobs::illager::{
+    EvokerEntity, IllagerArmPose, IllagerSpell, IllusionerEntity, PillagerEntity, RaiderKeys,
+    RavagerEntity, VindicatorEntity,
+};
+pub use mobs::neutral::{
+    BeeEntity, DolphinEntity, FoxEntity, GlowSquidEntity, PandaEntity, PolarBearEntity,
+    SquidEntity, WolfEntity,
+};
 pub use mobs::npc::{VillagerEntity, WanderingTraderEntity};
 pub use mobs::passive::{
-    ChickenEntity, CowEntity, LlamaEntity, MushroomCowEntity, PigEntity, SheepEntity,
-    TraderLlamaEntity,
+    AllayEntity, ArmadilloEntity, AxolotlEntity, CamelEntity, CatEntity, ChickenEntity, CowEntity,
+    DonkeyEntity, FrogEntity, GoatEntity, HorseEntity, LlamaEntity, MuleEntity, MushroomCowEntity,
+    OcelotEntity, ParrotEntity, PigEntity, SheepEntity, SkeletonHorseEntity, SnifferEntity,
+    TadpoleEntity, TraderLlamaEntity, TurtleEntity, ZombieHorseEntity,
 };
-pub use mobs::zombie::{ZombieEntity, ZombieVillagerEntity};
-pub use objects::display_ui::{BlockDisplayEntity, ItemFrameEntity, LeashFenceKnotEntity};
-pub use objects::explosives::EndCrystalEntity;
+pub use mobs::skeleton::{
+    BoggedEntity, ParchedEntity, SkeletonEntity, StrayEntity, WitherSkeletonEntity,
+};
+pub use mobs::zombie::{DrownedEntity, HuskEntity, ZombieEntity, ZombieVillagerEntity};
+pub use objects::display_ui::{
+    ArmorStandEntity, ArmorStandPose, BillboardConstraints, BlockDisplayEntity, CushionEntity,
+    GlowItemFrameEntity, ItemDisplayContext, ItemDisplayEntity, ItemFrameEntity,
+    LeashFenceKnotEntity, MannequinEntity, NO_BRIGHTNESS_OVERRIDE, PaintingEntity,
+    TextDisplayAlign, TextDisplayEntity, TextDisplayFlags,
+};
+pub use objects::explosives::{EndCrystalEntity, PrimedTntEntity};
 pub use objects::items::{ExperienceOrbEntity, FallingBlockEntity, ItemEntity};
 pub use objects::projectiles::{
-    EnderPearlEntity, EyeOfEnderEntity, FireworkRocketEntity, FishingHookEntity, SnowballEntity,
-    ThrownEggEntity,
+    AbstractArrow, AbstractArrowBase, AbstractThrownPotion, AreaEffectCloudEntity, ArrowEntity,
+    BreezeWindChargeEntity, DragonFireballEntity, EnderPearlEntity, EvokerFangsEntity,
+    ExplosionInteraction, ExplosionSpec, EyeOfEnderEntity, FireworkRocketEntity, FishingHookEntity,
+    FishingHookState, HurtingProjectile, HurtingProjectileState, LargeFireballEntity,
+    LlamaSpitEntity, Pickup, ShulkerBulletEntity, SmallFireballEntity, SnowballEntity,
+    SpectralArrowEntity, ThrownEggEntity, ThrownExperienceBottleEntity,
+    ThrownLingeringPotionEntity, ThrownSplashPotionEntity, WindChargeEntity, WitherSkullEntity,
+    get_mob_arrow, piercing_count,
 };
-pub use objects::technical::{InteractionEntity, MarkerEntity};
-pub use objects::vehicles::ChestMinecartEntity;
+pub use objects::technical::{
+    InteractionEntity, InteractionEntityDataView, LightningBoltEntity, MarkerEntity,
+    OminousItemSpawnerEntity, PlayerAction,
+};
+pub use objects::vehicles::{
+    BoatEntity, BoatStatus, ChestBoatEntity, ChestBoatStorage, ChestMinecartEntity,
+    ChestRaftEntity, CommandBlockMinecartEntity, FurnaceMinecartEntity, HopperMinecartEntity,
+    MinecartEntity, RaftEntity, SpawnerMinecartEntity, TntMinecartEntity,
+};

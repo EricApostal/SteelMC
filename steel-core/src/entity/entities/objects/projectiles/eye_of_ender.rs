@@ -137,7 +137,15 @@ impl EyeOfEnderEntity {
     }
 
     /// Sets the displayed item stack.
+    ///
+    /// Vanilla `EyeOfEnder.setItem` falls back to a plain ender eye for an
+    /// empty stack and clamps the count to one.
     pub fn set_item(&self, item: ItemStack) {
+        let item = if item.is_empty() {
+            Self::default_item()
+        } else {
+            item.copy_with_count(1)
+        };
         self.entity_data.lock().item_stack.set(item);
     }
 
@@ -223,6 +231,10 @@ impl Entity for EyeOfEnderEntity {
     }
 
     fn tick(self: Arc<Self>) {
+        // Vanilla `EyeOfEnder.tick` starts with `super.tick()` (base tick:
+        // portal cooldown, fire/freeze state, below-world discard, …).
+        self.default_tick();
+
         let next_pos = self.position() + self.velocity();
 
         let target_pos = self.state.lock().target_pos;

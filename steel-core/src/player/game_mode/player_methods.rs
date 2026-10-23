@@ -26,15 +26,18 @@ impl Player {
         }
 
         // Update abilities based on new game mode (mirrors vanilla GameType.updatePlayerAbilities)
-        let flying_after_update = {
+        // Neoforge preserves the pre-change flying state and re-enables it;
+        // the per-tick flight check clears stale flight when it no longer applies.
+        let was_flying = self.is_flying();
+        {
             let mut abilities = self.abilities.lock();
             abilities.update_for_game_mode(gamemode);
-            abilities.flying
-        };
-        if flying_after_update
-            && gamemode != GameType::Spectator
-            && self.is_in_range_of_ground_for_flight_disable()
-        {
+            abilities.flying = was_flying || abilities.flying;
+        }
+        if gamemode != GameType::Spectator && self.is_in_range_of_ground_for_flight_disable() {
+            // Vanilla `ServerPlayerGameMode.changeGameModeForPlayer` drops flight
+            // within one block of the ground so a mode switch never strands the
+            // player hovering just above terrain.
             self.set_flying(false);
         }
         self.send_abilities();
@@ -67,7 +70,6 @@ impl Player {
             // TODO: Restart location-based enchantment effects once those effects are implemented.
         }
 
-        self.send_abilities();
         self.update_game_mode_invisibility();
         self.living_base.mark_effects_dirty();
 
@@ -191,10 +193,13 @@ impl Player {
         }
     }
 
-    /// Returns true if player has infinite materials (Creative mode).
+    /// Returns true if the player has infinite materials (Creative mode).
+    ///
+    /// Mirrors vanilla `Player.hasInfiniteMaterials`, i.e. the ability flag
+    /// rather than the game mode, so abilities restored from player data win.
     #[must_use]
     pub fn has_infinite_materials(&self) -> bool {
-        self.game_mode() == GameType::Creative
+        self.abilities.lock().instabuild
     }
 
     /// Acknowledges block changes up to the given sequence number.
@@ -301,8 +306,19 @@ impl Player {
             return;
         };
 
-        // TODO: Store the camera entity and apply world-border/cross-world
-        // setCamera semantics once those foundations exist.
+        // Vanilla requires the target to be inside the world border before
+        // checking interaction range and pickability.
+        let target_pos = target.block_position();
+        if !world.world_border_snapshot().is_within_bounds_with_margin(
+            f64::from(target_pos.x()),
+            f64::from(target_pos.z()),
+            0.0,
+        ) {
+            return;
+        }
+
+        // TODO: Store the camera entity and apply cross-world setCamera
+        // semantics once that foundation exists.
         if self.is_within_entity_interaction_range(target.bounding_box(), 3.0)
             && target.is_pickable()
         {

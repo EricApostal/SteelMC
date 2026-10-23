@@ -354,7 +354,26 @@ fn summonable_entity_argument_suggests_only_registered_factories() {
         .map(Suggestion::text)
         .collect::<Vec<_>>();
 
-    assert_eq!(suggestions, ["minecraft:pig"]);
+    // More entity types gain factories as the fleet lands them, so the
+    // expectation is derived from the live registry rather than hardcoded.
+    let Some(registry) = crate::entity::ENTITIES.get() else {
+        panic!("entity registry should be initialised");
+    };
+    let mut expected = steel_registry::REGISTRY
+        .entity_types
+        .iter()
+        .filter(|&(_, entity_type)| entity_type.summonable && registry.has_factory(entity_type))
+        .map(|(_, entity_type)| format!("minecraft:{}", entity_type.key.path))
+        .filter(|key| key.starts_with("minecraft:pi"))
+        .collect::<Vec<_>>();
+    expected.sort();
+    let mut actual = suggestions;
+    actual.sort();
+    assert!(
+        !expected.is_empty(),
+        "the fixture must cover a summonable type"
+    );
+    assert_eq!(actual, expected);
 }
 
 #[test]

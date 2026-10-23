@@ -18,7 +18,7 @@ use steel_utils::SectionPos;
 use super::leaf_distance::resolve_generated_leaf_distances;
 
 pub(crate) fn initialize(
-    _context: Arc<WorldGenContext>,
+    context: Arc<WorldGenContext>,
     _step: &ChunkStep,
     _cache: &Arc<StaticCache2D<Arc<ChunkHolder>>>,
     holder: Arc<ChunkHolder>,
@@ -28,6 +28,35 @@ pub(crate) fn initialize(
     };
 
     chunk.initialize_light_sources();
+
+    // Vanilla `ThreadedLevelLightEngine.initializeLight`: report every non-empty
+    // real section to the light engine, then enable the column with the chunk's
+    // persisted light-correct flag and drop any retained data.
+    let pos = chunk.pos();
+    let chunk_map = &context.world().chunk_map;
+    let range = chunk_light_range(&chunk);
+    for section_y in range.min_chunk_section_y()..range.max_chunk_section_y_exclusive() {
+        let Some(index) = range.chunk_section_index(section_y) else {
+            continue;
+        };
+        if chunk
+            .sections()
+            .sections
+            .get(index)
+            .is_some_and(|section| !section.read().is_empty())
+        {
+            chunk_map
+                .update_light_section_status(SectionPos::new(pos.0.x, section_y, pos.0.y), false);
+        }
+    }
+    let lighted = chunk.is_light_correct();
+    chunk_map.set_light_enabled(pos, lighted);
+    chunk_map.retain_light_data(pos, false);
+}
+
+fn chunk_light_range(chunk: &crate::chunk::Chunk) -> LightSectionRange {
+    LightSectionRange::from_world_height(chunk.min_y(), chunk.height())
+        .expect("invalid world height for light stage")
 }
 
 pub(crate) fn generate(
@@ -36,6 +65,13 @@ pub(crate) fn generate(
     cache: &Arc<StaticCache2D<Arc<ChunkHolder>>>,
     holder: Arc<ChunkHolder>,
 ) {
+    // Vanilla `ThreadedLevelLightEngine.lightChunk` clears the light-correct flag
+    // while lighting and restores it once the chunk is lit.
+    let chunk = holder
+        .try_chunk(ChunkStatus::InitializeLight)
+        .expect("Chunk not found at status InitializeLight");
+    chunk.set_light_correct(false);
+
     let (sky_updates, block_updates) = run_light_stage(
         cache,
         holder.as_ref(),
@@ -43,6 +79,7 @@ pub(crate) fn generate(
     );
     publish_light_updates(&context, LightLayer::Sky, sky_updates);
     publish_light_updates(&context, LightLayer::Block, block_updates);
+    chunk.set_light_correct(true);
 }
 
 pub(crate) fn load(
@@ -51,6 +88,11 @@ pub(crate) fn load(
     cache: &Arc<StaticCache2D<Arc<ChunkHolder>>>,
     holder: Arc<ChunkHolder>,
 ) {
+    let chunk = holder
+        .try_chunk(ChunkStatus::Light)
+        .expect("Chunk not found at status Light");
+    chunk.set_light_correct(false);
+
     let (sky_updates, block_updates) = run_loaded_light_stage(
         cache,
         holder.as_ref(),
@@ -58,6 +100,7 @@ pub(crate) fn load(
     );
     publish_light_updates(&context, LightLayer::Sky, sky_updates);
     publish_light_updates(&context, LightLayer::Block, block_updates);
+    chunk.set_light_correct(true);
 }
 
 fn run_light_stage(

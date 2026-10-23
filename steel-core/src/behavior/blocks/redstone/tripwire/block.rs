@@ -120,7 +120,8 @@ impl TripWireBlock {
         if should_be_pressed {
             world.schedule_block_tick_default(pos, self.block, RECHECK_PERIOD);
         } else if was_pressed {
-            world.schedule_block_tick_default(pos, self.block, 0);
+            // Vanilla `checkPressed` schedules the release recheck one tick later.
+            world.schedule_block_tick_default(pos, self.block, 1);
         }
     }
 }

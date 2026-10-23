@@ -98,6 +98,111 @@ fn generate_random_pos(
     generate_random_pos_with_weight(pos_supplier, |pos| mob.get_walk_target_value(pos))
 }
 
+/// Vanilla `HoverRandomPos.getPos(...)`: a land-biased direction search whose result is
+/// lifted above solid ground so the mob hovers.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the vanilla helper's parameter list"
+)]
+pub(crate) fn hover_random_pos(
+    mob: &dyn PathfinderMob,
+    horizontal_dist: i32,
+    vertical_dist: i32,
+    x_dir: f64,
+    z_dir: f64,
+    max_xz_radians_from_dir: f64,
+    hover_max_height: i32,
+    hover_min_height: i32,
+) -> Option<DVec3> {
+    let restrict = mob_restricted(mob, f64::from(horizontal_dist));
+    generate_random_pos(mob, || {
+        let direction = {
+            let mut random = LegacyRandom::from_seed(rand::random());
+            generate_random_direction_within_radians(
+                &mut random,
+                0.0,
+                f64::from(horizontal_dist),
+                vertical_dist,
+                0,
+                x_dir,
+                z_dir,
+                max_xz_radians_from_dir,
+            )
+        }?;
+        let pos =
+            land_random_pos_toward_direction(mob, f64::from(horizontal_dist), restrict, direction)?;
+        let above_solid = rand::random_range(hover_min_height..=hover_max_height);
+        move_up_to_above_solid(mob, pos, above_solid)
+    })
+}
+
+/// Vanilla `AirAndWaterRandomPos.getPos(...)`: a land-biased direction search lifted out of
+/// solid blocks, rejecting positions with a pathfinding malus.
+pub(crate) fn air_and_water_random_pos(
+    mob: &dyn PathfinderMob,
+    horizontal_dist: i32,
+    vertical_dist: i32,
+    flying_height: i32,
+    x_dir: f64,
+    z_dir: f64,
+    max_xz_radians_from_dir: f64,
+) -> Option<DVec3> {
+    let restrict = mob_restricted(mob, f64::from(horizontal_dist));
+    generate_random_pos(mob, || {
+        let direction = {
+            let mut random = LegacyRandom::from_seed(rand::random());
+            generate_random_direction_within_radians(
+                &mut random,
+                0.0,
+                f64::from(horizontal_dist),
+                vertical_dist,
+                flying_height,
+                x_dir,
+                z_dir,
+                max_xz_radians_from_dir,
+            )
+        }?;
+        let pos = generate_random_pos_toward_direction(mob, f64::from(horizontal_dist), direction);
+        if is_outside_limits(mob, pos) || is_restricted(restrict, mob, pos) {
+            return None;
+        }
+        let pos = move_up_out_of_solid(mob, pos)?;
+        if has_malus(mob, pos) {
+            return None;
+        }
+        Some(pos)
+    })
+}
+
+/// Vanilla `RandomPos.moveUpToAboveSolid`.
+fn move_up_to_above_solid(
+    mob: &dyn PathfinderMob,
+    pos: BlockPos,
+    above_solid: i32,
+) -> Option<BlockPos> {
+    if !is_solid(mob, pos) {
+        return Some(pos);
+    }
+
+    let world = mob.level()?;
+    let mut pos = pos.above();
+    while pos.y() <= world.get_max_y() && is_solid(mob, pos) {
+        pos = pos.above();
+    }
+    let first_non_solid_y = pos.y();
+    while pos.y() <= world.get_max_y() && pos.y() - first_non_solid_y < above_solid {
+        pos = pos.above();
+        if is_solid(mob, pos) {
+            pos = pos.below();
+            break;
+        }
+    }
+    if is_water(mob, pos) || has_malus(mob, pos) {
+        return None;
+    }
+    Some(pos)
+}
+
 /// Vanilla `LandRandomPos.getPos(mob, xz, y, weight)`: the same 10-attempt
 /// search as [`generate_random_pos`], scored by a caller-supplied weight.
 pub(crate) fn land_random_pos_with_weight(

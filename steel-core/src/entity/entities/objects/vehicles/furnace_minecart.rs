@@ -1,0 +1,340 @@
+//! Furnace minecart entity (`net.minecraft.world.entity.vehicle.minecart.MinecartFurnace`).
+//!
+//! Stores its burn time (`Fuel` NBT, 3600 ticks per coal/charcoal, capped at
+//! 32000) and a horizontal push vector (`PushX`/`PushZ` NBT) applied while
+//! fueled. The synced `id_fuel` flag mirrors vanilla `DATA_ID_FUEL`, driving the
+//! lit furnace display block and the smoke particles.
+//!
+//! Deliberate difference: vanilla switches to the experimental
+//! `NewMinecartBehavior` when `minecart_improvements` is enabled; Steel always
+//! uses the stable `OldMinecartBehavior` physics from [`super::minecart_base`].
+
+use std::sync::{Arc, Weak};
+
+use glam::DVec3;
+use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
+use simdnbt::owned::NbtCompound;
+use steel_macros::entity_behavior;
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+use steel_registry::blocks::properties::{BlockStateProperties, Direction};
+use steel_registry::entity_type::EntityTypeRef;
+use steel_registry::item_stack::ItemStack;
+use steel_registry::items::ItemRef;
+use steel_registry::particle_type::ParticleData;
+use steel_registry::vanilla_entity_data::{AbstractMinecartEntityData, MinecartFurnaceEntityData};
+use steel_registry::vanilla_item_tags::ItemTag;
+use steel_registry::{
+    REGISTRY, TaggedRegistryExt as _, vanilla_blocks, vanilla_items, vanilla_particle_types,
+};
+use steel_utils::axis::Axis;
+use steel_utils::block_util::FoundRectangle;
+use steel_utils::locks::SyncMutex;
+use steel_utils::types::InteractionHand;
+use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
+
+use crate::behavior::InteractionResult;
+use crate::entity::damage::DamageSource;
+use crate::entity::{Entity, EntityBase, EntityBaseLoad, EntitySyncedData};
+use crate::player::Player;
+use crate::world::{LevelReader as _, World};
+
+use super::minecart_base::{
+    self, MAX_SPEED_IN_WATER, MAX_SPEED_ON_LAND, Minecart, MinecartState, base_natural_slowdown,
+};
+
+/// Vanilla `MinecartFurnace.FUEL_TICKS_PER_ITEM`.
+const FUEL_TICKS_PER_ITEM: i32 = 3600;
+/// Vanilla `MinecartFurnace.MAX_FUEL_TICKS`.
+const MAX_FUEL_TICKS: i32 = 32000;
+/// Vanilla `MinecartFurnace.getMaxSpeed` water multiplier.
+const WATER_MAX_SPEED_MULTIPLIER: f64 = 0.75;
+/// Vanilla `MinecartFurnace.getMaxSpeed` land multiplier.
+const LAND_MAX_SPEED_MULTIPLIER: f64 = 0.5;
+/// Vanilla smoke gate: `random.nextInt(4) == 0`.
+const SMOKE_CHANCE_BOUND: u32 = 4;
+
+/// A coal-powered minecart that pushes itself and other carts.
+#[entity_behavior(class = "MinecartFurnace")]
+pub struct FurnaceMinecartEntity {
+    base: EntityBase,
+    entity_type: EntityTypeRef,
+    entity_data: SyncMutex<MinecartFurnaceEntityData>,
+    state: SyncMutex<MinecartState>,
+    furnace: SyncMutex<FurnaceState>,
+}
+
+/// Vanilla `MinecartFurnace.fuel`/`push`, which are plain fields rather than
+/// synchronized entity data.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FurnaceState {
+    /// Remaining fuel in ticks.
+    fuel: i32,
+    /// Push force while fueled, horizontal only.
+    push: DVec3,
+}
+
+impl FurnaceState {
+    const fn new() -> Self {
+        Self {
+            fuel: 0,
+            push: DVec3::ZERO,
+        }
+    }
+}
+
+// SAFETY: This key is owned by Steel and uniquely identifies `FurnaceMinecartEntity`.
+unsafe impl DowncastType for FurnaceMinecartEntity {
+    const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:entity/furnace_minecart");
+}
+
+impl FurnaceMinecartEntity {
+    /// Creates a new furnace minecart entity.
+    #[must_use]
+    pub fn new(entity_type: EntityTypeRef, id: i32, position: DVec3, world: Weak<World>) -> Self {
+        Self {
+            base: EntityBase::new(id, position, entity_type.dimensions, world),
+            entity_type,
+            entity_data: SyncMutex::new(MinecartFurnaceEntityData::new()),
+            state: SyncMutex::new(MinecartState::new()),
+            furnace: SyncMutex::new(FurnaceState::new()),
+        }
+    }
+
+    /// Creates a furnace minecart entity from saved data.
+    #[must_use]
+    pub fn from_saved(entity_type: EntityTypeRef, load: EntityBaseLoad) -> Self {
+        Self {
+            base: EntityBase::from_load(load, entity_type.dimensions),
+            entity_type,
+            entity_data: SyncMutex::new(MinecartFurnaceEntityData::new()),
+            state: SyncMutex::new(MinecartState::new()),
+            furnace: SyncMutex::new(FurnaceState::new()),
+        }
+    }
+
+    /// Remaining fuel in ticks, vanilla `fuel`.
+    #[must_use]
+    pub fn fuel(&self) -> i32 {
+        self.furnace.lock().fuel
+    }
+
+    /// Current push force, vanilla `push` (horizontal only).
+    #[must_use]
+    pub fn push_force(&self) -> DVec3 {
+        self.furnace.lock().push
+    }
+
+    /// Whether the cart is burning fuel, vanilla `hasFuel`.
+    #[must_use]
+    pub fn has_fuel(&self) -> bool {
+        *self.entity_data.lock().id_fuel.get()
+    }
+
+    /// Sets the synced fuel flag, vanilla `setHasFuel`.
+    pub fn set_has_fuel(&self, fuel: bool) {
+        self.entity_data.lock().id_fuel.set(fuel);
+    }
+
+    /// Feeds the cart, vanilla `addFuel`.
+    ///
+    /// Returns `true` when `stack` is furnace-minecart fuel and headroom remains.
+    pub fn add_fuel(&self, interacting_pos: DVec3, stack: &ItemStack) -> bool {
+        if !REGISTRY
+            .items
+            .is_in_tag(stack.item(), &ItemTag::FURNACE_MINECART_FUEL)
+        {
+            return false;
+        }
+
+        let mut state = self.furnace.lock();
+        if state.fuel + FUEL_TICKS_PER_ITEM > MAX_FUEL_TICKS {
+            return false;
+        }
+
+        state.fuel += FUEL_TICKS_PER_ITEM;
+        if state.fuel > 0 {
+            let away = self.position() - interacting_pos;
+            state.push = DVec3::new(away.x, 0.0, away.z);
+        }
+        true
+    }
+
+    /// Vanilla `MinecartFurnace.interact`: feed the cart with the held item.
+    pub fn interact_furnace(&self, player: &Player, hand: InteractionHand) -> InteractionResult {
+        let held = player.inventory.lock().get_item_in_hand(hand).clone();
+        if self.add_fuel(player.position(), &held) {
+            let has_infinite_materials = player.has_infinite_materials();
+            player
+                .inventory
+                .lock()
+                .mutate_item_in_hand(hand, |item| item.consume_one(has_infinite_materials));
+        }
+
+        InteractionResult::Success
+    }
+
+    /// Vanilla `MinecartFurnace.calculateNewPushAlong`.
+    fn push_along(&self, movement: DVec3) -> DVec3 {
+        let push = self.push_force();
+        if push.length_squared() > 1.0e-4 && movement.length_squared() > 0.001 {
+            push.project_onto_normalized(movement.normalize_or_zero()) * push.length()
+        } else {
+            push
+        }
+    }
+}
+
+impl Minecart for FurnaceMinecartEntity {
+    fn cart_state(&self) -> &SyncMutex<MinecartState> {
+        &self.state
+    }
+
+    fn with_minecart_data<R>(&self, f: impl FnOnce(&AbstractMinecartEntityData) -> R) -> R {
+        f(self.entity_data.lock().abstract_minecart())
+    }
+
+    fn with_minecart_data_mut<R>(&self, f: impl FnOnce(&mut AbstractMinecartEntityData) -> R) -> R {
+        f(self.entity_data.lock().abstract_minecart_mut())
+    }
+
+    fn default_display_block_state(&self) -> BlockStateId {
+        // Vanilla `MinecartFurnace.getDefaultDisplayBlockState`.
+        vanilla_blocks::FURNACE
+            .default_state()
+            .set_value(&BlockStateProperties::FACING, Direction::North)
+            .set_value(&BlockStateProperties::LIT, self.has_fuel())
+    }
+
+    fn drop_item(&self) -> Option<ItemRef> {
+        Some(&vanilla_items::FURNACE_MINECART)
+    }
+
+    fn max_speed(&self, _world: &World) -> f64 {
+        if self.is_in_water() {
+            MAX_SPEED_IN_WATER * WATER_MAX_SPEED_MULTIPLIER
+        } else {
+            MAX_SPEED_ON_LAND * LAND_MAX_SPEED_MULTIPLIER
+        }
+    }
+
+    fn apply_natural_slowdown(&self, movement: DVec3) -> DVec3 {
+        let mut new_movement = if self.push_force().length_squared() > 1.0e-7 {
+            let push = self.push_along(movement);
+            self.furnace.lock().push = push;
+            DVec3::new(movement.x * 0.8, 0.0, movement.z * 0.8) + push
+        } else {
+            DVec3::new(movement.x * 0.98, 0.0, movement.z * 0.98)
+        };
+
+        if self.is_in_water() {
+            new_movement *= 0.1;
+        }
+
+        base_natural_slowdown(self, new_movement)
+    }
+}
+
+impl Entity for FurnaceMinecartEntity {
+    fn base(&self) -> &EntityBase {
+        &self.base
+    }
+
+    fn entity_type(&self) -> EntityTypeRef {
+        self.entity_type
+    }
+
+    fn synced_data(&self) -> Option<&dyn EntitySyncedData> {
+        Some(&self.entity_data)
+    }
+
+    fn tick(self: Arc<Self>) {
+        Arc::clone(&self).minecart_tick();
+
+        {
+            let mut state = self.furnace.lock();
+            if state.fuel > 0 {
+                state.fuel -= 1;
+            }
+            if state.fuel <= 0 {
+                state.push = DVec3::ZERO;
+            }
+        }
+        self.set_has_fuel(self.fuel() > 0);
+
+        if self.has_fuel()
+            && rand::random_range(0..SMOKE_CHANCE_BOUND) == 0
+            && let Some(world) = self.level()
+        {
+            let position = self.position();
+            world.send_particles(
+                ParticleData::simple(&vanilla_particle_types::LARGE_SMOKE),
+                DVec3::new(position.x, position.y + 0.8, position.z),
+                1,
+                DVec3::ZERO,
+                0.0,
+            );
+        }
+    }
+
+    fn interact(
+        &self,
+        player: &Player,
+        hand: InteractionHand,
+        _location: DVec3,
+    ) -> InteractionResult {
+        self.interact_furnace(player, hand)
+    }
+
+    fn is_pickable(&self) -> bool {
+        !self.is_removed()
+    }
+
+    fn is_pushable(&self) -> bool {
+        true
+    }
+
+    fn blocks_building(&self) -> bool {
+        true
+    }
+
+    fn is_on_rails(&self) -> bool {
+        self.is_on_minecart_rails()
+    }
+
+    fn get_default_gravity(&self) -> f64 {
+        self.minecart_default_gravity()
+    }
+
+    fn get_air_drag(&self) -> f64 {
+        minecart_base::AIR_DRAG
+    }
+
+    fn dimension_changing_delay(&self) -> i32 {
+        10
+    }
+
+    fn get_relative_portal_position(&self, axis: Axis, portal_area: FoundRectangle) -> DVec3 {
+        minecart_base::minecart_relative_portal_position(self, axis, portal_area)
+    }
+
+    fn hurt(&self, world: &World, source: &DamageSource, amount: f32) -> bool {
+        self.minecart_hurt(world, source, amount)
+    }
+
+    fn save_additional(&self, nbt: &mut NbtCompound) {
+        self.save_minecart_data(nbt);
+        let state = self.furnace.lock();
+        nbt.insert("PushX", state.push.x);
+        nbt.insert("PushZ", state.push.z);
+        nbt.insert("Fuel", state.fuel as i16);
+    }
+
+    fn load_additional(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
+        self.load_minecart_data(nbt);
+        let push_x = nbt.double("PushX").unwrap_or(0.0);
+        let push_z = nbt.double("PushZ").unwrap_or(0.0);
+        let mut state = self.furnace.lock();
+        state.push = DVec3::new(push_x, 0.0, push_z);
+        state.fuel = i32::from(nbt.short("Fuel").unwrap_or(0));
+    }
+}

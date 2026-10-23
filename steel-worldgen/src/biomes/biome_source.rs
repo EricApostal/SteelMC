@@ -3,6 +3,8 @@
 //! Mirrors vanilla's `BiomeSource` hierarchy:
 //! - `MultiNoiseBiomeSource` — Overworld and Nether (climate parameter matching via `RTree`)
 //! - `TheEndBiomeSource` — The End (spatial + erosion threshold)
+//! - `FixedBiomeSource` — a single biome everywhere (superflat, single-biome worlds)
+//! - `CheckerboardColumnBiomeSource` — cycles a biome list over a coarse grid
 //!
 //! Each dimension creates a different `BiomeSourceKind` variant. The chunk generator
 //! calls `chunk_sampler()` per chunk to get a `ChunkBiomeSampler` that holds per-chunk
@@ -47,6 +49,10 @@ pub enum BiomeSourceKind {
     /// Boxed because `EndIslands` is ~2KB (simplex noise permutation table),
     /// while the other variants are pointer-sized.
     End(Box<EndBiomeSource>),
+    /// Single-biome source (`FixedBiomeSource`), used by superflat and single-biome worlds.
+    Fixed(FixedBiomeSource),
+    /// Coarse-grid biome cycling source (`CheckerboardColumnBiomeSource`).
+    Checkerboard(CheckerboardColumnBiomeSource),
 }
 
 impl BiomeSourceKind {
@@ -66,6 +72,26 @@ impl BiomeSourceKind {
     #[must_use]
     pub fn end(seed: u64) -> Self {
         Self::End(Box::new(EndBiomeSource::new(seed)))
+    }
+
+    /// Create a fixed biome source returning `biome` everywhere.
+    ///
+    /// Mirrors vanilla `FixedBiomeSource`.
+    #[must_use]
+    pub fn fixed(biome: BiomeRef) -> Self {
+        Self::Fixed(FixedBiomeSource::new(biome))
+    }
+
+    /// Create a checkerboard biome source cycling `biomes` with vanilla's default scale of 2.
+    ///
+    /// Mirrors vanilla `CheckerboardColumnBiomeSource` with the default `scale`.
+    ///
+    /// # Panics
+    /// Panics if `biomes` is empty, which vanilla's codec also rejects (a holder set
+    /// cannot be empty).
+    #[must_use]
+    pub fn checkerboard(biomes: Vec<BiomeRef>) -> Self {
+        Self::Checkerboard(CheckerboardColumnBiomeSource::new(biomes, 2))
     }
 
     /// Every biome this source can produce, preserving the source's parameter-list order.
@@ -94,6 +120,8 @@ impl BiomeSourceKind {
                 &vanilla_biomes::SMALL_END_ISLANDS,
                 &vanilla_biomes::END_BARRENS,
             ],
+            Self::Fixed(source) => vec![source.biome()],
+            Self::Checkerboard(source) => source.biomes().to_vec(),
         };
 
         distinct_biome_refs(biomes)
@@ -119,6 +147,8 @@ impl BiomeSourceKind {
             Self::Overworld(source) => source.chunk_sampler(),
             Self::Nether(source) => source.chunk_sampler(),
             Self::End(source) => source.chunk_sampler(),
+            Self::Fixed(source) => source.chunk_sampler(),
+            Self::Checkerboard(source) => source.chunk_sampler(),
         }
     }
 
@@ -133,6 +163,20 @@ impl BiomeSourceKind {
         allowed: &dyn Fn(BiomeRef) -> bool,
         rng: &mut LegacyRandom,
     ) -> Option<(i32, i32)> {
+        // Vanilla `FixedBiomeSource.findBiomeHorizontal` overrides the generic search:
+        // it returns a uniformly random block inside the search square when the biome
+        // is allowed, without sampling the source at all.
+        if let Self::Fixed(source) = self {
+            if !allowed(source.biome()) {
+                return None;
+            }
+            let span = search_radius.saturating_mul(2).saturating_add(1);
+            return Some((
+                origin_x - search_radius + rng.next_i32_bounded(span),
+                origin_z - search_radius + rng.next_i32_bounded(span),
+            ));
+        }
+
         let mut sampler = self.chunk_sampler();
         // QuartPos.fromBlock; origin_y = 0 so noise_y = 0.
         let noise_center_x = origin_x >> 2;
@@ -162,7 +206,9 @@ impl BiomeSourceKind {
     pub fn initial_spawn_search_origin(&self) -> BlockPos {
         match self {
             Self::Overworld(source) => source.climate_sampler().find_spawn_position(),
-            Self::Nether(_) | Self::End(_) => BlockPos::new(0, 0, 0),
+            Self::Nether(_) | Self::End(_) | Self::Fixed(_) | Self::Checkerboard(_) => {
+                BlockPos::new(0, 0, 0)
+            }
         }
     }
 }
@@ -195,6 +241,10 @@ pub enum ChunkBiomeSampler<'a> {
     Nether(Box<NetherChunkBiomeSampler<'a>>),
     /// End sampler (spatial distance thresholds).
     End(Box<EndChunkBiomeSampler<'a>>),
+    /// Fixed sampler (single biome).
+    Fixed(FixedChunkBiomeSampler),
+    /// Checkerboard sampler (coarse-grid biome cycling).
+    Checkerboard(CheckerboardChunkBiomeSampler<'a>),
 }
 
 impl ChunkBiomeSampler<'_> {
@@ -205,6 +255,8 @@ impl ChunkBiomeSampler<'_> {
             Self::Overworld(s) => s.sample(quart_x, quart_y, quart_z),
             Self::Nether(s) => s.sample(quart_x, quart_y, quart_z),
             Self::End(s) => s.sample(quart_x, quart_y, quart_z),
+            Self::Fixed(s) => s.sample(),
+            Self::Checkerboard(s) => s.sample(quart_x, quart_z),
         }
     }
 
@@ -213,14 +265,14 @@ impl ChunkBiomeSampler<'_> {
     /// recomputing flat (xz-only) climate noise for every quart cell.
     ///
     /// Call once per chunk, before sampling, passing the chunk's minimum block
-    /// coordinates. No-op for the End, which selects biomes spatially and has no
-    /// column cache. Samplers used for sparse, scattered lookups (e.g.
+    /// coordinates. No-op for the End, fixed, and checkerboard sources, which select
+    /// biomes without column caches. Samplers used for sparse, scattered lookups (e.g.
     /// `find_biome_horizontal`) intentionally skip this and keep lazy caching.
     pub fn init_grid(&mut self, chunk_block_x: i32, chunk_block_z: i32) {
         match self {
             Self::Overworld(s) => s.init_grid(chunk_block_x, chunk_block_z),
             Self::Nether(s) => s.init_grid(chunk_block_x, chunk_block_z),
-            Self::End(_) => {}
+            Self::End(_) | Self::Fixed(_) | Self::Checkerboard(_) => {}
         }
     }
 }
@@ -453,6 +505,121 @@ impl EndChunkBiomeSampler<'_> {
     }
 }
 
+// ── Fixed ────────────────────────────────────────────────────────────────────
+
+/// Single-biome source mirroring vanilla's `FixedBiomeSource`.
+///
+/// Every quart position returns the same biome. Used by superflat generators
+/// and single-biome world presets.
+pub struct FixedBiomeSource {
+    biome: BiomeRef,
+}
+
+impl FixedBiomeSource {
+    /// Create a fixed biome source returning `biome` at every position.
+    #[must_use]
+    pub const fn new(biome: BiomeRef) -> Self {
+        Self { biome }
+    }
+
+    /// The single biome this source returns.
+    #[must_use]
+    pub const fn biome(&self) -> BiomeRef {
+        self.biome
+    }
+
+    fn chunk_sampler(&self) -> ChunkBiomeSampler<'_> {
+        ChunkBiomeSampler::Fixed(FixedChunkBiomeSampler { biome: self.biome })
+    }
+}
+
+/// Per-chunk sampler for [`FixedBiomeSource`]. Stateless: no caches needed.
+pub struct FixedChunkBiomeSampler {
+    biome: BiomeRef,
+}
+
+impl FixedChunkBiomeSampler {
+    fn sample(&mut self) -> BiomeRef {
+        self.biome
+    }
+}
+
+// ── Checkerboard ─────────────────────────────────────────────────────────────
+
+/// Coarse-grid biome cycling source mirroring vanilla's
+/// `CheckerboardColumnBiomeSource`.
+///
+/// Selection is `biomes[floor_mod((quart_x >> bit_shift) + (quart_z >> bit_shift), len)]`
+/// with `bit_shift = scale + 2`; vanilla's default `scale` of 2 gives 16-quart
+/// (64-block) cells.
+pub struct CheckerboardColumnBiomeSource {
+    biomes: Vec<BiomeRef>,
+    bit_shift: u32,
+}
+
+impl CheckerboardColumnBiomeSource {
+    /// Create a checkerboard source over `biomes` with the given vanilla `scale`
+    /// (cell size in quarts is `1 << (scale + 2)`).
+    ///
+    /// # Panics
+    /// Panics if `biomes` is empty or `scale` exceeds 62, matching the range of
+    /// vanilla's `scale` codec (`Codec.intRange(0, 62)`).
+    #[must_use]
+    pub fn new(biomes: Vec<BiomeRef>, scale: u32) -> Self {
+        assert!(
+            !biomes.is_empty(),
+            "checkerboard biome source needs a biome"
+        );
+        assert!(
+            scale <= 62,
+            "checkerboard scale {scale} exceeds vanilla maximum 62"
+        );
+        Self {
+            biomes,
+            bit_shift: scale + 2,
+        }
+    }
+
+    /// The biome list this source cycles, in order.
+    #[must_use]
+    pub fn biomes(&self) -> &[BiomeRef] {
+        &self.biomes
+    }
+
+    /// Vanilla `scale` (`bit_shift - 2`).
+    #[must_use]
+    pub const fn scale(&self) -> u32 {
+        self.bit_shift - 2
+    }
+
+    fn sample_biome(&self, quart_x: i32, quart_z: i32) -> BiomeRef {
+        // Vanilla `>>` on ints masks the shift distance mod 32 (JLS 15.19);
+        // `wrapping_shr` reproduces that for scales whose `bit_shift` exceeds 31.
+        let shift = self.bit_shift & 31;
+        let index = quart_x
+            .wrapping_shr(shift)
+            .wrapping_add(quart_z.wrapping_shr(shift))
+            .rem_euclid(self.biomes.len() as i32) as usize;
+        self.biomes[index]
+    }
+
+    fn chunk_sampler(&self) -> ChunkBiomeSampler<'_> {
+        ChunkBiomeSampler::Checkerboard(CheckerboardChunkBiomeSampler { source: self })
+    }
+}
+
+/// Per-chunk sampler for [`CheckerboardColumnBiomeSource`]. Stateless: selection
+/// is a pure function of quart coordinates.
+pub struct CheckerboardChunkBiomeSampler<'a> {
+    source: &'a CheckerboardColumnBiomeSource,
+}
+
+impl CheckerboardChunkBiomeSampler<'_> {
+    fn sample(&mut self, quart_x: i32, quart_z: i32) -> BiomeRef {
+        self.source.sample_biome(quart_x, quart_z)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,5 +643,30 @@ mod tests {
                 &vanilla_biomes::END_BARRENS.key,
             ]
         );
+    }
+
+    #[test]
+    fn fixed_returns_single_biome_everywhere() {
+        let source = BiomeSourceKind::fixed(&vanilla_biomes::DESERT);
+        assert_eq!(source.possible_biome_refs(), vec![&*vanilla_biomes::DESERT]);
+        let mut sampler = source.chunk_sampler();
+        assert_eq!(sampler.sample(0, 0, 0), &*vanilla_biomes::DESERT);
+        assert_eq!(sampler.sample(-1234, 64, 5678), &*vanilla_biomes::DESERT);
+    }
+
+    #[test]
+    fn checkerboard_matches_java_indexing() {
+        // Two biomes, default scale 2 → bit_shift 4. Cell (qx>>4)+(qz>>4), floormod 2.
+        let source =
+            BiomeSourceKind::checkerboard(vec![&vanilla_biomes::PLAINS, &vanilla_biomes::DESERT]);
+        let mut sampler = source.chunk_sampler();
+        // (0,0): 0+0=0 → index 0.
+        assert_eq!(sampler.sample(0, 0, 0), &*vanilla_biomes::PLAINS);
+        // (16,0): 1+0=1 → index 1.
+        assert_eq!(sampler.sample(16, 0, 0), &*vanilla_biomes::DESERT);
+        // (16,16): 1+1=2 → floormod 0.
+        assert_eq!(sampler.sample(16, 0, 16), &*vanilla_biomes::PLAINS);
+        // (-1,0): -1>>4 = -1 in Java (arithmetic shift) → -1 floormod 2 = 1.
+        assert_eq!(sampler.sample(-1, 0, 0), &*vanilla_biomes::DESERT);
     }
 }

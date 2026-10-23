@@ -1,44 +1,80 @@
 //! Steel-owned built-in command declarations.
 
 pub mod advancement;
+mod attribute;
+mod ban;
+mod bossbar;
+mod chase;
 mod clear;
+mod clone;
 mod damage;
+mod data;
+mod datapack;
+mod debug;
 mod defaultgamemode;
 mod difficulty;
 mod domain;
+mod effect;
 mod enchant;
 mod execute;
 mod experience;
 mod fill;
+mod fillbiome;
 mod fly;
+mod forceload;
 pub(crate) mod gamemode;
 mod gamerule;
 mod give;
+mod help;
 mod invsee;
+mod jfr;
+mod kick;
 mod kill;
 mod list;
 mod locate;
+mod loot;
+mod me;
+mod msg;
 mod operator;
+mod particle;
+mod perf;
 mod perms;
 mod playsound;
+mod raid;
+mod random;
+mod recipe;
+mod reload;
 mod return_command;
+mod ride;
+mod rotate;
+mod save;
+mod say;
+mod scoreboard;
 mod seed;
 mod setblock;
 mod setidletimeout;
 mod setworldspawn;
 mod spawnpoint;
+mod spectate;
+mod spreadplayers;
 mod stop;
 mod stopsound;
+mod stopwatch;
 mod summon;
+mod swing;
 mod tag;
+mod team;
+mod teammsg;
 mod teleport;
 mod tellraw;
 mod tick;
 mod time;
 mod title;
 mod transfer;
+mod trigger;
 mod version;
 mod weather;
+mod whitelist;
 mod worldborder;
 
 pub(crate) use difficulty::player_can_change_difficulty;
@@ -71,46 +107,86 @@ pub(crate) fn create_registered_dispatcher(
     builder.declare_permission(perms::GROUP_ALL_PERMISSION)?;
     builder.declare_permission(perms::METADATA_PERMISSION)?;
     builder.register(advancement::registration())?;
+    builder.register(attribute::registration())?;
+    builder.register(ban::registration())?;
+    builder.register(ban::ban_ip_registration())?;
+    builder.register(ban::ban_list_registration())?;
+    builder.register(ban::pardon_registration())?;
+    builder.register(ban::pardon_ip_registration())?;
+    builder.register(bossbar::registration())?;
+    builder.register(chase::registration())?;
     builder.register(clear::registration())?;
-    builder.register(operator::deop_registration())?;
+    builder.register(clone::registration())?;
     builder.register(damage::registration())?;
+    builder.register(data::registration())?;
+    builder.register(datapack::registration())?;
+    builder.register(debug::registration())?;
     builder.register(defaultgamemode::registration())?;
     builder.register(difficulty::registration())?;
     builder.register(domain::registration())?;
+    builder.register(effect::registration())?;
     builder.register(enchant::registration())?;
     builder.register(execute::registration())?;
     builder.register(experience::registration())?;
     builder.register(fill::registration())?;
+    builder.register(fillbiome::registration())?;
     builder.register(fly::registration())?;
+    builder.register(forceload::registration())?;
     builder.register(gamemode::registration()?)?;
     builder.register(gamerule::registration())?;
     builder.register(give::registration())?;
+    builder.register(help::registration())?;
+    builder.register(invsee::registration()?)?;
+    builder.register(jfr::registration())?;
+    builder.register(kick::registration())?;
     builder.register(kill::registration())?;
     builder.register(list::registration())?;
     builder.register(locate::registration())?;
+    builder.register(loot::registration())?;
+    builder.register(me::registration())?;
+    builder.register(msg::registration())?;
+    builder.register(operator::deop_registration())?;
     builder.register(operator::op_registration())?;
+    builder.register(particle::registration())?;
+    builder.register(perf::registration())?;
     builder.register(perms::registration())?;
     builder.register(playsound::registration())?;
+    builder.register(raid::registration())?;
+    builder.register(random::registration())?;
+    builder.register(recipe::registration())?;
+    builder.register(reload::registration())?;
     builder.register(return_command::registration())?;
+    builder.register(ride::registration())?;
+    builder.register(rotate::registration())?;
+    builder.register(save::registration())?;
+    builder.register(say::registration())?;
+    builder.register(scoreboard::registration())?;
     builder.register(seed::registration())?;
     builder.register(setblock::registration())?;
-    builder.register(spawnpoint::registration())?;
     builder.register(setidletimeout::registration())?;
     builder.register(setworldspawn::registration())?;
+    builder.register(spawnpoint::registration())?;
+    builder.register(spectate::registration())?;
+    builder.register(spreadplayers::registration())?;
     builder.register(stop::registration())?;
     builder.register(stopsound::registration())?;
+    builder.register(stopwatch::registration())?;
     builder.register(summon::registration())?;
+    builder.register(swing::registration())?;
     builder.register(tag::registration())?;
+    builder.register(team::registration())?;
+    builder.register(teammsg::registration())?;
     builder.register(teleport::registration())?;
     builder.register(tellraw::registration())?;
     builder.register(tick::registration())?;
     builder.register(time::registration())?;
     builder.register(title::registration())?;
+    builder.register(transfer::registration())?;
+    builder.register(trigger::registration())?;
     builder.register(version::registration())?;
     builder.register(weather::registration())?;
+    builder.register(whitelist::registration())?;
     builder.register(worldborder::registration())?;
-    builder.register(invsee::registration()?)?;
-    builder.register(transfer::registration())?;
     builder.extend(extension_commands.into_inner())?;
     builder.build_with_permissions()
 }
@@ -155,48 +231,91 @@ mod tests {
             names,
             [
                 "advancement",
+                "attribute",
+                "ban",
+                "ban-ip",
+                "banlist",
+                "pardon",
+                "pardon-ip",
+                "bossbar",
+                "chase",
                 "clear",
-                "deop",
+                "clone",
                 "damage",
+                "data",
+                "datapack",
+                "debug",
                 "defaultgamemode",
                 "difficulty",
                 "domain",
+                "effect",
                 "enchant",
                 "execute",
                 "experience",
                 "xp",
                 "fill",
+                "fillbiome",
                 "fly",
+                "forceload",
                 "gamemode",
                 "gamerule",
                 "give",
+                "help",
+                "invsee",
+                "jfr",
+                "kick",
                 "kill",
                 "list",
                 "locate",
+                "loot",
+                "me",
+                "msg",
+                "tell",
+                "w",
+                "deop",
                 "op",
+                "particle",
+                "perf",
                 "perms",
                 "playsound",
+                "raid",
+                "random",
+                "recipe",
+                "reload",
                 "return",
+                "ride",
+                "rotate",
+                "save-all",
+                "say",
+                "scoreboard",
                 "seed",
                 "setblock",
-                "spawnpoint",
                 "setidletimeout",
                 "setworldspawn",
+                "spawnpoint",
+                "spectate",
+                "spreadplayers",
                 "stop",
                 "stopsound",
+                "stopwatch",
                 "summon",
+                "swing",
                 "tag",
+                "team",
+                "teammsg",
+                "tm",
                 "teleport",
                 "tp",
                 "tellraw",
                 "tick",
                 "time",
                 "title",
+                "transfer",
+                "trigger",
                 "version",
                 "weather",
+                "whitelist",
                 "worldborder",
-                "invsee",
-                "transfer"
             ]
         );
 

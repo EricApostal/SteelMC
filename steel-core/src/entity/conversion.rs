@@ -3,6 +3,7 @@ use std::sync::Arc;
 use steel_registry::entity_type::EntityTypeRef;
 use steel_utils::types::Difficulty;
 
+use crate::entity::ai::brain::memory::{MemoryStatus, module_type as mem};
 use crate::entity::registry::ENTITIES;
 use crate::entity::{
     Entity, Mob, RemovalReason, SharedEntity, next_entity_id, start_riding_entities,
@@ -213,7 +214,16 @@ fn convert_common(from: &dyn Mob, to: &dyn Mob, params: ConversionParams) {
         converted_ageable.set_forced_age_timer(old_ageable.forced_age_timer());
     }
 
-    // The vanilla `ANGRY_AT` memory copy awaits the Brain foundation.
+    // Vanilla `ConversionType.convertCommon`: copies the `ANGRY_AT` UUID when
+    // the source brain has the memory registered and holding a value.
+    if let (Some(from_brain), Some(to_brain)) = (from.brain(), to.brain()) {
+        let from_brain = from_brain.lock();
+        if from_brain.check_memory(&mem::ANGRY_AT, MemoryStatus::Registered)
+            && let Some(angry_at) = from_brain.get_memory(&mem::ANGRY_AT)
+        {
+            to_brain.lock().set_memory(&mem::ANGRY_AT, Some(angry_at));
+        }
+    }
 
     if params.preserve_can_pick_up_loot {
         to.set_can_pick_up_loot(from.can_pick_up_loot());
@@ -516,34 +526,7 @@ mod tests {
     }
 
     #[test]
-    fn convert_to_fails_without_a_registered_factory() {
-        init_vanilla_registry();
-        init_entities();
-        let world_fixture = conversion_world();
-        let world = &world_fixture.world;
-        let pig = add_pig(world);
-
-        let converted = pig
-            .downcast_ref::<PigEntity>()
-            .expect("pig is concrete")
-            .convert_to(
-                &vanilla_entities::ZOMBIE,
-                ConversionParams::single(true, true),
-                None,
-            );
-
-        assert!(
-            converted.is_none(),
-            "no zombie factory is registered, so conversion cannot happen"
-        );
-        assert!(
-            !pig.is_removed(),
-            "failed conversions leave the source untouched"
-        );
-    }
-
-    #[test]
-    fn refused_conversion_keeps_the_source_passenger_mounted() {
+    fn conversion_moves_the_root_passenger_to_the_converted_mob() {
         init_vanilla_registry();
         init_entities();
         let world_fixture = conversion_world();
@@ -562,22 +545,19 @@ mod tests {
                 &vanilla_entities::ZOMBIE,
                 ConversionParams::single(true, true),
                 None,
-            );
+            )
+            .expect("a registered factory converts the source");
 
-        assert!(converted.is_none());
-        assert!(
-            !source.is_removed(),
-            "refused conversions leave the source alive"
-        );
+        assert!(source.is_removed(), "single conversion discards the source");
         assert_eq!(
-            source.first_passenger().map(|entity| entity.id()),
-            Some(passenger.id()),
-            "a refused conversion must not dismount the source's passenger"
+            passenger.vehicle().map(|entity| entity.id()),
+            Some(converted.id()),
+            "vanilla `ConversionType.SINGLE` re-mounts the root passenger on the new mob"
         );
     }
 
     #[test]
-    fn refused_conversion_keeps_the_source_on_its_vehicle() {
+    fn conversion_puts_the_converted_mob_on_the_sources_vehicle() {
         init_vanilla_registry();
         init_entities();
         let world_fixture = conversion_world();
@@ -596,22 +576,19 @@ mod tests {
                 &vanilla_entities::ZOMBIE,
                 ConversionParams::single(true, true),
                 None,
-            );
+            )
+            .expect("a registered factory converts the source");
 
-        assert!(converted.is_none());
-        assert!(
-            !source.is_removed(),
-            "refused conversions leave the source alive"
-        );
+        assert!(source.is_removed(), "single conversion discards the source");
         assert_eq!(
-            source.vehicle().map(|entity| entity.id()),
+            converted.vehicle().map(|entity| entity.id()),
             Some(vehicle.id()),
-            "a refused conversion must not dismount the source from its vehicle"
+            "vanilla `ConversionType.SINGLE` moves the new mob onto the source's vehicle"
         );
     }
 
     #[test]
-    fn refused_conversion_keeps_the_source_leash() {
+    fn conversion_transfers_the_sources_leash() {
         init_vanilla_registry();
         init_entities();
         let world_fixture = conversion_world();
@@ -631,17 +608,20 @@ mod tests {
                 &vanilla_entities::ZOMBIE,
                 ConversionParams::single(true, true),
                 None,
-            );
+            )
+            .expect("a registered factory converts the source");
 
-        assert!(converted.is_none());
-        assert!(
-            !source.is_removed(),
-            "refused conversions leave the source alive"
-        );
+        assert!(source.is_removed(), "single conversion discards the source");
+        // `convert_single` re-leashes the converted mob to the source's holder, so the
+        // leash is never silently dropped while the original entity is discarded.
         assert_eq!(
-            source_mob.leash_holder().map(|entity| entity.id()),
+            converted
+                .as_mob()
+                .expect("converted zombie is a mob")
+                .leash_holder()
+                .map(|entity| entity.id()),
             Some(holder.id()),
-            "a refused conversion must not steal the source's leash"
+            "a single conversion moves the leash to the converted mob"
         );
     }
 

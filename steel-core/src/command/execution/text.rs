@@ -46,6 +46,14 @@ impl<'a> CommandTextResolver<'a, CommandSource> {
             default_scoreboard_name: Some(entity.scoreboard_name()),
         }
     }
+
+    /// Vanilla `ResolutionContext.builder().withSource(source).withEntityOverride(null)`.
+    pub(crate) const fn with_source(source: &'a CommandSource) -> Self {
+        Self {
+            source,
+            default_scoreboard_name: None,
+        }
+    }
 }
 
 impl<S> TryTextResolutor for CommandTextResolver<'_, S>

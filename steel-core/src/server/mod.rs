@@ -38,7 +38,8 @@ use crate::config::ResolvedDomainConfig;
 use crate::config::{ResolvedWorldConfig, RuntimeConfig, WorldsConfig, validate_login_security};
 use crate::entity::damage::DamageHistory;
 use crate::entity::{
-    Entity, EntityBase, PendingWorldChangeToken, RemovalReason, SharedEntity, change_entity_world,
+    Entity, EntityBase, PendingWorldChangeToken, RemovalReason, SharedEntity,
+    boss::CustomBossEvents, change_entity_world,
 };
 
 use crate::chunk_saver::{ChunkStorage, PersistentEntity, registry::WorldStorageRegistry};
@@ -234,6 +235,7 @@ pub async fn test_server_with_worlds_and_config(
     if !shares_history {
         return Err("test worlds must share the server's history owner".to_owned());
     }
+    let white_list = config.white_list;
 
     Ok(Arc::new(Server {
         damage_history,
@@ -248,6 +250,7 @@ pub async fn test_server_with_worlds_and_config(
         player_admission_changed: Notify::new(),
         server_tick_changed: Notify::new(),
         tick_rate_manager: SyncRwLock::new(TickRateManager::new()),
+        custom_boss_events: SyncMutex::new(CustomBossEvents::new()),
         scoreboards,
         command_storage,
         command_dispatcher: SyncRwLock::new(registered_commands.dispatcher),
@@ -257,6 +260,7 @@ pub async fn test_server_with_worlds_and_config(
         chunk_encoding_pool: Arc::new(chunk_encoding_pool),
         jobs: ServerJobQueue::new(),
         player_data_storage,
+        player_lists: PlayerLists::in_memory(white_list),
         player_permission_states: SyncRwLock::new(player_permission_states),
         player_permission_updates: AsyncMutex::new(()),
         known_players: SyncMutex::new(KnownPlayerCacheState::new(KnownPlayers::new())),
@@ -445,6 +449,9 @@ impl<E> From<io::Error> for PlayerPermissionUpdateError<E> {
 }
 
 mod permissions;
+pub(crate) mod player_lists;
+
+use player_lists::PlayerLists;
 
 #[cfg(test)]
 use permissions::validate_player_permission_group_update;
@@ -492,6 +499,8 @@ pub struct Server {
     /// The number of minutes required for a player to be idle for them to be kicked (timed out) from the server.
     /// If this is equal to 0, no kicking will happen.
     pub player_idle_timeout: AtomicI32,
+    /// Vanilla `MinecraftServer.getCustomBossEvents`.
+    pub custom_boss_events: SyncMutex<CustomBossEvents>,
     /// Command scoreboards isolated by Steel domain.
     pub scoreboards: DomainScoreboards,
     /// Command NBT storage isolated by Steel domain.
@@ -510,6 +519,8 @@ pub struct Server {
     pub jobs: ServerJobQueue,
     /// Player data storage for saving/loading player state.
     pub player_data_storage: PlayerDataStorage,
+    /// Vanilla operator, ban, IP-ban and allowlist files.
+    player_lists: PlayerLists,
     /// Persisted permission state indexed by player UUID.
     player_permission_states: SyncRwLock<PermissionSubjectIndex>,
     /// Serializes persistence and cache publication for player permission edits.
@@ -708,6 +719,9 @@ impl Server {
             .load_known_players()
             .await
             .map_err(|error| format!("failed to load known players: {error}"))?;
+        let player_lists = PlayerLists::load(&resolved_worlds.save_path, config.white_list)
+            .await
+            .map_err(|error| format!("failed to load server player lists: {error}"))?;
         let mut worlds = WorldMap::new(
             resolved_worlds.default_domain.clone(),
             &resolved_worlds.domains,
@@ -849,6 +863,7 @@ impl Server {
             registry_cache,
             tick_rate_manager: SyncRwLock::new(TickRateManager::new()),
             player_idle_timeout: AtomicI32::new(0),
+            custom_boss_events: SyncMutex::new(CustomBossEvents::new()),
             scoreboards,
             command_storage,
             command_dispatcher: SyncRwLock::new(registered_commands.dispatcher),
@@ -858,6 +873,7 @@ impl Server {
             chunk_encoding_pool,
             jobs: ServerJobQueue::new(),
             player_data_storage,
+            player_lists,
             player_permission_states: SyncRwLock::new(player_permission_states),
             player_permission_updates: AsyncMutex::new(()),
             known_players: SyncMutex::new(KnownPlayerCacheState::new(known_players)),
@@ -895,6 +911,11 @@ impl Server {
             scoreboards: self.scoreboards.save(&self.worlds).await,
             storage: self.save_command_storage().await,
         }
+    }
+
+    /// Read access to the live command dispatcher, used by `/help`.
+    pub(crate) fn command_dispatcher(&self) -> parking_lot::RwLockReadGuard<'_, CommandDispatcher> {
+        self.command_dispatcher.read()
     }
 
     /// Queues a command for execution at the start of the next game tick.

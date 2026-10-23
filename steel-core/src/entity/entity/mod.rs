@@ -1150,6 +1150,26 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
         self.game_event_with_source_entity(event, Some(self.as_entity_event_source()));
     }
 
+    /// Vanilla `Entity.thunderHit`: a lightning strike damages the entity.
+    ///
+    /// `bolt` is the striking [`LightningBoltEntity`](crate::entity::entities::LightningBoltEntity);
+    /// mobs override this for conversions, and `LivingEntity` adds fire ticks.
+    #[expect(
+        unused_variables,
+        reason = "the default vanilla implementation ignores the striking bolt"
+    )]
+    fn thunder_hit(&self, world: &Arc<World>, bolt: &SharedEntity) {
+        if !self.is_alive() {
+            return;
+        }
+
+        self.hurt(
+            world,
+            &DamageSource::environment(&vanilla_damage_types::LIGHTNING_BOLT),
+            5.0,
+        );
+    }
+
     /// Kills this entity using vanilla's living/non-living class split.
     ///
     /// `world` is vanilla's explicit `ServerLevel` argument. Living entities
@@ -1535,6 +1555,46 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
     /// Returns the `Enemy` marker, equivalent to vanilla's `instanceof Enemy`.
     fn as_enemy(&self) -> Option<&dyn Enemy> {
         try_as_dyn::<Self, dyn Enemy>(self)
+    }
+
+    /// Returns this entity as a tameable animal when it has that behavior.
+    fn as_tameable(&self) -> Option<&dyn crate::entity::ai::goal::Tameable> {
+        try_as_dyn::<Self, dyn crate::entity::ai::goal::Tameable>(self)
+    }
+
+    /// Returns this entity as a ranged-attack mob when it can shoot projectiles.
+    fn as_ranged_attack_mob(&self) -> Option<&dyn crate::entity::ai::goal::RangedAttackMob> {
+        try_as_dyn::<Self, dyn crate::entity::ai::goal::RangedAttackMob>(self)
+    }
+
+    /// Returns this entity as a schooling fish when it follows a flock leader.
+    fn as_schooling_fish(&self) -> Option<&dyn crate::entity::ai::goal::SchoolingFish> {
+        try_as_dyn::<Self, dyn crate::entity::ai::goal::SchoolingFish>(self)
+    }
+
+    /// Returns this entity as a creeper when it can swell before exploding.
+    fn as_creeper(&self) -> Option<&dyn crate::entity::ai::goal::CreeperLike> {
+        try_as_dyn::<Self, dyn crate::entity::ai::goal::CreeperLike>(self)
+    }
+
+    /// Returns this entity as a feline when it can sit or lie on blocks.
+    fn as_feline(&self) -> Option<&dyn crate::entity::ai::goal::Feline> {
+        try_as_dyn::<Self, dyn crate::entity::ai::goal::Feline>(self)
+    }
+
+    /// Returns this entity as an abstract horse when it has equine AI state.
+    fn as_abstract_horse(&self) -> Option<&dyn crate::entity::ai::goal::AbstractHorse> {
+        try_as_dyn::<Self, dyn crate::entity::ai::goal::AbstractHorse>(self)
+    }
+
+    /// Returns this entity as a caravan llama when it can join a caravan.
+    fn as_caravan_llama(&self) -> Option<&dyn crate::entity::ai::goal::CaravanLlama> {
+        try_as_dyn::<Self, dyn crate::entity::ai::goal::CaravanLlama>(self)
+    }
+
+    /// Returns this entity as a shoulder-riding mob when it can sit on a shoulder.
+    fn as_shoulder_riding(&self) -> Option<&dyn crate::entity::ai::goal::ShoulderRiding> {
+        try_as_dyn::<Self, dyn crate::entity::ai::goal::ShoulderRiding>(self)
     }
 
     /// Returns true for entities that implement vanilla `Npc` behavior.
@@ -3666,6 +3726,32 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
     /// Called after entity creation during chunk deserialization. Base fields
     /// are already restored; this handles type-specific data.
     fn load_additional(&self, _nbt: BorrowedNbtCompoundView<'_, '_>) {}
+
+    /// Applies an owned command/runtime compound to this entity.
+    ///
+    /// Mirrors vanilla `Entity.load(CompoundTag)`, which `/data modify entity`
+    /// uses to write NBT back: base spawn fields are applied first, then
+    /// type-specific state, then synced entity data is refreshed.
+    ///
+    /// `simdnbt` keeps its read-facing representation borrowed, so this performs
+    /// a checked in-memory encode/decode bridge rather than making every command
+    /// caller duplicate that conversion, matching
+    /// [`BlockEntity::load_with_owned_components`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the compound cannot be re-borrowed after encoding.
+    fn load_with_owned_components(&self, nbt: &NbtCompound) -> Result<(), simdnbt::Error> {
+        let mut encoded = Vec::new();
+        nbt.write(&mut encoded);
+        let borrowed =
+            simdnbt::borrow::read_compound(&mut std::io::Cursor::new(encoded.as_slice()))?;
+        let view: BorrowedNbtCompoundView<'_, '_> = (&borrowed).into();
+        self.apply_spawn_data(view);
+        self.load_additional(view);
+        self.sync_base_entity_data();
+        Ok(())
+    }
 
     /// Applies entity-specific implicit components carried by an item stack.
     ///

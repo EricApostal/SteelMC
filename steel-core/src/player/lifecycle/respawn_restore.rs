@@ -94,6 +94,10 @@ impl Player {
                 self.restore_inventory_experience_and_score_from(old_player);
             }
         }
+
+        // Vanilla `ServerPlayer.restoreFrom` copies the enchanting seed on every
+        // respawn path, even when XP is not transferred.
+        self.set_enchantment_seed(old_player.enchantment_seed());
     }
 
     fn restore_all_respawn_state_from(&self, old_player: &Self) {

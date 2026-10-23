@@ -8,6 +8,7 @@ use steel_utils::UuidExt as _;
 
 use super::*;
 use crate::entity::entities::PigEntity;
+use crate::entity::neutral_mob::NO_ANGER_END_TIME;
 use crate::entity::{Entity, EntityReference, EntitySpawnReason, Mob};
 
 fn golem() -> IronGolemEntity {
@@ -79,8 +80,9 @@ fn legacy_anger_time_key_is_still_read() {
         .unwrap_or_else(|error| panic!("test nbt should reborrow: {error}"));
     golem.read_persistent_anger_save_data(&(&borrowed).into());
 
-    // No level is attached, so `setTimeToRemainAngry` cannot resolve a game time.
-    assert_eq!(golem.get_persistent_anger_end_time(), 0);
+    // No level is attached, so `setTimeToRemainAngry` cannot resolve a game time and
+    // the mob keeps vanilla's `NO_ANGER_END_TIME` sentinel.
+    assert_eq!(golem.get_persistent_anger_end_time(), NO_ANGER_END_TIME);
 }
 
 #[test]

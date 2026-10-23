@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc, Weak,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    net::SocketAddr,
+    sync::{
+        Arc, OnceLock, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use steel_utils::locks::{SyncMutex, SyncRwLock};
@@ -24,6 +27,8 @@ pub struct PlayerSession {
     pub(crate) chat: SyncMutex<ChatState>,
     /// Vanilla keeps creative drop throttling on the connection across respawns.
     pub(super) drop_spam_throttler: SyncMutex<TickThrottler>,
+    /// The accepted client's socket address, vanilla `Connection.getRemoteAddress`.
+    remote_address: OnceLock<SocketAddr>,
 }
 
 enum CurrentPlayerSlot {
@@ -60,7 +65,24 @@ impl PlayerSession {
                 DROP_SPAM_THROTTLER_INCREMENT_STEP,
                 DROP_SPAM_THROTTLER_THRESHOLD,
             )),
+            remote_address: OnceLock::new(),
         }
+    }
+
+    /// Records the accepted client's socket address.
+    ///
+    /// Called once by the connection listener when the session is created for an
+    /// accepted transport; later calls are ignored.
+    pub fn set_remote_address(&self, address: SocketAddr) {
+        let _ = self.remote_address.set(address);
+    }
+
+    /// The accepted client's socket address, vanilla `Connection.getRemoteAddress`.
+    ///
+    /// In-process transports that never record one return `None`.
+    #[must_use]
+    pub fn remote_address(&self) -> Option<SocketAddr> {
+        self.remote_address.get().copied()
     }
 
     #[must_use]

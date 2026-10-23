@@ -14,6 +14,7 @@ use super::MemoryModuleType;
 use super::MemoryModuleTypeRef;
 use super::nearest_visible::NearestVisibleLivingEntities;
 use crate::entity::SharedEntity;
+use crate::entity::ai::behavior::spear_attack::SpearStatus;
 use crate::entity::ai::brain::tracker::PositionTracker;
 use crate::entity::ai::path::Path;
 use crate::entity::damage::DamageSource;
@@ -102,6 +103,66 @@ memory_module_type!(PACIFIED: bool = "pacified");
 memory_module_type!(ATE_RECENTLY: bool = "ate_recently");
 memory_module_type!(NEAREST_REPELLENT: BlockPos = "nearest_repellent");
 memory_module_type!(LIKED_PLAYER: Uuid = "liked_player");
+memory_module_type!(HAS_HUNTING_COOLDOWN: bool = "has_hunting_cooldown");
+memory_module_type!(UNREACHABLE_TONGUE_TARGETS: Vec<Uuid> = "unreachable_tongue_targets");
+memory_module_type!(ATTACK_TARGET_COOLDOWN: i32 = "attack_target_cooldown");
+memory_module_type!(SPEAR_FLEEING_TIME: i32 = "spear_fleeing_time");
+memory_module_type!(SPEAR_FLEEING_POSITION: DVec3 = "spear_fleeing_position");
+memory_module_type!(SPEAR_CHARGE_POSITION: DVec3 = "spear_charge_position");
+memory_module_type!(SPEAR_ENGAGE_TIME: i32 = "spear_engage_time");
+memory_module_type!(SPEAR_STATUS: SpearStatus = "spear_status");
+memory_module_type!(TIME_TRYING_TO_REACH_ADMIRE_ITEM: i32 = "time_trying_to_reach_admire_item");
+memory_module_type!(DISABLE_WALK_TO_ADMIRE_ITEM: bool = "disable_walk_to_admire_item");
+memory_module_type!(
+    NEAREST_VISIBLE_HUNTABLE_HOGLIN: SharedEntity = "nearest_visible_huntable_hoglin"
+);
+memory_module_type!(NEAREST_VISIBLE_BABY_HOGLIN: SharedEntity = "nearest_visible_baby_hoglin");
+memory_module_type!(
+    NEAREST_TARGETABLE_PLAYER_NOT_WEARING_GOLD: SharedEntity =
+        "nearest_targetable_player_not_wearing_gold"
+);
+memory_module_type!(NEARBY_ADULT_PIGLINS: Vec<SharedEntity> = "nearby_adult_piglins");
+memory_module_type!(
+    NEAREST_VISIBLE_ADULT_PIGLINS: Vec<SharedEntity> = "nearest_visible_adult_piglins"
+);
+memory_module_type!(
+    NEAREST_VISIBLE_ADULT_HOGLINS: Vec<SharedEntity> = "nearest_visible_adult_hoglins"
+);
+memory_module_type!(NEAREST_VISIBLE_ADULT_PIGLIN: SharedEntity = "nearest_visible_adult_piglin");
+memory_module_type!(NEAREST_VISIBLE_ZOMBIFIED: SharedEntity = "nearest_visible_zombified");
+memory_module_type!(VISIBLE_ADULT_PIGLIN_COUNT: i32 = "visible_adult_piglin_count");
+memory_module_type!(VISIBLE_ADULT_HOGLIN_COUNT: i32 = "visible_adult_hoglin_count");
+memory_module_type!(
+    NEAREST_PLAYER_HOLDING_WANTED_ITEM: SharedEntity = "nearest_player_holding_wanted_item"
+);
+memory_module_type!(ROAR_TARGET: SharedEntity = "roar_target");
+memory_module_type!(DISTURBANCE_LOCATION: BlockPos = "disturbance_location");
+memory_module_type!(RECENT_PROJECTILE: () = "recent_projectile");
+memory_module_type!(IS_SNIFFING: () = "is_sniffing");
+memory_module_type!(IS_EMERGING: () = "is_emerging");
+memory_module_type!(ROAR_SOUND_DELAY: () = "roar_sound_delay");
+memory_module_type!(DIG_COOLDOWN: () = "dig_cooldown");
+memory_module_type!(ROAR_SOUND_COOLDOWN: () = "roar_sound_cooldown");
+memory_module_type!(SNIFF_COOLDOWN: () = "sniff_cooldown");
+memory_module_type!(TOUCH_COOLDOWN: () = "touch_cooldown");
+memory_module_type!(VIBRATION_COOLDOWN: () = "vibration_cooldown");
+memory_module_type!(SONIC_BOOM_COOLDOWN: () = "sonic_boom_cooldown");
+memory_module_type!(SONIC_BOOM_SOUND_COOLDOWN: () = "sonic_boom_sound_cooldown");
+memory_module_type!(SONIC_BOOM_SOUND_DELAY: () = "sonic_boom_sound_delay");
+memory_module_type!(LIKED_NOTEBLOCK_POSITION: GlobalPos = "liked_noteblock");
+memory_module_type!(LIKED_NOTEBLOCK_COOLDOWN_TICKS: i32 = "liked_noteblock_cooldown_ticks");
+memory_module_type!(SNIFFER_EXPLORED_POSITIONS: Vec<GlobalPos> = "sniffer_explored_positions");
+memory_module_type!(SNIFFER_SNIFFING_TARGET: BlockPos = "sniffer_sniffing_target");
+memory_module_type!(SNIFFER_DIGGING: bool = "sniffer_digging");
+memory_module_type!(SNIFFER_HAPPY: bool = "sniffer_happy");
+memory_module_type!(BREEZE_JUMP_COOLDOWN: () = "breeze_jump_cooldown");
+memory_module_type!(BREEZE_SHOOT: () = "breeze_shoot");
+memory_module_type!(BREEZE_SHOOT_CHARGING: () = "breeze_shoot_charging");
+memory_module_type!(BREEZE_SHOOT_RECOVERING: () = "breeze_shoot_recover");
+memory_module_type!(BREEZE_SHOOT_COOLDOWN: () = "breeze_shoot_cooldown");
+memory_module_type!(BREEZE_JUMP_INHALING: () = "breeze_jump_inhaling");
+memory_module_type!(BREEZE_JUMP_TARGET: BlockPos = "breeze_jump_target");
+memory_module_type!(BREEZE_LEAVING_WATER: () = "breeze_leaving_water");
 
 /// Every memory module type Steel declares, in declaration order.
 pub static ALL: &[MemoryModuleTypeRef] = &[
@@ -171,6 +232,55 @@ pub static ALL: &[MemoryModuleTypeRef] = &[
     &ATE_RECENTLY,
     &NEAREST_REPELLENT,
     &LIKED_PLAYER,
+    &HAS_HUNTING_COOLDOWN,
+    &UNREACHABLE_TONGUE_TARGETS,
+    &ATTACK_TARGET_COOLDOWN,
+    &SPEAR_FLEEING_TIME,
+    &SPEAR_FLEEING_POSITION,
+    &SPEAR_CHARGE_POSITION,
+    &SPEAR_ENGAGE_TIME,
+    &SPEAR_STATUS,
+    &TIME_TRYING_TO_REACH_ADMIRE_ITEM,
+    &DISABLE_WALK_TO_ADMIRE_ITEM,
+    &NEAREST_VISIBLE_HUNTABLE_HOGLIN,
+    &NEAREST_VISIBLE_BABY_HOGLIN,
+    &NEAREST_TARGETABLE_PLAYER_NOT_WEARING_GOLD,
+    &NEARBY_ADULT_PIGLINS,
+    &NEAREST_VISIBLE_ADULT_PIGLINS,
+    &NEAREST_VISIBLE_ADULT_HOGLINS,
+    &NEAREST_VISIBLE_ADULT_PIGLIN,
+    &NEAREST_VISIBLE_ZOMBIFIED,
+    &VISIBLE_ADULT_PIGLIN_COUNT,
+    &VISIBLE_ADULT_HOGLIN_COUNT,
+    &NEAREST_PLAYER_HOLDING_WANTED_ITEM,
+    &ROAR_TARGET,
+    &DISTURBANCE_LOCATION,
+    &RECENT_PROJECTILE,
+    &IS_SNIFFING,
+    &IS_EMERGING,
+    &ROAR_SOUND_DELAY,
+    &DIG_COOLDOWN,
+    &ROAR_SOUND_COOLDOWN,
+    &SNIFF_COOLDOWN,
+    &TOUCH_COOLDOWN,
+    &VIBRATION_COOLDOWN,
+    &SONIC_BOOM_COOLDOWN,
+    &SONIC_BOOM_SOUND_COOLDOWN,
+    &SONIC_BOOM_SOUND_DELAY,
+    &LIKED_NOTEBLOCK_POSITION,
+    &LIKED_NOTEBLOCK_COOLDOWN_TICKS,
+    &SNIFFER_EXPLORED_POSITIONS,
+    &SNIFFER_SNIFFING_TARGET,
+    &SNIFFER_DIGGING,
+    &SNIFFER_HAPPY,
+    &BREEZE_JUMP_COOLDOWN,
+    &BREEZE_SHOOT,
+    &BREEZE_SHOOT_CHARGING,
+    &BREEZE_SHOOT_RECOVERING,
+    &BREEZE_SHOOT_COOLDOWN,
+    &BREEZE_JUMP_INHALING,
+    &BREEZE_JUMP_TARGET,
+    &BREEZE_LEAVING_WATER,
 ];
 
 /// Looks up a memory module type by its registry key.

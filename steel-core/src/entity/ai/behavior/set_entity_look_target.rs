@@ -12,7 +12,7 @@ use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::ai::brain::tracker::EntityTracker;
 
 /// Vanilla `SetEntityLookTarget.create(Predicate, maxDist)` test.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum EntityLookTargetFilter {
     /// Vanilla `mob -> true`.
     Any,
@@ -20,15 +20,18 @@ pub enum EntityLookTargetFilter {
     Type(EntityTypeRef),
     /// Vanilla `mob -> category.equals(mob.getType().getCategory())`.
     Category(MobCategory),
+    /// Vanilla `mob -> predicate.test(mob)`.
+    Predicate(Arc<dyn Fn(&SharedEntity) -> bool + Send + Sync>),
 }
 
 impl EntityLookTargetFilter {
     #[must_use]
-    pub fn matches(self, entity: &SharedEntity) -> bool {
+    pub fn matches(&self, entity: &SharedEntity) -> bool {
         match self {
             Self::Any => true,
-            Self::Type(entity_type) => entity.entity_type() == entity_type,
-            Self::Category(category) => entity.entity_type().mob_category == category,
+            Self::Type(entity_type) => entity.entity_type() == *entity_type,
+            Self::Category(category) => entity.entity_type().mob_category == *category,
+            Self::Predicate(predicate) => predicate(entity),
         }
     }
 }
@@ -66,6 +69,18 @@ impl SetEntityLookTarget {
         Self::boxed_for_filter(EntityLookTargetFilter::Any, max_dist)
     }
 
+    /// Vanilla `SetEntityLookTarget.create(Predicate, maxDist)`.
+    #[must_use]
+    pub fn create_with_predicate(
+        predicate: impl Fn(&SharedEntity) -> bool + Send + Sync + 'static,
+        max_dist: f32,
+    ) -> OneShot<Self> {
+        Self::boxed_for_filter(
+            EntityLookTargetFilter::Predicate(Arc::new(predicate)),
+            max_dist,
+        )
+    }
+
     fn boxed_for_filter(filter: EntityLookTargetFilter, max_dist: f32) -> OneShot<Self> {
         OneShot::new(Self::new(filter, max_dist)).with_required_memories(vec![
             &mem::LOOK_TARGET,
@@ -85,7 +100,7 @@ impl Trigger for SetEntityLookTarget {
         };
 
         let body = ctx.body;
-        let filter = self.filter;
+        let filter = &self.filter;
         let max_dist_sqr = self.max_dist_sqr;
         let Some(target) = visible.find_closest(|entity| {
             filter.matches(entity)

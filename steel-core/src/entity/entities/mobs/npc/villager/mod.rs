@@ -24,14 +24,14 @@ use steel_registry::vanilla_item_tags::ItemTag;
 use steel_registry::villager_profession::VillagerProfessionRef;
 use steel_registry::villager_type::VillagerTypeRef;
 use steel_registry::{
-    REGISTRY, RegistryExt, TaggedRegistryExt, sound_events, vanilla_custom_stats, vanilla_entities,
-    vanilla_items, vanilla_mob_effects, vanilla_timelines,
+    REGISTRY, RegistryExt, TaggedRegistryExt, sound_events, vanilla_custom_stats,
+    vanilla_damage_types, vanilla_entities, vanilla_items, vanilla_mob_effects, vanilla_timelines,
 };
 use steel_utils::entity_events::EntityStatus;
 use steel_utils::locks::SyncMutex;
 use steel_utils::random::Random as _;
 use steel_utils::random::legacy_random::LegacyRandom;
-use steel_utils::types::InteractionHand;
+use steel_utils::types::{Difficulty, InteractionHand};
 use steel_utils::{ChunkPos, Downcast as _, DowncastType, DowncastTypeKey};
 use text_components::TextComponent;
 use text_components::translation::TranslatedMessage;
@@ -59,10 +59,10 @@ use crate::entity::npc::inventory_carrier::InventoryCarrier;
 use crate::entity::npc::npc::Npc;
 use crate::entity::npc::trading::{Merchant, MerchantOffer, MerchantOffers, MerchantOffersGuard};
 use crate::entity::{
-    AgeableMob, AgeableMobBase, AgeableMobGroupData, Entity, EntityBase, EntityBaseLoad,
-    EntityPose, EntitySpawnReason, EntitySyncedData, LivingEntity, LivingEntityBase,
-    LivingEntitySyncedData, Mob, MobBase, MobEffectInstance, PathfinderMob, RemovalReason,
-    SharedEntity, SpawnGroupData,
+    AgeableMob, AgeableMobBase, AgeableMobGroupData, ConversionParams, Entity, EntityBase,
+    EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData, LivingEntity,
+    LivingEntityBase, LivingEntitySyncedData, Mob, MobBase, MobEffectInstance, PathfinderMob,
+    RemovalReason, SharedEntity, SpawnGroupData,
 };
 use crate::inventory::container::Container;
 use crate::player::Player;
@@ -1103,6 +1103,36 @@ impl Entity for VillagerEntity {
         SoundSource::Neutral
     }
 
+    fn thunder_hit(&self, world: &Arc<World>, bolt: &SharedEntity) {
+        if world.difficulty() != Difficulty::Peaceful {
+            let converted = self.convert_to(
+                &vanilla_entities::WITCH,
+                ConversionParams::single(false, false),
+                Some(&|mob| {
+                    // Vanilla `Villager.thunderHit`'s conversion callback.
+                    mob.finalize_spawn(world, EntitySpawnReason::Conversion, None);
+                    mob.set_persistence_required();
+                }),
+            );
+            if converted.is_some() {
+                self.release_all_pois();
+                return;
+            }
+        }
+
+        // `Entity::thunder_hit` default body, inlined: a UFCS call here would resolve
+        // back to this override and recurse. `bolt` only identifies the strike for
+        // de-duplication; the default damages for 5.0.
+        let _ = bolt;
+        if Entity::is_alive(self) {
+            self.hurt(
+                world,
+                &DamageSource::environment(&vanilla_damage_types::LIGHTNING_BOLT),
+                5.0,
+            );
+        }
+    }
+
     fn save_additional(&self, nbt: &mut NbtCompound) {
         self.save_mob(nbt);
         self.save_ageable_mob(nbt);
@@ -1421,6 +1451,19 @@ impl Mob for VillagerEntity {
         }
 
         let no_offers = self.merchant.offers().is_empty();
+        // TEMP(diagnostic): remove once live trading is confirmed.
+        log::info!(
+            "villager {} interact: profession={}, type={}, level={}, offers={}, baby={}, sleeping={}, trading={}, finalized={}",
+            self.id(),
+            self.profession().key,
+            self.villager_type().key,
+            self.villager_level(),
+            self.merchant.offers().len(),
+            AgeableMob::is_baby(self),
+            LivingEntity::is_sleeping(self),
+            self.is_trading(),
+            self.villager_data_finalized(),
+        );
         if hand == InteractionHand::MainHand {
             if no_offers {
                 self.set_unhappy();

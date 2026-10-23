@@ -11,12 +11,14 @@ use super::super::{
     },
     registration::CommandRegistration,
 };
+use crate::permission::PermissionLevel;
 use crate::world::{MAX_CENTER_COORDINATE, MAX_SIZE, WorldBorderError};
 
 const MIN_SIZE: f64 = 1.0;
 
 pub(super) fn registration() -> CommandRegistration<CommandSource> {
     CommandRegistration::new(Identifier::vanilla_static("worldborder"), |_| command())
+        .at_level(PermissionLevel::Gamemasters)
 }
 
 fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {

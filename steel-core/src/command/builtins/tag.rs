@@ -13,9 +13,11 @@ use super::super::{
     },
     registration::CommandRegistration,
 };
+use crate::permission::PermissionLevel;
 
 pub(super) fn registration() -> CommandRegistration<CommandSource> {
     CommandRegistration::new(Identifier::vanilla_static("tag"), |_| command())
+        .at_level(PermissionLevel::Gamemasters)
 }
 
 fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {

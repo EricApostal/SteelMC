@@ -48,11 +48,22 @@ impl PlayerRespawnConfig {
     }
 }
 
+/// Stand-up position resolved by vanilla `ServerPlayer.findRespawnAndUseSpawnBlock`.
+///
+/// Shared with the End portal return path, which performs the same personal
+/// respawn lookup without consuming a respawn-anchor charge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PersonalRespawnSpawn {
+    /// Stand-up position produced by the bed/anchor/forced-fallback resolution.
+    pub(crate) position: DVec3,
+    /// Rotation used by vanilla (look-at yaw for beds and anchors, config pitch for the forced fallback).
+    pub(crate) rotation: (f32, f32),
+}
+
 #[derive(Clone, Copy)]
 struct DeathRespawnSpawn {
     position: DVec3,
     rotation: (f32, f32),
-    anchor_deplete_sound_pos: Option<BlockPos>,
     missing_respawn_block: bool,
 }
 
@@ -140,29 +151,9 @@ impl PlayerRespawnJob {
     fn request_personal_respawn_chunks(world: &Arc<World>, pos: BlockPos) -> ChunkRequestHandle {
         world.chunk_map.request_chunks(ChunkRequest {
             status: ChunkStatus::Full,
-            positions: Self::personal_respawn_chunk_positions(pos),
+            positions: personal_respawn_chunk_positions(pos),
             ticket_kind: ChunkTicketKind::PlayerSpawn,
         })
-    }
-
-    fn personal_respawn_chunk_positions(pos: BlockPos) -> Vec<ChunkPos> {
-        let min = ChunkPos::from_block_pos(pos.offset(
-            -PERSONAL_RESPAWN_SEARCH_BLOCK_RADIUS,
-            0,
-            -PERSONAL_RESPAWN_SEARCH_BLOCK_RADIUS,
-        ));
-        let max = ChunkPos::from_block_pos(pos.offset(
-            PERSONAL_RESPAWN_SEARCH_BLOCK_RADIUS,
-            0,
-            PERSONAL_RESPAWN_SEARCH_BLOCK_RADIUS,
-        ));
-        let mut positions = Vec::new();
-        for x in min.0.x..=max.0.x {
-            for z in min.0.y..=max.0.y {
-                positions.push(ChunkPos::new(x, z));
-            }
-        }
-        positions
     }
 
     fn still_valid(&self) -> bool {
@@ -246,13 +237,17 @@ impl ServerJob for PlayerRespawnJob {
                         }
                         ChunkRequestState::Ready => {}
                     }
-                    if let Some(spawn) = Self::resolve_personal_respawn(
+                    if let Some(spawn) = resolve_personal_respawn(
                         &self.target_world,
                         &self.player,
                         config,
                         matches!(self.kind, RespawnRequestKind::Death),
                     ) {
-                        self.finish(spawn);
+                        self.finish(DeathRespawnSpawn {
+                            position: spawn.position,
+                            rotation: spawn.rotation,
+                            missing_respawn_block: false,
+                        });
                         return JobPoll::Finished;
                     }
 
@@ -296,7 +291,6 @@ impl ServerJob for PlayerRespawnJob {
                             let spawn = DeathRespawnSpawn {
                                 position,
                                 rotation: self.rotation,
-                                anchor_deplete_sound_pos: None,
                                 missing_respawn_block: self.missing_respawn_block,
                             };
                             self.finish(spawn);
@@ -339,87 +333,120 @@ impl PlayerRespawnJob {
             }
         }
     }
+}
 
-    fn resolve_personal_respawn(
-        world: &Arc<World>,
-        player: &Player,
-        config: &PlayerRespawnConfig,
-        consume_spawn_block: bool,
-    ) -> Option<DeathRespawnSpawn> {
-        let pos = config.respawn_data.pos();
-        let state = world.get_block_state(pos);
+/// Vanilla's forced fallback: needs the config block and the block above to be free.
+fn resolve_forced_respawn_fallback(
+    pos: BlockPos,
+    state: BlockStateId,
+    top_state: BlockStateId,
+    rotation: (f32, f32),
+) -> Option<PersonalRespawnSpawn> {
+    if !state.is_possible_to_respawn_in_this() || !top_state.is_possible_to_respawn_in_this() {
+        return None;
+    }
+    Some(PersonalRespawnSpawn {
+        position: DVec3::new(
+            f64::from(pos.x()) + 0.5,
+            f64::from(pos.y()) + 0.1,
+            f64::from(pos.z()) + 0.5,
+        ),
+        rotation,
+    })
+}
 
-        if RespawnAnchorBlock::can_use_for_respawn(world, pos, state, config.forced) {
-            let position = RespawnAnchorBlock::find_standup_position(world, player, pos)?;
-            if RespawnAnchorBlock::should_consume_charge_after_respawn(
-                config.forced,
-                consume_spawn_block,
-                true,
-            ) {
-                let _ = RespawnAnchorBlock::consume_charge(world, pos, state);
-            }
-            return Some(DeathRespawnSpawn {
-                position,
-                rotation: (calculate_respawn_look_at_yaw(position, pos), 0.0),
-                anchor_deplete_sound_pos: Some(pos),
-                missing_respawn_block: false,
-            });
+/// Chunk positions a personal respawn lookup reads.
+///
+/// Mirrors the vanilla bed/anchor stand-up search reach: candidates extend two
+/// blocks out and their collision checks read one block farther.
+#[must_use]
+pub(crate) fn personal_respawn_chunk_positions(pos: BlockPos) -> Vec<ChunkPos> {
+    let min = ChunkPos::from_block_pos(pos.offset(
+        -PERSONAL_RESPAWN_SEARCH_BLOCK_RADIUS,
+        0,
+        -PERSONAL_RESPAWN_SEARCH_BLOCK_RADIUS,
+    ));
+    let max = ChunkPos::from_block_pos(pos.offset(
+        PERSONAL_RESPAWN_SEARCH_BLOCK_RADIUS,
+        0,
+        PERSONAL_RESPAWN_SEARCH_BLOCK_RADIUS,
+    ));
+    let mut positions = Vec::new();
+    for x in min.0.x..=max.0.x {
+        for z in min.0.y..=max.0.y {
+            positions.push(ChunkPos::new(x, z));
         }
+    }
+    positions
+}
 
-        if state.is_bed()
-            && Player::bed_rule_value_allows_in_world(
-                world,
-                Player::bed_rule_for(world, state).can_set_spawn,
-            )
-        {
-            let facing = state.get_value(&BlockStateProperties::HORIZONTAL_FACING);
-            let position = BedBlock::find_standup_position_with_yaw(
-                world,
-                player,
-                facing,
-                pos,
-                config.respawn_data.yaw,
-            )?;
-            return Some(DeathRespawnSpawn {
-                position,
-                rotation: (calculate_respawn_look_at_yaw(position, pos), 0.0),
-                anchor_deplete_sound_pos: None,
-                missing_respawn_block: false,
-            });
-        }
+/// Resolves vanilla `ServerPlayer.findRespawnAndUseSpawnBlock` for one respawn config.
+///
+/// Mirrors the vanilla branch order and edge cases:
+/// - a usable respawn anchor takes the stand-up search and consumes one charge for a
+///   non-forced death respawn, but only when a stand-up position was found;
+/// - an anchor or bed without a stand-up position yields `None` (vanilla does not fall
+///   through to the forced fallback for a recognised spawn block);
+/// - the forced fallback needs the config block and the block above it to be free.
+///
+/// `consume_spawn_block` is vanilla's `consumeSpawnBlock`: true for death respawns and
+/// false for the End-credits and End-portal returns.
+///
+/// The caller must have loaded [`personal_respawn_chunk_positions`] first.
+pub(crate) fn resolve_personal_respawn(
+    world: &Arc<World>,
+    player: &Player,
+    config: &PlayerRespawnConfig,
+    consume_spawn_block: bool,
+) -> Option<PersonalRespawnSpawn> {
+    let pos = config.respawn_data.pos();
+    let state = world.get_block_state(pos);
 
-        if !config.forced {
-            return None;
+    if RespawnAnchorBlock::can_use_for_respawn(world, pos, state, config.forced) {
+        let position = RespawnAnchorBlock::find_standup_position(world, player, pos)?;
+        if RespawnAnchorBlock::should_consume_charge_after_respawn(
+            config.forced,
+            consume_spawn_block,
+            true,
+        ) {
+            let _ = RespawnAnchorBlock::consume_charge(world, pos, state);
         }
-        let top_state = world.get_block_state(pos.above());
-        Self::resolve_forced_respawn_fallback(
-            pos,
-            state,
-            top_state,
-            (config.respawn_data.yaw, config.respawn_data.pitch),
+        return Some(PersonalRespawnSpawn {
+            position,
+            rotation: (calculate_respawn_look_at_yaw(position, pos), 0.0),
+        });
+    }
+
+    if state.is_bed()
+        && Player::bed_rule_value_allows_in_world(
+            world,
+            Player::bed_rule_for(world, state).can_set_spawn,
         )
+    {
+        let facing = state.get_value(&BlockStateProperties::HORIZONTAL_FACING);
+        let position = BedBlock::find_standup_position_with_yaw(
+            world,
+            player,
+            facing,
+            pos,
+            config.respawn_data.yaw,
+        )?;
+        return Some(PersonalRespawnSpawn {
+            position,
+            rotation: (calculate_respawn_look_at_yaw(position, pos), 0.0),
+        });
     }
 
-    fn resolve_forced_respawn_fallback(
-        pos: BlockPos,
-        state: BlockStateId,
-        top_state: BlockStateId,
-        rotation: (f32, f32),
-    ) -> Option<DeathRespawnSpawn> {
-        if !state.is_possible_to_respawn_in_this() || !top_state.is_possible_to_respawn_in_this() {
-            return None;
-        }
-        Some(DeathRespawnSpawn {
-            position: DVec3::new(
-                f64::from(pos.x()) + 0.5,
-                f64::from(pos.y()) + 0.1,
-                f64::from(pos.z()) + 0.5,
-            ),
-            rotation,
-            anchor_deplete_sound_pos: None,
-            missing_respawn_block: false,
-        })
+    if !config.forced {
+        return None;
     }
+    let top_state = world.get_block_state(pos.above());
+    resolve_forced_respawn_fallback(
+        pos,
+        state,
+        top_state,
+        (config.respawn_data.yaw, config.respawn_data.pitch),
+    )
 }
 
 fn calculate_respawn_look_at_yaw(position: DVec3, look_at_block_pos: BlockPos) -> f32 {
@@ -654,14 +681,21 @@ impl Player {
 
         server.resend_player_context(&replacement);
 
+        // Vanilla `PlayerList.respawn` plays the deplete sound after a death respawn whenever
+        // the retained respawn config still points at a respawn anchor, independent of which
+        // branch actually produced the stand-up position.
         if kind == RespawnRequestKind::Death
-            && let Some(pos) = spawn.anchor_deplete_sound_pos
-            && target_world.get_block_state(pos).get_block() == &vanilla_blocks::RESPAWN_ANCHOR
+            && let Some(config) = replacement.respawn_config.lock().clone()
+            && let Some(respawn_world) = server.worlds.get(config.respawn_data.dimension()).cloned()
+            && respawn_world
+                .get_block_state(config.respawn_data.pos())
+                .get_block()
+                == &vanilla_blocks::RESPAWN_ANCHOR
         {
             replacement.send_packet(CSound::new(
                 &sound_events::BLOCK_RESPAWN_ANCHOR_DEPLETE,
                 SoundSource::Blocks,
-                pos.0.as_dvec3(),
+                config.respawn_data.pos().0.as_dvec3(),
                 1.0,
                 1.0,
                 rand::random(),
@@ -671,11 +705,15 @@ impl Player {
         RespawnFinish::Completed
     }
 
+    /// Sends vanilla's `NO_RESPAWN_BLOCK_AVAILABLE` notice for a replacement whose
+    /// personal spawn block could not be used.
+    ///
+    /// Vanilla's fresh `ServerPlayer` simply keeps a null respawn config in this case,
+    /// which the replacement restore already does.
     fn handle_missing_respawn_block(&self, missing_respawn_block: bool) {
         if !missing_respawn_block {
             return;
         }
-        self.set_respawn_position(None, false);
         self.send_packet(CGameEvent {
             event: GameEventType::NoRespawnBlockAvailable,
             data: 0.0,
@@ -836,17 +874,17 @@ impl Player {
 mod tests {
     use steel_utils::{BlockPos, ChunkPos};
 
-    use super::PlayerRespawnJob;
+    use super::personal_respawn_chunk_positions;
 
     #[test]
     fn personal_respawn_loads_only_chunks_touched_by_standup_search() {
         assert_eq!(
-            PlayerRespawnJob::personal_respawn_chunk_positions(BlockPos::new(8, 64, 8)),
+            personal_respawn_chunk_positions(BlockPos::new(8, 64, 8)),
             [ChunkPos::new(0, 0)]
         );
 
         assert_eq!(
-            PlayerRespawnJob::personal_respawn_chunk_positions(BlockPos::new(13, 64, 13)),
+            personal_respawn_chunk_positions(BlockPos::new(13, 64, 13)),
             [
                 ChunkPos::new(0, 0),
                 ChunkPos::new(0, 1),

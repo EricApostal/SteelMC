@@ -1,5 +1,6 @@
 mod context;
 mod listener;
+pub mod vibration;
 
 pub use context::GameEventContext;
 pub use listener::{

@@ -189,9 +189,20 @@ impl Player {
     /// Checks if movement validation should be performed for this player.
     ///
     /// Uses the `playerMovementCheck` and `elytraMovementCheck` gamerules.
+    /// Vanilla also skips validation while the player is changing dimension and
+    /// for the singleplayer owner; Steel models the former as a pending world
+    /// change and has no singleplayer-owner state yet.
     ///
     /// Returns `true` if movement should be validated, `false` to skip validation.
-    fn should_validate_movement(world: &World, is_fall_flying: bool) -> bool {
+    fn should_validate_movement(
+        world: &World,
+        is_fall_flying: bool,
+        is_changing_dimension: bool,
+    ) -> bool {
+        if is_changing_dimension {
+            return false;
+        }
+
         let player_check = world.get_game_rule(&PLAYER_MOVEMENT_CHECK);
         if !player_check {
             return false;
@@ -289,6 +300,7 @@ impl Player {
         let game_mode = self.game_mode();
         let is_sleeping = self.is_sleeping();
         let is_fall_flying = self.is_fall_flying();
+        let is_changing_dimension = self.is_world_change_pending();
         let was_on_ground = self.on_ground();
         let is_spectator = game_mode == GameType::Spectator;
         let is_creative = game_mode == GameType::Creative;
@@ -343,7 +355,7 @@ impl Player {
                 delta_packets = 1;
             }
 
-            if Self::should_validate_movement(&world, is_fall_flying) {
+            if Self::should_validate_movement(&world, is_fall_flying, is_changing_dimension) {
                 let threshold = if is_fall_flying {
                     SPEED_THRESHOLD_FLYING
                 } else {
@@ -390,6 +402,7 @@ impl Player {
         let error_dist_sq = error_delta.length_squared();
         let in_impulse_grace = self.is_in_post_impulse_grace_time();
         let fail = error_dist_sq > MOVEMENT_ERROR_THRESHOLD
+            && !is_changing_dimension
             && !is_creative
             && !is_spectator
             && !in_impulse_grace;
@@ -456,6 +469,17 @@ impl Player {
                 self.remove_latest_movement_recording();
                 return;
             }
+        }
+
+        // Vanilla `ServerGamePacketListenerImpl.handlePlayerPositionChange` drops the
+        // pending impulse context once the client is supported again. Steel has no
+        // auto-spin-attack state, so that vanilla term is always false here.
+        // TODO: Add the auto-spin-attack term once the riptide spin attack exists.
+        let landed_in_liquid =
+            self.velocity().y < f64::from(1.0E-5_f32) && (self.is_in_water() || self.is_in_lava());
+        if is_on_ground || landed_in_liquid || self.on_climbable() || is_spectator || is_fall_flying
+        {
+            self.try_reset_current_impulse_context();
         }
 
         self.check_movement_statistics(client_delta);

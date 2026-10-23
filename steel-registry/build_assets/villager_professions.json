@@ -26,7 +26,16 @@
   {
     "id": 5,
     "key": "minecraft:farmer",
-    "work_sound": "minecraft:entity.villager.work_farmer"
+    "work_sound": "minecraft:entity.villager.work_farmer",
+    "requested_items": [
+      "minecraft:wheat",
+      "minecraft:wheat_seeds",
+      "minecraft:beetroot_seeds",
+      "minecraft:bone_meal"
+    ],
+    "secondary_poi": [
+      "minecraft:farmland"
+    ]
   },
   {
     "id": 6,

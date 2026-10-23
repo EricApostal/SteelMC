@@ -312,7 +312,7 @@ pub(super) fn generate_foliage_placer(placer: &FoliagePlacer) -> TokenStream {
         FoliagePlacer::RandomSpread(placer) => {
             let radius = generate_int_provider(&placer.radius);
             let offset = generate_int_provider(&placer.offset);
-            let foliage_height = placer.foliage_height;
+            let foliage_height = generate_int_provider(&placer.foliage_height);
             let leaf_placement_attempts = placer.leaf_placement_attempts;
             quote! {
                 FoliagePlacer::RandomSpread(RandomSpreadFoliagePlacer {

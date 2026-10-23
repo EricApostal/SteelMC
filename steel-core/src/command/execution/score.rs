@@ -91,6 +91,16 @@ impl IntRange {
         }
         true
     }
+
+    /// The inclusive lower bound, if the range has one.
+    pub(crate) const fn minimum(self) -> Option<i32> {
+        self.minimum
+    }
+
+    /// The inclusive upper bound, if the range has one.
+    pub(crate) const fn maximum(self) -> Option<i32> {
+        self.maximum
+    }
 }
 
 pub(super) fn parse_score_holder<S>(

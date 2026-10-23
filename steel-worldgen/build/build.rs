@@ -36,11 +36,7 @@ pub fn main() {
     let df_dir = out_dir.join("vanilla_density_functions");
     fs::create_dir_all(&df_dir).expect("failed to create generated density function directory");
 
-    for (content, name) in [
-        (df.overworld, "overworld"),
-        (df.nether, "nether"),
-        (df.end, "end"),
-    ] {
+    for (name, content) in df.modules {
         let path = df_dir.join(format!("{name}.rs"));
         write_if_changed(&path, content.to_string());
     }

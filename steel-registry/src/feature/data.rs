@@ -78,6 +78,7 @@ pub enum ConfiguredFeatureKind {
     },
     EndSpike(EndSpikeConfiguration),
     FallenTree(FallenTreeConfiguration),
+    FillLayer(FillLayerConfiguration),
     Fossil(FossilConfiguration),
     FreezeTopLayer,
     Geode(GeodeConfiguration),
@@ -104,6 +105,7 @@ pub enum ConfiguredFeatureKind {
     RandomNeighborSpread(RandomNeighborSpreadConfiguration),
     RandomBooleanSelector(RandomBooleanSelectorConfiguration),
     RandomSelector(RandomSelectorConfiguration),
+    ReplaceSingleBlock(Vec<BlockReplacement>),
     RootSystem(RootSystemConfiguration),
     ScatteredOre(OreConfiguration),
     SculkPatch(SculkPatchConfiguration),
@@ -589,6 +591,23 @@ pub struct FallenTreeConfiguration {
 }
 
 #[derive(Debug, Clone)]
+pub struct FillLayerConfiguration {
+    /// Layer offset from the dimension's minimum Y.
+    pub height: i32,
+    pub state: BlockStateData,
+}
+
+/// One target entry of vanilla `ReplaceBlockFeature`: a rule test plus the state
+/// written when the test matches.
+#[derive(Debug, Clone)]
+pub struct BlockReplacement {
+    /// Vanilla's shared `RuleTest` type, identical to the structure-processor
+    /// input/location predicate tree.
+    pub target: crate::structure::processor::data::StructureRuleTestData,
+    pub state: BlockStateData,
+}
+
+#[derive(Debug, Clone)]
 pub struct FossilConfiguration {
     pub fossil_structures: Vec<Identifier>,
     pub overlay_structures: Vec<Identifier>,
@@ -986,7 +1005,7 @@ pub struct MegaPineFoliagePlacer {
 pub struct RandomSpreadFoliagePlacer {
     pub radius: IntProvider,
     pub offset: IntProvider,
-    pub foliage_height: i32,
+    pub foliage_height: IntProvider,
     pub leaf_placement_attempts: i32,
 }
 

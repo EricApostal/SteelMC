@@ -44,7 +44,7 @@ pub(crate) fn apply_potion_contents(
 
 /// Scales `duration` by `scale`, leaving the infinite-duration sentinel (`-1`) and a zero
 /// duration untouched, and never rounding a finite result below 1 tick.
-fn scale_effect_duration(duration: i32, scale: f32) -> i32 {
+pub(crate) fn scale_effect_duration(duration: i32, scale: f32) -> i32 {
     if duration == -1 || duration == 0 {
         return duration;
     }

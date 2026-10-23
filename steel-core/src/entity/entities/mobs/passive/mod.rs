@@ -1,15 +1,41 @@
 //! Passive entity implementations.
 /// Those mobs are passive creatures that run away when attacked by a player.
+pub mod allay;
+pub mod armadillo;
+pub mod axolotl;
+pub mod camel;
+pub mod cat;
 mod chicken;
 mod cow;
+pub mod equine;
+pub mod frog;
+pub mod goat;
 pub mod llama;
 mod mooshroom;
+pub mod ocelot;
+pub mod parrot;
 mod pig;
 mod sheep;
+pub mod sniffer;
+pub mod tadpole;
+pub mod turtle;
 
+pub use allay::AllayEntity;
+pub use armadillo::ArmadilloEntity;
+pub use axolotl::AxolotlEntity;
+pub use camel::CamelEntity;
+pub use cat::CatEntity;
 pub use chicken::ChickenEntity;
 pub use cow::CowEntity;
+pub use equine::{DonkeyEntity, HorseEntity, MuleEntity, SkeletonHorseEntity, ZombieHorseEntity};
+pub use frog::FrogEntity;
+pub use goat::GoatEntity;
 pub use llama::{LlamaEntity, TraderLlamaEntity};
 pub use mooshroom::MushroomCowEntity;
+pub use ocelot::OcelotEntity;
+pub use parrot::ParrotEntity;
 pub use pig::PigEntity;
 pub use sheep::SheepEntity;
+pub use sniffer::SnifferEntity;
+pub use tadpole::TadpoleEntity;
+pub use turtle::TurtleEntity;

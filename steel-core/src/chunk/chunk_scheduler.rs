@@ -8,6 +8,7 @@ use std::{
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use steel_registry::steel_ticket_types::CHUNK_REQUEST;
+use steel_registry::vanilla_ticket_types;
 use steel_utils::{ChunkPos, locks::SyncMutex};
 use uuid::Uuid;
 
@@ -17,7 +18,7 @@ use crate::chunk::{
     chunk_ticket_manager::{ChunkTicketLevel, LoadLevelChange, LoadTicketManager},
     chunk_ticket_storage::{
         ChunkTicketStorage, PersistentChunkTickets, SourceLevelUpdate, SourceProjectionChanges,
-        TimedTicketExpiration,
+        TimedTicketExpiration, forced_ticket,
     },
     player_ticket_tracker::PlayerTicketTracker,
     simulation_ticket_manager::{SimulationLevelChange, SimulationTicketManager},
@@ -378,6 +379,37 @@ impl ChunkSchedulingCoordinator {
         let mut ingress = self.ticket_ingress.lock();
         let changes = ingress.storage.add_or_refresh_ender_pearl_ticket(pos);
         ingress.record_changes(changes);
+    }
+
+    /// Adds or removes vanilla's force-load ticket at `pos`.
+    ///
+    /// Mirrors `TicketStorage.updateChunkForced`: the ticket type is
+    /// `TicketType.FORCED` at the entity-ticking level. Returns whether ticket
+    /// membership changed, which is vanilla's `setChunkForced` result.
+    pub(crate) fn set_chunk_forced(&self, pos: ChunkPos, forced: bool) -> bool {
+        let mut ingress = self.ticket_ingress.lock();
+        if forced {
+            let already_forced = ingress
+                .storage
+                .has_ticket_type(pos, &vanilla_ticket_types::FORCED);
+            let changes = ingress.storage.add_ticket(pos, forced_ticket());
+            ingress.record_changes(changes);
+            !already_forced
+        } else {
+            let changes = ingress.storage.remove_ticket(pos, forced_ticket());
+            let removed = !changes.load_positions.is_empty();
+            ingress.record_changes(changes);
+            removed
+        }
+    }
+
+    /// Returns the sorted positions holding a vanilla force-load ticket.
+    #[must_use]
+    pub(crate) fn force_loaded_chunks(&self) -> Vec<ChunkPos> {
+        self.ticket_ingress
+            .lock()
+            .storage
+            .positions_with_ticket_type(&vanilla_ticket_types::FORCED)
     }
 
     #[must_use]

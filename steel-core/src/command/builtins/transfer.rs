@@ -11,11 +11,13 @@ use crate::{
         registration::CommandRegistration,
     },
     entity::Entity,
+    permission::PermissionLevel,
     player::Player,
 };
 
 pub(super) fn registration() -> CommandRegistration<CommandSource> {
     CommandRegistration::new(Identifier::vanilla_static("transfer"), |_| command())
+        .at_level(PermissionLevel::Admins)
 }
 
 fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {

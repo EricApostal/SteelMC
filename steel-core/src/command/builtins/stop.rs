@@ -6,9 +6,11 @@ use super::super::{
     execution::{CommandSource, SteelCommandContext, SteelCommandRuntime, literal},
     registration::CommandRegistration,
 };
+use crate::permission::PermissionLevel;
 
 pub(super) fn registration() -> CommandRegistration<CommandSource> {
     CommandRegistration::new(Identifier::vanilla_static("stop"), |_| command())
+        .at_level(PermissionLevel::Owners)
 }
 
 fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {

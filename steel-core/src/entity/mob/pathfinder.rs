@@ -7,6 +7,7 @@ use steel_registry::{vanilla_attributes, vanilla_blocks};
 use steel_utils::{BlockPos, ChunkPos};
 
 use super::{Mob, TARGET_REACH_DISTANCE_SQR};
+use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::ai::goal::{Goal, GoalControl};
 use crate::entity::ai::navigation::{
     NavigationPathRequest, NavigationRecomputeRequest, NavigationTickContext,
@@ -281,7 +282,15 @@ pub trait PathfinderMob: Mob {
         !self.mob_base().navigation().lock().is_done()
     }
 
+    /// Vanilla `PathfinderMob.isPanicking`: the brain memory wins, then the
+    /// running-`PanicGoal` fallback for goal-driven mobs.
     fn is_panicking(&self) -> bool {
+        if let Some(brain) = self.as_mob().and_then(Mob::brain)
+            && brain.lock().has_memory_value(&mem::IS_PANICKING)
+        {
+            return true;
+        }
+
         self.mob_base()
             .goal_selector()
             .lock()
@@ -303,9 +312,6 @@ pub trait PathfinderMob: Mob {
     }
 
     /// Re-enables MOVE and follows a nearby holder unless panicking.
-    ///
-    /// Brain-based panic detection awaits Brain support; Steel uses vanilla's
-    /// running-`PanicGoal` fallback.
     fn close_range_leash_behaviour_pathfinder(&self, holder: &dyn Entity) {
         if !self.should_stay_close_to_leash_holder() || self.is_panicking() {
             return;
@@ -338,7 +344,10 @@ pub trait PathfinderMob: Mob {
         Self: Sized,
     {
         self.remove_all_goals(|_| true);
-        // Vanilla also removes all brain behaviors; Steel has no brain system.
+        // Vanilla `Mob.removeFreeWill`: `getBrain().removeAllBehaviors()`.
+        if let Some(brain) = self.as_mob().and_then(Mob::brain) {
+            brain.lock().remove_all_behaviors();
+        }
     }
 
     fn create_path_to_targets(

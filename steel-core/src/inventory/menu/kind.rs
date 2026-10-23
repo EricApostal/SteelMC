@@ -93,6 +93,38 @@ pub trait MenuKind: ErasedType + Send + Sync {
         true
     }
 
+    /// Handles a container button click from the client's container-button packet.
+    ///
+    /// Mirrors vanilla `AbstractContainerMenu.clickMenuButton`. `button_id` carries
+    /// the screen-specific selection (enchant option index, stonecutter recipe
+    /// index, loom pattern index, lectern page command). Returns `true` when the
+    /// button was accepted; `false` makes the caller treat it as invalid.
+    fn on_button_clicked(
+        &mut self,
+        _behavior: &mut MenuBehavior,
+        _guard: &mut ContainerLockGuard,
+        _button_id: i32,
+        _player: &Player,
+    ) -> bool {
+        false
+    }
+
+    /// Handles a slot-state toggle from the client (crafter slot disabling).
+    ///
+    /// Mirrors vanilla `AbstractContainerMenu.setSlotState`, reached from
+    /// `ServerGamePacketListenerImpl.handleContainerSlotStateChanged`. Returns
+    /// `true` when the toggle was accepted.
+    fn on_slot_state_changed(
+        &mut self,
+        _behavior: &mut MenuBehavior,
+        _guard: &mut ContainerLockGuard,
+        _slot_id: i32,
+        _new_state: bool,
+        _player: &Player,
+    ) -> bool {
+        false
+    }
+
     /// Handles a beacon effect update from the client's set-beacon packet.
     /// Returns `false` when the selection or payment is invalid.
     fn on_update_effects(

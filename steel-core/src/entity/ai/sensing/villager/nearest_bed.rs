@@ -111,6 +111,10 @@ impl BatchCache {
     }
 
     /// Vanilla `cacheTest`: at most [`BATCH_SIZE`] candidates per batch, once each.
+    ///
+    /// Vanilla increments before comparing (`++this.triedCount >= 5`), so the call
+    /// that reaches the batch size is rejected and only `BATCH_SIZE - 1` candidates
+    /// are actually tried per batch.
     fn test(&self, pos: BlockPos) -> bool {
         let mut state = self.state.lock();
         if state.entries.contains_key(&pos) {
@@ -155,9 +159,15 @@ mod tests {
         let cache = BatchCache::default();
         cache.begin_batch(100);
 
-        for x in 0..BATCH_SIZE {
+        // Vanilla `++triedCount >= 5` lets four candidates through per batch: the
+        // fifth call only consumes the count.
+        for x in 0..BATCH_SIZE - 1 {
             assert!(cache.test(pos(x)), "candidate {x} should be tried");
         }
+        assert!(
+            !cache.test(pos(BATCH_SIZE - 1)),
+            "the call that reaches the batch size is rejected"
+        );
         assert!(!cache.test(pos(BATCH_SIZE)), "batch is exhausted");
         assert!(!cache.test(pos(0)), "candidates are only tried once");
     }
@@ -180,9 +190,11 @@ mod tests {
     fn next_batch_stops_retrying_once_the_batch_size_is_hit() {
         let cache = BatchCache::default();
         cache.begin_batch(100);
-        for x in 0..BATCH_SIZE {
+        for x in 0..BATCH_SIZE - 1 {
             assert!(cache.test(pos(x)));
         }
+        assert!(cache.should_retry(), "four tries leave the batch open");
+        assert!(!cache.test(pos(BATCH_SIZE - 1)));
         assert!(!cache.should_retry());
 
         cache.begin_batch(200);

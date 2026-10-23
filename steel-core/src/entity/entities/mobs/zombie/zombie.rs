@@ -85,6 +85,10 @@ const SPAWN_AS_BABY_CHANCE: f32 = 0.05;
 const JOCKEY_CHANCE: f32 = 0.05;
 const ZOMBIE_ARMOR_CHANCE: f32 = 0.05;
 const ZOMBIE_ARMOR_CHANCE_HARD: f32 = 0.01;
+/// Vanilla `Drowned.populateDefaultEquipmentSlots`: `random.nextFloat() > 0.9`.
+const DROWNED_EQUIPMENT_CHANCE: f32 = 0.9;
+/// Vanilla `Drowned.populateDefaultEquipmentSlots`: `random.nextInt(16) < 10`.
+const DROWNED_TRIDENT_WEIGHT: i32 = 10;
 const KNOCKBACK_RESISTANCE_BONUS: f64 = 0.05;
 const FOLLOW_RANGE_BONUS: f64 = 1.5;
 const LEADER_REINFORCEMENT_BONUS: f64 = 0.25;
@@ -99,6 +103,8 @@ const TICKS_PER_SECOND: i32 = 20;
 const ZOMBIE_BABY_WIDTH: f32 = 0.49;
 const ZOMBIE_BABY_HEIGHT: f32 = 0.98;
 const ZOMBIE_BABY_EYE_HEIGHT: f32 = 0.775;
+/// Vanilla `Husk.BABY_DIMENSIONS` eye height.
+const HUSK_BABY_EYE_HEIGHT: f32 = 0.825;
 const ZOMBIE_BABY_VEHICLE_Y: f64 = 0.1875;
 
 const ZOMBIE_BABY_VEHICLE_ATTACHMENTS: [EntityAttachmentPoint; 1] =
@@ -111,11 +117,31 @@ const ZOMBIE_BABY_DIMENSIONS: EntityDimensions = EntityDimensions::new_with_atta
     EntityAttachments::new(&[], &ZOMBIE_BABY_VEHICLE_ATTACHMENTS, &[], &[]),
 );
 
+/// Vanilla `Husk.BABY_DIMENSIONS` (identical to `Zombie`'s except eye height).
+const HUSK_BABY_DIMENSIONS: EntityDimensions = EntityDimensions::new_with_attachments(
+    ZOMBIE_BABY_WIDTH,
+    ZOMBIE_BABY_HEIGHT,
+    HUSK_BABY_EYE_HEIGHT,
+    EntityAttachments::new(&[], &ZOMBIE_BABY_VEHICLE_ATTACHMENTS, &[], &[]),
+);
+
 /// Drowning-conversion counters (vanilla `ConversionTracker`).
 #[derive(Debug, Clone, Copy, Default)]
 struct DrowningConversion {
     affliction_time: i32,
     conversion_time: i32,
+}
+
+/// Discriminates which vanilla subclass shares the `Zombie` body.
+///
+/// Vanilla's `Husk` and `Drowned` extend `Zombie` and override a handful of
+/// protected methods; Rust has no inheritance, so the shared body dispatches on
+/// this value instead of each subclass duplicating the `Zombie` logic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ZombieVariant {
+    Zombie,
+    Husk,
+    Drowned,
 }
 
 /// Vanilla `Zombie`.
@@ -128,6 +154,7 @@ pub struct ZombieEntity {
     entity_data: SyncMutex<ZombieEntityData>,
     can_break_doors: SyncMutex<bool>,
     drowning: SyncMutex<DrowningConversion>,
+    variant: ZombieVariant,
 }
 
 // SAFETY: This key is owned by Steel and uniquely identifies `ZombieEntity`.
@@ -139,22 +166,33 @@ impl ZombieEntity {
     /// Creates a new zombie at runtime.
     #[must_use]
     pub fn new(entity_type: EntityTypeRef, id: i32, position: DVec3, world: Weak<World>) -> Self {
-        Self::new_with_base(
+        Self::new_with_variant(
             EntityBase::new(id, position, entity_type.dimensions, world),
             entity_type,
+            ZombieVariant::Zombie,
         )
     }
 
     /// Reconstructs a zombie from persisted base entity state.
     #[must_use]
     pub fn from_saved(entity_type: EntityTypeRef, load: EntityBaseLoad) -> Self {
-        Self::new_with_base(
+        Self::new_with_variant(
             EntityBase::from_load(load, entity_type.dimensions),
             entity_type,
+            ZombieVariant::Zombie,
         )
     }
 
-    fn new_with_base(base: EntityBase, entity_type: EntityTypeRef) -> Self {
+    /// Builds the shared `Zombie` body for a concrete vanilla subclass.
+    ///
+    /// `HuskEntity` and `DrownedEntity` own one of these and delegate to it;
+    /// `variant` supplies the overridden behaviour that vanilla gets from Java
+    /// inheritance.
+    pub(crate) fn new_with_variant(
+        base: EntityBase,
+        entity_type: EntityTypeRef,
+        variant: ZombieVariant,
+    ) -> Self {
         let living_base = LivingEntityBase::new(entity_type);
         let mob_base = MobBase::new();
         mob_base.set_xp_reward(XP_REWARD);
@@ -216,7 +254,13 @@ impl ZombieEntity {
             entity_data: SyncMutex::new(entity_data),
             can_break_doors: SyncMutex::new(false),
             drowning: SyncMutex::new(DrowningConversion::default()),
+            variant,
         }
+    }
+
+    /// Which vanilla subclass this body behaves as.
+    pub(crate) fn variant(&self) -> ZombieVariant {
+        self.variant
     }
 
     /// Vanilla `Zombie.isBaby`.
@@ -270,9 +314,9 @@ impl ZombieEntity {
         *self.entity_data.lock().drowned_conversion.get()
     }
 
-    /// Vanilla `Zombie.convertsInWater`; `ZombieVillager` overrides it to `false`.
+    /// Vanilla `Zombie.convertsInWater`; `ZombieVillager`/`Drowned` return `false`.
     pub fn converts_in_water(&self) -> bool {
-        true
+        self.variant != ZombieVariant::Drowned
     }
 
     /// Vanilla `Zombie.getSpawnAsBabyOdds`.
@@ -281,14 +325,20 @@ impl ZombieEntity {
         random.next_f32() < SPAWN_AS_BABY_CHANCE
     }
 
-    /// Vanilla `Zombie.getConversionSound`.
+    /// Vanilla `Zombie.getConversionSound`; `Husk` returns 1041.
     pub fn conversion_sound(&self) -> i32 {
-        level_events::SOUND_ZOMBIE_TO_DROWNED
+        match self.variant {
+            ZombieVariant::Husk => level_events::SOUND_HUSK_TO_ZOMBIE,
+            ZombieVariant::Zombie | ZombieVariant::Drowned => level_events::SOUND_ZOMBIE_TO_DROWNED,
+        }
     }
 
-    /// Vanilla `Zombie.convertsToWhenDrowning`.
+    /// Vanilla `Zombie.convertsToWhenDrowning`; `Husk` converts back to `Zombie`.
     pub fn converts_to_when_drowning(&self) -> EntityTypeRef {
-        &vanilla_entities::DROWNED
+        match self.variant {
+            ZombieVariant::Husk => &vanilla_entities::ZOMBIE,
+            ZombieVariant::Zombie | ZombieVariant::Drowned => &vanilla_entities::DROWNED,
+        }
     }
 
     /// Vanilla `Zombie.setInWaterTime` (test hook).
@@ -306,9 +356,9 @@ impl ZombieEntity {
         self.drowning.lock().conversion_time
     }
 
-    /// Vanilla `Zombie.canSpawnInLiquids`.
+    /// Vanilla `Zombie.canSpawnInLiquids`; `Drowned` returns `true`.
     pub fn can_spawn_in_liquids(&self) -> bool {
-        false
+        self.variant == ZombieVariant::Drowned
     }
 
     /// Current zombie special-type data (`DATA_SPECIAL_TYPE_ID`).
@@ -526,7 +576,8 @@ impl ZombieEntity {
     /// reinforcement roll. The vanilla source entity is not observable through
     /// Steel's `before_actually_hurt` hook, so re-targeting to the attacker is
     /// omitted; reinforcements defend the current target.
-    fn on_about_to_be_hurt(&self) {
+    /// Reinforcements re-target and roll (vanilla `Zombie.hurtServer`).
+    pub(crate) fn on_about_to_be_hurt(&self) {
         let Some(world) = self.level() else {
             return;
         };
@@ -635,11 +686,37 @@ impl ZombieEntity {
         }
     }
 
+    /// Vanilla `Zombie.getStepSound`; `Husk`/`Drowned` override it.
+    pub fn step_sound(&self) -> SoundEventRef {
+        match self.variant {
+            ZombieVariant::Husk => &sound_events::ENTITY_HUSK_STEP,
+            ZombieVariant::Drowned => &sound_events::ENTITY_DROWNED_STEP,
+            ZombieVariant::Zombie => &sound_events::ENTITY_ZOMBIE_STEP,
+        }
+    }
+
     fn populate_default_equipment_slots(
         &self,
         random: &mut impl steel_utils::random::Random,
         difficulty_modifier: f32,
     ) {
+        if self.variant == ZombieVariant::Drowned {
+            // Vanilla `Drowned.populateDefaultEquipmentSlots`, which does not call
+            // `Zombie`'s table.
+            if random.next_f32() > DROWNED_EQUIPMENT_CHANCE {
+                let item = if random.next_i32_bounded(16) < DROWNED_TRIDENT_WEIGHT {
+                    &vanilla_items::TRIDENT
+                } else {
+                    &vanilla_items::FISHING_ROD
+                };
+                self.living_base()
+                    .equipment()
+                    .lock()
+                    .set(EquipmentSlot::MainHand, ItemStack::new(item));
+            }
+            return;
+        }
+
         let chance = if difficulty_modifier >= 1.0 {
             ZOMBIE_ARMOR_CHANCE_HARD
         } else {
@@ -737,7 +814,12 @@ impl Entity for ZombieEntity {
 
     fn dimensions_for_pose(&self, _pose: EntityPose) -> EntityDimensions {
         if self.is_baby() {
-            return ZOMBIE_BABY_DIMENSIONS;
+            // Vanilla `Husk.BABY_DIMENSIONS` differs from `Zombie`'s eye height.
+            return if self.variant == ZombieVariant::Husk {
+                HUSK_BABY_DIMENSIONS
+            } else {
+                ZOMBIE_BABY_DIMENSIONS
+            };
         }
         let scale = LivingEntity::get_scale(self);
         if self.entity_type.fixed {
@@ -771,11 +853,14 @@ impl Entity for ZombieEntity {
     }
 
     fn swim_sound(&self) -> SoundEventRef {
+        if self.variant == ZombieVariant::Drowned {
+            return &sound_events::ENTITY_DROWNED_SWIM;
+        }
         Monster::swim_sound_monster(self)
     }
 
     fn play_step_sound(&self, _pos: BlockPos, _block_state: BlockStateId) {
-        self.play_sound(&sound_events::ENTITY_ZOMBIE_STEP, 0.15, 1.0);
+        self.play_sound(self.step_sound(), 0.15, 1.0);
     }
 
     fn save_additional(&self, nbt: &mut NbtCompound) {
@@ -864,17 +949,36 @@ impl LivingEntity for ZombieEntity {
     }
 
     fn hurt_sound(&self, _source: &DamageSource) -> Option<SoundEventRef> {
-        Some(&sound_events::ENTITY_ZOMBIE_HURT)
+        // Vanilla `Drowned.getHurtSound` switches on being in water.
+        Some(match self.variant {
+            ZombieVariant::Husk => &sound_events::ENTITY_HUSK_HURT,
+            ZombieVariant::Drowned => {
+                if self.is_in_water() {
+                    &sound_events::ENTITY_DROWNED_HURT_WATER
+                } else {
+                    &sound_events::ENTITY_DROWNED_HURT
+                }
+            }
+            ZombieVariant::Zombie => &sound_events::ENTITY_ZOMBIE_HURT,
+        })
     }
 
     fn death_sound(&self) -> Option<SoundEventRef> {
-        Some(&sound_events::ENTITY_ZOMBIE_DEATH)
+        Some(match self.variant {
+            ZombieVariant::Husk => &sound_events::ENTITY_HUSK_DEATH,
+            ZombieVariant::Drowned => {
+                if self.is_in_water() {
+                    &sound_events::ENTITY_DROWNED_DEATH_WATER
+                } else {
+                    &sound_events::ENTITY_DROWNED_DEATH
+                }
+            }
+            ZombieVariant::Zombie => &sound_events::ENTITY_ZOMBIE_DEATH,
+        })
     }
 
     fn before_actually_hurt(&self, _source: &DamageSource, _amount: f32) {
-        if let Some(zombie) = self.downcast_ref::<ZombieEntity>() {
-            zombie.on_about_to_be_hurt();
-        }
+        self.on_about_to_be_hurt();
     }
 
     fn should_drop_experience(&self) -> bool {
@@ -916,7 +1020,17 @@ impl Mob for ZombieEntity {
     }
 
     fn ambient_sound(&self) -> Option<SoundEventRef> {
-        Some(&sound_events::ENTITY_ZOMBIE_AMBIENT)
+        Some(match self.variant {
+            ZombieVariant::Husk => &sound_events::ENTITY_HUSK_AMBIENT,
+            ZombieVariant::Drowned => {
+                if self.is_in_water() {
+                    &sound_events::ENTITY_DROWNED_AMBIENT_WATER
+                } else {
+                    &sound_events::ENTITY_DROWNED_AMBIENT
+                }
+            }
+            ZombieVariant::Zombie => &sound_events::ENTITY_ZOMBIE_AMBIENT,
+        })
     }
 
     fn mob_flags(&self) -> i8 {

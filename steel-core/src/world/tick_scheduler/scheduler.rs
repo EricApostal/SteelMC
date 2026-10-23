@@ -1,8 +1,9 @@
 use super::{
-    Arc, AtomicI64, AtomicOrdering, BTreeSet, BinaryHeap, BlockPos, BlockRef, ChunkPos,
-    ChunkTickContainer, ChunkTickContainerLifecycle, ChunkTickLists, FluidRef, FullChunkRef,
-    FxHashMap, Ordering, PackedChunkPos, ScheduledTick, ScheduledTickBatch, SyncMutex, SyncRwLock,
-    TickKey, TickList, TickPriority, TickSchedulerError, intra_tick_drain_order,
+    Arc, AtomicI64, AtomicOrdering, BTreeSet, BinaryHeap, BlockPos, BlockRef, BlockTick,
+    BoundingBox, ChunkPos, ChunkTickContainer, ChunkTickContainerLifecycle, ChunkTickLists,
+    FluidRef, FluidTick, FullChunkRef, FxHashMap, IVec3, Ordering, PackedChunkPos, ScheduledTick,
+    ScheduledTickBatch, SectionPos, SyncMutex, SyncRwLock, TickKey, TickList, TickPriority,
+    TickSchedulerError, intra_tick_drain_order,
 };
 
 pub(crate) struct WorldTickScheduler {
@@ -491,6 +492,191 @@ impl WorldTickScheduler {
         )
     }
 
+    /// Removes every scheduled block and fluid tick whose position is inside `area`.
+    ///
+    /// Mirrors vanilla `LevelTicks.clearArea`: only chunk containers overlapping the area's
+    /// chunk range are visited, and each container's head/deadline index entry is repaired
+    /// exactly when its head changes. Vanilla's callers only clear block ticks; Steel's single
+    /// scheduler clears the fluid queue too, so a cleared area cannot leave fluid ticks behind.
+    /// Ticks already collected into an executor batch keep running: Steel hands those to the
+    /// executor as an immutable batch, so it has no mutable `toRunThisTick` queue to purge.
+    pub(crate) fn clear_area(&self, area: BoundingBox) {
+        let _phase = self.phase.read();
+        for (pos, container) in self.containers_in_area(area) {
+            let mut container_state = container.state.lock();
+            // The container lock is held across the head repair, matching `schedule_block`:
+            // otherwise a concurrent schedule could slip a tick in between and leave a stale
+            // deadline behind.
+            let mut state = self.state.lock();
+            if container_state.lifecycle != ChunkTickContainerLifecycle::Registered {
+                continue;
+            }
+            let Some(registered) = state.chunks.get(&pos) else {
+                continue;
+            };
+            if !Arc::ptr_eq(&registered.container, &container) {
+                continue;
+            }
+            clear_container_area(&mut container_state.lists, area);
+            let block_head = container_state
+                .lists
+                .block()
+                .peek()
+                .map(|tick| tick.trigger_tick);
+            let fluid_head = container_state
+                .lists
+                .fluid()
+                .peek()
+                .map(|tick| tick.trigger_tick);
+            // `set_head` repairs the per-kind deadline index exactly like vanilla's
+            // `updateContainerScheduling`, and drops the entry when the container is empty.
+            if let Err(error) = state.set_head(pos, TickKind::Block, block_head) {
+                panic!("scheduled-tick head index invariant failed: {error:?}");
+            }
+            if let Err(error) = state.set_head(pos, TickKind::Fluid, fluid_head) {
+                panic!("scheduled-tick head index invariant failed: {error:?}");
+            }
+        }
+    }
+
+    /// Copies this scheduler's ticks inside `area`, re-scheduled at `offset` positions.
+    ///
+    /// Mirrors vanilla `LevelTicks.copyArea`, which delegates to `copyAreaFrom` with itself.
+    pub(crate) fn copy_area(&self, area: BoundingBox, offset: IVec3) {
+        self.copy_area_from(self, area, offset);
+    }
+
+    /// Copies `source`'s ticks inside `area`, re-scheduled at `offset` positions.
+    ///
+    /// Mirrors vanilla `LevelTicks.copyAreaFrom`: every collected tick is re-scheduled as
+    /// `ScheduledTick` at `pos + offset` with `sub_tick_order - min + max + 1`, preserving
+    /// the trigger tick and priority. Sub-tick statistics are computed per tick kind, matching
+    /// vanilla's per-type `LevelTicks` instances. Ticks whose offset position has no registered
+    /// container are dropped, like vanilla's unloaded-position drop in `schedule`.
+    pub(crate) fn copy_area_from(
+        &self,
+        source: &WorldTickScheduler,
+        area: BoundingBox,
+        offset: IVec3,
+    ) {
+        let (block_ticks, fluid_ticks) = source.collect_area_ticks(area);
+        copy_kind_ticks(
+            self,
+            block_ticks,
+            offset,
+            TickKind::Block,
+            ChunkTickLists::block_mut,
+        );
+        copy_kind_ticks(
+            self,
+            fluid_ticks,
+            offset,
+            TickKind::Fluid,
+            ChunkTickLists::fluid_mut,
+        );
+    }
+
+    /// Snapshots the chunk containers registered for the chunk range overlapping `area`.
+    ///
+    /// Mirrors vanilla's `forContainersInArea`: the block min/max corners convert to chunk
+    /// coordinates via `SectionPos` (`>> 4`), so partially overlapped edge chunks are included.
+    fn containers_in_area(&self, area: BoundingBox) -> Vec<(ChunkPos, Arc<ChunkTickContainer>)> {
+        let state = self.state.lock();
+        let mut containers = Vec::new();
+        for chunk_x in SectionPos::block_to_section_coord(area.min_x())
+            ..=SectionPos::block_to_section_coord(area.max_x())
+        {
+            for chunk_z in SectionPos::block_to_section_coord(area.min_z())
+                ..=SectionPos::block_to_section_coord(area.max_z())
+            {
+                let pos = ChunkPos::new(chunk_x, chunk_z);
+                if let Some(registered) = state.chunks.get(&pos) {
+                    containers.push((pos, Arc::clone(&registered.container)));
+                }
+            }
+        }
+        containers
+    }
+
+    /// Collects every queued block and fluid tick inside `area`.
+    ///
+    /// Mirrors vanilla's `getAll` stream over the live queues. Not-yet-unpacked saved entries are
+    /// skipped: they carry a relative delay but no sub-tick order for the copy formula, and
+    /// vanilla's live world unpacks them before a container joins `LevelTicks`.
+    fn collect_area_ticks(&self, area: BoundingBox) -> (Vec<BlockTick>, Vec<FluidTick>) {
+        let _phase = self.phase.read();
+        let mut block_ticks = Vec::new();
+        let mut fluid_ticks = Vec::new();
+        for (_, container) in self.containers_in_area(area) {
+            let container_state = container.state.lock();
+            block_ticks.extend(
+                container_state
+                    .lists
+                    .block()
+                    .live_entries()
+                    .filter(|tick| area.contains_blockpos(tick.pos)),
+            );
+            fluid_ticks.extend(
+                container_state
+                    .lists
+                    .fluid()
+                    .live_entries()
+                    .filter(|tick| area.contains_blockpos(tick.pos)),
+            );
+        }
+        (block_ticks, fluid_ticks)
+    }
+
+    /// Inserts one area-copied tick, dropping it when its chunk is not registered.
+    ///
+    /// Mirrors vanilla `LevelTicks.schedule` plus the `chunkScheduleUpdater` head repair:
+    /// a destination container that already schedules the same `(pos, type)` ignores the copy.
+    fn schedule_copied_tick<T: TickKey>(
+        &self,
+        kind: TickKind,
+        select: fn(&mut ChunkTickLists) -> &mut TickList<T>,
+        tick: ScheduledTick<T>,
+    ) {
+        let _phase = self.phase.read();
+        let pos = ChunkPos::from_block_pos(tick.pos);
+        let container = {
+            let state = self.state.lock();
+            let Some(registered) = state.chunks.get(&pos) else {
+                return;
+            };
+            Arc::clone(&registered.container)
+        };
+        let mut container_state = container.state.lock();
+        if container_state.lifecycle != ChunkTickContainerLifecycle::Registered {
+            return;
+        }
+        if !select(&mut container_state.lists).schedule(
+            tick.tick_type,
+            tick.pos,
+            tick.trigger_tick,
+            tick.priority,
+            tick.sub_tick_order,
+        ) {
+            return;
+        }
+        let head = select(&mut container_state.lists)
+            .peek()
+            .map(|tick| tick.trigger_tick);
+        // Held across the metadata update like `schedule_block`, so the indexed head cannot go
+        // stale between reading it and repairing the deadline set.
+        let mut state = self.state.lock();
+        if state
+            .chunks
+            .get(&pos)
+            .is_none_or(|registered| !Arc::ptr_eq(&registered.container, &container))
+        {
+            return;
+        }
+        if let Err(error) = state.set_head(pos, kind, head) {
+            panic!("scheduled-tick head index invariant failed: {error:?}");
+        }
+    }
+
     /// Selects fluids after block callbacks using the same captured game time.
     pub(crate) fn collect_fluid_ticks(
         &self,
@@ -633,6 +819,62 @@ fn prepare_ready_containers<T: TickKey>(
         }
     }
     (ready_containers, head_updates)
+}
+
+/// Re-schedules copied ticks into `target` with vanilla's sub-tick renumbering.
+///
+/// Vanilla's `copyAreaFrom` renumbers `subTickOrder` as `order - min + max + 1` over the
+/// collected set, so copied ticks keep their relative intra-tick order but sort after every
+/// tick already queued at the destination. An empty set schedules nothing, exactly like
+/// `LongSummaryStatistics` over an empty stream feeding an empty `forEach`.
+fn copy_kind_ticks<T: TickKey>(
+    target: &WorldTickScheduler,
+    ticks: Vec<ScheduledTick<T>>,
+    offset: IVec3,
+    kind: TickKind,
+    select: fn(&mut ChunkTickLists) -> &mut TickList<T>,
+) {
+    let Some(first) = ticks.first() else {
+        return;
+    };
+    let mut min_sub_tick = first.sub_tick_order;
+    let mut max_sub_tick = first.sub_tick_order;
+    for tick in &ticks {
+        min_sub_tick = min_sub_tick.min(tick.sub_tick_order);
+        max_sub_tick = max_sub_tick.max(tick.sub_tick_order);
+    }
+    for tick in ticks {
+        let shifted = ScheduledTick {
+            pos: tick.pos.offset(offset.x, offset.y, offset.z),
+            sub_tick_order: tick
+                .sub_tick_order
+                .wrapping_sub(min_sub_tick)
+                .wrapping_add(max_sub_tick)
+                .wrapping_add(1),
+            ..tick
+        };
+        target.schedule_copied_tick(kind, select, shifted);
+    }
+}
+
+/// Removes every queued block and fluid tick inside `area`, live and not yet unpacked.
+///
+/// Mirrors the per-container half of vanilla `LevelTicks.clearArea`: live ticks via
+/// `LevelChunkTicks.removeIf`, and Steel additionally purges not-yet-unpacked saved ticks
+/// so pre-ticking containers cannot resurrect cleared entries on `unpack`.
+fn clear_container_area(lists: &mut ChunkTickLists, area: BoundingBox) {
+    lists
+        .block_mut()
+        .remove_live_matching(|tick| area.contains_blockpos(tick.pos));
+    lists
+        .block_mut()
+        .remove_pending_matching(|tick| area.contains_blockpos(tick.pos));
+    lists
+        .fluid_mut()
+        .remove_live_matching(|tick| area.contains_blockpos(tick.pos));
+    lists
+        .fluid_mut()
+        .remove_pending_matching(|tick| area.contains_blockpos(tick.pos));
 }
 
 /// Selects at most `max_ticks` ready entries from sparse live-container heads.

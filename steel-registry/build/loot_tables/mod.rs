@@ -30,23 +30,117 @@ pub(crate) use values::{generate_number_provider, generate_potion_options};
 #[serde(untagged)]
 pub(crate) enum NumberProviderJson {
     Constant(f32),
-    Object {
-        #[serde(rename = "type")]
-        provider_type: String,
-        #[serde(default)]
-        value: Option<f32>,
-        #[serde(default)]
-        min: Option<f32>,
-        #[serde(default)]
-        max: Option<f32>,
-        #[serde(default)]
-        n: Option<f32>, // Can be float in JSON, convert to i32 later
-        #[serde(default)]
-        p: Option<f32>,
-        /// `minecraft:add` provider inputs.
-        #[serde(default)]
-        inputs: Option<Vec<NumberProviderJson>>,
-    },
+    /// A `minecraft:<path>` reference to a `context_int_provider` /
+    /// `context_float_provider` registry entry (vanilla `RegistryCodecs.holder`).
+    Reference(String),
+    Object(Box<NumberProviderObjectJson>),
+}
+
+/// An object-shaped number provider (`net.minecraft.world.level.storage.loot.providers.number`).
+///
+/// Vanilla has one codec per provider type; this struct parses the union of every
+/// provider field so that [`generate_number_provider`] can dispatch on `type`.
+/// Fields are optional because each provider only uses its own subset.
+#[derive(Deserialize, Debug, Clone)]
+pub(crate) struct NumberProviderObjectJson {
+    /// Provider type id, e.g. `minecraft:uniform`.
+    #[serde(rename = "type")]
+    pub(crate) provider_type: String,
+    /// `minecraft:constant` value.
+    #[serde(default)]
+    pub(crate) value: Option<NumberProviderJson>,
+    /// `minecraft:uniform` lower bound.
+    #[serde(default)]
+    pub(crate) min: Option<NumberProviderJson>,
+    /// `minecraft:uniform` upper bound.
+    #[serde(default)]
+    pub(crate) max: Option<NumberProviderJson>,
+    /// `minecraft:binomial` trial count (an int provider).
+    #[serde(default)]
+    pub(crate) n: Option<NumberProviderJson>,
+    /// `minecraft:binomial` success chance (a float provider).
+    #[serde(default)]
+    pub(crate) p: Option<NumberProviderJson>,
+    /// Aggregate inputs (`add`, `avg`, `min`, `max`, `mul`, `length`).
+    #[serde(default)]
+    pub(crate) inputs: Option<Vec<NumberProviderJson>>,
+    /// Binary left operand (`sub`, `div`, `floor_div`, `mod`, `floor_mod`).
+    #[serde(default)]
+    pub(crate) left: Option<NumberProviderJson>,
+    /// Binary right operand.
+    #[serde(default)]
+    pub(crate) right: Option<NumberProviderJson>,
+    /// `minecraft:pow` base.
+    #[serde(default)]
+    pub(crate) base: Option<NumberProviderJson>,
+    /// `minecraft:pow` exponent.
+    #[serde(default)]
+    pub(crate) exponent: Option<NumberProviderJson>,
+    /// Unary input (`abs`, `negate`, `ceil`, `floor`, `round`, `truncate`, `sqrt`,
+    /// `sin`, `cos`, `from_int`, `from_float`).
+    #[serde(default)]
+    pub(crate) input: Option<NumberProviderJson>,
+    /// `minecraft:conditional` condition.
+    #[serde(default)]
+    pub(crate) condition: Option<ConditionRefJson>,
+    /// `minecraft:conditional` value used when the condition passes.
+    #[serde(default)]
+    pub(crate) on_true: Option<NumberProviderJson>,
+    /// `minecraft:conditional` value used when the condition fails.
+    #[serde(default)]
+    pub(crate) on_false: Option<NumberProviderJson>,
+    /// `minecraft:number_dispatcher` cases, tested in order.
+    #[serde(default)]
+    pub(crate) cases: Option<Vec<DispatcherCaseJson>>,
+    /// `minecraft:number_dispatcher` default value.
+    #[serde(default)]
+    pub(crate) default: Option<NumberProviderJson>,
+    /// `minecraft:weighted_list` distribution.
+    #[serde(default)]
+    pub(crate) distribution: Option<Vec<WeightedProviderJson>>,
+    /// `minecraft:score` score holder (a name string or a `fixed`/`context` object).
+    #[serde(default)]
+    pub(crate) target: Option<serde_json::Value>,
+    /// `minecraft:score` objective name.
+    #[serde(default)]
+    pub(crate) score: Option<String>,
+    /// `minecraft:score` legacy multiplier.
+    #[serde(default)]
+    pub(crate) scale: Option<f32>,
+    /// `minecraft:storage` storage id.
+    #[serde(default)]
+    pub(crate) storage: Option<String>,
+    /// `minecraft:storage` NBT path.
+    #[serde(default)]
+    pub(crate) path: Option<String>,
+    /// `minecraft:score`/`minecraft:storage` fallback value.
+    #[serde(default)]
+    pub(crate) fallback: Option<NumberProviderJson>,
+    /// `minecraft:environment_attribute` attribute id.
+    #[serde(default)]
+    pub(crate) attribute: Option<String>,
+    /// `minecraft:enchantment_level` amount (vanilla `LevelBasedValue`).
+    #[serde(default)]
+    pub(crate) amount: Option<serde_json::Value>,
+}
+
+/// One `minecraft:number_dispatcher` case (vanilla `DispatcherProvider.Case`).
+#[derive(Deserialize, Debug, Clone)]
+pub(crate) struct DispatcherCaseJson {
+    /// Condition that selects this case.
+    pub(crate) condition: ConditionRefJson,
+    /// Value produced when the condition passes.
+    pub(crate) value: NumberProviderJson,
+}
+
+/// One `minecraft:weighted_list` entry (vanilla `WeightedList` of providers).
+#[derive(Deserialize, Debug, Clone)]
+pub(crate) struct WeightedProviderJson {
+    /// The provider (vanilla `data`).
+    pub(crate) data: NumberProviderJson,
+    /// Non-negative selection weight.
+    #[serde(default = "default_weight")]
+    pub(crate) weight: i32,
 }
 
 impl Default for NumberProviderJson {
@@ -93,7 +187,7 @@ impl ModifierJson {
 /// `RegistryCodecs.holder`) a bare string referencing a `minecraft:predicate` by id.
 #[derive(Deserialize, Debug, Clone)]
 #[serde(untagged)]
-enum ConditionRefJson {
+pub(crate) enum ConditionRefJson {
     Reference(String),
     Inline(Box<LootConditionJson>),
 }
@@ -216,7 +310,7 @@ const fn default_weight() -> i32 {
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-struct LootConditionJson {
+pub(crate) struct LootConditionJson {
     #[serde(rename = "type")]
     condition: String,
     // match_block (vanilla `BlockPredicate`)

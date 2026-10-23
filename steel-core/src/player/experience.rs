@@ -1,4 +1,5 @@
 use steel_protocol::packets::game::SoundSource;
+use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_events;
 
 use crate::entity::Entity;
@@ -140,7 +141,9 @@ impl Experience {
         }
 
         self.progress += additional_points as f32 / Self::points_for_level(self.level) as f32;
-        self.total_points = self.total_points.wrapping_add(additional_points).max(0);
+        // Vanilla `Mth.clamp(this.totalExperience + i, 0, Integer.MAX_VALUE)`:
+        // saturation gives the same result as the wide clamp in both directions.
+        self.total_points = self.total_points.saturating_add(additional_points).max(0);
 
         while self.progress < 0.0 {
             let remaining = self.progress * Self::points_for_level(self.level) as f32;
@@ -230,6 +233,38 @@ impl Player {
         *self.entity_data.lock().score.get()
     }
 
+    /// Returns the seed the enchanting table uses for its three offers.
+    ///
+    /// Vanilla `Player.getEnchantmentSeed`.
+    #[must_use]
+    pub fn enchantment_seed(&self) -> i32 {
+        *self.enchantment_seed.lock()
+    }
+
+    /// Sets the enchanting-table seed, used by the save/load and respawn-copy paths.
+    ///
+    /// Vanilla assigns `Player.enchantmentSeed` directly in `readAdditionalSaveData`
+    /// and in `ServerPlayer.restoreFrom`; it has no setter.
+    pub fn set_enchantment_seed(&self, seed: i32) {
+        *self.enchantment_seed.lock() = seed;
+    }
+
+    /// Charges an enchantment and refreshes the offer seed.
+    ///
+    /// Vanilla `Player.onEnchantmentPerformed`: subtract the cost, clamp the level
+    /// (resetting progress and total points if it goes negative) and reseed. The
+    /// `ServerPlayer` override additionally forces the experience packet to resend,
+    /// which is the `dirty` flag here. `item_stack` is unused by 26.3 vanilla too; it
+    /// is kept so the enchanting menu port matches the vanilla call shape.
+    pub fn on_enchantment_performed(&self, _item_stack: &ItemStack, enchantment_cost: i32) {
+        {
+            let mut experience = self.experience.lock();
+            experience.add_levels(enchantment_cost.saturating_neg());
+            experience.dirty = true;
+        }
+        self.set_enchantment_seed(rand::random());
+    }
+
     /// Sets the player's vanilla death-screen score.
     pub fn set_score(&self, score: i32) {
         self.entity_data.lock().score.set(score);
@@ -305,4 +340,41 @@ pub(super) fn first_point_level_up_sound(
         return None;
     }
     i32::try_from(first_multiple).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Experience;
+
+    /// Vanilla `Player.giveExperiencePoints` clamps the total to
+    /// `[0, i32::MAX]` instead of wrapping.
+    #[test]
+    fn total_points_clamp_matches_vanilla_mth_clamp() {
+        let mut almost_max = Experience::from_parts(0, 0.0, i32::MAX - 1);
+        almost_max.add_points(100);
+        assert_eq!(almost_max.total_points(), i32::MAX);
+
+        let mut almost_zero = Experience::from_parts(0, 0.5, 1);
+        almost_zero.add_points(-100);
+        assert_eq!(almost_zero.total_points(), 0);
+    }
+
+    /// Vanilla grindstone XP curve spot checks (`getXpNeededForNextLevel`).
+    #[test]
+    fn points_for_level_boundaries() {
+        assert_eq!(Experience::points_for_level(0), 7);
+        assert_eq!(Experience::points_for_level(14), 35);
+        assert_eq!(Experience::points_for_level(15), 37);
+        assert_eq!(Experience::points_for_level(29), 107);
+        assert_eq!(Experience::points_for_level(30), 112);
+        assert_eq!(Experience::points_for_level(31), 121);
+    }
+
+    /// Vanilla death reward is `min(level * 7, 100)`.
+    #[test]
+    fn death_xp_reward_caps_at_100() {
+        assert_eq!(Experience::from_parts(5, 0.0, 0).death_xp_reward(), 35);
+        assert_eq!(Experience::from_parts(30, 0.0, 0).death_xp_reward(), 100);
+        assert_eq!(Experience::from_parts(100, 0.0, 0).death_xp_reward(), 100);
+    }
 }

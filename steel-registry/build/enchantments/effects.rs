@@ -3,11 +3,12 @@ use super::{
     ConditionalValueEffectJson, CrossbowChargingSoundsJson, DamageSourcePredicateJson,
     EnchantmentTargetJson, EntityEffectJson, EntityFlagsPredicateJson, EntityPredicateJson,
     EntityTargetJson, EntityTypePredicateJson, EntityTypeSpecificPredicateJson,
-    EntityVehiclePredicateJson, GameType, Ident, Identifier, ItemHolderSetJson,
-    LevelBasedValueJson, LevelBasedValueTypedJson, MobEffectSelectionJson, RequirementsJson, Span,
-    TargetedConditionalEntityEffectJson, TargetedConditionalValueEffectJson, ToShoutySnakeCase,
-    TokenStream, ValueEffectJson, damage_type_ref_token, generate_sound_event_ref,
-    identifier_token, quote,
+    EntityTypeSetJson, EntityVehiclePredicateJson, FloatProviderJson, FloatProviderTypedJson,
+    GameType, Ident, Identifier, ItemHolderSetJson, LevelBasedValueJson, LevelBasedValueTypedJson,
+    MobEffectSelectionJson, ParticlePositionSourceJson, ParticleVelocitySourceJson,
+    RequirementsJson, Span, TargetedConditionalEntityEffectJson, TargetedConditionalValueEffectJson,
+    ToShoutySnakeCase, TokenStream, ValueEffectJson, damage_type_ref_token,
+    generate_sound_event_ref, identifier_token, quote,
 };
 
 pub(super) fn attribute_ref_token(attribute: &Identifier) -> TokenStream {
@@ -349,6 +350,8 @@ pub(super) fn generate_entity_effect(
             pitch,
         } => {
             let sounds = sounds.iter().map(generate_sound_event_ref);
+            let volume = generate_float_provider(volume);
+            let pitch = generate_float_provider(pitch);
             quote! {
                 EnchantmentEntityEffect::PlaySound {
                     sounds: &[#(#sounds),*],
@@ -356,6 +359,63 @@ pub(super) fn generate_entity_effect(
                     pitch: #pitch,
                 }
             }
+        }
+        EntityEffectJson::SummonEntity {
+            entity_types,
+            join_team,
+        } => {
+            let entity_types = generate_entity_type_set(entity_types);
+            quote! {
+                EnchantmentEntityEffect::SummonEntity {
+                    entity_types: #entity_types,
+                    join_team: #join_team,
+                }
+            }
+        }
+        EntityEffectJson::SpawnParticles {
+            particle,
+            horizontal_position,
+            vertical_position,
+            horizontal_velocity,
+            vertical_velocity,
+            speed,
+        } => {
+            let particle = particle_type_ref_token(particle);
+            let horizontal_position = generate_particle_position_source(horizontal_position);
+            let vertical_position = generate_particle_position_source(vertical_position);
+            let horizontal_velocity = generate_particle_velocity_source(horizontal_velocity);
+            let vertical_velocity = generate_particle_velocity_source(vertical_velocity);
+            let speed = generate_float_provider(speed);
+            quote! {
+                EnchantmentEntityEffect::SpawnParticles {
+                    particle: #particle,
+                    horizontal_position: #horizontal_position,
+                    vertical_position: #vertical_position,
+                    horizontal_velocity: #horizontal_velocity,
+                    vertical_velocity: #vertical_velocity,
+                    speed: #speed,
+                }
+            }
+        }
+        EntityEffectJson::Attribute(attribute) => {
+            let ident = Ident::new(
+                &format!("{prefix}_EFFECT_ATTRIBUTE_{}", *counter),
+                Span::call_site(),
+            );
+            *counter += 1;
+            let amount = generate_level_based_value_ref(prefix, &attribute.amount, statics, counter);
+            let attribute_ref = attribute_ref_token(&attribute.attribute);
+            let id = identifier_token(&attribute.id);
+            let operation = attribute_modifier_operation_token(&attribute.operation);
+            statics.extend(quote! {
+                static #ident: EnchantmentAttributeEffect = EnchantmentAttributeEffect {
+                    amount: #amount,
+                    attribute: #attribute_ref,
+                    id: #id,
+                    operation: #operation,
+                };
+            });
+            quote! { EnchantmentEntityEffect::Attribute(&#ident) }
         }
         EntityEffectJson::DamageEntity {
             min_damage,
@@ -687,4 +747,122 @@ pub(super) fn generate_crossbow_charging_sounds(
 pub(super) fn generate_sound_event_refs(sounds: &[Identifier]) -> TokenStream {
     let sounds = sounds.iter().map(generate_sound_event_ref);
     quote! { &[#(#sounds),*] }
+}
+
+/// Emits a vanilla `FloatProvider` expression.
+pub(super) fn generate_float_provider(provider: &FloatProviderJson) -> TokenStream {
+    match provider {
+        FloatProviderJson::Constant(value) => quote! { FloatProvider::Constant(#value) },
+        FloatProviderJson::Typed(typed) => match typed {
+            FloatProviderTypedJson::Constant { value } => {
+                quote! { FloatProvider::Constant(#value) }
+            }
+            FloatProviderTypedJson::Uniform {
+                min_inclusive,
+                max_exclusive,
+            } => quote! {
+                FloatProvider::Uniform {
+                    min_inclusive: #min_inclusive,
+                    max_exclusive: #max_exclusive,
+                }
+            },
+            FloatProviderTypedJson::Trapezoid { min, max, plateau } => quote! {
+                FloatProvider::Trapezoid {
+                    min: #min,
+                    max: #max,
+                    plateau: #plateau,
+                }
+            },
+            FloatProviderTypedJson::ClampedNormal {
+                mean,
+                deviation,
+                min,
+                max,
+            } => quote! {
+                FloatProvider::ClampedNormal {
+                    mean: #mean,
+                    deviation: #deviation,
+                    min: #min,
+                    max: #max,
+                }
+            },
+        },
+    }
+}
+
+/// Emits a `HolderSet<EntityType>` expression.
+pub(super) fn generate_entity_type_set(set: &EntityTypeSetJson) -> TokenStream {
+    match set {
+        EntityTypeSetJson::Tag(tag) => {
+            let tag = identifier_token(tag);
+            quote! { EntityTypeSet::Tag(#tag) }
+        }
+        EntityTypeSetJson::Direct(entries) => {
+            let entries = entries.iter().map(entity_type_ref_token);
+            quote! { EntityTypeSet::Direct(&[#(#entries),*]) }
+        }
+    }
+}
+
+pub(super) fn entity_type_ref_token(entity_type: &Identifier) -> TokenStream {
+    assert_eq!(
+        entity_type.namespace.as_ref(),
+        "minecraft",
+        "vanilla enchantment entity references must use the minecraft namespace: {entity_type}"
+    );
+    let ident = Ident::new(&entity_type.path.to_shouty_snake_case(), Span::call_site());
+    quote! { &vanilla_entities::#ident }
+}
+
+pub(super) fn particle_type_ref_token(particle: &Identifier) -> TokenStream {
+    assert_eq!(
+        particle.namespace.as_ref(),
+        "minecraft",
+        "vanilla enchantment particle references must use the minecraft namespace: {particle}"
+    );
+    let ident = Ident::new(&particle.path.to_shouty_snake_case(), Span::call_site());
+    quote! { &vanilla_particle_types::#ident }
+}
+
+/// Emits a `ParticlePositionSource` expression.
+pub(super) fn generate_particle_position_source(
+    source: &ParticlePositionSourceJson,
+) -> TokenStream {
+    // Vanilla serialises these with `StringRepresentable.fromEnum`, so the
+    // resource location may or may not carry the `minecraft:` namespace.
+    let source_type = match source
+        .source_type
+        .strip_prefix("minecraft:")
+        .unwrap_or(&source.source_type)
+    {
+        "entity_position" => quote! { ParticlePositionSourceType::EntityPosition },
+        "in_bounding_box" => quote! { ParticlePositionSourceType::InBoundingBox },
+        other => panic!("Unknown particle position source type: {other}"),
+    };
+    let offset = source.offset;
+    let scale = source.scale;
+    quote! {
+        ParticlePositionSource {
+            source_type: #source_type,
+            offset: #offset,
+            scale: #scale,
+        }
+    }
+}
+
+/// Emits a `ParticleVelocitySource` expression.
+pub(super) fn generate_particle_velocity_source(
+    source: &ParticleVelocitySourceJson,
+) -> TokenStream {
+    let movement_scale = source.movement_scale;
+    let base = match &source.base {
+        Some(base) => generate_float_provider(base),
+        None => quote! { FloatProvider::Constant(0.0) },
+    };
+    quote! {
+        ParticleVelocitySource {
+            movement_scale: #movement_scale,
+            base: #base,
+        }
+    }
 }

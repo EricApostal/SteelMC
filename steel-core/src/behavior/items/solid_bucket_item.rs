@@ -38,8 +38,10 @@ impl ItemBehavior for SolidBucketItem {
             self.place_sound,
         );
 
-        if matches!(result, InteractionResult::Success) && !context.player.has_infinite_materials()
-        {
+        // Vanilla `SolidBucketItem.useOn`: swap for the empty bucket whenever
+        // the placement consumed the action (any `SUCCESS` variant), keeping the
+        // stack untouched for infinite-materials players.
+        if result.consumes_action() && !context.player.has_infinite_materials() {
             context
                 .inv
                 .with_item(|item| *item = ItemStack::new(&vanilla_items::BUCKET));

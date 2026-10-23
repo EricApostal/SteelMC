@@ -14,11 +14,29 @@ use crate::density::DensityFunction;
 
 use super::TranspilerInput;
 use super::context::TranspileContext;
-use super::graph::{collect_interpolated_inners, is_flat_cached, unwrap_markers};
+use super::graph::{
+    collect_interpolated_inners, interpolated_cell_sizes, is_flat_cached, unwrap_markers,
+};
 use super::naming::{
     named_fn_ident, named_fn_ident_simd, router_cache_field_ident, router_compute_fn_ident,
     sanitize_name,
 };
+
+/// Whether every `Interpolated` marker reachable from `df` sits on the
+/// dimension's column-cache grid (`input.cell_width`/`input.cell_height`).
+///
+/// Entries without any `Interpolated` marker are trivially on-grid.
+fn interpolates_on_grid(
+    df: &DensityFunction,
+    registry: &BTreeMap<String, DensityFunction>,
+    input: &TranspilerInput,
+) -> bool {
+    interpolated_cell_sizes(df, registry)
+        .into_iter()
+        .all(|(cell_size_xz, cell_size_y)| {
+            cell_size_xz == input.cell_width && cell_size_y == input.cell_height
+        })
+}
 
 impl TranspileContext {
     pub(super) fn gen_named_functions(&mut self, input: &TranspilerInput) -> TokenStream {
@@ -172,7 +190,8 @@ impl TranspileContext {
                 .cloned(),
         );
 
-        // Phase 1: Collect ALL interpolated inners across all entries
+        // Phase 1: Collect the interpolated inners of every entry that is sampled
+        // on this dimension's own interpolation grid.
         #[expect(
             clippy::items_after_statements,
             reason = "struct is local to this code path and defined inline for clarity"
@@ -180,12 +199,18 @@ impl TranspileContext {
         struct EntryInfo {
             start: usize,
             df: DensityFunction,
+            /// Whether this entry's markers all sit on the dimension's column-cache
+            /// grid. Off-grid entries have no channels and are evaluated directly.
+            on_grid: bool,
         }
         let mut all_inners: Vec<DensityFunction> = Vec::new();
         let mut entries: BTreeMap<String, EntryInfo> = BTreeMap::new();
 
         for name in &entry_names {
-            if let Some(df) = input.router_entries.get(name) {
+            let Some(df) = input.router_entries.get(name) else {
+                continue;
+            };
+            if interpolates_on_grid(df, &input.registry, input) {
                 let start = all_inners.len();
                 let inners = collect_interpolated_inners(df, &input.registry);
                 if !inners.is_empty() {
@@ -195,9 +220,31 @@ impl TranspileContext {
                         EntryInfo {
                             start,
                             df: df.clone(),
+                            on_grid: true,
                         },
                     );
                 }
+            } else if name.starts_with("material_ore_vein_") {
+                // Ore-vein entries may declare a different cell size than the
+                // dimension itself (floating_islands reuses the overworld's 4/8
+                // ore-vein functions while interpolating terrain on 8/4). They
+                // cannot share the column cache's grid, so they are evaluated at
+                // the block position instead of from interpolation channels.
+                // Divergence: vanilla interpolates these on their own grid; a
+                // second grid in `NoiseChunk` would be needed to match it exactly.
+                entries.insert(
+                    name.clone(),
+                    EntryInfo {
+                        start: all_inners.len(),
+                        df: df.clone(),
+                        on_grid: false,
+                    },
+                );
+            } else {
+                panic!(
+                    "{name} declares an Interpolated cell size that does not match this dimension's {}/{} interpolation grid",
+                    input.cell_width, input.cell_height
+                );
             }
         }
 
@@ -277,7 +324,7 @@ impl TranspileContext {
             let prepare_cache = self
                 .combine_needs_column_cache(&info.df, input)
                 .then(|| quote! { cache.ensure(x, z, noises); });
-            self.interpolated_param_mode = true;
+            self.interpolated_param_mode = info.on_grid;
             self.interpolated_param_counter = info.start;
             let body = self.gen_expr(&info.df, input, false);
             self.interpolated_param_mode = false;

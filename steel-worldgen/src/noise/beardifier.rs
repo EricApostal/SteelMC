@@ -51,11 +51,13 @@ static BEARD_KERNEL: LazyLock<[f32; KERNEL_TOTAL]> = LazyLock::new(|| {
 });
 
 /// Vanilla's `Mth.fastInvSqrt` — the Quake III fast inverse square root, ported exactly.
+/// The magic constant is Mojang's `6910469410427058090L` (`0x5FE6_EB50_C7B5_37AA`),
+/// one greater than the textbook Quake value.
 #[inline]
 fn fast_inv_sqrt(x: f64) -> f64 {
     let xhalf = 0.5f64 * x;
     let i = f64::to_bits(x) as i64;
-    let i = 0x5FE6_EB50_C7B5_37A9_i64 - (i >> 1);
+    let i = 0x5FE6_EB50_C7B5_37AA_i64 - (i >> 1);
     let mut x = f64::from_bits(i as u64);
     x *= 1.5f64 - xhalf * x * x;
     x

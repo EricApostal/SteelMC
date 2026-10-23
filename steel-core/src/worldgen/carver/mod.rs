@@ -380,12 +380,12 @@ where
 
         let min_x_idx = ((x - horizontal_radius).floor() as i32 - self.chunk_min_x - 1).max(0);
         let max_x_idx = ((x + horizontal_radius).floor() as i32 - self.chunk_min_x).min(15);
-        let min_y = ((y - vertical_radius).floor() as i32 - 1).max(self.ctx.min_y + 1);
-        // Vanilla: `chunk.isUpgrading() ? 0 : 7`. No chunk upgrade path yet,
-        // so always 7 — matches extractor config.
-        let protected_blocks_on_top = 7;
-        let max_y = ((y + vertical_radius).floor() as i32 + 1)
-            .min(self.ctx.min_y + self.ctx.gen_depth - 1 - protected_blocks_on_top);
+        // Vanilla clamps to the output's own bounds (`CarvingMask.minY()` /
+        // `maxY()`), which already exclude the bottom block and the top seven
+        // (`CarvingMask::for_worldgen_context`). The Y loop below is exclusive
+        // of `min_y` and inclusive of `max_y`, as in vanilla.
+        let min_y = ((y - vertical_radius).floor() as i32 - 1).max(self.mask.min_y());
+        let max_y = ((y + vertical_radius).floor() as i32 + 1).min(self.mask.max_y());
         let min_z_idx = ((z - horizontal_radius).floor() as i32 - self.chunk_min_z - 1).max(0);
         let max_z_idx = ((z + horizontal_radius).floor() as i32 - self.chunk_min_z).min(15);
 

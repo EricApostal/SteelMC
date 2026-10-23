@@ -6,8 +6,10 @@ use std::{
 
 use super::scheduler::{RegisteredChunkTicks, TickKind};
 use super::*;
+use glam::IVec3;
 use steel_registry::blocks::Block;
 use steel_registry::blocks::behavior::BlockConfig;
+use steel_registry::fluid::FluidRef;
 use steel_registry::init_vanilla_registry;
 use steel_registry::vanilla_fluids;
 use steel_utils::Identifier;
@@ -47,22 +49,30 @@ fn schedule(
 fn scheduler_with_block_lists(
     chunks: impl IntoIterator<Item = (ChunkPos, BlockTickList)>,
 ) -> WorldTickScheduler {
+    scheduler_with_lists(
+        chunks
+            .into_iter()
+            .map(|(pos, block)| (pos, block, FluidTickList::new())),
+    )
+}
+
+fn scheduler_with_lists(
+    chunks: impl IntoIterator<Item = (ChunkPos, BlockTickList, FluidTickList)>,
+) -> WorldTickScheduler {
     let scheduler = WorldTickScheduler::new();
     {
         let mut state = scheduler.state.lock();
-        for (pos, block) in chunks {
+        for (pos, block, fluid) in chunks {
             let block_head = block.peek().map(|tick| tick.trigger_tick);
-            let container = Arc::new(ChunkTickContainer::new(ChunkTickLists::new(
-                block,
-                FluidTickList::new(),
-            )));
+            let fluid_head = fluid.peek().map(|tick| tick.trigger_tick);
+            let container = Arc::new(ChunkTickContainer::new(ChunkTickLists::new(block, fluid)));
             container.state.lock().lifecycle = ChunkTickContainerLifecycle::Registered;
             state.chunks.insert(
                 pos,
                 RegisteredChunkTicks {
                     container,
                     block_head,
-                    fluid_head: None,
+                    fluid_head,
                     active: None,
                 },
             );
@@ -98,6 +108,65 @@ fn block_head(scheduler: &WorldTickScheduler, pos: ChunkPos) -> Option<i64> {
         .chunks
         .get(&pos)
         .and_then(|registered| registered.block_head)
+}
+
+fn fluid_head(scheduler: &WorldTickScheduler, pos: ChunkPos) -> Option<i64> {
+    scheduler
+        .state
+        .lock()
+        .chunks
+        .get(&pos)
+        .and_then(|registered| registered.fluid_head)
+}
+
+/// Live block ticks of one chunk, sorted by position for stable assertions.
+fn block_live_ticks(scheduler: &WorldTickScheduler, pos: ChunkPos) -> Vec<BlockTick> {
+    let container = registered_container(scheduler, pos);
+    let state = container.state.lock();
+    let mut ticks = state.lists.block().live_entries().collect::<Vec<_>>();
+    ticks.sort_by_key(|tick| (tick.pos.x(), tick.pos.y(), tick.pos.z()));
+    ticks
+}
+
+fn block_live_positions(scheduler: &WorldTickScheduler, pos: ChunkPos) -> Vec<BlockPos> {
+    block_live_ticks(scheduler, pos)
+        .into_iter()
+        .map(|tick| tick.pos)
+        .collect()
+}
+
+fn block_pending_positions(scheduler: &WorldTickScheduler, pos: ChunkPos) -> Vec<BlockPos> {
+    let container = registered_container(scheduler, pos);
+    let state = container.state.lock();
+    let mut positions = state
+        .lists
+        .block()
+        .pending_entries()
+        .iter()
+        .map(|tick| tick.pos)
+        .collect::<Vec<_>>();
+    positions.sort_by_key(|pos| (pos.x(), pos.y(), pos.z()));
+    positions
+}
+
+fn fluid_live_ticks(scheduler: &WorldTickScheduler, pos: ChunkPos) -> Vec<FluidTick> {
+    let container = registered_container(scheduler, pos);
+    let state = container.state.lock();
+    let mut ticks = state.lists.fluid().live_entries().collect::<Vec<_>>();
+    ticks.sort_by_key(|tick| (tick.pos.x(), tick.pos.y(), tick.pos.z()));
+    ticks
+}
+
+fn fluid_live_positions(scheduler: &WorldTickScheduler, pos: ChunkPos) -> Vec<BlockPos> {
+    fluid_live_ticks(scheduler, pos)
+        .into_iter()
+        .map(|tick| tick.pos)
+        .collect()
+}
+
+/// A box covering all of chunk `(0, 0)`, matching vanilla's inclusive `BoundingBox.isInside`.
+fn chunk_box() -> BoundingBox {
+    BoundingBox::new(IVec3::ZERO, IVec3::new(15, 15, 15))
 }
 
 fn begin_block_tick(
@@ -837,4 +906,330 @@ fn priority_ordering_matches_vanilla_discriminants() {
     assert!(TickPriority::ExtremelyHigh < TickPriority::Normal);
     assert!(TickPriority::Normal < TickPriority::ExtremelyLow);
     assert!(TickPriority::High < TickPriority::Low);
+}
+
+#[test]
+fn clear_area_removes_inside_ticks_and_repairs_heads() {
+    init_vanilla_registry();
+    let inside_a = BlockPos::new(1, 1, 1);
+    let inside_b = BlockPos::new(15, 15, 15);
+    let inside_edge = BlockPos::new(15, 0, 15);
+    let other_chunk = BlockPos::new(16, 0, 0);
+    let outside_y = BlockPos::new(1, 16, 1);
+    let fluid_inside = BlockPos::new(2, 2, 2);
+    let fluid_outside = BlockPos::new(20, 0, 0);
+
+    let mut first = BlockTickList::new();
+    assert!(schedule(
+        &mut first,
+        test_block(),
+        inside_a,
+        5,
+        TickPriority::Normal,
+        0
+    ));
+    assert!(schedule(
+        &mut first,
+        test_block(),
+        inside_b,
+        3,
+        TickPriority::High,
+        1
+    ));
+    assert!(schedule(
+        &mut first,
+        test_block(),
+        inside_edge,
+        4,
+        TickPriority::Normal,
+        2
+    ));
+    assert!(schedule(
+        &mut first,
+        test_block_2(),
+        outside_y,
+        2,
+        TickPriority::Normal,
+        3
+    ));
+    let mut second = BlockTickList::new();
+    assert!(schedule(
+        &mut second,
+        test_block_2(),
+        other_chunk,
+        6,
+        TickPriority::Normal,
+        4
+    ));
+    let mut second_fluid = FluidTickList::new();
+    let mut first_fluid = FluidTickList::new();
+    let water: FluidRef = &vanilla_fluids::WATER;
+    assert!(first_fluid.schedule(water, fluid_inside, 5, TickPriority::Normal, 0));
+    assert!(second_fluid.schedule(water, fluid_outside, 1, TickPriority::Normal, 1));
+
+    let first_pos = ChunkPos::new(0, 0);
+    let second_pos = ChunkPos::new(1, 0);
+    let scheduler = scheduler_with_lists([
+        (first_pos, first, first_fluid),
+        (second_pos, second, second_fluid),
+    ]);
+    scheduler.clear_area(chunk_box());
+
+    assert_eq!(block_live_positions(&scheduler, first_pos), [outside_y]);
+    assert_eq!(block_live_positions(&scheduler, second_pos), [other_chunk]);
+    assert!(fluid_live_positions(&scheduler, first_pos).is_empty());
+    assert_eq!(
+        fluid_live_positions(&scheduler, second_pos),
+        [fluid_outside]
+    );
+    assert_eq!(block_head(&scheduler, first_pos), Some(2));
+    assert_eq!(block_head(&scheduler, second_pos), Some(6));
+    assert_eq!(fluid_head(&scheduler, first_pos), None);
+    assert_eq!(fluid_head(&scheduler, second_pos), Some(1));
+}
+
+#[test]
+fn clear_area_purges_pending_ticks_and_keeps_collection_order() {
+    init_vanilla_registry();
+    let inside_pos = BlockPos::new(1, 0, 1);
+    let remaining_pos = BlockPos::new(1, 16, 1);
+    let pending_pos = BlockPos::new(2, 0, 2);
+
+    let mut live = BlockTickList::new();
+    assert!(schedule(
+        &mut live,
+        test_block(),
+        inside_pos,
+        1,
+        TickPriority::Normal,
+        5
+    ));
+    assert!(schedule(
+        &mut live,
+        test_block(),
+        remaining_pos,
+        2,
+        TickPriority::Normal,
+        6
+    ));
+    let mut lists = BlockTickList::from_saved_ticks(vec![SavedTick {
+        tick_type: test_block(),
+        pos: pending_pos,
+        delay: 1,
+        priority: TickPriority::Normal,
+    }]);
+    for tick in live.live_entries() {
+        assert!(lists.schedule(
+            tick.tick_type,
+            tick.pos,
+            tick.trigger_tick,
+            tick.priority,
+            tick.sub_tick_order
+        ));
+    }
+
+    let pos = ChunkPos::new(0, 0);
+    // A second chunk whose ticks all sit outside the cleared box, plus a later tick in the
+    // cleared chunk: collection must still drain them in vanilla's head order.
+    let untouched_pos = ChunkPos::new(1, 0);
+    let mut untouched = BlockTickList::new();
+    assert!(schedule(
+        &mut untouched,
+        test_block(),
+        BlockPos::new(16, 0, 0),
+        1,
+        TickPriority::Normal,
+        0
+    ));
+    assert!(schedule(
+        &mut untouched,
+        test_block(),
+        BlockPos::new(17, 0, 0),
+        3,
+        TickPriority::Normal,
+        1
+    ));
+
+    let scheduler = scheduler_with_block_lists([(pos, lists), (untouched_pos, untouched)]);
+    scheduler.clear_area(chunk_box());
+
+    // Both the live and the not-yet-unpacked tick inside the box are gone.
+    assert_eq!(block_live_positions(&scheduler, pos), [remaining_pos]);
+    assert!(block_pending_positions(&scheduler, pos).is_empty());
+    assert_eq!(block_head(&scheduler, pos), Some(2));
+
+    // `unpack` must not resurrect cleared pending ticks, and collection still drains in order.
+    for chunk_pos in [pos, untouched_pos] {
+        if let Err(error) = scheduler.unpack_chunk(chunk_pos, 0) {
+            panic!("test scheduler invariant failed: {error:?}");
+        }
+        assert!(block_pending_positions(&scheduler, chunk_pos).is_empty());
+    }
+    let selected = begin_block_tick_at(&scheduler, 3, &[pos, untouched_pos], 10);
+    assert_eq!(
+        selected
+            .ticks
+            .iter()
+            .map(|tick| tick.pos)
+            .collect::<Vec<_>>(),
+        [
+            BlockPos::new(16, 0, 0),
+            BlockPos::new(17, 0, 0),
+            remaining_pos
+        ]
+    );
+    assert_eq!(block_head(&scheduler, pos), None);
+    assert_eq!(block_head(&scheduler, untouched_pos), None);
+}
+
+#[test]
+fn clear_area_visits_edge_chunks_by_block_corners() {
+    // x = 16 is chunk 1; a box ending there must still clear chunk 1's inside tick.
+    let inside_pos = BlockPos::new(16, 0, 0);
+    let mut ticks = BlockTickList::new();
+    assert!(schedule(
+        &mut ticks,
+        test_block(),
+        inside_pos,
+        1,
+        TickPriority::Normal,
+        0
+    ));
+    let pos = ChunkPos::new(1, 0);
+    let scheduler = scheduler_with_block_lists([(pos, ticks)]);
+
+    scheduler.clear_area(BoundingBox::new(IVec3::new(16, 0, 0), IVec3::new(16, 0, 0)));
+
+    assert!(block_live_positions(&scheduler, pos).is_empty());
+    assert_eq!(block_head(&scheduler, pos), None);
+}
+
+#[test]
+fn copy_area_reschedules_with_vanilla_sub_tick_formula() {
+    let first_pos = BlockPos::new(1, 0, 1);
+    let second_pos = BlockPos::new(2, 0, 2);
+    let skipped_pos = BlockPos::new(1, 16, 1);
+    let mut source_ticks = BlockTickList::new();
+    assert!(schedule(
+        &mut source_ticks,
+        test_block(),
+        first_pos,
+        7,
+        TickPriority::High,
+        10
+    ));
+    assert!(schedule(
+        &mut source_ticks,
+        test_block(),
+        second_pos,
+        7,
+        TickPriority::Normal,
+        14
+    ));
+    assert!(schedule(
+        &mut source_ticks,
+        test_block(),
+        skipped_pos,
+        7,
+        TickPriority::Normal,
+        20
+    ));
+
+    let scheduler = scheduler_with_block_lists([
+        (ChunkPos::new(0, 0), source_ticks),
+        (ChunkPos::new(1, 0), BlockTickList::new()),
+    ]);
+    // min = 10, max = 14, so copies land with orders 10 - 10 + 14 + 1 = 15 and 14 - 10 + 14 + 1 = 19.
+    scheduler.copy_area(chunk_box(), IVec3::new(16, 0, 0));
+
+    let copied = block_live_ticks(&scheduler, ChunkPos::new(1, 0));
+    let first_copy = copied
+        .iter()
+        .find(|tick| tick.pos == BlockPos::new(17, 0, 1))
+        .expect("copied tick must land at the offset position");
+    let second_copy = copied
+        .iter()
+        .find(|tick| tick.pos == BlockPos::new(18, 0, 2))
+        .expect("copied tick must land at the offset position");
+    assert_eq!(copied.len(), 2);
+    assert_eq!(first_copy.trigger_tick, 7);
+    assert_eq!(first_copy.priority, TickPriority::High);
+    assert_eq!(first_copy.sub_tick_order, 15);
+    assert_eq!(second_copy.trigger_tick, 7);
+    assert_eq!(second_copy.priority, TickPriority::Normal);
+    assert_eq!(second_copy.sub_tick_order, 19);
+    // The source scheduler keeps its own ticks: this is a copy, not a move. `skipped_pos` sits
+    // outside the box (same chunk, above it) and is never collected.
+    assert_eq!(
+        block_live_positions(&scheduler, ChunkPos::new(0, 0)),
+        [first_pos, skipped_pos, second_pos]
+    );
+    assert_eq!(block_head(&scheduler, ChunkPos::new(1, 0)), Some(7));
+}
+
+#[test]
+fn copy_area_from_across_schedulers_keeps_trigger_and_priority() {
+    init_vanilla_registry();
+    let pos = ChunkPos::new(0, 0);
+    let first_pos = BlockPos::new(1, 0, 1);
+    let second_pos = BlockPos::new(3, 0, 3);
+    let mut source_ticks = BlockTickList::new();
+    assert!(schedule(
+        &mut source_ticks,
+        test_block(),
+        first_pos,
+        9,
+        TickPriority::Low,
+        -4
+    ));
+    assert!(schedule(
+        &mut source_ticks,
+        test_block_2(),
+        second_pos,
+        12,
+        TickPriority::High,
+        2
+    ));
+    let source = scheduler_with_block_lists([(pos, source_ticks)]);
+
+    let mut dest_ticks = BlockTickList::new();
+    // The destination already schedules the same `(pos, type)`, so vanilla's
+    // `LevelChunkTicks.schedule` keeps this tick and ignores the copied one.
+    assert!(schedule(
+        &mut dest_ticks,
+        test_block(),
+        first_pos,
+        9,
+        TickPriority::Low,
+        77
+    ));
+    let dest = scheduler_with_block_lists([(pos, dest_ticks)]);
+    // min = -4, max = 2, so copies land with orders -4 + 4 + 2 + 1 = 3 and 2 + 4 + 2 + 1 = 9.
+    dest.copy_area_from(&source, chunk_box(), IVec3::ZERO);
+
+    let copied = block_live_ticks(&dest, pos);
+    assert_eq!(copied.len(), 2);
+    let first_copy = copied
+        .iter()
+        .find(|tick| tick.pos == first_pos)
+        .expect("destination tick keeps its position");
+    assert_eq!(first_copy.trigger_tick, 9);
+    assert_eq!(first_copy.priority, TickPriority::Low);
+    assert_eq!(first_copy.sub_tick_order, 77);
+    let second_copy = copied
+        .iter()
+        .find(|tick| tick.pos == second_pos)
+        .expect("copied tick keeps its position with a zero offset");
+    assert_eq!(second_copy.trigger_tick, 12);
+    assert_eq!(second_copy.priority, TickPriority::High);
+    assert_eq!(second_copy.sub_tick_order, 9);
+    assert_eq!(block_head(&dest, pos), Some(9));
+    // Copying an empty area is a no-op and never touches the head index.
+    dest.copy_area_from(
+        &source,
+        BoundingBox::new(IVec3::new(100, 0, 100), IVec3::new(116, 0, 116)),
+        IVec3::ZERO,
+    );
+    assert_eq!(block_live_ticks(&dest, pos).len(), 2);
+    assert_eq!(block_head(&dest, pos), Some(9));
 }

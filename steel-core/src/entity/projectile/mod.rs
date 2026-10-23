@@ -403,6 +403,13 @@ pub trait Projectile: Entity + ProjectileEventSource {
         self.base().set_old_rotation_to_current();
     }
 
+    /// Shoots this projectile toward the world-space point `target`
+    /// (vanilla `Projectile.shoot(double, double, double, float, float)`).
+    fn shoot_at(&self, target: DVec3, power: f32, uncertainty: f32) {
+        let direction = target - self.position();
+        self.shoot(direction, power, uncertainty);
+    }
+
     /// Shoots this projectile from `source`'s rotation (offset by `y_offset`),
     /// adding the source's own movement on top.
     fn shoot_from_rotation(
@@ -708,6 +715,142 @@ where
         return None;
     }
     enchantment_helper::on_projectile_spawned(world, item_stack, entity.as_ref(), Some(&owner));
+
+    Some(entity)
+}
+
+/// Spawns an already-constructed projectile, shoots it with `shoot`, adds it to
+/// the world and runs `applyOnProjectileSpawned` — vanilla
+/// `Projectile.spawnProjectile(projectile, level, itemStack, shootFunction)`.
+///
+/// Unlike [`spawn_throwable_item_projectile`] the caller owns construction
+/// (position, rendered item, owner), which is how vanilla's mob-launched
+/// projectiles are created (llama spit, blaze fireballs, wither skulls, …).
+/// Pass an empty [`ItemStack`] when there is no weapon to read enchantments from.
+#[must_use]
+pub fn spawn_projectile<E>(
+    world: &Arc<World>,
+    projectile: E,
+    item_stack: &mut ItemStack,
+    shoot: impl FnOnce(&E),
+) -> Option<SharedEntity>
+where
+    E: Projectile + Entity + 'static,
+{
+    shoot(&projectile);
+
+    let entity: SharedEntity = Arc::new(projectile);
+    if let Err(error) = world.try_add_entity(Arc::clone(&entity)) {
+        log::debug!("failed to spawn projectile: {error}");
+        return None;
+    }
+    let owner = entity.projectile_owner();
+    enchantment_helper::on_projectile_spawned(world, item_stack, entity.as_ref(), owner.as_ref());
+
+    Some(entity)
+}
+
+/// Shoots a projectile at a world-space point from a freshly created entity
+/// (vanilla `Projectile.spawnProjectileUsingShoot`).
+#[must_use]
+pub fn spawn_projectile_using_shoot<E>(
+    world: &Arc<World>,
+    projectile: E,
+    item_stack: &mut ItemStack,
+    target: DVec3,
+    power: f32,
+    uncertainty: f32,
+) -> Option<SharedEntity>
+where
+    E: Projectile + Entity + 'static,
+{
+    spawn_projectile(world, projectile, item_stack, |projectile| {
+        projectile.shoot_at(target, power, uncertainty);
+    })
+}
+
+/// Shoots a projectile from `source`'s rotation along the look direction
+/// (vanilla `Projectile.spawnProjectileFromRotation`).
+#[must_use]
+pub fn spawn_projectile_from_rotation<E>(
+    world: &Arc<World>,
+    source: &dyn Entity,
+    item_stack: &mut ItemStack,
+    y_offset: f32,
+    power: f32,
+    uncertainty: f32,
+    create: impl FnOnce() -> E,
+) -> Option<SharedEntity>
+where
+    E: Projectile + Entity + 'static,
+{
+    let projectile = create();
+    let (yaw, pitch) = source.rotation();
+    spawn_projectile(world, projectile, item_stack, |projectile| {
+        projectile.shoot_from_rotation(source, pitch, yaw, y_offset, power, uncertainty);
+    })
+}
+
+/// Shoots an already-constructed projectile held as a [`SharedEntity`], then adds
+/// it and runs `applyOnProjectileSpawned` — the object-safe counterpart of
+/// [`spawn_projectile`], for callers that only have a `dyn Projectile` (dispensers,
+/// plugins, item behaviors that resolve the entity from a registry factory).
+///
+/// The entity MUST NOT have been added to the world yet; this call does that.
+/// Returns `None` when `entity` is not a projectile or the world rejects it.
+#[must_use]
+pub fn shoot_projectile_entity(
+    world: &Arc<World>,
+    entity: &SharedEntity,
+    item_stack: &mut ItemStack,
+    target: DVec3,
+    power: f32,
+    uncertainty: f32,
+) -> Option<SharedEntity> {
+    let Some(projectile) = entity.as_projectile() else {
+        log::debug!("entity {} is not a projectile", entity.id());
+        return None;
+    };
+    projectile.shoot_at(target, power, uncertainty);
+
+    if let Err(error) = world.try_add_entity(Arc::clone(entity)) {
+        log::debug!("failed to spawn projectile: {error}");
+        return None;
+    }
+    let owner = entity.projectile_owner();
+    enchantment_helper::on_projectile_spawned(world, item_stack, entity.as_ref(), owner.as_ref());
+
+    Some(Arc::clone(entity))
+}
+
+/// Shoots and adds an already-constructed projectile held as a [`SharedEntity`]
+/// — vanilla `Projectile.spawnProjectile(projectile, level, itemStack, shootFunction)`.
+///
+/// `shoot` runs before the entity is added, so callers can use any shooting
+/// shape (`shoot`, `shoot_from_rotation`, `shoot_at`). This is the path used by
+/// bows, crossbows and mob ranged attacks, which build the entity first (to set
+/// its item, crit flag, or pierce level) and then shoot it.
+///
+/// The entity MUST NOT have been added to the world yet; this call does that.
+#[must_use]
+pub fn spawn_shot_projectile(
+    world: &Arc<World>,
+    entity: SharedEntity,
+    item_stack: &mut ItemStack,
+    shoot: impl FnOnce(&dyn Projectile),
+) -> Option<SharedEntity> {
+    let Some(projectile) = entity.as_projectile() else {
+        log::debug!("entity {} is not a projectile", entity.id());
+        return None;
+    };
+    shoot(projectile);
+
+    if let Err(error) = world.try_add_entity(Arc::clone(&entity)) {
+        log::debug!("failed to spawn projectile: {error}");
+        return None;
+    }
+    let owner = entity.projectile_owner();
+    enchantment_helper::on_projectile_spawned(world, item_stack, entity.as_ref(), owner.as_ref());
 
     Some(entity)
 }

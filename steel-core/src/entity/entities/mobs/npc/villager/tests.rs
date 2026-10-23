@@ -114,3 +114,86 @@ fn villager_loads_vanilla_data() {
     assert_eq!(*villager.last_restock_game_time.lock(), 4_800);
     assert_eq!(*villager.number_of_restocks_today.lock(), 1);
 }
+
+/// A villager that holds a job site must produce the profession's level offers.
+///
+/// Regression: an employed villager whose offers fail to generate shakes its head
+/// on interaction (`mob_interact` treats an empty offer list as "no trades"), which
+/// is what an unemployed villager legitimately does.
+#[test]
+fn employed_villager_generates_level_offers() {
+    use crate::test_support::fresh_test_world;
+
+    let fixture = fresh_test_world("villager_offers");
+    let world = &fixture.world;
+    let villager: SharedEntity = std::sync::Arc::new(VillagerEntity::new(
+        &vanilla_entities::VILLAGER,
+        1,
+        DVec3::new(0.5, 1.0, 0.5),
+        std::sync::Arc::downgrade(world),
+    ));
+    let entity = villager
+        .downcast_ref::<VillagerEntity>()
+        .expect("villager downcast");
+
+    let data = entity
+        .villager_data()
+        .with_type_ref(&vanilla_villager_types::PLAINS)
+        .with_profession_ref(&vanilla_villager_professions::FARMER);
+    entity.set_villager_data(data);
+    entity.ensure_offers_initialized();
+
+    let offers = entity.merchant.offers();
+    assert!(
+        !offers.is_empty(),
+        "an employed farmer must generate its level-{} trade set, got {} offers",
+        entity.villager_level(),
+        offers.len()
+    );
+}
+
+/// The full live path: a naturally spawned villager (unemployed, biome type) that then
+/// takes a job site must end up with that profession's level offers.
+#[test]
+fn naturally_spawned_villager_gets_offers_after_taking_a_job() {
+    use crate::entity::EntitySpawnReason;
+    use crate::test_support::fresh_test_world;
+    use steel_registry::{vanilla_poi_types, vanilla_villager_professions};
+
+    let fixture = fresh_test_world("villager_takes_job");
+    let world = &fixture.world;
+    let villager: SharedEntity = std::sync::Arc::new(VillagerEntity::new(
+        &vanilla_entities::VILLAGER,
+        1,
+        DVec3::new(0.5, 1.0, 0.5),
+        std::sync::Arc::downgrade(world),
+    ));
+    let entity = villager
+        .downcast_ref::<VillagerEntity>()
+        .expect("villager downcast");
+
+    entity.finalize_spawn(world, EntitySpawnReason::Natural, None);
+    assert_eq!(
+        entity.profession().key,
+        vanilla_villager_professions::NONE.key,
+        "a naturally spawned villager starts unemployed"
+    );
+
+    assert!(
+        entity.apply_profession_from_poi(&vanilla_poi_types::FARMER),
+        "the farmer job site must be assignable"
+    );
+    assert_eq!(
+        entity.profession().key,
+        vanilla_villager_professions::FARMER.key
+    );
+
+    entity.ensure_offers_initialized();
+    let offers = entity.merchant.offers();
+    assert!(
+        !offers.is_empty(),
+        "a villager that just took the farmer job must have offers (level {}, type {})",
+        entity.villager_level(),
+        entity.villager_type().key
+    );
+}

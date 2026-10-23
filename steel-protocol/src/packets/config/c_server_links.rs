@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
 use steel_macros::{ClientPacket, WriteTo};
 use steel_registry::packets::config::C_SERVER_LINKS;
+use steel_registry::packets::play::C_SERVER_LINKS as PLAY_C_SERVER_LINKS;
 use steel_utils::codec::Or;
 use text_components::TextComponent;
 
 #[derive(ClientPacket, WriteTo, Clone, Debug)]
-#[packet_id(Config = C_SERVER_LINKS)]
+#[packet_id(Config = C_SERVER_LINKS, Play = PLAY_C_SERVER_LINKS)]
 pub struct CServerLinks {
     pub links: Vec<Link>,
 }

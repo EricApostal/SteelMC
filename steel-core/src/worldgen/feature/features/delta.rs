@@ -36,14 +36,13 @@ impl FeatureDecorationRunner {
 
             if Self::delta_is_clear(region, pos, contents) {
                 if has_rim {
-                    let _ = region.set_block_state(pos, rim, UpdateFlags::UPDATE_CLIENTS);
+                    let _ = region.set_block_state(pos, rim, UpdateFlags::UPDATE_ALL);
                     any_placed = true;
                 }
 
                 let offset_pos = pos.offset(rim_x, 0, rim_z);
                 if Self::delta_is_clear(region, offset_pos, contents) {
-                    let _ =
-                        region.set_block_state(offset_pos, contents, UpdateFlags::UPDATE_CLIENTS);
+                    let _ = region.set_block_state(offset_pos, contents, UpdateFlags::UPDATE_ALL);
                     any_placed = true;
                 }
             }

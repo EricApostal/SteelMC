@@ -400,6 +400,34 @@ pub trait BlockBehavior: Send + Sync {
     ) {
     }
 
+    /// Vanilla `BlockBehaviour.onExplosionHit`'s default body.
+    ///
+    /// Drops loot (decayed for `DESTROY_WITH_DECAY`), spawns after-break effects,
+    /// removes the block, then runs [`BlockBehavior::was_exploded`].
+    fn on_explosion_hit(
+        &self,
+        state: BlockStateId,
+        world: &Arc<World>,
+        pos: BlockPos,
+        explosion: &crate::world::explosion::ExplosionInfo<'_>,
+        on_drop: &mut dyn FnMut(ItemStack, BlockPos),
+    ) {
+        crate::world::explosion::default_on_explosion_hit(state, world, pos, explosion, on_drop);
+    }
+
+    /// Vanilla `Block.wasExploded`.
+    #[expect(
+        unused_variables,
+        reason = "default trait implementation ignores all params"
+    )]
+    fn was_exploded(
+        &self,
+        world: &Arc<World>,
+        pos: BlockPos,
+        explosion: &crate::world::explosion::ExplosionInfo<'_>,
+    ) {
+    }
+
     /// Called after this block is removed from the world, to affect neighbors.
     ///
     /// This is used for things like rails notifying neighbors when removed.

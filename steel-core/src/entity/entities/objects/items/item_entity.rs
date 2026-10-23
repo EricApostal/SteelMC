@@ -13,6 +13,7 @@ use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_entity_data::ItemEntityData;
 use steel_registry::{vanilla_custom_stats, vanilla_damage_types};
+use steel_registry::{vanilla_game_events, vanilla_game_rules};
 use steel_utils::UuidExt;
 use steel_utils::locks::SyncMutex;
 use steel_utils::{Downcast as _, DowncastType, DowncastTypeKey};
@@ -693,19 +694,40 @@ impl Entity for ItemEntity {
         self.try_pickup(player);
     }
 
-    fn hurt(&self, _world: &World, source: &DamageSource, amount: f32) -> bool {
-        // TODO: Check isInvulnerableToBase once the shared non-living entity hook is ported.
+    fn hurt(&self, world: &World, source: &DamageSource, amount: f32) -> bool {
+        // Match vanilla's `ItemEntity.hurtServer`.
+        if self.is_invulnerable_to_base(source) {
+            return false;
+        }
+
+        if !world.get_game_rule(&vanilla_game_rules::MOB_GRIEFING)
+            && source
+                .causing_entity()
+                .is_some_and(|entity| entity.is_mob())
+        {
+            return false;
+        }
+
         if !self.get_item().can_be_hurt_by(source.damage_type) {
             return false;
         }
+
+        self.mark_hurt();
         let new_health = {
             let mut state = self.item_state.lock();
             state.health = (state.health as f32 - amount) as i32;
             state.health
         };
+        self.game_event_with_source_entity(
+            &vanilla_game_events::ENTITY_DAMAGE,
+            source.causing_entity().map(|entity| entity.as_ref()),
+        );
         if new_health <= 0 {
-            // TODO: Call item.onDestroyed() when implemented
-            self.set_removed(RemovalReason::Killed);
+            // Vanilla hook: `ItemStack.onDestroyed(ItemEntity)`. Steel has no item
+            // destroy hook yet (`ItemBehavior` exposes no such method), so the
+            // removal below stands in for it. Reported gap: add `on_destroyed` to
+            // `crate::behavior::item::ItemBehavior` and dispatch it here.
+            self.set_removed(RemovalReason::Discarded);
         }
         true
     }

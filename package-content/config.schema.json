@@ -98,6 +98,30 @@
           "description": "Whether to enforce secure chat",
           "default": false
         },
+        "white_list": {
+          "type": "boolean",
+          "description": "Whether the allowlist (whitelist.json) gates logins",
+          "default": true
+        },
+        "enforce_whitelist": {
+          "type": "boolean",
+          "description": "Whether allowlist changes kick players who are not allowlisted",
+          "default": false
+        },
+        "op_permission_level": {
+          "type": "integer",
+          "description": "Vanilla op level (0-4) granted by /op",
+          "minimum": 0,
+          "maximum": 4,
+          "default": 4
+        },
+        "function_permission_level": {
+          "type": "integer",
+          "description": "Vanilla op level (0-4) command functions run with",
+          "minimum": 0,
+          "maximum": 4,
+          "default": 2
+        },
         "chat_spam_threshold_seconds": {
           "type": "integer",
           "description": "Vanilla chat spam threshold window in seconds; values <= 0 disable throttling",

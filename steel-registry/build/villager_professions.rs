@@ -14,6 +14,17 @@ struct VillagerProfessionEntry {
     id: usize,
     key: Identifier,
     work_sound: Option<Identifier>,
+    /// Vanilla `VillagerProfession.requestedItems`.
+    ///
+    /// Vanilla hard-codes these in its bootstrap; the vendored extractor output
+    /// does not carry them, so only professions that declare a set list them here
+    /// (currently just `farmer`). Replace with extractor output once
+    /// `SteelExtractor` covers `VillagerProfessions`.
+    #[serde(default)]
+    requested_items: Option<Vec<Identifier>>,
+    /// Vanilla `VillagerProfession.secondaryPoi`; same provenance note as above.
+    #[serde(default)]
+    secondary_poi: Option<Vec<Identifier>>,
 }
 
 #[derive(Deserialize)]

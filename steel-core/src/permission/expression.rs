@@ -1,6 +1,6 @@
 use std::ops::{BitAnd, BitOr};
 
-use super::PermissionKey;
+use super::{PermissionKey, PermissionLevel};
 
 /// Boolean permission expression evaluated with tri-state allow/deny/unset semantics.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -14,6 +14,11 @@ pub enum PermissionExpr {
         /// Specific child permission being checked.
         key: PermissionKey,
     },
+    /// Satisfied by a vanilla operator permission level.
+    ///
+    /// Resolves to allow when the source's level is at least `required`, and to
+    /// unset otherwise so a Steel key can still grant the same command.
+    Level(PermissionLevel),
     /// Requires every nested expression to allow.
     All(Vec<Self>),
     /// Requires at least one nested expression to allow.
@@ -31,6 +36,12 @@ impl PermissionExpr {
     #[must_use]
     pub const fn scoped_key(parent: PermissionKey, key: PermissionKey) -> Self {
         Self::ScopedKey { parent, key }
+    }
+
+    /// Creates a vanilla op-level expression.
+    #[must_use]
+    pub const fn level(required: PermissionLevel) -> Self {
+        Self::Level(required)
     }
 }
 

@@ -11,23 +11,30 @@ use steel_math::wrap_degrees;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::sound_event::SoundEventRef;
+use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entity_data::BatEntityData;
 use steel_registry::{level_events, sound_events, vanilla_attributes};
 use steel_utils::locks::SyncMutex;
+use steel_utils::random::Random;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
+use crate::chunk::heightmap::HeightmapType;
 use crate::entity::ai::targeting::TargetingConditions;
 use crate::entity::damage::DamageSource;
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityMovementEmission, EntityPose, EntitySyncedData,
-    LivingEntity, LivingEntityBase, LivingTravelInput, Mob, MobBase, SharedEntity,
+    Entity, EntityBase, EntityBaseLoad, EntityMovementEmission, EntityPose, EntitySpawnReason,
+    EntitySyncedData, LivingEntity, LivingEntityBase, LivingTravelInput, Mob, MobBase,
+    SharedEntity,
 };
 use crate::physics::MoveResult;
-use crate::world::{World, is_redstone_conductor};
+use crate::world::{LevelReader as _, World, is_redstone_conductor};
 
 const FLAG_RESTING: i8 = 1;
 const BAT_RESTING_TARGETING_RANGE: f64 = 4.0;
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
+
+/// Vanilla `Bat.TICKS_PER_FLAP`: the bat's wings are flapped every tenth tick.
+const TICKS_PER_FLAP: i32 = 10;
 
 /// Vanilla `Bat.customServerAiStep` chance divisors (`nextInt` bounds).
 const RESTING_YAW_ROLL_CHANCE: i32 = 200;
@@ -243,6 +250,44 @@ impl BatEntity {
                 ),
         )
     }
+
+    /// Mirrors vanilla `Bat.checkBatSpawnRules`: bats only spawn strictly below
+    /// the world surface, only half of the time, only when a brightness roll
+    /// succeeds, and only on a block tagged `minecraft:bats_spawnable_on`.
+    ///
+    /// GAP: nothing consumes this rule yet. Vanilla attaches it through
+    /// `SpawnPlacements.register(BAT, ...)`; Steel has no spawn-placement table
+    /// in `entity::spawn` or the world spawner, so natural bat spawning does
+    /// not happen yet. The rule itself is complete so that coordinator can call
+    /// it unchanged.
+    #[must_use]
+    pub fn check_bat_spawn_rules(
+        entity_type: EntityTypeRef,
+        level: &World,
+        spawn_reason: EntitySpawnReason,
+        pos: BlockPos,
+        random: &mut impl Random,
+    ) -> bool {
+        // Vanilla compares against `getHeightmapPos(WORLD_SURFACE, pos)`.
+        if pos.y() >= level.level_height_at(HeightmapType::WorldSurface, pos.x(), pos.z()) {
+            return false;
+        }
+
+        if random.next_bool() {
+            return false;
+        }
+
+        let brightness = level.max_local_raw_brightness(pos, level.sky_darkening());
+        if i32::from(brightness) > random.next_i32_bounded(4) {
+            return false;
+        }
+
+        level
+            .get_block_state(pos.below())
+            .get_block()
+            .has_tag(&BlockTag::BATS_SPAWNABLE_ON)
+            && <Self as Mob>::check_mob_spawn_rules(entity_type, level, spawn_reason, pos)
+    }
 }
 
 impl Entity for BatEntity {
@@ -283,6 +328,11 @@ impl Entity for BatEntity {
                 velocity.z,
             ));
         }
+
+        // GAP: vanilla runs `Bat.setupAnimationStates` here, driving
+        // `flyAnimationState` / `restAnimationState` from `isResting()`. Steel
+        // has no `AnimationState` equivalent, so the flap and rest ship with the
+        // renderer (`FLAP_LENGTH_SECONDS` flap timing) and needs that foundation.
     }
 
     fn dimensions_for_pose(&self, _pose: EntityPose) -> EntityDimensions {
@@ -332,7 +382,7 @@ impl Entity for BatEntity {
     }
 
     fn is_flapping(&self) -> bool {
-        !self.is_resting() && self.tick_count() % 10 == 0
+        !self.is_resting() && self.tick_count() % TICKS_PER_FLAP == 0
     }
 
     fn hurt(&self, world: &World, source: &DamageSource, amount: f32) -> bool {
@@ -392,6 +442,9 @@ impl LivingEntity for BatEntity {
     }
 
     fn push_entities(&self) {}
+
+    /// Vanilla `Bat.doPush` is empty; bats never push other entities.
+    fn do_push(&self, _entity: &SharedEntity) {}
 
     fn server_ai_step(&self, entity: &SharedEntity) {
         Mob::mob_server_ai_step(self, entity);

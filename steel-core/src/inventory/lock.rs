@@ -168,6 +168,18 @@ impl ContainerRef {
             .is_none_or(|owner| owner.block_entity.is_valid_container_for(player))
     }
 
+    /// Returns the block entity that owns this container, when it is still the
+    /// block entity stored at its position.
+    ///
+    /// Used by the menu lifecycle to drive container-viewer accounting without
+    /// locking the container or downcasting.
+    #[must_use]
+    pub fn owner_block_entity(&self) -> Option<SharedBlockEntity> {
+        self.owner
+            .as_ref()
+            .and_then(|owner| owner.block_entity.current_block_entity())
+    }
+
     /// Locks this container and returns a guard.
     fn lock(&self) -> LockedContainer {
         LockedContainer(SyncMutex::lock_arc(&self.source))

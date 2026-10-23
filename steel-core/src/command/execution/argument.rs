@@ -1,12 +1,13 @@
 use std::{fmt, sync::Arc};
 
 use super::{
-    BiomeOrTag, BlockInput, BlockPredicate, CommandArgumentSource, Coordinates, IntRange,
-    ItemPredicate, ScoreHolderArgument, StructureOrTagKey, WorldArgument,
+    BiomeOrTag, BlockInput, BlockPredicate, CommandArgumentSource, CommandSource, Coordinates,
+    IntRange, ItemPredicate, ScoreHolderArgument, StructureOrTagKey, WorldArgument,
     biome::{parse_biome_or_tag, suggest_biomes},
     block::{parse_block_input, parse_block_predicate, suggest_block_inputs, suggest_blocks},
     coordinates::{
-        parse_block_pos, parse_rotation, parse_vec2, parse_vec3, suggest_coordinates, suggest_vec2,
+        WorldCoordinate, WorldCoordinates, parse_block_pos, parse_rotation, parse_vec2, parse_vec3,
+        suggest_coordinates, suggest_vec2,
     },
     item::{parse_item_stack, suggest_item_stack},
     item_predicate::{parse_item_predicate, suggest_item_predicate},
@@ -23,33 +24,43 @@ use super::{
 use crate::chunk::heightmap::HeightmapType;
 use crate::command::brigadier::{
     ArgumentSuggestionContext, ArgumentType, CommandArgumentParser, CommandSyntaxError,
-    CommandSyntaxErrorKind, ContainsPrimitiveArgumentValue, PrimitiveArgumentValue, StringReader,
-    SuggestionsBuilder,
+    CommandSyntaxErrorKind, ContainsPrimitiveArgumentValue, PrimitiveArgumentValue, ReaderCursor,
+    StringReader, SuggestionsBuilder,
 };
 use crate::command::incorrectly_typed_argument;
 use crate::command::protocol::protocol_argument_type;
 use crate::entity::{ENTITIES, EntityAnchor};
+use crate::scoreboard::{DisplaySlot, ObjectiveCriteria, TeamColor};
 use glam::DVec3;
+use simdnbt::owned::NbtTag;
+use steel_math::wrap_degrees;
 use steel_protocol::packets::game::{
     ArgumentStringTypeBehavior, ArgumentType as ProtocolArgumentType,
     SuggestionType as ProtocolSuggestionType,
 };
 use steel_registry::advancement::registry::AdvancementRef;
+use steel_registry::attribute::AttributeRef;
 use steel_registry::damage_type::DamageTypeRef;
+use steel_registry::data_components::vanilla_components::SwingAnimationType;
+use steel_registry::mob_effect::MobEffectRef;
+use steel_registry::particle_type::ParticleTypeRef;
 use steel_registry::{
-    DAMAGE_TYPE_REGISTRY, ENCHANTMENT_REGISTRY, ENTITY_TYPE_REGISTRY, REGISTRY, RegistryExt as _,
-    TIMELINE_REGISTRY, WORLD_CLOCK_REGISTRY, enchantment::EnchantmentRef,
-    entity_type::EntityTypeRef, item_stack::ItemStack, timeline::TimelineRef,
-    world_clock::WorldClockRef,
+    DAMAGE_TYPE_REGISTRY, ENCHANTMENT_REGISTRY, ENTITY_TYPE_REGISTRY, MOB_EFFECT_REGISTRY,
+    REGISTRY, RegistryExt as _, TIMELINE_REGISTRY, WORLD_CLOCK_REGISTRY,
+    enchantment::EnchantmentRef, entity_type::EntityTypeRef, item_stack::ItemStack,
+    timeline::TimelineRef, world_clock::WorldClockRef,
 };
 use steel_utils::translations::ADVANCEMENT_ADVANCEMENT_NOT_FOUND;
 use steel_utils::{
-    Downcast as _, DowncastType, DowncastTypeKey, ErasedType, Identifier,
+    Downcast as _, DowncastType, DowncastTypeKey, ErasedType, Identifier, Rotation,
     nbt::{NbtPath, parse_snbt_argument},
     translations,
     types::GameType,
 };
+use steel_worldgen::structure::StructureMirror;
 use text_components::TextComponent;
+use text_components::format::Format;
+use uuid::Uuid;
 
 /// Axes selected by vanilla's coordinate swizzle argument.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -371,6 +382,111 @@ impl SteelArgumentType {
         Self::new(TimeMarkerParser { clock_argument })
     }
 
+    /// Vanilla `AngleArgument`: one source-relative or absolute yaw.
+    pub(crate) fn angle() -> Self {
+        Self::new(AngleParser)
+    }
+
+    /// Vanilla `MessageArgument`: greedy text with resolvable entity selectors.
+    pub(crate) fn message() -> Self {
+        Self::new(MessageParser)
+    }
+
+    /// Vanilla `HexColorArgument`: a packed opaque ARGB colour.
+    pub(crate) fn hex_color() -> Self {
+        Self::new(HexColorParser)
+    }
+
+    /// Vanilla `ResourceArgument<MobEffect>`.
+    pub(crate) fn mob_effect() -> Self {
+        Self::new(MobEffectParser)
+    }
+
+    /// Vanilla `ResourceArgument<Attribute>`.
+    pub(crate) fn attribute() -> Self {
+        Self::new(AttributeParser)
+    }
+
+    /// Vanilla `ParticleArgument` for the bare-key form.
+    pub(crate) fn particle() -> Self {
+        Self::new(ParticleParser)
+    }
+
+    /// Vanilla `OperationArgument`: a scoreboard operation symbol.
+    pub(crate) fn operation() -> Self {
+        Self::new(OperationParser)
+    }
+
+    /// Vanilla `ObjectiveCriteriaArgument`.
+    pub(crate) fn objective_criteria() -> Self {
+        Self::new(ObjectiveCriteriaParser)
+    }
+
+    /// Vanilla `ScoreboardSlotArgument`.
+    pub(crate) fn scoreboard_slot() -> Self {
+        Self::new(ScoreboardSlotParser)
+    }
+
+    /// Vanilla `TeamArgument`: a scoreboard team name retained for execution.
+    pub(crate) fn team() -> Self {
+        Self::new(TeamParser)
+    }
+
+    /// Vanilla `TeamColorArgument`.
+    pub(crate) fn team_color() -> Self {
+        Self::new(TeamColorParser)
+    }
+
+    /// Vanilla `UuidArgument`.
+    pub(crate) fn uuid() -> Self {
+        Self::new(UuidParser)
+    }
+
+    /// Vanilla `ColumnPosArgument`: a two-dimensional block column.
+    pub(crate) fn column_pos() -> Self {
+        Self::new(ColumnPosParser)
+    }
+
+    /// Vanilla `RangeArgument.Floats`: a double range.
+    pub(crate) fn double_range() -> Self {
+        Self::new(FloatRangeParser)
+    }
+
+    /// Vanilla `NbtTagArgument`: one SNBT value of any type.
+    pub(crate) fn nbt_tag() -> Self {
+        Self::new(NbtTagParser)
+    }
+
+    /// Vanilla `SwingAnimationArgument`.
+    pub(crate) fn swing_animation() -> Self {
+        Self::new(SwingAnimationParser)
+    }
+
+    /// Vanilla `IdentifierArgument`: a generic, unvalidated resource location.
+    pub(crate) fn identifier_argument() -> Self {
+        Self::new(IdentifierParser)
+    }
+
+    /// Vanilla `SlotsArgument`: a named range of vanilla container slots.
+    pub(crate) fn slots() -> Self {
+        Self::new(SlotsParser)
+    }
+
+    /// Vanilla `TemplateMirrorArgument`.
+    pub(crate) fn template_mirror() -> Self {
+        Self::new(TemplateMirrorParser)
+    }
+
+    /// Vanilla `TemplateRotationArgument`.
+    pub(crate) fn template_rotation() -> Self {
+        Self::new(TemplateRotationParser)
+    }
+
+    /// Vanilla `StyleArgument`: a chat style parsed from SNBT.
+    pub(crate) fn style() -> Self {
+        Self::new(StyleParser)
+    }
+
     pub(crate) fn protocol_argument(
         &self,
     ) -> (ProtocolArgumentType, Option<ProtocolSuggestionType>) {
@@ -505,6 +621,7 @@ impl_downcast_type!(HeightmapType, "steel:command/value/heightmap");
 impl_downcast_type!(EntitySelector, "steel:command/value/entity_selector");
 impl_downcast_type!(ScoreHolderArgument, "steel:command/value/score_holder");
 impl_downcast_type!(IntRange, "steel:command/value/int_range");
+impl_downcast_type!(FloatRange, "steel:command/value/float_range");
 impl_downcast_type!(BiomeOrTag, "steel:command/value/biome_or_tag");
 impl_downcast_type!(
     StructureOrTagKey,
@@ -550,6 +667,66 @@ argument_value_wrapper!(
     "steel:command/value/component"
 );
 argument_value_wrapper!(NbtPathValue(NbtPath), "steel:command/value/nbt_path");
+argument_value_wrapper!(AngleValue(Angle), "steel:command/value/angle");
+argument_value_wrapper!(MessageValue(Message), "steel:command/value/message");
+argument_value_wrapper!(HexColorValue(i32), "steel:command/value/hex_color");
+argument_value_wrapper!(
+    MobEffectValue(MobEffectRef),
+    "steel:command/value/mob_effect"
+);
+argument_value_wrapper!(
+    AttributeValue(AttributeRef),
+    "steel:command/value/attribute"
+);
+argument_value_wrapper!(OperationValue(Operation), "steel:command/value/operation");
+argument_value_wrapper!(
+    ParticleValue(ParticleTypeRef),
+    "steel:command/value/particle"
+);
+argument_value_wrapper!(
+    ObjectiveCriteriaValue(Box<str>),
+    "steel:command/value/objective_criteria"
+);
+argument_value_wrapper!(
+    ScoreboardSlotValue(DisplaySlot),
+    "steel:command/value/scoreboard_slot"
+);
+argument_value_wrapper!(TeamValue(Box<str>), "steel:command/value/team");
+argument_value_wrapper!(TeamColorValue(TeamColor), "steel:command/value/team_color");
+argument_value_wrapper!(UuidValue(Uuid), "steel:command/value/uuid");
+argument_value_wrapper!(
+    ColumnPosValue(Coordinates),
+    "steel:command/value/column_pos"
+);
+argument_value_wrapper!(NbtTagValue(NbtTag), "steel:command/value/nbt_tag");
+argument_value_wrapper!(
+    SwingAnimationValue(SwingAnimationType),
+    "steel:command/value/swing_animation"
+);
+
+/// A parsed vanilla `Style`; `text_components::format::Format` is Steel's style type.
+pub(super) struct StyleValue(pub(super) Format);
+
+impl fmt::Debug for StyleValue {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // `text_components::format::Format` has no `Debug`, so report emptiness only.
+        formatter
+            .debug_struct("StyleValue")
+            .field("is_empty", &self.0.is_none())
+            .finish()
+    }
+}
+
+impl_downcast_type!(StyleValue, "steel:command/value/style");
+argument_value_wrapper!(SlotsValue(SlotRange), "steel:command/value/slots");
+argument_value_wrapper!(
+    TemplateMirrorValue(StructureMirror),
+    "steel:command/value/template_mirror"
+);
+argument_value_wrapper!(
+    TemplateRotationValue(Rotation),
+    "steel:command/value/template_rotation"
+);
 argument_value_wrapper!(
     IdentifierValue(Identifier),
     "steel:command/value/identifier"
@@ -559,6 +736,265 @@ argument_value_wrapper!(
     "steel:command/value/world_clock"
 );
 argument_value_wrapper!(TimelineValue(TimelineRef), "steel:command/value/timeline");
+
+/// Vanilla `AngleArgument.SingleAngle`: a yaw that may be relative to the source.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Angle {
+    value: f32,
+    relative: bool,
+}
+
+impl Angle {
+    pub(crate) const fn new(value: f32, relative: bool) -> Self {
+        Self { value, relative }
+    }
+
+    /// Resolves this angle against `source_yaw`, wrapping like vanilla `Mth.wrapDegrees`.
+    #[must_use]
+    pub(crate) fn resolve(self, source_yaw: f32) -> f32 {
+        wrap_degrees(if self.relative {
+            self.value + source_yaw
+        } else {
+            self.value
+        })
+    }
+}
+
+/// Vanilla `OperationArgument.Operation`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Operation {
+    /// `=`
+    Assign,
+    /// `+=`
+    Add,
+    /// `-=`
+    Subtract,
+    /// `*=`
+    Multiply,
+    /// `/=`
+    Divide,
+    /// `%=`
+    Modulo,
+    /// `><`
+    Swap,
+    /// `<`
+    Min,
+    /// `>`
+    Max,
+}
+
+impl Operation {
+    /// Every vanilla operation symbol, in `ArgumentTypeInfos`-visible order.
+    pub(crate) const ALL: [Self; 9] = [
+        Self::Assign,
+        Self::Add,
+        Self::Subtract,
+        Self::Multiply,
+        Self::Divide,
+        Self::Modulo,
+        Self::Swap,
+        Self::Min,
+        Self::Max,
+    ];
+
+    /// The vanilla symbol accepted by `OperationArgument`.
+    #[must_use]
+    pub(crate) const fn symbol(self) -> &'static str {
+        match self {
+            Self::Assign => "=",
+            Self::Add => "+=",
+            Self::Subtract => "-=",
+            Self::Multiply => "*=",
+            Self::Divide => "/=",
+            Self::Modulo => "%=",
+            Self::Swap => "><",
+            Self::Min => "<",
+            Self::Max => ">",
+        }
+    }
+
+    fn from_symbol(symbol: &str) -> Option<Self> {
+        match symbol {
+            "=" => Some(Self::Assign),
+            "+=" => Some(Self::Add),
+            "-=" => Some(Self::Subtract),
+            "*=" => Some(Self::Multiply),
+            "/=" => Some(Self::Divide),
+            "%=" => Some(Self::Modulo),
+            "><" => Some(Self::Swap),
+            "<" => Some(Self::Min),
+            ">" => Some(Self::Max),
+            _ => None,
+        }
+    }
+
+    /// Returns whether this operation exchanges both score values.
+    #[must_use]
+    pub(crate) const fn is_swap(self) -> bool {
+        matches!(self, Self::Swap)
+    }
+
+    /// Applies this operation to a left and right value, mirroring vanilla
+    /// `OperationArgument.SimpleOperation`.
+    pub(crate) fn apply_values(self, left: i32, right: i32) -> Result<i32, CommandSyntaxError> {
+        let zero_division = || {
+            CommandSyntaxError::dynamic(TextComponent::from(
+                &translations::ARGUMENTS_OPERATION_DIV0,
+            ))
+        };
+        match self {
+            Self::Assign => Ok(right),
+            Self::Add => Ok(left.wrapping_add(right)),
+            Self::Subtract => Ok(left.wrapping_sub(right)),
+            Self::Multiply => Ok(left.wrapping_mul(right)),
+            Self::Divide => {
+                if right == 0 {
+                    Err(zero_division())
+                } else {
+                    // Vanilla `Mth.floorDiv`: floor division, not truncation.
+                    Ok(left.div_euclid(right))
+                }
+            }
+            Self::Modulo => {
+                if right == 0 {
+                    Err(zero_division())
+                } else {
+                    // Vanilla `Mth.positiveModulo`: always non-negative.
+                    Ok(left.rem_euclid(right))
+                }
+            }
+            Self::Min => Ok(left.min(right)),
+            Self::Max => Ok(left.max(right)),
+            Self::Swap => Ok(right),
+        }
+    }
+}
+
+/// Vanilla `server.level.ColumnPos`: the x/z pair of a block column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ColumnPos {
+    /// Column x coordinate.
+    pub(crate) x: i32,
+    /// Column z coordinate.
+    pub(crate) z: i32,
+}
+
+/// Vanilla `RangeArgument.Floats` (`MinMaxBounds.Doubles`) inclusive double bounds.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FloatRange {
+    minimum: Option<f64>,
+    maximum: Option<f64>,
+}
+
+impl FloatRange {
+    const fn new(minimum: Option<f64>, maximum: Option<f64>) -> Self {
+        Self { minimum, maximum }
+    }
+
+    /// Returns the inclusive minimum bound.
+    #[must_use]
+    pub(crate) const fn minimum(self) -> Option<f64> {
+        self.minimum
+    }
+
+    /// Returns the inclusive maximum bound.
+    #[must_use]
+    pub(crate) const fn maximum(self) -> Option<f64> {
+        self.maximum
+    }
+
+    /// Returns whether `value` lies inside the inclusive bounds.
+    #[must_use]
+    pub(crate) fn matches(self, value: f64) -> bool {
+        if let Some(minimum) = self.minimum
+            && value < minimum
+        {
+            return false;
+        }
+        if let Some(maximum) = self.maximum
+            && value > maximum
+        {
+            return false;
+        }
+        true
+    }
+}
+
+/// Vanilla `world.inventory.SlotRange`: a named range of vanilla slot ids.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SlotRange {
+    name: Box<str>,
+    slots: Box<[i32]>,
+}
+
+impl SlotRange {
+    /// The vanilla serialized name accepted by `SlotsArgument`.
+    #[must_use]
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The vanilla slot ids covered by this range, in vanilla order.
+    #[must_use]
+    pub(crate) fn slots(&self) -> &[i32] {
+        &self.slots
+    }
+
+    /// Returns whether this range covers exactly one slot.
+    #[must_use]
+    pub(crate) fn is_single(&self) -> bool {
+        self.slots.len() == 1
+    }
+}
+
+/// Vanilla `MessageArgument.Message`: greedy text plus its selector parts.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Message {
+    text: Box<str>,
+    parts: Box<[MessagePart]>,
+}
+
+impl Message {
+    /// The raw message text as typed by the sender.
+    #[must_use]
+    pub(crate) fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// The entity-selector parts resolved when the message is read.
+    #[must_use]
+    pub(crate) fn parts(&self) -> &[MessagePart] {
+        &self.parts
+    }
+}
+
+/// One `@selector` occurrence inside a [`Message`], offset from the text start.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MessagePart {
+    start: usize,
+    end: usize,
+    selector: Box<EntitySelector>,
+}
+
+impl MessagePart {
+    /// Offset of the first character of the selector.
+    #[must_use]
+    pub(crate) const fn start(&self) -> usize {
+        self.start
+    }
+
+    /// Offset one past the last character of the selector.
+    #[must_use]
+    pub(crate) const fn end(&self) -> usize {
+        self.end
+    }
+
+    /// The parsed selector.
+    #[must_use]
+    pub(crate) fn selector(&self) -> &EntitySelector {
+        &self.selector
+    }
+}
 
 macro_rules! unit_argument_parser {
     (
@@ -1188,6 +1624,16 @@ unit_argument_parser!(
     protocol(ProtocolArgumentType::Component, None)
 );
 unit_argument_parser!(
+    NbtTagParser,
+    "steel:command/parser/nbt_tag",
+    NbtTagValue,
+    parse | reader,
+    _source | { parse_nbt_tag(reader).map(NbtTagValue) },
+    suggest | _context,
+    _builder | {},
+    protocol(ProtocolArgumentType::NbtTag, None)
+);
+unit_argument_parser!(
     NbtPathParser,
     "steel:command/parser/nbt_path",
     NbtPathValue,
@@ -1197,6 +1643,295 @@ unit_argument_parser!(
     _builder | {},
     protocol(ProtocolArgumentType::NbtPath, None)
 );
+unit_argument_parser!(
+    IdentifierParser,
+    "steel:command/parser/identifier",
+    IdentifierValue,
+    parse | reader,
+    _source | { parse_identifier(reader).map(IdentifierValue) },
+    suggest | _context,
+    _builder | {},
+    protocol(ProtocolArgumentType::ResourceLocation, None)
+);
+unit_argument_parser!(
+    FloatRangeParser,
+    "steel:command/parser/float_range",
+    FloatRange,
+    parse | reader,
+    _source | { parse_float_range(reader) },
+    suggest | _context,
+    _builder | {},
+    protocol(ProtocolArgumentType::FloatRange, None)
+);
+unit_argument_parser!(
+    AngleParser,
+    "steel:command/parser/angle",
+    AngleValue,
+    parse | reader,
+    _source | { parse_angle(reader).map(AngleValue) },
+    suggest | _context,
+    _builder | {},
+    protocol(ProtocolArgumentType::Angle, None)
+);
+unit_argument_parser!(
+    UuidParser,
+    "steel:command/parser/uuid",
+    UuidValue,
+    parse | reader,
+    _source | { parse_uuid(reader).map(UuidValue) },
+    suggest | _context,
+    _builder | {},
+    protocol(ProtocolArgumentType::Uuid, None)
+);
+unit_argument_parser!(
+    ParticleParser,
+    "steel:command/parser/particle",
+    ParticleValue,
+    parse | reader,
+    _source | {
+        let key = parse_identifier(reader)?;
+        REGISTRY.particle_types.by_key(&key).map_or_else(
+            || {
+                let message = translations::PARTICLE_NOT_FOUND
+                    .message([key.to_string()])
+                    .component();
+                Err(reader.error(CommandSyntaxErrorKind::Dynamic(Box::new(message))))
+            },
+            |particle| Ok(ParticleValue(particle)),
+        )
+    },
+    suggest | _context,
+    builder | {
+        suggest_resources(
+            REGISTRY
+                .particle_types
+                .iter()
+                .map(|(_, particle)| &particle.key),
+            builder,
+        );
+    },
+    protocol(ProtocolArgumentType::Particle, None)
+);
+unit_argument_parser!(
+    OperationParser,
+    "steel:command/parser/operation",
+    OperationValue,
+    parse | reader,
+    _source | { parse_operation(reader).map(OperationValue) },
+    suggest | _context,
+    builder | {
+        suggest_operations(builder);
+    },
+    protocol(ProtocolArgumentType::Operation, None)
+);
+unit_argument_parser!(
+    ScoreboardSlotParser,
+    "steel:command/parser/scoreboard_slot",
+    ScoreboardSlotValue,
+    parse | reader,
+    _source | { parse_display_slot(reader).map(ScoreboardSlotValue) },
+    suggest | _context,
+    builder | {
+        suggest_display_slots(builder);
+    },
+    protocol(ProtocolArgumentType::ScoreboardSlot, None)
+);
+unit_argument_parser!(
+    TeamParser,
+    "steel:command/parser/team",
+    TeamValue,
+    parse | reader,
+    _source | { parse_team_name(reader).map(TeamValue) },
+    suggest | context,
+    builder | {
+        suggest_team_names(builder, context.source());
+    },
+    protocol(
+        ProtocolArgumentType::Team,
+        Some(ProtocolSuggestionType::AskServer),
+    )
+);
+unit_argument_parser!(
+    TeamColorParser,
+    "steel:command/parser/team_color",
+    TeamColorValue,
+    parse | reader,
+    _source | { parse_team_color(reader).map(TeamColorValue) },
+    suggest | _context,
+    builder | {
+        suggest_team_colors(builder);
+    },
+    protocol(ProtocolArgumentType::Color, None)
+);
+unit_argument_parser!(
+    ObjectiveCriteriaParser,
+    "steel:command/parser/objective_criteria",
+    ObjectiveCriteriaValue,
+    parse | reader,
+    _source | { parse_objective_criteria(reader).map(ObjectiveCriteriaValue) },
+    suggest | _context,
+    builder | {
+        suggest_objective_criteria(builder);
+    },
+    protocol(ProtocolArgumentType::ObjectiveCriteria, None)
+);
+unit_argument_parser!(
+    SwingAnimationParser,
+    "steel:command/parser/swing_animation",
+    SwingAnimationValue,
+    parse | reader,
+    _source | { parse_swing_animation(reader).map(SwingAnimationValue) },
+    suggest | _context,
+    builder | {
+        suggest_swing_animations(builder);
+    },
+    protocol(ProtocolArgumentType::SwingAnimation, None)
+);
+unit_argument_parser!(
+    SlotsParser,
+    "steel:command/parser/slots",
+    SlotsValue,
+    parse | reader,
+    _source | { parse_slot_range(reader).map(SlotsValue) },
+    suggest | _context,
+    builder | {
+        suggest_slot_ranges(builder, false);
+    },
+    protocol(ProtocolArgumentType::ItemSlots, None)
+);
+unit_argument_parser!(
+    TemplateMirrorParser,
+    "steel:command/parser/template_mirror",
+    TemplateMirrorValue,
+    parse | reader,
+    _source | { parse_template_mirror(reader).map(TemplateMirrorValue) },
+    suggest | _context,
+    builder | {
+        suggest_template_mirrors(builder);
+    },
+    protocol(ProtocolArgumentType::TemplateMirror, None)
+);
+unit_argument_parser!(
+    TemplateRotationParser,
+    "steel:command/parser/template_rotation",
+    TemplateRotationValue,
+    parse | reader,
+    _source | { parse_template_rotation(reader).map(TemplateRotationValue) },
+    suggest | _context,
+    builder | {
+        suggest_template_rotations(builder);
+    },
+    protocol(ProtocolArgumentType::TemplateRotation, None)
+);
+unit_argument_parser!(
+    ColumnPosParser,
+    "steel:command/parser/column_pos",
+    ColumnPosValue,
+    parse | reader,
+    _source | { parse_column_pos(reader).map(ColumnPosValue) },
+    suggest | _context,
+    builder | {
+        suggest_column_pos(builder);
+    },
+    protocol(ProtocolArgumentType::ColumnPos, None)
+);
+unit_argument_parser!(
+    StyleParser,
+    "steel:command/parser/style",
+    StyleValue,
+    parse | reader,
+    _source | { parse_style(reader).map(StyleValue) },
+    suggest | _context,
+    _builder | {},
+    protocol(ProtocolArgumentType::Style, None)
+);
+unit_argument_parser!(
+    HexColorParser,
+    "steel:command/parser/hex_color",
+    HexColorValue,
+    parse | reader,
+    _source | { parse_hex_color(reader).map(HexColorValue) },
+    suggest | _context,
+    builder | {
+        builder.suggest("F00");
+        builder.suggest("FF0000");
+    },
+    protocol(ProtocolArgumentType::HexColor, None)
+);
+unit_argument_parser!(
+    MessageParser,
+    "steel:command/parser/message",
+    MessageValue,
+    parse | reader,
+    source | { parse_message(reader, source, source.allows_entity_selectors()).map(MessageValue) },
+    suggest | _context,
+    _builder | {},
+    protocol(ProtocolArgumentType::Message, None)
+);
+unit_argument_parser!(
+    MobEffectParser,
+    "steel:command/parser/mob_effect",
+    MobEffectValue,
+    parse | reader,
+    _source | {
+        let key = parse_identifier(reader)?;
+        REGISTRY.mob_effects.by_key(&key).map_or_else(
+            || Err(unknown_resource(reader, &key, &MOB_EFFECT_REGISTRY)),
+            |effect| Ok(MobEffectValue(effect)),
+        )
+    },
+    suggest | _context,
+    builder | {
+        suggest_resources(
+            REGISTRY.mob_effects.iter().map(|(_, effect)| &effect.key),
+            builder,
+        );
+    },
+    protocol(
+        ProtocolArgumentType::Resource {
+            identifier: "minecraft:mob_effect",
+        },
+        None,
+    )
+);
+unit_argument_parser!(
+    AttributeParser,
+    "steel:command/parser/attribute",
+    AttributeValue,
+    parse | reader,
+    _source | {
+        let key = parse_identifier(reader)?;
+        REGISTRY.attributes.by_key(&key).map_or_else(
+            || {
+                let message = translations::ARGUMENT_RESOURCE_NOT_FOUND
+                    .message([
+                        key.to_string(),
+                        Identifier::vanilla_static("attribute").to_string(),
+                    ])
+                    .component();
+                Err(reader.error(CommandSyntaxErrorKind::Dynamic(Box::new(message))))
+            },
+            |attribute| Ok(AttributeValue(attribute)),
+        )
+    },
+    suggest | _context,
+    builder | {
+        suggest_resources(
+            REGISTRY
+                .attributes
+                .iter()
+                .map(|(_, attribute)| &attribute.key),
+            builder,
+        );
+    },
+    protocol(
+        ProtocolArgumentType::Resource {
+            identifier: "minecraft:attribute",
+        },
+        None,
+    )
+);
+
 unit_argument_parser!(
     StorageKeyParser,
     "steel:command/parser/storage_key",
@@ -1667,4 +2402,806 @@ fn suggest_time_units(builder: &mut SuggestionsBuilder<'_>) {
 
 fn java_round(value: f32) -> i32 {
     (value + 0.5).floor() as i32
+}
+
+fn dynamic_error(reader: &StringReader<'_>, component: TextComponent) -> CommandSyntaxError {
+    reader.error(CommandSyntaxErrorKind::Dynamic(Box::new(component)))
+}
+
+fn translated_error(
+    reader: &StringReader<'_>,
+    translation: &'static text_components::translation::Translation<0>,
+) -> CommandSyntaxError {
+    dynamic_error(reader, TextComponent::from(translation))
+}
+
+fn translated_argument_error(
+    reader: &StringReader<'_>,
+    translation: &'static text_components::translation::Translation<1>,
+    value: impl Into<String>,
+) -> CommandSyntaxError {
+    dynamic_error(reader, translation.message([value.into()]).component())
+}
+
+fn parse_angle(reader: &mut StringReader<'_>) -> Result<Angle, CommandSyntaxError> {
+    if !reader.can_read() {
+        return Err(translated_error(
+            reader,
+            &translations::ARGUMENT_ANGLE_INCOMPLETE,
+        ));
+    }
+    let relative = reader.peek() == Some('~');
+    if relative {
+        reader.skip();
+    }
+    let value = if reader.can_read() && reader.peek() != Some(' ') {
+        reader.read_float()?
+    } else {
+        0.0
+    };
+    if value.is_nan() || value.is_infinite() {
+        return Err(translated_error(
+            reader,
+            &translations::ARGUMENT_ANGLE_INVALID,
+        ));
+    }
+    Ok(Angle::new(value, relative))
+}
+
+/// Vanilla `MessageArgument.Message.parseText`.
+fn parse_message(
+    reader: &mut StringReader<'_>,
+    source: &dyn CommandArgumentSource,
+    allow_selectors: bool,
+) -> Result<Message, CommandSyntaxError> {
+    const MAX_MESSAGE_LENGTH: usize = 256;
+
+    let remaining = reader.remaining();
+    // Vanilla bounds `StringReader.getRemainingLength()`, which is UTF-16 code units.
+    let remaining_length = remaining.encode_utf16().count();
+    if remaining_length > MAX_MESSAGE_LENGTH {
+        return Err(dynamic_error(
+            reader,
+            translations::ARGUMENT_MESSAGE_TOO_LONG
+                .message([remaining_length.to_string(), MAX_MESSAGE_LENGTH.to_string()])
+                .component(),
+        ));
+    }
+
+    let text: Box<str> = remaining.into();
+    if !allow_selectors {
+        reader.advance_bytes(remaining.len());
+        return Ok(Message {
+            text,
+            parts: Box::new([]),
+        });
+    }
+
+    let mut parts = Vec::new();
+    let mut index = 0;
+    let mut consumed = 0;
+    while index < remaining.len() {
+        if remaining.as_bytes()[index] != b'@' {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        if !remaining[start + 1..]
+            .chars()
+            .next()
+            .is_some_and(is_selector_type)
+        {
+            // Vanilla treats a missing or unknown selector type as literal text.
+            index += 1;
+            continue;
+        }
+
+        if !reader.advance_bytes(start - consumed) {
+            index += 1;
+            continue;
+        }
+        let checkpoint = reader.checkpoint();
+        match parse_entity_selector(reader, source, false, false) {
+            Ok(selector) => {
+                let end = remaining.len() - reader.remaining().len();
+                consumed = end;
+                parts.push(MessagePart {
+                    start,
+                    end,
+                    selector: Box::new(selector),
+                });
+                index = end;
+            }
+            Err(error) => {
+                reader.restore(checkpoint);
+                return Err(error);
+            }
+        }
+    }
+
+    reader.advance_bytes(remaining.len() - consumed);
+    Ok(Message {
+        text,
+        parts: parts.into_boxed_slice(),
+    })
+}
+
+const fn is_selector_type(character: char) -> bool {
+    matches!(character, 'a' | 'e' | 'n' | 'p' | 'r' | 's')
+}
+
+/// Vanilla `MessageArgument.Part.toComponent` and `EntitySelector.joinNames`.
+pub(crate) fn resolve_message(
+    message: &Message,
+    source: &CommandSource,
+) -> Result<TextComponent, CommandSyntaxError> {
+    if message.parts.is_empty() {
+        return Ok(TextComponent::plain(message.text.to_string()));
+    }
+
+    let mut result = TextComponent::new();
+    result.children.push(TextComponent::plain(
+        message.text[..message.parts[0].start].to_string(),
+    ));
+    let mut read_to = message.parts[0].start;
+    for part in message.parts.iter() {
+        let entities = part.selector.find_entities(source)?;
+        if read_to < part.start {
+            result.children.push(TextComponent::plain(
+                message.text[read_to..part.start].to_string(),
+            ));
+        }
+        result.children.push(join_names(&entities));
+        read_to = part.end;
+    }
+    if read_to < message.text.len() {
+        result
+            .children
+            .push(TextComponent::plain(message.text[read_to..].to_string()));
+    }
+    Ok(result)
+}
+
+fn join_names(entities: &[crate::entity::SharedEntity]) -> TextComponent {
+    match entities {
+        [] => TextComponent::new(),
+        [only] => only.display_name(),
+        many => {
+            let mut component = TextComponent::new();
+            for (index, entity) in many.iter().enumerate() {
+                if index > 0 {
+                    component.children.push(TextComponent::plain(", "));
+                }
+                component.children.push(entity.display_name());
+            }
+            component
+        }
+    }
+}
+
+fn parse_hex_color(reader: &mut StringReader<'_>) -> Result<i32, CommandSyntaxError> {
+    let raw = reader.read_unquoted_string();
+    let channel = |start: usize, length: usize| -> Option<i32> {
+        let slice = raw.get(start..start + length)?;
+        if length == 1 {
+            let digit = slice.chars().next()?.to_digit(16)?;
+            Some(digit as i32 * 17)
+        } else {
+            i32::from_str_radix(slice, 16).ok()
+        }
+    };
+    let color = match raw.len() {
+        3 => channel(0, 1).zip(channel(1, 1)).zip(channel(2, 1)),
+        6 => channel(0, 2).zip(channel(2, 2)).zip(channel(4, 2)),
+        _ => None,
+    };
+    let Some(((red, green), blue)) = color else {
+        return Err(translated_argument_error(
+            reader,
+            &translations::ARGUMENT_HEXCOLOR_INVALID,
+            raw,
+        ));
+    };
+    Ok(0xFF00_0000u32 as i32 | (red << 16) | (green << 8) | blue)
+}
+
+fn parse_uuid(reader: &mut StringReader<'_>) -> Result<Uuid, CommandSyntaxError> {
+    let remaining = reader.remaining();
+    let length = remaining
+        .find(|character: char| !matches!(character, '-' | '0'..='9' | 'a'..='f' | 'A'..='F'))
+        .unwrap_or(remaining.len());
+    let candidate = &remaining[..length];
+    if candidate.len() == 36
+        && let Ok(uuid) = Uuid::parse_str(candidate)
+    {
+        reader.advance_bytes(length);
+        return Ok(uuid);
+    }
+    Err(translated_error(
+        reader,
+        &translations::ARGUMENT_UUID_INVALID,
+    ))
+}
+
+fn parse_operation(reader: &mut StringReader<'_>) -> Result<Operation, CommandSyntaxError> {
+    if !reader.can_read() {
+        return Err(translated_error(
+            reader,
+            &translations::ARGUMENTS_OPERATION_INVALID,
+        ));
+    }
+    let raw = reader.read_unquoted_token();
+    Operation::from_symbol(raw)
+        .ok_or_else(|| translated_error(reader, &translations::ARGUMENTS_OPERATION_INVALID))
+}
+
+fn suggest_operations(builder: &mut SuggestionsBuilder<'_>) {
+    let prefix = builder.remaining().to_owned();
+    for operation in Operation::ALL {
+        let symbol = operation.symbol();
+        if symbol.starts_with(&prefix) {
+            builder.suggest(symbol);
+        }
+    }
+}
+
+fn parse_display_slot(reader: &mut StringReader<'_>) -> Result<DisplaySlot, CommandSyntaxError> {
+    let raw = reader.read_unquoted_string();
+    let parsed = DisplaySlot::from_str(raw);
+    if let Some(slot) = parsed {
+        return Ok(slot);
+    }
+    Err(translated_argument_error(
+        reader,
+        &translations::ARGUMENT_SCOREBOARD_DISPLAY_SLOT_INVALID,
+        raw,
+    ))
+}
+
+fn suggest_display_slots(builder: &mut SuggestionsBuilder<'_>) {
+    let prefix = builder.remaining().to_owned();
+    for slot in DisplaySlot::ALL {
+        let name = slot.as_str();
+        if name.starts_with(&prefix) {
+            builder.suggest(name);
+        }
+    }
+}
+
+fn parse_team_name(reader: &mut StringReader<'_>) -> Result<Box<str>, CommandSyntaxError> {
+    Ok(reader.read_unquoted_string().into())
+}
+
+fn suggest_team_names(builder: &mut SuggestionsBuilder<'_>, source: &dyn CommandArgumentSource) {
+    let prefix = builder.remaining();
+    for team in source
+        .selector_team_names()
+        .into_iter()
+        .filter(|team| team.starts_with(prefix))
+    {
+        builder.suggest(team);
+    }
+}
+
+fn parse_team_color(reader: &mut StringReader<'_>) -> Result<TeamColor, CommandSyntaxError> {
+    let raw = reader.read_unquoted_string();
+    let parsed = TeamColor::from_str(raw);
+    if let Some(color) = parsed {
+        return Ok(color);
+    }
+    Err(translated_argument_error(
+        reader,
+        &translations::ARGUMENT_COLOR_INVALID,
+        raw,
+    ))
+}
+
+fn suggest_team_colors(builder: &mut SuggestionsBuilder<'_>) {
+    let prefix = builder.remaining().to_owned();
+    for color in TeamColor::ALL {
+        let name = color.as_str();
+        if name.starts_with(&prefix) {
+            builder.suggest(name);
+        }
+    }
+}
+
+fn objective_criteria_name(stat_type: &Identifier, value: &Identifier) -> String {
+    format!(
+        "{}.{}:{}.{}",
+        stat_type.namespace, stat_type.path, value.namespace, value.path
+    )
+}
+
+fn parse_objective_criteria(reader: &mut StringReader<'_>) -> Result<Box<str>, CommandSyntaxError> {
+    let raw = reader.read_unquoted_token();
+    if ObjectiveCriteria::parse(raw).is_some() {
+        Ok(raw.into())
+    } else {
+        Err(translated_argument_error(
+            reader,
+            &translations::ARGUMENT_CRITERIA_INVALID,
+            raw,
+        ))
+    }
+}
+
+fn suggest_objective_criteria(builder: &mut SuggestionsBuilder<'_>) {
+    let prefix = builder.remaining().to_owned();
+    for criteria in ObjectiveCriteria::custom_criteria_names() {
+        if criteria.starts_with(&prefix) {
+            builder.suggest(criteria);
+        }
+    }
+    for (_, entry) in REGISTRY.stat_types.iter() {
+        for id in 0..entry.registry_len() {
+            let Some(value) = entry.key_from_id(id) else {
+                continue;
+            };
+            let name = objective_criteria_name(&entry.key, value);
+            if name.starts_with(&prefix) {
+                builder.suggest(name);
+            }
+        }
+    }
+}
+
+fn parse_swing_animation(
+    reader: &mut StringReader<'_>,
+) -> Result<SwingAnimationType, CommandSyntaxError> {
+    let raw = reader.read_unquoted_string();
+    let parsed = [
+        SwingAnimationType::None,
+        SwingAnimationType::Whack,
+        SwingAnimationType::Stab,
+    ]
+    .into_iter()
+    .find(|animation| animation.serialized_name() == raw);
+    if let Some(animation) = parsed {
+        return Ok(animation);
+    }
+    Err(translated_argument_error(
+        reader,
+        &translations::ARGUMENT_SWING_ANIMATION_INVALID,
+        raw,
+    ))
+}
+
+fn suggest_swing_animations(builder: &mut SuggestionsBuilder<'_>) {
+    let prefix = builder.remaining().to_owned();
+    for animation in [
+        SwingAnimationType::None,
+        SwingAnimationType::Whack,
+        SwingAnimationType::Stab,
+    ] {
+        let name = animation.serialized_name();
+        if name.starts_with(&prefix) {
+            builder.suggest(name);
+        }
+    }
+}
+
+fn parse_template_mirror(
+    reader: &mut StringReader<'_>,
+) -> Result<StructureMirror, CommandSyntaxError> {
+    let raw = reader.read_unquoted_string();
+    match raw {
+        "none" => Ok(StructureMirror::None),
+        "left_right" => Ok(StructureMirror::LeftRight),
+        "front_back" => Ok(StructureMirror::FrontBack),
+        _ => Err(translated_argument_error(
+            reader,
+            &translations::ARGUMENT_ENUM_INVALID,
+            raw,
+        )),
+    }
+}
+
+fn suggest_template_mirrors(builder: &mut SuggestionsBuilder<'_>) {
+    let prefix = builder.remaining().to_owned();
+    for name in ["none", "left_right", "front_back"] {
+        if name.starts_with(&prefix) {
+            builder.suggest(name);
+        }
+    }
+}
+
+fn parse_template_rotation(reader: &mut StringReader<'_>) -> Result<Rotation, CommandSyntaxError> {
+    let raw = reader.read_unquoted_string();
+    match raw {
+        "none" => Ok(Rotation::None),
+        "clockwise_90" => Ok(Rotation::Clockwise90),
+        "180" => Ok(Rotation::Clockwise180),
+        "counterclockwise_90" => Ok(Rotation::CounterClockwise90),
+        _ => Err(translated_argument_error(
+            reader,
+            &translations::ARGUMENT_ENUM_INVALID,
+            raw,
+        )),
+    }
+}
+
+fn suggest_template_rotations(builder: &mut SuggestionsBuilder<'_>) {
+    let prefix = builder.remaining().to_owned();
+    for name in ["none", "clockwise_90", "180", "counterclockwise_90"] {
+        if name.starts_with(&prefix) {
+            builder.suggest(name);
+        }
+    }
+}
+
+fn parse_column_pos(reader: &mut StringReader<'_>) -> Result<Coordinates, CommandSyntaxError> {
+    let start = reader.checkpoint();
+    if !reader.can_read() {
+        return Err(translated_error(
+            reader,
+            &translations::ARGUMENT_POS2D_INCOMPLETE,
+        ));
+    }
+    let x = parse_column_coordinate(reader)?;
+    if reader.peek() != Some(' ') {
+        reader.restore(start);
+        return Err(translated_error(
+            reader,
+            &translations::ARGUMENT_POS2D_INCOMPLETE,
+        ));
+    }
+    reader.skip();
+    let z = parse_column_coordinate(reader)?;
+    Ok(Coordinates::World(WorldCoordinates::new(
+        x,
+        WorldCoordinate::new(true, 0.0),
+        z,
+    )))
+}
+
+fn parse_column_coordinate(
+    reader: &mut StringReader<'_>,
+) -> Result<WorldCoordinate, CommandSyntaxError> {
+    if reader.peek() == Some('^') {
+        return Err(translated_error(reader, &translations::ARGUMENT_POS_MIXED));
+    }
+    if !reader.can_read() {
+        return Err(translated_error(
+            reader,
+            &translations::ARGUMENT_POS_MISSING_INT,
+        ));
+    }
+    let relative = reader.peek() == Some('~');
+    if relative {
+        reader.skip();
+    }
+    let value = if reader.can_read() && reader.peek() != Some(' ') {
+        if relative {
+            reader.read_double()?
+        } else {
+            f64::from(reader.read_int()?)
+        }
+    } else {
+        0.0
+    };
+    Ok(WorldCoordinate::new(relative, value))
+}
+
+fn suggest_column_pos(builder: &mut SuggestionsBuilder<'_>) {
+    let input = builder.remaining();
+    let coordinate = if input.starts_with('^') { "^" } else { "~" };
+    if input.is_empty() {
+        let full = format!("{coordinate} {coordinate}");
+        builder.suggest(coordinate);
+        builder.suggest(full);
+        return;
+    }
+    let fields = input.trim_end().split(' ').collect::<Vec<_>>();
+    if let [x] = fields.as_slice() {
+        builder.suggest(format!("{x} {coordinate}"));
+    }
+}
+
+fn parse_float_range(reader: &mut StringReader<'_>) -> Result<FloatRange, CommandSyntaxError> {
+    let start = reader.checkpoint();
+    if !reader.can_read() {
+        return Err(range_error(
+            reader,
+            start,
+            &translations::ARGUMENT_RANGE_EMPTY,
+        ));
+    }
+
+    let minimum = read_optional_double(reader, start)?;
+    let maximum = if reader.can_read_length(2)
+        && reader.peek() == Some('.')
+        && peek_next(reader) == Some('.')
+    {
+        reader.skip();
+        reader.skip();
+        read_optional_double(reader, start)?
+    } else {
+        minimum
+    };
+
+    if minimum.is_none() && maximum.is_none() {
+        return Err(range_error(
+            reader,
+            start,
+            &translations::ARGUMENT_RANGE_EMPTY,
+        ));
+    }
+    if minimum
+        .zip(maximum)
+        .is_some_and(|(minimum, maximum)| minimum > maximum)
+    {
+        return Err(range_error(
+            reader,
+            start,
+            &translations::ARGUMENT_RANGE_SWAPPED,
+        ));
+    }
+    Ok(FloatRange::new(minimum, maximum))
+}
+
+fn read_optional_double(
+    reader: &mut StringReader<'_>,
+    range_start: ReaderCursor,
+) -> Result<Option<f64>, CommandSyntaxError> {
+    let start = reader.read_so_far().len();
+    while reader
+        .peek()
+        .is_some_and(|character| is_range_number_character(character, peek_next(reader)))
+    {
+        reader.skip();
+    }
+    let raw = &reader.input()[start..reader.read_so_far().len()];
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let Ok(value) = raw.parse() else {
+        reader.restore(range_start);
+        return Err(reader.error(CommandSyntaxErrorKind::InvalidDouble(raw.into())));
+    };
+    Ok(Some(value))
+}
+
+fn peek_next(reader: &StringReader<'_>) -> Option<char> {
+    reader.remaining().chars().nth(1)
+}
+
+fn is_range_number_character(character: char, next: Option<char>) -> bool {
+    character.is_ascii_digit()
+        || character == '-'
+        || character == '+'
+        || (character == '.' && next != Some('.'))
+}
+
+fn range_error(
+    reader: &mut StringReader<'_>,
+    start: ReaderCursor,
+    translation: &'static text_components::translation::Translation<0>,
+) -> CommandSyntaxError {
+    reader.restore(start);
+    translated_error(reader, translation)
+}
+
+fn parse_nbt_tag(reader: &mut StringReader<'_>) -> Result<NbtTag, CommandSyntaxError> {
+    let (tag, consumed) = parse_snbt_argument(reader.remaining()).map_err(|error| {
+        reader.advance_bytes(error.cursor());
+        dynamic_error(reader, error.component())
+    })?;
+    if !reader.advance_bytes(consumed) {
+        return Err(dynamic_error(
+            reader,
+            TextComponent::plain("Invalid NBT tag cursor"),
+        ));
+    }
+    Ok(tag)
+}
+
+fn parse_style(reader: &mut StringReader<'_>) -> Result<Format, CommandSyntaxError> {
+    let tag = parse_nbt_tag(reader).map_err(|error| {
+        reader.error(CommandSyntaxErrorKind::Dynamic(Box::new(
+            translations::ARGUMENT_STYLE_INVALID
+                .message([error.message_component()])
+                .component(),
+        )))
+    })?;
+    let NbtTag::Compound(compound) = tag else {
+        return Err(translated_argument_error(
+            reader,
+            &translations::ARGUMENT_STYLE_INVALID,
+            "Style must be a compound tag",
+        ));
+    };
+
+    let mut style = Format::new();
+    for (key, value) in compound.iter() {
+        match key.to_str().as_ref() {
+            "color" => style.color = Some(parse_style_color(reader, value)?),
+            "font" => {
+                let NbtTag::String(font) = value else {
+                    return Err(translated_argument_error(
+                        reader,
+                        &translations::ARGUMENT_STYLE_INVALID,
+                        "font must be a string",
+                    ));
+                };
+                style.font = Some(std::borrow::Cow::Owned(font.to_str().into_owned()));
+            }
+            "bold" => style.bold = Some(parse_style_bool(reader, value)?),
+            "italic" => style.italic = Some(parse_style_bool(reader, value)?),
+            "underlined" => style.underlined = Some(parse_style_bool(reader, value)?),
+            "strikethrough" => style.strikethrough = Some(parse_style_bool(reader, value)?),
+            "obfuscated" => style.obfuscated = Some(parse_style_bool(reader, value)?),
+            "shadow_color" => style.shadow_color = Some(parse_style_int(reader, value)?),
+            // Steel's `Format` has no field for these vanilla style members.
+            unsupported => {
+                return Err(translated_argument_error(
+                    reader,
+                    &translations::ARGUMENT_STYLE_INVALID,
+                    format!("Unsupported style field {unsupported}"),
+                ));
+            }
+        }
+    }
+    Ok(style)
+}
+
+fn parse_style_color(
+    reader: &StringReader<'_>,
+    value: &NbtTag,
+) -> Result<text_components::format::Color, CommandSyntaxError> {
+    let NbtTag::String(color) = value else {
+        return Err(translated_argument_error(
+            reader,
+            &translations::ARGUMENT_STYLE_INVALID,
+            "color must be a string",
+        ));
+    };
+    let color = color.to_str();
+    if let Some(color) = text_components::format::Color::from_hex(&color) {
+        return Ok(color);
+    }
+    named_style_color(&color).ok_or_else(|| {
+        translated_argument_error(
+            reader,
+            &translations::ARGUMENT_STYLE_INVALID,
+            format!("Unknown color {color}"),
+        )
+    })
+}
+
+fn named_style_color(name: &str) -> Option<text_components::format::Color> {
+    use text_components::format::Color;
+    Some(match name {
+        "black" => Color::Black,
+        "dark_blue" => Color::DarkBlue,
+        "dark_green" => Color::DarkGreen,
+        "dark_aqua" => Color::DarkAqua,
+        "dark_red" => Color::DarkRed,
+        "dark_purple" => Color::DarkPurple,
+        "gold" => Color::Gold,
+        "gray" => Color::Gray,
+        "dark_gray" => Color::DarkGray,
+        "blue" => Color::Blue,
+        "green" => Color::Green,
+        "aqua" => Color::Aqua,
+        "red" => Color::Red,
+        "light_purple" => Color::LightPurple,
+        "yellow" => Color::Yellow,
+        "white" => Color::White,
+        _ => return None,
+    })
+}
+
+fn parse_style_bool(reader: &StringReader<'_>, value: &NbtTag) -> Result<bool, CommandSyntaxError> {
+    match value {
+        NbtTag::Byte(byte) => Ok(*byte != 0),
+        NbtTag::Int(int) => Ok(*int != 0),
+        _ => Err(translated_argument_error(
+            reader,
+            &translations::ARGUMENT_STYLE_INVALID,
+            "Style flags must be bytes",
+        )),
+    }
+}
+
+fn parse_style_int(reader: &StringReader<'_>, value: &NbtTag) -> Result<i32, CommandSyntaxError> {
+    match value {
+        NbtTag::Int(int) => Ok(*int),
+        NbtTag::Byte(byte) => Ok(i32::from(*byte)),
+        NbtTag::Short(short) => Ok(i32::from(*short)),
+        NbtTag::Long(long) => i32::try_from(*long).map_err(|_| {
+            translated_argument_error(
+                reader,
+                &translations::ARGUMENT_STYLE_INVALID,
+                "shadow_color is out of range",
+            )
+        }),
+        _ => Err(translated_argument_error(
+            reader,
+            &translations::ARGUMENT_STYLE_INVALID,
+            "shadow_color must be an int",
+        )),
+    }
+}
+
+fn parse_slot_range(reader: &mut StringReader<'_>) -> Result<SlotRange, CommandSyntaxError> {
+    let raw = reader.read_unquoted_string();
+    let parsed = slot_ranges()
+        .iter()
+        .find(|range| range.name() == raw)
+        .cloned();
+    if let Some(range) = parsed {
+        return Ok(range);
+    }
+    Err(translated_argument_error(
+        reader,
+        &translations::SLOT_UNKNOWN,
+        raw,
+    ))
+}
+
+fn suggest_slot_ranges(builder: &mut SuggestionsBuilder<'_>, single_only: bool) {
+    let prefix = builder.remaining();
+    for range in slot_ranges() {
+        if single_only && !range.is_single() {
+            continue;
+        }
+        if range.name().starts_with(prefix) {
+            builder.suggest(range.name());
+        }
+    }
+}
+
+/// Vanilla `SlotRanges`: every named slot range, in vanilla declaration order.
+fn slot_ranges() -> &'static [SlotRange] {
+    static SLOT_RANGES: std::sync::LazyLock<Vec<SlotRange>> =
+        std::sync::LazyLock::new(build_slot_ranges);
+    &SLOT_RANGES
+}
+
+fn build_slot_ranges() -> Vec<SlotRange> {
+    fn single(ranges: &mut Vec<SlotRange>, name: impl Into<String>, id: i32) {
+        push(ranges, name, vec![id]);
+    }
+
+    fn push(ranges: &mut Vec<SlotRange>, name: impl Into<String>, slots: Vec<i32>) {
+        ranges.push(SlotRange {
+            name: name.into().into_boxed_str(),
+            slots: slots.into_boxed_slice(),
+        });
+    }
+
+    fn range(ranges: &mut Vec<SlotRange>, prefix: &str, offset: i32, size: i32) {
+        let mut all = Vec::with_capacity(size as usize);
+        for index in 0..size {
+            let slot = offset + index;
+            single(ranges, format!("{prefix}{index}"), slot);
+            all.push(slot);
+        }
+        push(ranges, format!("{prefix}*"), all);
+    }
+
+    let mut ranges = Vec::new();
+    single(&mut ranges, "contents", 0);
+    range(&mut ranges, "container.", 0, 54);
+    range(&mut ranges, "hotbar.", 0, 9);
+    range(&mut ranges, "inventory.", 9, 27);
+    range(&mut ranges, "enderchest.", 200, 27);
+    range(&mut ranges, "mob.inventory.", 300, 8);
+    range(&mut ranges, "horse.", 500, 15);
+    single(&mut ranges, "weapon", 98);
+    single(&mut ranges, "weapon.mainhand", 98);
+    single(&mut ranges, "weapon.offhand", 99);
+    push(&mut ranges, "weapon.*", vec![98, 99]);
+    single(&mut ranges, "armor.head", 103);
+    single(&mut ranges, "armor.chest", 102);
+    single(&mut ranges, "armor.legs", 101);
+    single(&mut ranges, "armor.feet", 100);
+    single(&mut ranges, "armor.body", 105);
+    push(&mut ranges, "armor.*", vec![103, 102, 101, 100, 105]);
+    single(&mut ranges, "saddle", 106);
+    single(&mut ranges, "horse.chest", 499);
+    single(&mut ranges, "player.cursor", 499);
+    range(&mut ranges, "player.crafting.", 500, 4);
+    ranges
 }

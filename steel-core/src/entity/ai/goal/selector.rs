@@ -1,3 +1,4 @@
+use std::any::{Any, TypeId};
 use std::fmt;
 use std::ops::BitOr;
 
@@ -74,7 +75,26 @@ impl BitOr for GoalControls {
     }
 }
 
-pub trait Goal: Send {
+/// Vanilla `goal instanceof G` for boxed Steel goals.
+///
+/// Used by `GoalSelector::remove_all_goals` predicates, e.g.
+/// `remove_all_goals(mob, |goal| is_goal::<RangedBowAttackGoal>(goal))`.
+#[must_use]
+pub(crate) fn is_goal<G: Goal + 'static>(goal: &dyn Goal) -> bool {
+    goal.goal_type_id() == TypeId::of::<G>()
+}
+
+pub trait Goal: Send + Any {
+    /// Returns the concrete goal type's id.
+    ///
+    /// Vanilla adds and removes concrete goal classes by type (`Zombie.setCanBreakDoors`,
+    /// `AbstractSkeleton.reassessWeaponGoal`, ...). Steel goals are boxed trait objects, so
+    /// [`is_goal`] compares this id instead of an `instanceof` test.
+    #[must_use]
+    fn goal_type_id(&self) -> TypeId {
+        Any::type_id(self)
+    }
+
     fn controls(&self) -> GoalControls;
 
     fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool;

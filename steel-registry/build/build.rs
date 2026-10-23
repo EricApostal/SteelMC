@@ -43,6 +43,8 @@ mod block_entity_types;
 mod block_transformers;
 mod blocks;
 mod carvers;
+mod context_float_providers;
+mod context_int_providers;
 mod cat_variants;
 mod chat_types;
 mod chicken_variants;
@@ -51,6 +53,7 @@ mod damage_types;
 mod decorated_pot_patterns;
 mod dialogs;
 mod dimension_types;
+mod flat_level_generator_presets;
 mod entities;
 mod entity_data;
 mod features;
@@ -64,6 +67,7 @@ mod frog_variants;
 mod game_events;
 mod game_rules;
 mod instruments;
+mod item_modifiers;
 mod items;
 mod jukebox_songs;
 mod level_events;
@@ -79,16 +83,23 @@ mod pig_variants;
 mod poi_types;
 mod position_source_types;
 mod potions;
+mod predicates;
 mod recipes;
+mod slot_sources;
 mod sound_events;
 mod sound_types;
 mod structure;
+mod sulfur_cube_archetypes;
 mod suspicious_stew_effects;
+mod test_environments;
+mod test_instances;
 mod timelines;
 mod trim_materials;
 mod trim_patterns;
 mod villager_professions;
+mod trial_spawners;
 mod villager_types;
+mod world_presets;
 mod wolf_sound_variants;
 mod wolf_variants;
 mod world_clocks;
@@ -185,6 +196,21 @@ const CONFIGURED_FEATURES: &str = "configured_features";
 const PLACED_FEATURES: &str = "placed_features";
 const CUSTOM_STATS: &str = "custom_stats";
 const SUSPICIOUS_STEW_EFFECTS: &str = "suspicious_stew_effects";
+const TRIAL_SPAWNERS: &str = "trial_spawners";
+const SULFUR_CUBE_ARCHETYPES: &str = "sulfur_cube_archetypes";
+const WORLD_PRESETS: &str = "world_presets";
+const FLAT_LEVEL_GENERATOR_PRESETS: &str = "flat_level_generator_presets";
+const GAME_EVENT_TAGS: &str = "game_event_tags";
+const FEATURE_TAGS: &str = "feature_tags";
+const WORLD_PRESET_TAGS: &str = "world_preset_tags";
+const FLAT_LEVEL_GENERATOR_PRESET_TAGS: &str = "flat_level_generator_preset_tags";
+const CONTEXT_INT_PROVIDERS: &str = "context_int_providers";
+const CONTEXT_FLOAT_PROVIDERS: &str = "context_float_providers";
+const PREDICATES: &str = "predicates";
+const ITEM_MODIFIERS: &str = "item_modifiers";
+const SLOT_SOURCES: &str = "slot_sources";
+const TEST_ENVIRONMENTS: &str = "test_environments";
+const TEST_INSTANCES: &str = "test_instances";
 
 pub fn main() {
     // Rerun build script when any file in the build/ directory changes
@@ -283,6 +309,27 @@ pub fn main() {
         (features::build_placed(), PLACED_FEATURES),
         (custom_stats::build(), CUSTOM_STATS),
         (suspicious_stew_effects::build(), SUSPICIOUS_STEW_EFFECTS),
+        (trial_spawners::build(), TRIAL_SPAWNERS),
+        (sulfur_cube_archetypes::build(), SULFUR_CUBE_ARCHETYPES),
+        (world_presets::build(), WORLD_PRESETS),
+        (
+            flat_level_generator_presets::build(),
+            FLAT_LEVEL_GENERATOR_PRESETS,
+        ),
+        (tags::game_event(), GAME_EVENT_TAGS),
+        (tags::feature(), FEATURE_TAGS),
+        (tags::world_preset(), WORLD_PRESET_TAGS),
+        (
+            tags::flat_level_generator_preset(),
+            FLAT_LEVEL_GENERATOR_PRESET_TAGS,
+        ),
+        (context_int_providers::build(), CONTEXT_INT_PROVIDERS),
+        (context_float_providers::build(), CONTEXT_FLOAT_PROVIDERS),
+        (predicates::build(), PREDICATES),
+        (item_modifiers::build(), ITEM_MODIFIERS),
+        (slot_sources::build(), SLOT_SOURCES),
+        (test_environments::build(), TEST_ENVIRONMENTS),
+        (test_instances::build(), TEST_INSTANCES),
         (advancements::build(), ADVANCEMENTS),
     ];
 

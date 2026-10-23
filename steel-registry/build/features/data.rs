@@ -94,6 +94,7 @@ pub enum ConfiguredFeatureKind {
     EndPodium { active: bool },
     EndSpike(EndSpikeConfiguration),
     FallenTree(FallenTreeConfiguration),
+    FillLayer(FillLayerConfiguration),
     Fossil(FossilConfiguration),
     FreezeTopLayer,
     Geode(GeodeConfiguration),
@@ -117,6 +118,7 @@ pub enum ConfiguredFeatureKind {
     ProjectedRandomPatchySquare(ProjectedRandomPatchySquareConfiguration),
     RandomBooleanSelector(RandomBooleanSelectorConfiguration),
     RandomSelector(RandomSelectorConfiguration),
+    ReplaceSingleBlock(Vec<BlockReplacement>),
     RootSystem(RootSystemConfiguration),
     ScatteredOre(OreConfiguration),
     SculkPatch(SculkPatchConfiguration),
@@ -217,6 +219,7 @@ fn deserialize_configured_feature_kind(
         "minecraft:fallen_tree" => {
             ConfiguredFeatureKind::FallenTree(parse!(FallenTreeConfiguration)?)
         }
+        "minecraft:fill_layer" => ConfiguredFeatureKind::FillLayer(parse!(FillLayerConfiguration)?),
         "minecraft:fossil" => ConfiguredFeatureKind::Fossil(parse!(FossilConfiguration)?),
         "minecraft:freeze_top_layer" => ConfiguredFeatureKind::FreezeTopLayer,
         "minecraft:geode" => ConfiguredFeatureKind::Geode(parse!(GeodeConfiguration)?),
@@ -282,6 +285,14 @@ fn deserialize_configured_feature_kind(
         ),
         "minecraft:random_selector" => {
             ConfiguredFeatureKind::RandomSelector(parse!(RandomSelectorConfiguration)?)
+        }
+        "minecraft:replace_single_block" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct ReplaceSingleBlockConfigJson {
+                targets: Vec<BlockReplacement>,
+            }
+            ConfiguredFeatureKind::ReplaceSingleBlock(parse!(ReplaceSingleBlockConfigJson)?.targets)
         }
         "minecraft:weighted_random_selector" => ConfiguredFeatureKind::WeightedRandomSelector(
             parse!(WeightedRandomFeatureConfiguration)?,
@@ -1068,6 +1079,21 @@ pub struct FallenTreeConfiguration {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct FillLayerConfiguration {
+    pub height: i32,
+    pub state: BlockStateData,
+}
+
+/// One target entry of vanilla `ReplaceBlockFeature` (`BlockReplacement`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlockReplacement {
+    pub target: crate::structure_processor_data::StructureRuleTestData,
+    pub state: BlockStateData,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FossilConfiguration {
     pub fossil_structures: Vec<Identifier>,
     pub overlay_structures: Vec<Identifier>,
@@ -1700,7 +1726,7 @@ pub struct MegaPineFoliagePlacer {
 pub struct RandomSpreadFoliagePlacer {
     pub radius: IntProvider,
     pub offset: IntProvider,
-    pub foliage_height: i32,
+    pub foliage_height: IntProvider,
     pub leaf_placement_attempts: i32,
 }
 

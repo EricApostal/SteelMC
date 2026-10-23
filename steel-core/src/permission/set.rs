@@ -1,6 +1,8 @@
 use std::mem;
 
-use super::{PermissionContext, PermissionExpr, PermissionKey, PermissionRuleContext};
+use super::{
+    PermissionContext, PermissionExpr, PermissionKey, PermissionLevel, PermissionRuleContext,
+};
 
 /// Resolved state of one matching permission rule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -303,13 +305,34 @@ impl PermissionSet {
         permission: &PermissionExpr,
         context: &PermissionContext,
     ) -> Option<PermissionState> {
+        self.resolve_with_level(permission, context, PermissionLevel::All)
+    }
+
+    /// Resolves a permission expression in `context` with a vanilla operator level.
+    ///
+    /// [`PermissionExpr::Level`] resolves to allow when `level` satisfies it and to
+    /// unset otherwise, so an explicit Steel key grant still applies.
+    #[must_use]
+    pub fn resolve_with_level(
+        &self,
+        permission: &PermissionExpr,
+        context: &PermissionContext,
+        level: PermissionLevel,
+    ) -> Option<PermissionState> {
         match permission {
             PermissionExpr::Key(key) => self.resolve_key_in(key, context),
             PermissionExpr::ScopedKey { parent, key } => {
                 self.resolve_scoped_key_in(parent, key, context)
             }
-            PermissionExpr::All(children) => resolve_all(children, self, context),
-            PermissionExpr::Any(children) => resolve_any(children, self, context),
+            PermissionExpr::Level(required) => level
+                .is_equal_or_higher_than(*required)
+                .then_some(PermissionState::Allow),
+            PermissionExpr::All(children) => resolve_all(children, |child| {
+                self.resolve_with_level(child, context, level)
+            }),
+            PermissionExpr::Any(children) => resolve_any(children, |child| {
+                self.resolve_with_level(child, context, level)
+            }),
         }
     }
 
@@ -407,15 +430,14 @@ impl PermissionSet {
 
 fn resolve_all(
     children: &[PermissionExpr],
-    permissions: &PermissionSet,
-    context: &PermissionContext,
+    mut resolve: impl FnMut(&PermissionExpr) -> Option<PermissionState>,
 ) -> Option<PermissionState> {
     if children.is_empty() {
         return Some(PermissionState::Allow);
     }
     let mut saw_unset = false;
     for child in children {
-        match permissions.resolve_in(child, context) {
+        match resolve(child) {
             Some(PermissionState::Allow) => {}
             Some(PermissionState::Deny) => return Some(PermissionState::Deny),
             None => saw_unset = true,
@@ -430,15 +452,14 @@ fn resolve_all(
 
 fn resolve_any(
     children: &[PermissionExpr],
-    permissions: &PermissionSet,
-    context: &PermissionContext,
+    mut resolve: impl FnMut(&PermissionExpr) -> Option<PermissionState>,
 ) -> Option<PermissionState> {
     if children.is_empty() {
         return Some(PermissionState::Deny);
     }
     let mut saw_unset = false;
     for child in children {
-        match permissions.resolve_in(child, context) {
+        match resolve(child) {
             Some(PermissionState::Allow) => return Some(PermissionState::Allow),
             Some(PermissionState::Deny) => {}
             None => saw_unset = true,

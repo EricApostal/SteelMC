@@ -125,6 +125,20 @@ pub fn build_simple_tags(
     registry_module: &str,
     registry_type: &str,
 ) -> TokenStream {
+    build_simple_tags_with_name(tag_subdir, registry_module, registry_type, None)
+}
+
+/// Like [`build_simple_tags`], but with an explicit tag-struct name.
+///
+/// Vanilla names tag holders after the *tag* (`GameEventTags`, `WorldPresetTags`),
+/// while Steel's registry modules are plural (`game_events`); passing `None`
+/// derives the struct name from the module, and `Some` mirrors vanilla.
+pub fn build_simple_tags_with_name(
+    tag_subdir: &str,
+    registry_module: &str,
+    registry_type: &str,
+    tag_struct_name: Option<&str>,
+) -> TokenStream {
     let tag_dir =
         format!("../steel-utils/build_assets/builtin_datapacks/minecraft/tags/{tag_subdir}");
     println!("cargo:rerun-if-changed={tag_dir}");
@@ -139,7 +153,7 @@ pub fn build_simple_tags(
         Span::call_site(),
     );
     let tag_category_ident = Ident::new(
-        &format!("{}Tag", registry_module.to_upper_camel_case()),
+        tag_struct_name.unwrap_or(&format!("{}Tag", registry_module.to_upper_camel_case())),
         Span::call_site(),
     );
 

@@ -69,6 +69,7 @@ impl ComparatorBlock {
     }
 
     fn item_frame_signal(world: &World, direction: Direction, pos: BlockPos) -> Option<i32> {
+        // Vanilla queries `ItemFrame.class`; Steel uses the `ItemFrame` capability trait.
         let bounds = WorldAabb::new(
             f64::from(pos.x()),
             f64::from(pos.y()),
@@ -367,6 +368,8 @@ impl BlockBehavior for ComparatorBlock {
         param_a: i32,
         param_b: i32,
     ) -> bool {
+        // Vanilla's `super.triggerEvent` no-ops and returns false; only the block entity is
+        // consulted here.
         let Some(block_entity) = world.get_block_entity(pos) else {
             return false;
         };

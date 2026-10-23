@@ -20,6 +20,7 @@ use text_components::TextComponent;
 use toml::map::Map;
 
 use crate::chunk_saver::registry::WorldStorageRegistry;
+use crate::permission::PermissionLevel;
 use crate::worldgen::registry::{ValidatedWorldGeneratorConfig, WorldGeneratorRegistry};
 
 /// Error returned when online mode is configured without its authentication handshake.
@@ -82,6 +83,14 @@ pub struct RuntimeConfig {
     pub favicon: String,
     /// Whether to enforce secure chat.
     pub enforce_secure_chat: bool,
+    /// Vanilla `white-list`: whether the allowlist gates logins.
+    pub white_list: bool,
+    /// Vanilla `enforce-whitelist`: whether allowlist changes kick unlisted players.
+    pub enforce_whitelist: bool,
+    /// Vanilla `op-permission-level`: the level `/op` grants.
+    pub op_permission_level: PermissionLevel,
+    /// Vanilla `function-permission-level`: the level command functions run with.
+    pub function_permission_level: PermissionLevel,
     /// Vanilla chat spam threshold window in seconds
     pub chat_spam_threshold_seconds: i32,
     /// Vanilla command spam threshold window in seconds
@@ -117,6 +126,10 @@ impl Default for RuntimeConfig {
             use_favicon: true,
             favicon: "config/favicon.png".to_owned(),
             enforce_secure_chat: false,
+            white_list: true,
+            enforce_whitelist: false,
+            op_permission_level: PermissionLevel::Owners,
+            function_permission_level: PermissionLevel::Gamemasters,
             chat_spam_threshold_seconds: DEFAULT_SPAM_THRESHOLD_SECONDS,
             command_spam_threshold_seconds: DEFAULT_SPAM_THRESHOLD_SECONDS,
             compression: Some(CompressionInfo::default()),

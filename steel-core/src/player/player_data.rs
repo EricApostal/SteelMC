@@ -23,7 +23,7 @@ use crate::{
 
 /// Current data version for player saves.
 /// Increment when making breaking changes to the format.
-pub const PLAYER_DATA_VERSION: i32 = 6;
+pub const PLAYER_DATA_VERSION: i32 = 7;
 
 /// Persistent player data saved by Steel's storage backend.
 ///
@@ -105,6 +105,9 @@ pub struct PersistentPlayerData {
 
     /// Vanilla `Player.totalExperience`, updated by point grants but independent of level/progress.
     pub experience_total: i32,
+
+    /// Vanilla `Player.enchantmentSeed` (`XpSeed`); 0 means "randomize on load".
+    pub enchantment_seed: i32,
 
     /// Vanilla death-screen score. Point grants change it with Java `int` wrapping.
     pub score: i32,
@@ -271,6 +274,7 @@ impl PersistentPlayerData {
             experience_level,
             experience_progress,
             experience_total,
+            enchantment_seed: player.enchantment_seed(),
             score,
             seen_credits: player.has_seen_credits(),
             root_vehicle,
@@ -349,6 +353,14 @@ impl Player {
         let mut experience = Experience::default();
         experience.dirty = true;
         *self.experience.lock() = experience;
+
+        // A fresh player has no stored `XpSeed`; vanilla randomizes it on load.
+        // `rand::random` can return 0, so retry in the vanishingly rare case.
+        let mut seed = 0;
+        while seed == 0 {
+            seed = rand::random();
+        }
+        self.set_enchantment_seed(seed);
 
         self.set_score(0);
         self.set_seen_credits(false);
@@ -506,6 +518,13 @@ impl PersistentPlayerData {
                 self.experience_total,
             );
         }
+        // Vanilla `Player.readAdditionalSaveData`: a stored seed of 0 means "unset".
+        let enchantment_seed = if self.enchantment_seed == 0 {
+            rand::random()
+        } else {
+            self.enchantment_seed
+        };
+        player.set_enchantment_seed(enchantment_seed);
         player.set_score(self.score);
         player.set_seen_credits(self.seen_credits);
 

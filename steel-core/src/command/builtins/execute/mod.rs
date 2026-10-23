@@ -1,6 +1,6 @@
 //! Vanilla command execution context composition.
 
-mod condition;
+pub(in crate::command::builtins) mod condition;
 mod source;
 mod store;
 
@@ -43,7 +43,7 @@ fn command(dispatcher_root: NodeId) -> CommandNodeBuilder<CommandSource, SteelCo
         .then(source::on_relations())
 }
 
-fn source_scoreboard(
+pub(super) fn source_scoreboard(
     context: &SteelCommandContext<CommandSource>,
 ) -> Result<&Scoreboard, CommandSyntaxError> {
     let source = context.source();
@@ -59,7 +59,7 @@ fn source_scoreboard(
         })
 }
 
-fn source_command_storage(
+pub(super) fn source_command_storage(
     context: &SteelCommandContext<CommandSource>,
 ) -> Result<&CommandStorage, CommandSyntaxError> {
     let source = context.source();

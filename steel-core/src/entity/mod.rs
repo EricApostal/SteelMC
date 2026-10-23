@@ -756,6 +756,7 @@ mod ageable;
 pub(crate) mod ai;
 mod animal;
 pub mod attribute;
+pub mod boss;
 mod base;
 mod block_attached_entity;
 mod block_effects;

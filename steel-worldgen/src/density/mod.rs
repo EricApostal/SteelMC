@@ -15,11 +15,88 @@
 
 use crate::noise::NormalNoise;
 use crate::random::RandomSplitter;
+use steel_utils::Identifier;
 
 pub mod spline_eval;
 pub mod traits;
 
 pub use traits::{ColumnCache, DimensionNoises, NoiseSettings};
+
+/// Vanilla `noise_settings` registry entries.
+///
+/// Each key corresponds to one generated module under
+/// [`crate::density_functions`], e.g. [`NoiseSettingsKey::LargeBiomes`] provides
+/// `density_functions::large_biomes::{LargeBiomesNoises, LargeBiomesNoiseSettings}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NoiseSettingsKey {
+    /// `minecraft:overworld` — the default overworld generator.
+    Overworld,
+    /// `minecraft:nether` — the nether generator.
+    Nether,
+    /// `minecraft:end` — the end generator.
+    End,
+    /// `minecraft:large_biomes` — overworld with large biomes.
+    LargeBiomes,
+    /// `minecraft:amplified` — overworld with amplified terrain.
+    Amplified,
+    /// `minecraft:caves` — cave generation test dimension.
+    Caves,
+    /// `minecraft:floating_islands` — floating islands test dimension.
+    FloatingIslands,
+}
+
+impl NoiseSettingsKey {
+    /// All keys, in vanilla registry order.
+    pub const ALL: [Self; 7] = [
+        Self::Overworld,
+        Self::Nether,
+        Self::End,
+        Self::LargeBiomes,
+        Self::Amplified,
+        Self::Caves,
+        Self::FloatingIslands,
+    ];
+
+    /// Resolves a `noise_settings` registry identifier to its key.
+    ///
+    /// Returns `None` for identifiers outside the `minecraft` namespace or for
+    /// vanilla settings Steel does not transpile.
+    #[must_use]
+    pub fn from_identifier(key: &Identifier) -> Option<Self> {
+        if key.namespace.as_ref() != Identifier::VANILLA_NAMESPACE {
+            return None;
+        }
+        match key.path.as_ref() {
+            "overworld" => Some(Self::Overworld),
+            "nether" => Some(Self::Nether),
+            "end" => Some(Self::End),
+            "large_biomes" => Some(Self::LargeBiomes),
+            "amplified" => Some(Self::Amplified),
+            "caves" => Some(Self::Caves),
+            "floating_islands" => Some(Self::FloatingIslands),
+            _ => None,
+        }
+    }
+
+    /// The `noise_settings` registry identifier for this key.
+    #[must_use]
+    pub fn identifier(self) -> Identifier {
+        Identifier::vanilla_static(self.path())
+    }
+
+    /// The datapack path of this key (`overworld`, `large_biomes`, ...).
+    const fn path(self) -> &'static str {
+        match self {
+            Self::Overworld => "overworld",
+            Self::Nether => "nether",
+            Self::End => "end",
+            Self::LargeBiomes => "large_biomes",
+            Self::Amplified => "amplified",
+            Self::Caves => "caves",
+            Self::FloatingIslands => "floating_islands",
+        }
+    }
+}
 
 /// Parameters for creating a noise generator.
 ///

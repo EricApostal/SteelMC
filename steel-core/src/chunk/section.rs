@@ -345,6 +345,53 @@ impl Sections {
         }
     }
 
+    /// Rewrites every biome cell of every section, mirroring vanilla
+    /// `ChunkAccess.fillBiomesFromNoise`.
+    ///
+    /// `resolver` receives the absolute quart coordinates of the cell together
+    /// with the biome currently stored there, and returns the biome to store.
+    /// Cells the resolver returns unchanged are left untouched. The return value
+    /// counts cells whose biome changed.
+    pub fn fill_biomes_from_noise(
+        &self,
+        min_y: i32,
+        quart_min_x: i32,
+        quart_min_z: i32,
+        mut resolver: impl FnMut(i32, i32, i32, u16) -> u16,
+    ) -> usize {
+        let mut changed = 0;
+        for (section_index, holder) in self.sections.iter().enumerate() {
+            let section_y = (min_y / 16) + section_index as i32;
+            let quart_min_y = section_y * 4;
+            let mut guard = holder.write();
+            for local_quart_y in 0..4 {
+                for local_quart_z in 0..4 {
+                    for local_quart_x in 0..4 {
+                        let current = guard
+                            .biomes
+                            .get(local_quart_x, local_quart_y, local_quart_z);
+                        let replacement = resolver(
+                            quart_min_x + local_quart_x as i32,
+                            quart_min_y + local_quart_y as i32,
+                            quart_min_z + local_quart_z as i32,
+                            current,
+                        );
+                        if replacement != current {
+                            guard.set_biome(
+                                local_quart_x,
+                                local_quart_y,
+                                local_quart_z,
+                                replacement,
+                            );
+                            changed += 1;
+                        }
+                    }
+                }
+            }
+        }
+        changed
+    }
+
     /// Returns whether each real chunk section contains no non-air blocks.
     #[must_use]
     pub fn section_emptiness_map(&self) -> Box<[bool]> {
@@ -725,6 +772,21 @@ impl ChunkSection {
             // fall back to scanning rather than risk missing a POI.
             BlockPalette::Building(_) => true,
         }
+    }
+
+    /// Sets one quart-cell biome of this section.
+    ///
+    /// Returns the biome id previously stored in the cell. Quart coordinates are
+    /// section-local (`0..4` on each axis), matching
+    /// [`Sections::read_all_biomes`].
+    pub fn set_biome(
+        &mut self,
+        quart_x: usize,
+        quart_y: usize,
+        quart_z: usize,
+        biome_id: u16,
+    ) -> u16 {
+        self.biomes.set(quart_x, quart_y, quart_z, biome_id)
     }
 
     /// Sets a block state and updates the cached counters.

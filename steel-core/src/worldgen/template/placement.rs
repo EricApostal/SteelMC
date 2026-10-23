@@ -2,6 +2,15 @@ use super::*;
 use steel_math::{DEGREE_90, DEGREE_180, DEGREE_270, wrap_degrees};
 
 impl StructureTemplate {
+    /// Returns the template's size in blocks, before rotation.
+    ///
+    /// `/place template` needs this before placing to widen vanilla's
+    /// `checkLoaded` extent to `pos .. pos + size`.
+    #[must_use]
+    pub(crate) const fn unrotated_size(&self) -> IVec3 {
+        self.size
+    }
+
     pub(crate) fn bounding_box(&self, pos: BlockPos, rotation: Rotation) -> BoundingBox {
         rotation.get_bounding_box(pos.0, self.size)
     }

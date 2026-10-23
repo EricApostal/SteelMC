@@ -54,7 +54,7 @@ use crate::chunk::gameplay_chunk_lookup_cache::{
     GameplayChunkLookupCacheScope, lookup_or_insert_with,
 };
 use crate::chunk::light::{
-    LIGHT_CACHE_RADIUS, LightCacheLayout, LightCacheSetupRadius, LightLayer,
+    LIGHT_CACHE_RADIUS, LevelLightState, LightCacheLayout, LightCacheSetupRadius, LightLayer,
     LightSectionEmptinessChange, LightSectionRange, LightWorkWindowGate, LightWorkset,
     build_chunk_light_update_packet_for_sections,
     propagate_block_light_changes_with_empty_sections,
@@ -77,6 +77,7 @@ use crate::worldgen::{ChunkGeneratorType, WorldGenContext};
 use crate::{entity::Entity, player::Player};
 
 mod generation_readiness;
+mod light_engine;
 mod light_update_state;
 mod light_updates;
 mod persistence;
@@ -257,6 +258,8 @@ pub struct ChunkMap {
     light_updates_progress_notify: Notify,
     /// Radius-2 work-window gate for light-engine worksets.
     light_work_window_gate: Arc<LightWorkWindowGate>,
+    /// Vanilla `LevelLightEngine` section-state bookkeeping for both light layers.
+    light_engine: SyncMutex<LevelLightState>,
     /// Number of top-level generation tasks currently running.
     running_generation_tasks: AtomicUsize,
     /// Wakes the generation refill loop when pending/running task state changes.
@@ -314,6 +317,15 @@ impl Drop for RunningGenerationTaskPermit {
             .fetch_sub(1, Ordering::AcqRel);
         self.chunk_map.notify_generation_refill();
     }
+}
+
+/// Outcome of [`ChunkMap::fill_biomes`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BiomeFillResult {
+    /// Number of quart cells whose biome changed.
+    pub changed: usize,
+    /// Chunks whose biome data changed, in region scan order.
+    pub chunks: Vec<ChunkPos>,
 }
 
 impl ChunkMap {
@@ -402,6 +414,7 @@ impl ChunkMap {
             light_updates: SyncMutex::new(LightUpdateState::default()),
             light_updates_progress_notify: Notify::new(),
             light_work_window_gate: Arc::new(LightWorkWindowGate::new()),
+            light_engine: SyncMutex::new(LevelLightState::new(dimension_type.has_skylight)),
             running_generation_tasks: AtomicUsize::new(0),
             generation_refill_notify: Notify::new(),
             generation_refill_cancel_token: CancellationToken::new(),
@@ -940,12 +953,41 @@ impl ChunkMap {
                     // Vanilla random chunk ticks use the entity-ticking range but only
                     // require the same confirmed block-ticking chunk used by scheduled ticks.
                     let tickable_chunk = &tickable_chunks.block[index];
+                    let chunk_pos = tickable_chunk.pos;
+
+                    // Vanilla `ServerLevel.tickChunk` "iceandsnow": precipitation is
+                    // sampled for every block-ticking chunk before the random block
+                    // and fluid ticks, and is not gated on randomly ticking sections.
+                    for _ in 0..random_tick_speed {
+                        if rand::random::<i32>().rem_euclid(48) == 0 {
+                            // Vanilla `Level.getBlockRandomPos(minX, 0, minZ, 15)`.
+                            let val = rand::random::<i32>() >> 2;
+                            world.tick_precipitation(BlockPos::new(
+                                (chunk_pos.0.x << 4) + (val & 15),
+                                (val >> 16) & 15,
+                                (chunk_pos.0.y << 4) + ((val >> 8) & 15),
+                            ));
+                        }
+                    }
+
                     if tickable_chunk.randomly_ticking_sections.is_empty() {
                         continue;
                     }
                     if let Some(chunk) = tickable_chunk.holder.try_full_chunk() {
                         chunk.tick_random_blocks(world, random_tick_speed, &mut random_positions);
                     }
+                }
+                timings.tick_chunks += start.elapsed();
+            }
+
+            if runs_normally {
+                // Vanilla `ServerChunkCache.tickSpawningChunk` calls
+                // `ServerLevel.tickThunder` once per spawning chunk that is inside the
+                // entity-ticking range, before that chunk's natural spawning pass.
+                let _span = tracing::trace_span!("tick_thunder").entered();
+                let start = Instant::now();
+                for &index in &tickable_chunks.entity_indices {
+                    world.tick_thunder(tickable_chunks.block[index].pos);
                 }
                 timings.tick_chunks += start.elapsed();
             }
@@ -1319,6 +1361,105 @@ impl ChunkMap {
             lifecycle_dispatchers.append(&mut unload.lifecycle_dispatchers);
             for block_entity in lifecycle_dispatchers {
                 block_entity.dispatch_lifecycle_events();
+            }
+        }
+    }
+
+    /// Marks `chunk` as force-loaded or releases it, mirroring vanilla
+    /// `ServerLevel.setChunkForced`.
+    ///
+    /// Vanilla adds a `TicketType.FORCED` ticket at the entity-ticking level
+    /// (`ChunkMap.FORCED_TICKET_LEVEL`); the ticket type is persistent, so the
+    /// set round-trips through Steel's generic `CHUNK_TICKETS` saved data.
+    /// Returns whether the chunk's force-load state changed.
+    pub fn set_chunk_forced(&self, chunk: ChunkPos, forced: bool) -> bool {
+        self.scheduling.set_chunk_forced(chunk, forced)
+    }
+
+    /// Returns the force-loaded chunks, sorted by `(x, z)`.
+    ///
+    /// Mirrors vanilla `ServerLevel.getForceLoadedChunks`; ordering makes
+    /// `/forceload query` output deterministic.
+    #[must_use]
+    pub fn force_loaded_chunks(&self) -> Vec<ChunkPos> {
+        self.scheduling.force_loaded_chunks()
+    }
+
+    /// Fills biomes inside a block region, mirroring vanilla
+    /// `FillBiomeCommand.fill`.
+    ///
+    /// `from` and `to` are block positions; they are quantized to quart cells
+    /// exactly like vanilla. `replace` receives the biome id currently stored in
+    /// a cell and returns the biome id to store, or `None` to leave the cell
+    /// alone. Changed chunks are marked dirty.
+    ///
+    /// Returns `None` when any chunk covering the region is not fully loaded,
+    /// mirroring vanilla's `argument.pos.unloaded` failure. As in vanilla, the
+    /// whole region is checked before any biome is written.
+    pub fn fill_biomes(
+        &self,
+        from: BlockPos,
+        to: BlockPos,
+        mut replace: impl FnMut(u16) -> Option<u16>,
+    ) -> Option<BiomeFillResult> {
+        let min_quart_x = from.x().min(to.x()) >> 2;
+        let min_quart_y = from.y().min(to.y()) >> 2;
+        let min_quart_z = from.z().min(to.z()) >> 2;
+        let max_quart_x = from.x().max(to.x()) >> 2;
+        let max_quart_y = from.y().max(to.y()) >> 2;
+        let max_quart_z = from.z().max(to.z()) >> 2;
+
+        let mut positions = Vec::new();
+        for chunk_z in (min_quart_z >> 2)..=(max_quart_z >> 2) {
+            for chunk_x in (min_quart_x >> 2)..=(max_quart_x >> 2) {
+                let pos = ChunkPos::new(chunk_x, chunk_z);
+                if self.with_full_chunk(pos, |_| ()).is_none() {
+                    return None;
+                }
+                positions.push(pos);
+            }
+        }
+
+        let mut changed = 0;
+        let mut chunks = Vec::new();
+        for pos in positions {
+            let chunk_changed = self.with_full_chunk(pos, |chunk| {
+                chunk
+                    .common()
+                    .fill_biomes_from_noise(|quart_x, quart_y, quart_z, current| {
+                        let inside_region = quart_x >= min_quart_x
+                            && quart_x <= max_quart_x
+                            && quart_y >= min_quart_y
+                            && quart_y <= max_quart_y
+                            && quart_z >= min_quart_z
+                            && quart_z <= max_quart_z;
+                        if !inside_region {
+                            return current;
+                        }
+                        replace(current).unwrap_or(current)
+                    })
+            })?;
+            if chunk_changed > 0 {
+                changed += chunk_changed;
+                chunks.push(pos);
+            }
+        }
+
+        Some(BiomeFillResult { changed, chunks })
+    }
+
+    /// Resends biome data for the given chunks to every player tracking them.
+    ///
+    /// Mirrors `ChunkMap.resendBiomesForChunks`. Call after bulk biome mutation
+    /// (e.g. `/fillbiome`) so clients observing stale biome palettes converge.
+    /// Currently this marks the holders' client-visible content changed and
+    /// relies on the next chunk-content broadcast for delivery. [INFERENCE:
+    /// whether the broadcast loop already covers biome-only changes untested.]
+    pub fn resend_biomes_for_chunks(&self, positions: &[ChunkPos]) {
+        for &pos in positions {
+            if let Some(holder) = self.chunks.read_sync(&pos, |_, holder| Arc::clone(holder)) {
+                holder.mark_packet_content_changed();
+                self.chunks_to_broadcast.lock().push(holder);
             }
         }
     }

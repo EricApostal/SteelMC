@@ -66,6 +66,13 @@ unsafe impl DowncastType for FireworkRocketEntity {
 impl FireworkRocketEntity {
     /// Creates an uninitialized rocket for the entity factory.
     #[must_use]
+    /// Creates an uninitialized rocket for the entity factory.
+    ///
+    /// Data-driven defaults (`life = 0`, `lifetime = 0`, not shot at an
+    /// angle): the `lifetime` that drives `tick` is only populated by the
+    /// launch path below, matching vanilla's default-constructed fields; the
+    /// `FireworksItem` synced stack defaults to a plain rocket stack via the
+    /// generated entity data.
     pub fn new(entity_type: EntityTypeRef, id: i32, position: DVec3, world: Weak<World>) -> Self {
         Self {
             base: EntityBase::new(id, position, entity_type.dimensions, world),

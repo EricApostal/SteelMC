@@ -1011,6 +1011,31 @@ impl LivingEntityBase {
             return;
         }
 
+        // Vanilla `LivingEntity.detectEquipmentUpdates` runs `ItemStack.forEachModifier`
+        // (item component modifiers) and then the enchantment `minecraft:attributes`
+        // effects through the same transient attribute list.
+        crate::enchantment_helper::for_each_enchantment_attribute_modifier(
+            item_stack,
+            slot,
+            |attribute, modifier| {
+                let id = modifier.id.clone();
+                for (index, keys) in installed_modifiers.iter_mut().enumerate() {
+                    if index == slot_index {
+                        continue;
+                    }
+                    keys.retain(|key| key.attribute.key != attribute.key || key.id != id);
+                }
+
+                attributes.remove_modifier(attribute, &id);
+                if attributes.add_modifier(attribute, modifier, false) {
+                    installed_modifiers[slot_index].push(EquipmentAttributeModifierKey {
+                        attribute,
+                        id,
+                    });
+                }
+            },
+        );
+
         let Some(modifiers) = item_stack.get_attribute_modifiers() else {
             return;
         };

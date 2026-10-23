@@ -20,3 +20,30 @@ pub use s_client_information::{ChatVisibility, HumanoidArm, ParticleStatus, SCli
 pub use s_custom_payload::SCustomPayload;
 pub use s_keep_alive::SKeepAlive;
 pub use s_ping_request::SPingRequest;
+
+// §8 parity packets.
+mod c_clear_dialog;
+mod c_cookie_request;
+mod c_custom_report_details;
+mod c_post_effects;
+mod c_resource_pack_pop;
+mod c_resource_pack_push;
+mod c_show_dialog;
+mod c_store_cookie;
+mod s_cookie_response;
+mod s_custom_click_action;
+mod s_pong;
+mod s_resource_pack;
+
+pub use c_clear_dialog::CClearDialog;
+pub use c_cookie_request::CCookieRequest;
+pub use c_custom_report_details::CCustomReportDetails;
+pub use c_post_effects::CPostEffects;
+pub use c_resource_pack_pop::CResourcePackPop;
+pub use c_resource_pack_push::CResourcePackPush;
+pub use c_show_dialog::CShowDialog;
+pub use c_store_cookie::CStoreCookie;
+pub use s_cookie_response::{MAX_COOKIE_PAYLOAD_SIZE, SCookieResponse};
+pub use s_custom_click_action::{MAX_PAYLOAD_SIZE, SCustomClickAction};
+pub use s_pong::SPong;
+pub use s_resource_pack::{ResourcePackAction, SResourcePack};

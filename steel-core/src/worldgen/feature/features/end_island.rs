@@ -18,7 +18,7 @@ impl FeatureDecorationRunner {
                         let _ = region.set_block_state(
                             origin.offset(x, y, z),
                             end_stone,
-                            UpdateFlags::UPDATE_CLIENTS,
+                            UpdateFlags::UPDATE_ALL,
                         );
                     }
                 }

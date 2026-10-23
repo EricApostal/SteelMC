@@ -166,9 +166,14 @@ impl Player {
     }
 
     /// Determines the desired pose based on current player state.
-    /// Priority: `Sleeping` > `Swimming` > `FallFlying` > `Sneaking` > `Standing`
-    // TODO: Add SpinAttack pose (requires riptide trident)
+    ///
+    /// Vanilla priority: `Sleeping` > `Swimming` > `FallFlying` > `SpinAttack` >
+    /// `Crouching` > `Standing`. The flying ability only suppresses the crouching
+    /// branch because `is_swimming` already checks it; Steel has no auto-spin-attack
+    /// state yet, so the `SpinAttack` branch is still missing.
     pub(super) fn get_desired_pose(&self) -> EntityPose {
+        // TODO: Add the SpinAttack pose between FallFlying and Sneaking once the
+        // riptide auto-spin-attack state exists.
         if self.is_sleeping() {
             EntityPose::Sleeping
         } else if self.is_swimming() {

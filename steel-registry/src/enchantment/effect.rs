@@ -1,12 +1,17 @@
+use crate::REGISTRY;
+use crate::TaggedRegistryExt;
 use crate::attribute::{AttributeModifierOperation, AttributeRef};
 use crate::damage_type::DamageTypeRef;
+use crate::entity_type::EntityTypeRef;
 use crate::items::ItemRef;
 use crate::mob_effect::MobEffectRef;
+use crate::particle_type::ParticleTypeRef;
 use crate::sound_event::SoundEventRef;
 use glam::DVec3;
 use steel_utils::Identifier;
 use steel_utils::random::Random;
 use steel_utils::types::GameType;
+use steel_utils::value_providers::FloatProvider;
 
 /// Vanilla enchantment effect component keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -408,6 +413,79 @@ pub enum MobEffectSelection {
     UnsupportedTag(Identifier),
 }
 
+/// Vanilla `HolderSet<EntityType>` used by `summon_entity`.
+#[derive(Debug)]
+pub enum EntityTypeSet {
+    Tag(Identifier),
+    Direct(&'static [EntityTypeRef]),
+}
+
+impl EntityTypeSet {
+    /// Vanilla `HolderSet.getRandomElement`.
+    #[must_use]
+    pub fn get_random_element(&self, random: &mut impl Random) -> Option<EntityTypeRef> {
+        let types = match self {
+            Self::Tag(tag) => REGISTRY.entity_types.get_tag(tag)?,
+            Self::Direct(types) => types.to_vec(),
+        };
+        if types.is_empty() {
+            return None;
+        }
+        Some(types[random.next_i32_bounded(types.len() as i32) as usize])
+    }
+}
+
+/// Vanilla `SpawnParticlesEffect.PositionSourceType`.
+#[derive(Debug, Clone, Copy)]
+pub enum ParticlePositionSourceType {
+    EntityPosition,
+    InBoundingBox,
+}
+
+/// Vanilla `SpawnParticlesEffect.PositionSource`.
+#[derive(Debug, Clone, Copy)]
+pub struct ParticlePositionSource {
+    pub source_type: ParticlePositionSourceType,
+    pub offset: f32,
+    pub scale: f32,
+}
+
+impl ParticlePositionSource {
+    /// Vanilla `PositionSource.getCoordinate`.
+    #[must_use]
+    pub fn get_coordinate(
+        self,
+        position: f64,
+        center: f64,
+        bounding_box_span: f32,
+        random: &mut impl Random,
+    ) -> f64 {
+        let coordinate = match self.source_type {
+            ParticlePositionSourceType::EntityPosition => position,
+            ParticlePositionSourceType::InBoundingBox => {
+                center + (random.next_f64() - 0.5) * f64::from(bounding_box_span * self.scale)
+            }
+        };
+
+        coordinate + f64::from(self.offset)
+    }
+}
+
+/// Vanilla `SpawnParticlesEffect.VelocitySource`.
+#[derive(Debug, Clone, Copy)]
+pub struct ParticleVelocitySource {
+    pub movement_scale: f32,
+    pub base: FloatProvider,
+}
+
+impl ParticleVelocitySource {
+    /// Vanilla `VelocitySource.getVelocity`.
+    #[must_use]
+    pub fn get_velocity(self, movement: f64, random: &mut impl Random) -> f64 {
+        movement * f64::from(self.movement_scale) + f64::from(self.base.sample(random))
+    }
+}
+
 #[derive(Debug)]
 pub enum EnchantmentEntityEffect {
     AllOf(&'static [&'static EnchantmentEntityEffect]),
@@ -424,8 +502,8 @@ pub enum EnchantmentEntityEffect {
     },
     PlaySound {
         sounds: &'static [SoundEventRef],
-        volume: f32,
-        pitch: f32,
+        volume: FloatProvider,
+        pitch: FloatProvider,
     },
     DamageEntity {
         min_damage: &'static LevelBasedValue,
@@ -442,6 +520,24 @@ pub enum EnchantmentEntityEffect {
         min_amplifier: &'static LevelBasedValue,
         max_amplifier: &'static LevelBasedValue,
     },
+    /// Vanilla `SummonEntityEffect`.
+    SummonEntity {
+        entity_types: EntityTypeSet,
+        join_team: bool,
+    },
+    /// Vanilla `SpawnParticlesEffect`.
+    SpawnParticles {
+        particle: ParticleTypeRef,
+        horizontal_position: ParticlePositionSource,
+        vertical_position: ParticlePositionSource,
+        horizontal_velocity: ParticleVelocitySource,
+        vertical_velocity: ParticleVelocitySource,
+        speed: FloatProvider,
+    },
+    /// Vanilla `EnchantmentAttributeEffect` used through
+    /// `minecraft:location_changed` (the component is not a valid
+    /// `minecraft:post_attack` effect).
+    Attribute(&'static EnchantmentAttributeEffect),
     Unsupported {
         effect_type: Identifier,
     },
@@ -481,11 +577,11 @@ pub struct EnchantmentEffects {
     pub armor_effectiveness: &'static [ConditionalEnchantmentEffect<EnchantmentValueEffect>],
     pub post_attack: &'static [TargetedConditionalEnchantmentEffect<EnchantmentEntityEffect>],
     pub post_piercing_attack: &'static [ConditionalEnchantmentEffect<EnchantmentEntityEffect>],
-    pub hit_block: bool,
+    pub hit_block: &'static [ConditionalEnchantmentEffect<EnchantmentEntityEffect>],
     pub item_damage: &'static [ConditionalEnchantmentEffect<EnchantmentValueEffect>],
     pub equipment_drops: &'static [TargetedConditionalEnchantmentEffect<EnchantmentValueEffect>],
-    pub location_changed: bool,
-    pub tick: bool,
+    pub location_changed: &'static [ConditionalEnchantmentEffect<EnchantmentEntityEffect>],
+    pub tick: &'static [ConditionalEnchantmentEffect<EnchantmentEntityEffect>],
     pub ammo_use: &'static [ConditionalEnchantmentEffect<EnchantmentValueEffect>],
     pub projectile_piercing: &'static [ConditionalEnchantmentEffect<EnchantmentValueEffect>],
     pub projectile_spawned: &'static [ConditionalEnchantmentEffect<EnchantmentEntityEffect>],
@@ -517,11 +613,11 @@ impl EnchantmentEffects {
         armor_effectiveness: &[],
         post_attack: &[],
         post_piercing_attack: &[],
-        hit_block: false,
+        hit_block: &[],
         item_damage: &[],
         equipment_drops: &[],
-        location_changed: false,
-        tick: false,
+        location_changed: &[],
+        tick: &[],
         ammo_use: &[],
         projectile_piercing: &[],
         projectile_spawned: &[],
@@ -555,11 +651,11 @@ impl EnchantmentEffects {
             EnchantmentEffectComponent::ArmorEffectiveness => !self.armor_effectiveness.is_empty(),
             EnchantmentEffectComponent::PostAttack => !self.post_attack.is_empty(),
             EnchantmentEffectComponent::PostPiercingAttack => !self.post_piercing_attack.is_empty(),
-            EnchantmentEffectComponent::HitBlock => self.hit_block,
+            EnchantmentEffectComponent::HitBlock => !self.hit_block.is_empty(),
             EnchantmentEffectComponent::ItemDamage => !self.item_damage.is_empty(),
             EnchantmentEffectComponent::EquipmentDrops => !self.equipment_drops.is_empty(),
-            EnchantmentEffectComponent::LocationChanged => self.location_changed,
-            EnchantmentEffectComponent::Tick => self.tick,
+            EnchantmentEffectComponent::LocationChanged => !self.location_changed.is_empty(),
+            EnchantmentEffectComponent::Tick => !self.tick.is_empty(),
             EnchantmentEffectComponent::AmmoUse => !self.ammo_use.is_empty(),
             EnchantmentEffectComponent::ProjectilePiercing => !self.projectile_piercing.is_empty(),
             EnchantmentEffectComponent::ProjectileSpawned => !self.projectile_spawned.is_empty(),

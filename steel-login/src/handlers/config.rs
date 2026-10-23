@@ -120,6 +120,7 @@ impl JavaTcpClient {
             self.server.config.chat_spam_threshold_seconds,
             self.server.config.command_spam_threshold_seconds,
         ));
+        session.set_remote_address(self.address);
         let java_connection = JavaConnection::new(
             self.outgoing_queue.clone(),
             self.cancel_token.clone(),

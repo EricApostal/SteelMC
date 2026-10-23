@@ -42,6 +42,14 @@ pub(crate) enum WorldClockLoadError {
     InvalidRate { clock: Identifier, rate: f32 },
 }
 
+/// Vanilla `ServerClockManager.MoveResult`: the outcome of moving a clock to a marker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MoveResult {
+    NoTimeMarkerFound,
+    NotMoved,
+    Moved,
+}
+
 /// Per-world clock instances.
 ///
 /// Vanilla owns one clock manager at server scope and every loaded level
@@ -98,6 +106,16 @@ impl WorldClockManager {
         self.clocks.get(&clock.key).map(|state| state.total_ticks)
     }
 
+    #[must_use]
+    pub(crate) fn is_paused(&self, clock: WorldClockRef) -> Option<bool> {
+        self.clocks.get(&clock.key).map(|state| state.paused)
+    }
+
+    #[must_use]
+    pub(crate) fn rate(&self, clock: WorldClockRef) -> Option<f32> {
+        self.clocks.get(&clock.key).map(|state| state.rate)
+    }
+
     pub(crate) fn set_total_ticks(&mut self, clock: WorldClockRef, total_ticks: i64) -> Option<()> {
         let state = self.clocks.get_mut(&clock.key)?;
         state.total_ticks = total_ticks;
@@ -126,12 +144,13 @@ impl WorldClockManager {
         Some(())
     }
 
-    /// Moves a clock to a marker, returning `false` when that marker is not defined for it.
+    /// Moves a clock to a marker, mirroring vanilla `ServerClockManager.moveToTimeMarker`.
+    /// `None` means this world has no instance of the clock.
     pub(crate) fn move_to_time_marker(
         &mut self,
         clock: WorldClockRef,
         marker_key: &Identifier,
-    ) -> Option<bool> {
+    ) -> Option<MoveResult> {
         let total_ticks = self.total_ticks(clock)?;
         let marker = REGISTRY
             .timelines
@@ -145,12 +164,15 @@ impl WorldClockManager {
                     .map(|marker| (marker, timeline.period_ticks))
             });
         let Some((marker, period_ticks)) = marker else {
-            return Some(false);
+            return Some(MoveResult::NoTimeMarkerFound);
         };
+        if marker.occurs_at(total_ticks, period_ticks) {
+            return Some(MoveResult::NotMoved);
+        }
         let state = self.clocks.get_mut(&clock.key)?;
         state.total_ticks = marker.resolve_time_to_move_to(total_ticks, period_ticks);
         state.partial_tick = 0.0;
-        Some(true)
+        Some(MoveResult::Moved)
     }
 
     /// Advances all unpaused clocks once when the world's `advance_time` rule allows it.
@@ -228,6 +250,16 @@ impl World {
         self.level_data.read().world_clocks().total_ticks(clock)
     }
 
+    /// Returns whether one clock in this world is paused.
+    pub(crate) fn clock_is_paused(&self, clock: WorldClockRef) -> Option<bool> {
+        self.level_data.read().world_clocks().is_paused(clock)
+    }
+
+    /// Returns the rate of one clock in this world.
+    pub(crate) fn clock_rate(&self, clock: WorldClockRef) -> Option<f32> {
+        self.level_data.read().world_clocks().rate(clock)
+    }
+
     /// Creates a full per-world time synchronization packet.
     pub(crate) fn time_sync_packet(&self) -> CSetTime {
         let level_data = self.level_data.read();
@@ -267,7 +299,7 @@ impl World {
         &self,
         clock: WorldClockRef,
         marker: &Identifier,
-    ) -> Option<bool> {
+    ) -> Option<MoveResult> {
         self.modify_clock(clock, |manager| manager.move_to_time_marker(clock, marker))
     }
 
@@ -400,12 +432,30 @@ mod tests {
             Some(())
         );
 
+        // Exactly on the marker: vanilla reports it as already reached.
         assert_eq!(
             manager.move_to_time_marker(
                 &vanilla_world_clocks::OVERWORLD,
                 &Identifier::vanilla_static("day")
             ),
-            Some(true)
+            Some(MoveResult::NotMoved)
+        );
+        assert_eq!(
+            manager.total_ticks(&vanilla_world_clocks::OVERWORLD),
+            Some(1_000)
+        );
+
+        // Just past it: the move wraps to the next occurrence, never backwards.
+        assert_eq!(
+            manager.set_total_ticks(&vanilla_world_clocks::OVERWORLD, 1_001),
+            Some(())
+        );
+        assert_eq!(
+            manager.move_to_time_marker(
+                &vanilla_world_clocks::OVERWORLD,
+                &Identifier::vanilla_static("day")
+            ),
+            Some(MoveResult::Moved)
         );
         assert_eq!(
             manager.total_ticks(&vanilla_world_clocks::OVERWORLD),

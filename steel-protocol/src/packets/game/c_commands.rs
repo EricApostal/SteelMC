@@ -344,7 +344,16 @@ pub enum ArgumentType {
     LootTable,
     LootPredicate,
     LootModifier,
+    /// `minecraft:context_float_provider` (registry index 55).
+    ContextFloatProvider,
+    /// `minecraft:context_int_provider` (registry index 56).
+    ContextIntProvider,
+    /// `minecraft:slot_source` (registry index 57).
+    SlotSource,
     Dialog,
+    /// `minecraft:feature` (registry index 59).
+    Feature,
+    SwingAnimation,
     Uuid,
 }
 
@@ -413,8 +422,16 @@ impl ArgumentType {
             Self::LootTable => 52,
             Self::LootPredicate => 53,
             Self::LootModifier => 54,
-            Self::Dialog => 55,
-            Self::Uuid => 56,
+            // Vanilla 26.3 `minecraft:command_argument_type` indices follow
+            // `ArgumentTypeInfos.bootstrap` registration order exactly; the
+            // `ResourceOrIdArgument` family carries no payload on the wire.
+            Self::ContextFloatProvider => 55,
+            Self::ContextIntProvider => 56,
+            Self::SlotSource => 57,
+            Self::Dialog => 58,
+            Self::Feature => 59,
+            Self::SwingAnimation => 60,
+            Self::Uuid => 61,
         }
     }
 }
@@ -528,8 +545,13 @@ mod tests {
             (ArgumentType::LootTable, 52),
             (ArgumentType::LootPredicate, 53),
             (ArgumentType::LootModifier, 54),
-            (ArgumentType::Dialog, 55),
-            (ArgumentType::Uuid, 56),
+            (ArgumentType::ContextFloatProvider, 55),
+            (ArgumentType::ContextIntProvider, 56),
+            (ArgumentType::SlotSource, 57),
+            (ArgumentType::Dialog, 58),
+            (ArgumentType::Feature, 59),
+            (ArgumentType::SwingAnimation, 60),
+            (ArgumentType::Uuid, 61),
         ] {
             let mut encoded = Vec::new();
             assert!(argument.write(&mut encoded).is_ok());

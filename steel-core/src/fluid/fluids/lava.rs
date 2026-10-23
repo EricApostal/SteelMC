@@ -147,6 +147,14 @@ impl FluidBehavior for LavaFluid {
         );
     }
 
+    /// Vanilla `LavaFluid.randomTick`: spreads fire to flammable neighbours.
+    ///
+    /// The spread algorithm lives in [`crate::world::World::lava_random_tick_fire_spread`] so the
+    /// fire table stays in one place.
+    fn random_tick(&self, world: &Arc<World>, pos: BlockPos) {
+        world.lava_random_tick_fire_spread(pos);
+    }
+
     fn tick(
         &self,
         world: &Arc<World>,

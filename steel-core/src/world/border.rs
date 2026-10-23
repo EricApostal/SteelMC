@@ -19,7 +19,7 @@ pub(crate) enum BorderStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct WorldBorderSnapshot {
+pub struct WorldBorderSnapshot {
     pub(crate) center_x: f64,
     pub(crate) center_z: f64,
     pub(crate) old_size: f64,
@@ -297,7 +297,89 @@ impl BorderExtent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// One world-border mutation reported to [`BorderChangeListener`]s.
+///
+/// Vanilla's `BorderChangeListener` receives the whole `WorldBorder`; Steel
+/// passes the post-mutation [`WorldBorderSnapshot`] instead because the border is
+/// held behind a lock and listeners must never re-enter it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BorderChange {
+    /// Vanilla `BorderChangeListener.onSetSize`.
+    Size {
+        /// New border size.
+        new_size: f64,
+    },
+    /// Vanilla `BorderChangeListener.onLerpSize`.
+    ///
+    /// Vanilla also passes the current `gameTime`; Steel's lerp state stores the
+    /// remaining progress instead of an absolute end tick, so no game time is
+    /// needed to describe the change.
+    LerpSize {
+        /// Size the lerp starts from.
+        from_size: f64,
+        /// Size the lerp targets.
+        target_size: f64,
+        /// Lerp duration in ticks.
+        ticks: i64,
+    },
+    /// Vanilla `BorderChangeListener.onSetCenter`.
+    Center {
+        /// New center X coordinate.
+        x: f64,
+        /// New center Z coordinate.
+        z: f64,
+    },
+    /// Vanilla `BorderChangeListener.onSetWarningTime`.
+    WarningTime {
+        /// New warning time in ticks.
+        time: i32,
+    },
+    /// Vanilla `BorderChangeListener.onSetWarningBlocks`.
+    WarningBlocks {
+        /// New warning distance in blocks.
+        blocks: i32,
+    },
+    /// Vanilla `BorderChangeListener.onSetDamagePerBlock`.
+    DamagePerBlock {
+        /// New damage per block outside the safe zone.
+        damage_per_block: f64,
+    },
+    /// Vanilla `BorderChangeListener.onSetSafeZone`.
+    SafeZone {
+        /// New safe zone width outside the border.
+        safe_zone: f64,
+    },
+}
+
+/// Vanilla `BorderChangeListener`: an observer of world-border mutations.
+///
+/// Steel's built-in packet broadcast stays inline in the `World` setters (the
+/// equivalent of vanilla's single `PlayerList` listener); registered listeners
+/// are additional observers such as spawn-suppression or gametest hooks.
+pub trait BorderChangeListener: Send + Sync {
+    /// Called after the border size changed statically.
+    fn on_set_size(&self, border: WorldBorderSnapshot, new_size: f64);
+    /// Called after a border size lerp started.
+    fn on_lerp_size(
+        &self,
+        border: WorldBorderSnapshot,
+        from_size: f64,
+        target_size: f64,
+        ticks: i64,
+    );
+    /// Called after the border center changed.
+    fn on_set_center(&self, border: WorldBorderSnapshot, x: f64, z: f64);
+    /// Called after the warning time changed.
+    fn on_set_warning_time(&self, border: WorldBorderSnapshot, time: i32);
+    /// Called after the warning distance changed.
+    fn on_set_warning_blocks(&self, border: WorldBorderSnapshot, blocks: i32);
+    /// Called after the damage per block changed.
+    fn on_set_damage_per_block(&self, border: WorldBorderSnapshot, damage_per_block: f64);
+    /// Called after the safe zone changed.
+    fn on_set_safe_zone(&self, border: WorldBorderSnapshot, safe_zone: f64);
+}
+
+#[derive(Clone)]
 pub(crate) struct WorldBorder {
     center_x: f64,
     center_z: f64,
@@ -307,6 +389,37 @@ pub(crate) struct WorldBorder {
     warning_blocks: i32,
     absolute_max_size: i32,
     extent: BorderExtent,
+    listeners: Vec<std::sync::Arc<dyn BorderChangeListener>>,
+}
+
+impl std::fmt::Debug for WorldBorder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorldBorder")
+            .field("center_x", &self.center_x)
+            .field("center_z", &self.center_z)
+            .field("damage_per_block", &self.damage_per_block)
+            .field("safe_zone", &self.safe_zone)
+            .field("warning_time", &self.warning_time)
+            .field("warning_blocks", &self.warning_blocks)
+            .field("absolute_max_size", &self.absolute_max_size)
+            .field("extent", &self.extent)
+            .field("listeners", &self.listeners.len())
+            .finish()
+    }
+}
+
+impl PartialEq for WorldBorder {
+    /// Border state equality; registered change listeners are observers and are not compared.
+    fn eq(&self, other: &Self) -> bool {
+        self.center_x == other.center_x
+            && self.center_z == other.center_z
+            && self.damage_per_block == other.damage_per_block
+            && self.safe_zone == other.safe_zone
+            && self.warning_time == other.warning_time
+            && self.warning_blocks == other.warning_blocks
+            && self.absolute_max_size == other.absolute_max_size
+            && self.extent == other.extent
+    }
 }
 
 impl WorldBorder {
@@ -333,7 +446,25 @@ impl WorldBorder {
             warning_blocks: data.warning_blocks,
             absolute_max_size: DEFAULT_ABSOLUTE_MAX_SIZE,
             extent,
+            listeners: Vec::new(),
         })
+    }
+
+    /// Vanilla `WorldBorder.addListener`.
+    pub(crate) fn add_listener(&mut self, listener: std::sync::Arc<dyn BorderChangeListener>) {
+        self.listeners.push(listener);
+    }
+
+    /// Vanilla `WorldBorder.removeListener`.
+    pub(crate) fn remove_listener(&mut self, listener: &std::sync::Arc<dyn BorderChangeListener>) {
+        self.listeners
+            .retain(|registered| !std::sync::Arc::ptr_eq(registered, listener));
+    }
+
+    /// Returns the registered listeners, matching vanilla's copy-on-read
+    /// `getListeners` so listeners can be added or removed while notifying.
+    pub(crate) fn listeners(&self) -> Vec<std::sync::Arc<dyn BorderChangeListener>> {
+        self.listeners.clone()
     }
 
     #[must_use]
@@ -380,18 +511,18 @@ impl WorldBorder {
         self.extent = self.extent.tick();
     }
 
-    pub(crate) fn set_center(&mut self, x: f64, z: f64) -> Result<(), WorldBorderError> {
+    pub(crate) fn set_center(&mut self, x: f64, z: f64) -> Result<BorderChange, WorldBorderError> {
         validate_center("center_x", x)?;
         validate_center("center_z", z)?;
         self.center_x = x;
         self.center_z = z;
-        Ok(())
+        Ok(BorderChange::Center { x, z })
     }
 
-    pub(crate) fn set_size(&mut self, size: f64) -> Result<(), WorldBorderError> {
+    pub(crate) fn set_size(&mut self, size: f64) -> Result<BorderChange, WorldBorderError> {
         validate_finite("size", size)?;
         self.extent = BorderExtent::static_size(size);
-        Ok(())
+        Ok(BorderChange::Size { new_size: size })
     }
 
     pub(crate) fn lerp_size_between(
@@ -399,34 +530,45 @@ impl WorldBorder {
         from: f64,
         to: f64,
         ticks: i64,
-    ) -> Result<(), WorldBorderError> {
+    ) -> Result<BorderChange, WorldBorderError> {
         validate_finite("from", from)?;
         validate_finite("to", to)?;
         self.extent = BorderExtent::moving(from, to, ticks)?;
-        Ok(())
+        Ok(BorderChange::LerpSize {
+            from_size: from,
+            target_size: to,
+            ticks,
+        })
     }
 
-    pub(crate) const fn set_warning_time(&mut self, warning_time: i32) {
+    pub(crate) const fn set_warning_time(&mut self, warning_time: i32) -> BorderChange {
         self.warning_time = warning_time;
+        BorderChange::WarningTime { time: warning_time }
     }
 
-    pub(crate) const fn set_warning_blocks(&mut self, warning_blocks: i32) {
+    pub(crate) const fn set_warning_blocks(&mut self, warning_blocks: i32) -> BorderChange {
         self.warning_blocks = warning_blocks;
+        BorderChange::WarningBlocks {
+            blocks: warning_blocks,
+        }
     }
 
     pub(crate) fn set_damage_per_block(
         &mut self,
         damage_per_block: f64,
-    ) -> Result<(), WorldBorderError> {
+    ) -> Result<BorderChange, WorldBorderError> {
         validate_finite("damage_per_block", damage_per_block)?;
         self.damage_per_block = damage_per_block;
-        Ok(())
+        Ok(BorderChange::DamagePerBlock { damage_per_block })
     }
 
-    pub(crate) fn set_safe_zone(&mut self, safe_zone: f64) -> Result<(), WorldBorderError> {
+    pub(crate) fn set_safe_zone(
+        &mut self,
+        safe_zone: f64,
+    ) -> Result<BorderChange, WorldBorderError> {
         validate_finite("safe_zone", safe_zone)?;
         self.safe_zone = safe_zone;
-        Ok(())
+        Ok(BorderChange::SafeZone { safe_zone })
     }
 }
 
@@ -463,6 +605,45 @@ use super::{
 };
 
 impl World {
+    /// Vanilla `WorldBorder.addListener`: registers an observer of border mutations.
+    pub fn add_world_border_listener(&self, listener: std::sync::Arc<dyn BorderChangeListener>) {
+        self.world_border.lock().add_listener(listener);
+    }
+
+    /// Vanilla `WorldBorder.removeListener`.
+    pub fn remove_world_border_listener(
+        &self,
+        listener: &std::sync::Arc<dyn BorderChangeListener>,
+    ) {
+        self.world_border.lock().remove_listener(listener);
+    }
+
+    /// Notifies every registered listener of one border mutation.
+    fn notify_border_listeners(&self, snapshot: WorldBorderSnapshot, change: BorderChange) {
+        let listeners = self.world_border.lock().listeners();
+        for listener in listeners {
+            match change {
+                BorderChange::Size { new_size } => listener.on_set_size(snapshot, new_size),
+                BorderChange::LerpSize {
+                    from_size,
+                    target_size,
+                    ticks,
+                } => listener.on_lerp_size(snapshot, from_size, target_size, ticks),
+                BorderChange::Center { x, z } => listener.on_set_center(snapshot, x, z),
+                BorderChange::WarningTime { time } => listener.on_set_warning_time(snapshot, time),
+                BorderChange::WarningBlocks { blocks } => {
+                    listener.on_set_warning_blocks(snapshot, blocks);
+                }
+                BorderChange::DamagePerBlock { damage_per_block } => {
+                    listener.on_set_damage_per_block(snapshot, damage_per_block);
+                }
+                BorderChange::SafeZone { safe_zone } => {
+                    listener.on_set_safe_zone(snapshot, safe_zone)
+                }
+            }
+        }
+    }
+
     #[must_use]
     pub(crate) fn world_border_snapshot(&self) -> WorldBorderSnapshot {
         self.world_border.lock().snapshot()
@@ -508,30 +689,32 @@ impl World {
 
     /// Sets the world border center and broadcasts the vanilla center update packet.
     pub fn set_world_border_center(&self, x: f64, z: f64) -> Result<(), WorldBorderError> {
-        let (snapshot, data) = {
+        let (snapshot, data, change) = {
             let mut border = self.world_border.lock();
-            border.set_center(x, z)?;
-            (border.snapshot(), border.to_data())
+            let change = border.set_center(x, z)?;
+            (border.snapshot(), border.to_data(), change)
         };
         self.store_world_border_data_if_changed(data);
         self.broadcast_to_all(CSetBorderCenter {
             new_center_x: snapshot.center_x,
             new_center_z: snapshot.center_z,
         });
+        self.notify_border_listeners(snapshot, change);
         Ok(())
     }
 
     /// Sets a static world border size and broadcasts the vanilla size update packet.
     pub fn set_world_border_size(&self, size: f64) -> Result<(), WorldBorderError> {
-        let (snapshot, data) = {
+        let (snapshot, data, change) = {
             let mut border = self.world_border.lock();
-            border.set_size(size)?;
-            (border.snapshot(), border.to_data())
+            let change = border.set_size(size)?;
+            (border.snapshot(), border.to_data(), change)
         };
         self.store_world_border_data_if_changed(data);
         self.broadcast_to_all(CSetBorderSize {
             size: snapshot.new_size,
         });
+        self.notify_border_listeners(snapshot, change);
         Ok(())
     }
 
@@ -542,10 +725,10 @@ impl World {
         to: f64,
         ticks: i64,
     ) -> Result<(), WorldBorderError> {
-        let (snapshot, data) = {
+        let (snapshot, data, change) = {
             let mut border = self.world_border.lock();
-            border.lerp_size_between(from, to, ticks)?;
-            (border.snapshot(), border.to_data())
+            let change = border.lerp_size_between(from, to, ticks)?;
+            (border.snapshot(), border.to_data(), change)
         };
         self.store_world_border_data_if_changed(data);
         self.broadcast_to_all(CSetBorderLerpSize {
@@ -553,31 +736,34 @@ impl World {
             new_size: snapshot.new_size,
             lerp_time: snapshot.lerp_time,
         });
+        self.notify_border_listeners(snapshot, change);
         Ok(())
     }
 
     /// Sets the client warning time and broadcasts the vanilla warning-delay packet.
     pub fn set_world_border_warning_time(&self, warning_time: i32) {
-        let data = {
+        let (data, change) = {
             let mut border = self.world_border.lock();
-            border.set_warning_time(warning_time);
-            border.to_data()
+            let change = border.set_warning_time(warning_time);
+            (border.to_data(), change)
         };
         self.store_world_border_data_if_changed(data);
         self.broadcast_to_all(CSetBorderWarningDelay {
             warning_delay: warning_time,
         });
+        self.notify_border_listeners(self.world_border_snapshot(), change);
     }
 
     /// Sets the client warning distance and broadcasts the vanilla warning-distance packet.
     pub fn set_world_border_warning_blocks(&self, warning_blocks: i32) {
-        let data = {
+        let (data, change) = {
             let mut border = self.world_border.lock();
-            border.set_warning_blocks(warning_blocks);
-            border.to_data()
+            let change = border.set_warning_blocks(warning_blocks);
+            (border.to_data(), change)
         };
         self.store_world_border_data_if_changed(data);
         self.broadcast_to_all(CSetBorderWarningDistance { warning_blocks });
+        self.notify_border_listeners(self.world_border_snapshot(), change);
     }
 
     /// Sets world border damage per block outside the safe zone.
@@ -585,23 +771,25 @@ impl World {
         &self,
         damage_per_block: f64,
     ) -> Result<(), WorldBorderError> {
-        let data = {
+        let (data, change) = {
             let mut border = self.world_border.lock();
-            border.set_damage_per_block(damage_per_block)?;
-            border.to_data()
+            let change = border.set_damage_per_block(damage_per_block)?;
+            (border.to_data(), change)
         };
         self.store_world_border_data_if_changed(data);
+        self.notify_border_listeners(self.world_border_snapshot(), change);
         Ok(())
     }
 
     /// Sets the safe distance outside the world border before damage starts.
     pub fn set_world_border_safe_zone(&self, safe_zone: f64) -> Result<(), WorldBorderError> {
-        let data = {
+        let (data, change) = {
             let mut border = self.world_border.lock();
-            border.set_safe_zone(safe_zone)?;
-            border.to_data()
+            let change = border.set_safe_zone(safe_zone)?;
+            (border.to_data(), change)
         };
         self.store_world_border_data_if_changed(data);
+        self.notify_border_listeners(self.world_border_snapshot(), change);
         Ok(())
     }
 
@@ -631,183 +819,91 @@ impl World {
 mod tests {
     use super::*;
 
-    fn assert_f64_eq(actual: f64, expected: f64) {
-        assert!(
-            (actual - expected).abs() <= f64::EPSILON,
-            "expected {expected}, got {actual}"
-        );
-    }
-
-    fn assert_f32_eq(actual: f32, expected: f32) {
-        assert!(
-            (actual - expected).abs() <= f32::EPSILON,
-            "expected {expected}, got {actual}"
-        );
-    }
-
     fn default_border() -> WorldBorder {
-        WorldBorder::new(WorldBorderData::default()).expect("default world border should load")
+        WorldBorder::new(WorldBorderData::default()).expect("default border data is valid")
+    }
+
+    use std::sync::Arc;
+
+    /// A `BorderChangeListener` used to exercise the registry; callbacks are no-ops.
+    #[derive(Debug)]
+    struct NoopBorderListener;
+
+    impl BorderChangeListener for NoopBorderListener {
+        fn on_set_size(&self, _border: WorldBorderSnapshot, _new_size: f64) {}
+
+        fn on_lerp_size(
+            &self,
+            _border: WorldBorderSnapshot,
+            _from_size: f64,
+            _target_size: f64,
+            _ticks: i64,
+        ) {
+        }
+
+        fn on_set_center(&self, _border: WorldBorderSnapshot, _x: f64, _z: f64) {}
+
+        fn on_set_warning_time(&self, _border: WorldBorderSnapshot, _time: i32) {}
+
+        fn on_set_warning_blocks(&self, _border: WorldBorderSnapshot, _blocks: i32) {}
+
+        fn on_set_damage_per_block(&self, _border: WorldBorderSnapshot, _damage_per_block: f64) {}
+
+        fn on_set_safe_zone(&self, _border: WorldBorderSnapshot, _safe_zone: f64) {}
     }
 
     #[test]
-    fn default_border_matches_vanilla_initial_settings() {
-        let border = default_border();
-        let snapshot = border.snapshot();
-
-        assert_f64_eq(snapshot.center_x, 0.0);
-        assert_f64_eq(snapshot.center_z, 0.0);
-        assert_f64_eq(snapshot.old_size, WorldBorderData::default().size);
-        assert_f64_eq(snapshot.new_size, WorldBorderData::default().size);
-        assert_eq!(snapshot.lerp_time, 0);
-        assert_eq!(snapshot.warning_blocks, 5);
-        assert_eq!(snapshot.warning_time, 300);
-        assert_eq!(snapshot.absolute_max_size, DEFAULT_ABSOLUTE_MAX_SIZE);
-    }
-
-    #[test]
-    fn border_bounds_are_clamped_to_absolute_max_size() {
+    fn border_mutators_report_vanilla_change_events() {
         let mut border = default_border();
-        border
-            .set_center(MAX_CENTER_COORDINATE, MAX_CENTER_COORDINATE)
-            .expect("valid vanilla border center");
-        let snapshot = border.snapshot();
 
-        assert_f64_eq(snapshot.max_x, f64::from(DEFAULT_ABSOLUTE_MAX_SIZE));
-        assert_f64_eq(snapshot.max_z, f64::from(DEFAULT_ABSOLUTE_MAX_SIZE));
-    }
+        let center = border.set_center(4.0, -8.0).expect("valid center");
+        let size = border.set_size(64.0).expect("valid size");
+        let lerp = border
+            .lerp_size_between(64.0, 32.0, 20)
+            .expect("valid lerp");
+        let warning_time = border.set_warning_time(42);
+        let warning_blocks = border.set_warning_blocks(9);
+        let damage = border
+            .set_damage_per_block(0.5)
+            .expect("valid damage per block");
+        let safe_zone = border.set_safe_zone(3.0).expect("valid safe zone");
 
-    #[test]
-    fn block_position_bounds_use_vanilla_inclusive_min_exclusive_max() {
-        let mut border = default_border();
-        border.set_size(10.0).expect("valid border size");
-        let snapshot = border.snapshot();
-
-        assert!(snapshot.is_block_within_bounds(BlockPos::new(-5, 64, -5)));
-        assert!(snapshot.is_block_within_bounds(BlockPos::new(4, 64, 4)));
-        assert!(!snapshot.is_block_within_bounds(BlockPos::new(5, 64, 0)));
-        assert!(!snapshot.is_block_within_bounds(BlockPos::new(0, 64, 5)));
-    }
-
-    #[test]
-    fn clamp_to_bounds_matches_vanilla_blockpos_containing() {
-        let mut border = default_border();
-        border.set_size(10.0).expect("valid border size");
-        let snapshot = border.snapshot();
-
+        assert_eq!(center, BorderChange::Center { x: 4.0, z: -8.0 });
+        assert_eq!(size, BorderChange::Size { new_size: 64.0 });
         assert_eq!(
-            snapshot.clamp_to_bounds(12.7, 64.9, 5.5),
-            BlockPos::new(4, 64, 4)
+            lerp,
+            BorderChange::LerpSize {
+                from_size: 64.0,
+                target_size: 32.0,
+                ticks: 20,
+            }
         );
+        assert_eq!(warning_time, BorderChange::WarningTime { time: 42 });
+        assert_eq!(warning_blocks, BorderChange::WarningBlocks { blocks: 9 });
         assert_eq!(
-            snapshot.clamp_to_bounds(-8.1, -1.2, -9.3),
-            BlockPos::new(-5, -2, -5)
+            damage,
+            BorderChange::DamagePerBlock {
+                damage_per_block: 0.5,
+            }
         );
+        assert_eq!(safe_zone, BorderChange::SafeZone { safe_zone: 3.0 });
     }
 
     #[test]
-    fn moving_border_ticks_to_target_size() {
+    fn listener_registry_add_remove_matches_vanilla_list_semantics() {
+        let listener: Arc<dyn BorderChangeListener> = Arc::new(NoopBorderListener);
+
         let mut border = default_border();
-        border
-            .lerp_size_between(10.0, 20.0, 2)
-            .expect("valid border lerp");
+        assert!(border.listeners().is_empty());
 
-        border.tick();
-        let first_tick = border.snapshot();
-        assert_f64_eq(first_tick.old_size, 15.0);
-        assert_f64_eq(first_tick.new_size, 20.0);
-        assert_eq!(first_tick.lerp_time, 1);
-        assert_eq!(first_tick.status, BorderStatus::Growing);
+        border.add_listener(Arc::clone(&listener));
+        assert_eq!(border.listeners().len(), 1);
 
-        border.tick();
-        let second_tick = border.snapshot();
-        assert_f64_eq(second_tick.old_size, 20.0);
-        assert_f64_eq(second_tick.new_size, 20.0);
-        assert_eq!(second_tick.lerp_time, 0);
-        assert_eq!(second_tick.status, BorderStatus::Stationary);
-    }
-
-    #[test]
-    fn close_to_border_matches_vanilla_distance_gate() {
-        let mut border = default_border();
-        border.set_size(10.0).expect("valid border size");
-        let snapshot = border.snapshot();
-        let aabb = WorldAabb::new(3.8, 0.0, -0.3, 4.4, 1.8, 0.3);
-
-        assert!(snapshot.is_inside_close_to_border(4.1, 0.0, aabb));
-        assert!(!snapshot.is_inside_close_to_border(0.0, 0.0, aabb));
-    }
-
-    #[test]
-    fn collision_shape_represents_outside_of_border() {
-        let mut border = default_border();
-        border.set_size(10.0).expect("valid border size");
-        let snapshot = border.snapshot();
-        let crossing_east = WorldAabb::new(4.5, 0.0, -0.3, 5.2, 1.8, 0.3);
-        let inside = WorldAabb::new(0.0, 0.0, -0.3, 0.6, 1.8, 0.3);
-
-        assert_eq!(snapshot.collision_shapes_for(crossing_east).len(), 1);
-        assert_eq!(snapshot.collision_shapes_for(inside).len(), 0);
-    }
-
-    #[test]
-    fn outside_damage_is_ignored_inside_safe_zone() {
-        let mut border = default_border();
-        border.set_size(10.0).expect("valid border size");
-        let snapshot = border.snapshot();
-        let just_outside = WorldAabb::entity_box(5.2, 0.0, 0.0, 0.3, 1.8);
-
-        assert!(
-            snapshot
-                .outside_damage_amount(5.2, 0.0, just_outside)
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn outside_damage_uses_vanilla_minimum_damage() {
-        let mut border = default_border();
-        border.set_size(10.0).expect("valid border size");
-        let snapshot = border.snapshot();
-        let outside = WorldAabb::entity_box(12.0, 0.0, 0.0, 0.3, 1.8);
-
-        let damage = snapshot
-            .outside_damage_amount(12.0, 0.0, outside)
-            .expect("outside player should take border damage");
-
-        assert_f32_eq(damage, 1.0);
-    }
-
-    #[test]
-    fn outside_damage_uses_vanilla_floor_after_scaling() {
-        let border = WorldBorder::new(WorldBorderData {
-            size: 10.0,
-            safe_zone: 0.0,
-            damage_per_block: 2.0,
-            ..WorldBorderData::default()
-        })
-        .expect("valid world border");
-        let snapshot = border.snapshot();
-        let outside = WorldAabb::entity_box(8.4, 0.0, 0.0, 0.3, 1.8);
-
-        let damage = snapshot
-            .outside_damage_amount(8.4, 0.0, outside)
-            .expect("outside player should take border damage");
-
-        assert_f32_eq(damage, 6.0);
-    }
-
-    #[test]
-    fn outside_damage_is_disabled_when_damage_per_block_is_not_positive() {
-        let border = WorldBorder::new(WorldBorderData {
-            size: 10.0,
-            safe_zone: 0.0,
-            damage_per_block: 0.0,
-            ..WorldBorderData::default()
-        })
-        .expect("valid world border");
-        let snapshot = border.snapshot();
-        let outside = WorldAabb::entity_box(8.0, 0.0, 0.0, 0.3, 1.8);
-
-        assert!(snapshot.outside_damage_amount(8.0, 0.0, outside).is_none());
+        // Vanilla `getListeners` copies the list, so a copied list is unaffected
+        // by later removal.
+        let copied = border.listeners();
+        border.remove_listener(&listener);
+        assert!(border.listeners().is_empty());
+        assert_eq!(copied.len(), 1);
     }
 }

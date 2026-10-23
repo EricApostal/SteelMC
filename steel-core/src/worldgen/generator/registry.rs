@@ -6,15 +6,16 @@ use std::iter::repeat_n;
 use std::path::Path;
 use std::sync::Arc;
 use steel_registry::dimension_type::DimensionTypeRef;
-use steel_registry::vanilla_biomes;
 use steel_registry::vanilla_dimension_types::{OVERWORLD, THE_END, THE_NETHER};
+use steel_registry::world_preset::{PresetBiomeSource, WorldPresetGenerator};
 use steel_registry::{REGISTRY, RegistryExt};
 use steel_utils::Identifier;
 use toml::map::Map;
 
 use crate::worldgen::structure::{FixedStructureBiomeProvider, StructureGenerator};
 use crate::worldgen::{
-    ChunkGeneratorType, EmptyChunkGenerator, FlatChunkGenerator, VanillaGenerator,
+    ChunkGeneratorType, DebugChunkGenerator, EmptyChunkGenerator, FlatChunkGenerator,
+    FlatGeneratorSettings, VanillaGenerator,
 };
 use steel_worldgen::biomes::BiomeSourceKind;
 use steel_worldgen::density_functions::{
@@ -71,6 +72,9 @@ impl ValidatedWorldGeneratorConfig {
             WorldGeneratorConfigData::Flat(config) => {
                 validated_dimension_type_by_key(&config.dimension_type)
             }
+            WorldGeneratorConfigData::Preset(config) => {
+                validated_dimension_type_by_key(&config.dimension_type)
+            }
         }
     }
 }
@@ -79,7 +83,8 @@ impl ValidatedWorldGeneratorConfig {
 enum WorldGeneratorConfigData {
     Empty,
     EmptyWorld(DimensionTypeOnlyConfig),
-    Flat(FlatGeneratorConfig),
+    Flat(ResolvedFlatConfig),
+    Preset(ResolvedPresetConfig),
 }
 
 /// Registry of server-side world generator factories.
@@ -127,6 +132,20 @@ impl WorldGeneratorRegistry {
             WorldGeneratorFactory {
                 validate: validate_empty_world_config,
                 create: create_empty,
+            },
+        )?;
+        registry.register(
+            Identifier::vanilla_static("debug"),
+            WorldGeneratorFactory {
+                validate: validate_empty_config,
+                create: create_debug,
+            },
+        )?;
+        registry.register(
+            Identifier::vanilla_static("preset"),
+            WorldGeneratorFactory {
+                validate: validate_preset_config,
+                create: create_preset,
             },
         )?;
 
@@ -179,19 +198,77 @@ struct DimensionTypeOnlyConfig {
     dimension_type: Identifier,
 }
 
+/// Raw `minecraft:flat` config.
+///
+/// Every field is optional so a `preset` can supply it; explicit fields override the
+/// preset, mirroring vanilla's superflat preset selection screen.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FlatGeneratorConfig {
     #[serde(default = "default_flat_dimension_type")]
     dimension_type: Identifier,
-    #[serde(default = "default_flat_layers")]
+    #[serde(default)]
+    preset: Option<Identifier>,
+    #[serde(default)]
+    biome: Option<Identifier>,
+    #[serde(default)]
+    layers: Option<Vec<FlatLayerConfig>>,
+    #[serde(default)]
+    features: Option<bool>,
+    #[serde(default)]
+    lakes: Option<bool>,
+    #[serde(default)]
+    structure_overrides: Option<Vec<Identifier>>,
+}
+
+/// `minecraft:flat` config after applying preset and vanilla defaults.
+#[derive(Debug, Clone)]
+struct ResolvedFlatConfig {
+    dimension_type: Identifier,
+    biome: Identifier,
     layers: Vec<FlatLayerConfig>,
-    #[serde(default)]
     features: bool,
-    #[serde(default)]
     lakes: bool,
-    #[serde(default = "default_flat_structure_overrides")]
     structure_overrides: Vec<Identifier>,
+}
+
+/// Raw `minecraft:preset` config: one dimension of a vanilla world preset.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PresetGeneratorConfig {
+    #[serde(default = "default_world_preset")]
+    preset: Identifier,
+    #[serde(default = "default_preset_dimension")]
+    dimension: Identifier,
+}
+
+/// `minecraft:preset` config resolved to one dimension's generator.
+#[derive(Debug, Clone)]
+struct ResolvedPresetConfig {
+    preset: Identifier,
+    dimension: Identifier,
+    dimension_type: Identifier,
+    generator: PresetDimensionGenerator,
+}
+
+/// Chunk generator selected by a world preset dimension.
+#[derive(Debug, Clone)]
+enum PresetDimensionGenerator {
+    Noise {
+        biome_source: PresetNoiseBiomeSource,
+        settings: Identifier,
+    },
+    Flat(ResolvedFlatConfig),
+    Debug,
+}
+
+/// Biome source of a preset's noise generator, resolved to a Steel variant.
+#[derive(Debug, Clone)]
+enum PresetNoiseBiomeSource {
+    Overworld,
+    Nether,
+    End,
+    Fixed(Identifier),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -202,6 +279,14 @@ struct FlatLayerConfig {
 }
 
 const fn default_flat_dimension_type() -> Identifier {
+    Identifier::vanilla_static("overworld")
+}
+
+const fn default_world_preset() -> Identifier {
+    Identifier::vanilla_static("normal")
+}
+
+const fn default_preset_dimension() -> Identifier {
     Identifier::vanilla_static("overworld")
 }
 
@@ -250,21 +335,86 @@ fn validate_empty_world_config(config: &toml::Value) -> Result<WorldGeneratorCon
 
 fn validate_flat_config(config: &toml::Value) -> Result<WorldGeneratorConfigData, String> {
     let parsed = parse_flat_config(config)?;
-    if parsed.layers.is_empty() {
+    let resolved = resolve_flat_config(&parsed)?;
+    validate_flat_settings(&resolved)?;
+    Ok(WorldGeneratorConfigData::Flat(resolved))
+}
+
+/// Resolves vanilla's flat preset/default cascade: explicit config fields win, then the
+/// selected `flat_level_generator_preset`'s settings, then vanilla's classic defaults.
+fn resolve_flat_config(parsed: &FlatGeneratorConfig) -> Result<ResolvedFlatConfig, String> {
+    let preset = match &parsed.preset {
+        Some(key) => Some(
+            REGISTRY
+                .flat_level_generator_presets
+                .by_key(key)
+                .ok_or_else(|| format!("unknown flat level generator preset {key}"))?,
+        ),
+        None => None,
+    };
+
+    let biome = parsed
+        .biome
+        .clone()
+        .or_else(|| preset.map(|preset| preset.settings.biome.clone()))
+        .unwrap_or_else(|| Identifier::vanilla_static("plains"));
+
+    let layers = match &parsed.layers {
+        Some(layers) => layers.clone(),
+        None => preset.map_or_else(default_flat_layers, |preset| {
+            preset
+                .settings
+                .layers
+                .iter()
+                .map(|layer| FlatLayerConfig {
+                    block: layer.block.clone(),
+                    height: layer.height as usize,
+                })
+                .collect()
+        }),
+    };
+
+    let features = parsed
+        .features
+        .or_else(|| preset.map(|preset| preset.settings.decoration))
+        .unwrap_or(false);
+    let lakes = parsed
+        .lakes
+        .or_else(|| preset.map(|preset| preset.settings.add_lakes))
+        .unwrap_or(false);
+    let structure_overrides = parsed
+        .structure_overrides
+        .clone()
+        .or_else(|| preset.map(|preset| preset.settings.structure_overrides.clone()))
+        .unwrap_or_else(default_flat_structure_overrides);
+
+    Ok(ResolvedFlatConfig {
+        dimension_type: parsed.dimension_type.clone(),
+        biome,
+        layers,
+        features,
+        lakes,
+        structure_overrides,
+    })
+}
+
+fn validate_flat_settings(config: &ResolvedFlatConfig) -> Result<(), String> {
+    if config.layers.is_empty() {
         return Err("minecraft:flat requires at least one layer".to_owned());
     }
-    // TODO: Implement vanilla FlatLevelGeneratorSettings::adjustGenerationSettings for these flags.
-    if parsed.features {
-        return Err("minecraft:flat features=true is not implemented yet".to_owned());
+    dimension_type_by_key(&config.dimension_type)?;
+    if REGISTRY.biomes.by_key(&config.biome).is_none() {
+        return Err(format!(
+            "unknown biome {} in minecraft:flat settings",
+            config.biome
+        ));
     }
-    if parsed.lakes {
-        return Err("minecraft:flat lakes=true is not implemented yet".to_owned());
-    }
-    dimension_type_by_key(&parsed.dimension_type)?;
-    for layer in &parsed.layers {
+    let mut total_height = 0usize;
+    for layer in &config.layers {
         if layer.height == 0 {
             return Err("minecraft:flat layer height must be greater than zero".to_owned());
         }
+        total_height = total_height.saturating_add(layer.height);
         if REGISTRY.blocks.by_key(&layer.block).is_none() {
             return Err(format!(
                 "unknown block {} in minecraft:flat layer",
@@ -272,18 +422,122 @@ fn validate_flat_config(config: &toml::Value) -> Result<WorldGeneratorConfigData
             ));
         }
     }
+    // Vanilla `FlatLevelGeneratorSettings.validateHeight`: the summed layer heights must
+    // fit the dimension's build height.
+    if total_height > 384 {
+        return Err(format!(
+            "sum of minecraft:flat layer heights is {total_height}, above the 384-block limit"
+        ));
+    }
     let available_structure_sets: FxHashSet<_> = load_vanilla_structure_sets()
         .into_iter()
         .map(|(key, _)| key)
         .collect();
-    for structure_set in &parsed.structure_overrides {
+    for structure_set in &config.structure_overrides {
         if !available_structure_sets.contains(structure_set) {
             return Err(format!(
                 "unknown structure set {structure_set} in minecraft:flat structure_overrides"
             ));
         }
     }
-    Ok(WorldGeneratorConfigData::Flat(parsed))
+    Ok(())
+}
+
+fn validate_preset_config(config: &toml::Value) -> Result<WorldGeneratorConfigData, String> {
+    let parsed: PresetGeneratorConfig = config
+        .clone()
+        .try_into()
+        .map_err(|e| format!("invalid minecraft:preset config: {e}"))?;
+    let preset = REGISTRY
+        .world_presets
+        .by_key(&parsed.preset)
+        .ok_or_else(|| format!("unknown world preset {}", parsed.preset))?;
+    let dimension = preset
+        .dimensions
+        .iter()
+        .find(|dimension| dimension.dimension == parsed.dimension)
+        .ok_or_else(|| {
+            format!(
+                "world preset {} has no dimension {}",
+                parsed.preset, parsed.dimension
+            )
+        })?;
+    dimension_type_by_key(&dimension.dimension_type)?;
+
+    let generator = match &dimension.generator {
+        WorldPresetGenerator::Noise {
+            biome_source,
+            settings,
+        } => {
+            let biome_source = match biome_source {
+                PresetBiomeSource::MultiNoise { preset } => {
+                    if preset == &Identifier::vanilla_static("overworld") {
+                        PresetNoiseBiomeSource::Overworld
+                    } else if preset == &Identifier::vanilla_static("nether") {
+                        PresetNoiseBiomeSource::Nether
+                    } else {
+                        return Err(format!(
+                            "multi-noise preset {preset} in world preset {} is not supported",
+                            parsed.preset
+                        ));
+                    }
+                }
+                PresetBiomeSource::Fixed { biome } => {
+                    if REGISTRY.biomes.by_key(biome).is_none() {
+                        return Err(format!(
+                            "unknown biome {biome} in world preset {}",
+                            parsed.preset
+                        ));
+                    }
+                    PresetNoiseBiomeSource::Fixed(biome.clone())
+                }
+                PresetBiomeSource::TheEnd => PresetNoiseBiomeSource::End,
+            };
+            // Steel transpiles one noise-settings set per dimension, so only the three
+            // vanilla dimension settings can be instantiated today.
+            if settings != &Identifier::vanilla_static("overworld")
+                && settings != &Identifier::vanilla_static("nether")
+                && settings != &Identifier::vanilla_static("end")
+            {
+                return Err(format!(
+                    "noise settings {settings} in world preset {} are not supported yet \
+                     (only minecraft:overworld, minecraft:nether, minecraft:end)",
+                    parsed.preset
+                ));
+            }
+            PresetDimensionGenerator::Noise {
+                biome_source,
+                settings: settings.clone(),
+            }
+        }
+        WorldPresetGenerator::Flat { settings } => {
+            let flat = ResolvedFlatConfig {
+                dimension_type: dimension.dimension_type.clone(),
+                biome: settings.biome.clone(),
+                layers: settings
+                    .layers
+                    .iter()
+                    .map(|layer| FlatLayerConfig {
+                        block: layer.block.clone(),
+                        height: layer.height as usize,
+                    })
+                    .collect(),
+                features: settings.decoration,
+                lakes: settings.add_lakes,
+                structure_overrides: settings.structure_overrides.clone(),
+            };
+            validate_flat_settings(&flat)?;
+            PresetDimensionGenerator::Flat(flat)
+        }
+        WorldPresetGenerator::Debug => PresetDimensionGenerator::Debug,
+    };
+
+    Ok(WorldGeneratorConfigData::Preset(ResolvedPresetConfig {
+        preset: parsed.preset,
+        dimension: parsed.dimension,
+        dimension_type: dimension.dimension_type.clone(),
+        generator,
+    }))
 }
 
 fn parse_flat_config(config: &toml::Value) -> Result<FlatGeneratorConfig, String> {
@@ -374,8 +628,22 @@ fn create_flat(
     let WorldGeneratorConfigData::Flat(parsed) = config else {
         return Err("validated config does not match minecraft:flat".to_owned());
     };
+    create_flat_generator(world_path, parsed, seed, thread_pool)
+}
+
+/// Builds a flat generator from resolved flat settings.
+fn create_flat_generator(
+    world_path: Option<&Path>,
+    parsed: &ResolvedFlatConfig,
+    seed: i64,
+    thread_pool: &rayon::ThreadPool,
+) -> Result<GeneratorOutput, String> {
     let dimension_type = dimension_type_by_key(&parsed.dimension_type)?;
     let normalized_config = normalized_flat_config(parsed);
+    let biome = REGISTRY
+        .biomes
+        .by_key(&parsed.biome)
+        .ok_or_else(|| format!("unknown biome {} in minecraft:flat settings", parsed.biome))?;
     let mut layers = Vec::new();
     for layer in &parsed.layers {
         let block = REGISTRY
@@ -383,7 +651,7 @@ fn create_flat(
             .by_key(&layer.block)
             .ok_or_else(|| format!("unknown block {} in minecraft:flat layer", layer.block))?;
         let state = REGISTRY.blocks.get_default_state_id(block);
-        layers.extend(repeat_n(state, layer.height));
+        layers.extend(repeat_n(Some(state), layer.height));
     }
 
     let structure_generator = if parsed.structure_overrides.is_empty() {
@@ -393,7 +661,7 @@ fn create_flat(
             .into_iter()
             .filter(|(key, _)| parsed.structure_overrides.contains(key))
             .collect();
-        let biome_provider = FixedStructureBiomeProvider::new(&vanilla_biomes::PLAINS);
+        let biome_provider = FixedStructureBiomeProvider::new(biome);
         Some(StructureGenerator::vanilla_flat_with_structure_sets(
             seed,
             world_path,
@@ -406,15 +674,110 @@ fn create_flat(
     Ok(GeneratorOutput {
         dimension_type,
         config: normalized_config,
-        generator: ChunkGeneratorType::Flat(FlatChunkGenerator::new_layers_with_structures(
-            layers,
-            seed,
-            FlatChunkGenerator::SEA_LEVEL,
-            structure_generator,
+        generator: ChunkGeneratorType::Flat(FlatChunkGenerator::from_settings(
+            FlatGeneratorSettings {
+                layers,
+                biome,
+                seed,
+                sea_level: FlatChunkGenerator::SEA_LEVEL,
+                features: parsed.features,
+                lakes: parsed.lakes,
+                structure_generator,
+            },
         )),
         is_flat: true,
         sea_level: FlatChunkGenerator::SEA_LEVEL,
     })
+}
+
+fn create_debug(
+    _world_path: Option<&Path>,
+    config: &WorldGeneratorConfigData,
+    _seed: i64,
+    _thread_pool: &rayon::ThreadPool,
+) -> Result<GeneratorOutput, String> {
+    let WorldGeneratorConfigData::Empty = config else {
+        return Err("validated config does not match minecraft:debug".to_owned());
+    };
+    Ok(GeneratorOutput {
+        dimension_type: &OVERWORLD,
+        config: empty_config(),
+        generator: ChunkGeneratorType::Debug(DebugChunkGenerator::new()),
+        is_flat: false,
+        sea_level: DebugChunkGenerator::SEA_LEVEL,
+    })
+}
+
+fn create_preset(
+    world_path: Option<&Path>,
+    config: &WorldGeneratorConfigData,
+    seed: i64,
+    thread_pool: &rayon::ThreadPool,
+) -> Result<GeneratorOutput, String> {
+    let WorldGeneratorConfigData::Preset(parsed) = config else {
+        return Err("validated config does not match minecraft:preset".to_owned());
+    };
+    let dimension_type = dimension_type_by_key(&parsed.dimension_type)?;
+    let normalized_config = normalized_preset_config(parsed);
+
+    match &parsed.generator {
+        PresetDimensionGenerator::Noise {
+            biome_source,
+            settings,
+        } => {
+            let seed_u = seed as u64;
+            let source = match biome_source {
+                PresetNoiseBiomeSource::Overworld => BiomeSourceKind::overworld(seed_u),
+                PresetNoiseBiomeSource::Nether => BiomeSourceKind::nether(seed_u),
+                PresetNoiseBiomeSource::End => BiomeSourceKind::end(seed_u),
+                PresetNoiseBiomeSource::Fixed(biome) => {
+                    let biome = REGISTRY.biomes.by_key(biome).ok_or_else(|| {
+                        format!("unknown biome {biome} in world preset {}", parsed.preset)
+                    })?;
+                    BiomeSourceKind::fixed(biome)
+                }
+            };
+            let generator = if settings == &Identifier::vanilla_static("overworld") {
+                ChunkGeneratorType::Overworld(VanillaGenerator::new(
+                    world_path,
+                    source,
+                    seed_u,
+                    thread_pool,
+                ))
+            } else if settings == &Identifier::vanilla_static("nether") {
+                ChunkGeneratorType::Nether(VanillaGenerator::new(
+                    world_path,
+                    source,
+                    seed_u,
+                    thread_pool,
+                ))
+            } else {
+                ChunkGeneratorType::End(VanillaGenerator::new(
+                    world_path,
+                    source,
+                    seed_u,
+                    thread_pool,
+                ))
+            };
+            Ok(GeneratorOutput {
+                dimension_type,
+                config: normalized_config,
+                generator,
+                is_flat: false,
+                sea_level: sea_level_for_dimension_type(dimension_type),
+            })
+        }
+        PresetDimensionGenerator::Flat(flat) => {
+            create_flat_generator(world_path, flat, seed, thread_pool)
+        }
+        PresetDimensionGenerator::Debug => Ok(GeneratorOutput {
+            dimension_type,
+            config: normalized_config,
+            generator: ChunkGeneratorType::Debug(DebugChunkGenerator::new()),
+            is_flat: false,
+            sea_level: DebugChunkGenerator::SEA_LEVEL,
+        }),
+    }
 }
 
 fn create_empty(
@@ -453,8 +816,12 @@ fn normalized_dimension_type_table(dimension_type: &Identifier) -> Map<String, t
     table
 }
 
-fn normalized_flat_config(config: &FlatGeneratorConfig) -> toml::Value {
+fn normalized_flat_config(config: &ResolvedFlatConfig) -> toml::Value {
     let mut table = normalized_dimension_type_table(&config.dimension_type);
+    table.insert(
+        "biome".to_owned(),
+        toml::Value::String(config.biome.to_string()),
+    );
     let layers = config
         .layers
         .iter()
@@ -483,6 +850,19 @@ fn normalized_flat_config(config: &FlatGeneratorConfig) -> toml::Value {
                 .map(|key| toml::Value::String(key.to_string()))
                 .collect(),
         ),
+    );
+    toml::Value::Table(table)
+}
+
+fn normalized_preset_config(config: &ResolvedPresetConfig) -> toml::Value {
+    let mut table = normalized_dimension_type_table(&config.dimension_type);
+    table.insert(
+        "preset".to_owned(),
+        toml::Value::String(config.preset.to_string()),
+    );
+    table.insert(
+        "dimension".to_owned(),
+        toml::Value::String(config.dimension.to_string()),
     );
     toml::Value::Table(table)
 }

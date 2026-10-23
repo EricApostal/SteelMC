@@ -296,8 +296,16 @@ fn unsupported_persistent_entity_is_dropped_after_load_and_resave() {
     else {
         panic!("forced proto chunk save should prepare");
     };
+    // Any entity type without a runtime factory must be dropped on load. Every type
+    // gains a factory as the port progresses, so the type is picked at runtime.
+    let Some(unsupported_type) = (0..steel_registry::REGISTRY.entity_types.len())
+        .filter_map(|id| steel_registry::REGISTRY.entity_types.by_id(id))
+        .find(|entity_type| !crate::entity::ENTITIES.has_factory(entity_type))
+    else {
+        return;
+    };
     let mut unsupported = test_persistent_end_crystal(DVec3::new(5.5, 6.0, 7.5));
-    unsupported.entity_type = vanilla_entities::VILLAGER.key.clone();
+    unsupported.entity_type = unsupported_type.key.clone();
     prepared.persistent.entities.push(unsupported);
 
     let loaded = ChunkStorage::persistent_to_chunk(
@@ -502,7 +510,7 @@ fn runtime_entity_passengers_skip_non_serializable_entities_like_vanilla() {
 }
 
 #[test]
-fn unimplemented_block_entities_preserve_nbt_through_proto_save_load() {
+fn spawner_block_entities_preserve_nbt_through_proto_save_load() {
     init_globals();
 
     let pos = ChunkPos::new(0, 0);
@@ -518,9 +526,13 @@ fn unimplemented_block_entities_preserve_nbt_through_proto_save_load() {
         UpdateFlags::UPDATE_NONE,
     );
 
+    // Keys the implemented `SpawnerBlockEntity` models, so the round trip proves the
+    // proto save/load path preserves entity-specific NBT.
+    let mut spawn_data = NbtCompound::new();
+    spawn_data.insert("id", "minecraft:zombie");
     let mut nbt = NbtCompound::new();
-    nbt.insert("LootTable", "minecraft:chests/simple_dungeon");
-    nbt.insert("LootTableSeed", 42_i64);
+    nbt.insert("Delay", 42_i16);
+    nbt.insert("SpawnData", spawn_data);
     let entity = BLOCK_ENTITIES.create_and_load_owned_or_unimplemented(
         &vanilla_block_entity_types::MOB_SPAWNER,
         proto.level_weak(),
@@ -558,9 +570,12 @@ fn unimplemented_block_entities_preserve_nbt_through_proto_save_load() {
     );
     loaded_entity.save_additional(&mut saved);
 
+    assert_eq!(saved.short("Delay"), Some(42));
     assert_eq!(
-        saved.string("LootTable").map(ToString::to_string),
-        Some("minecraft:chests/simple_dungeon".to_owned())
+        saved
+            .compound("SpawnData")
+            .and_then(|data| data.string("id"))
+            .map(ToString::to_string),
+        Some("minecraft:zombie".to_owned())
     );
-    assert_eq!(saved.long("LootTableSeed"), Some(42));
 }

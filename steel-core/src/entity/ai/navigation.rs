@@ -8,7 +8,7 @@ use steel_utils::BlockPos;
 
 use crate::entity::ai::path::{Path, PathType, PathTypeCache, PathfindingContext};
 use crate::entity::ai::pathfinder::{PathFinder, PathRequest};
-use crate::entity::ai::walk::{WalkNodeCollision, WalkNodeEvaluator};
+use crate::entity::ai::walk::{NodeEvaluator, WalkNodeCollision};
 use crate::world::LevelReader;
 
 const DIRECT_TARGET_REACHED_DISTANCE_SQR: f64 = 2.500_000_3e-7;
@@ -71,6 +71,9 @@ pub struct PathNavigation {
     can_walk_over_fences: bool,
     avoid_sun: bool,
     can_path_to_targets_below_surface: bool,
+    /// Vanilla `FlyingPathNavigation`: the mob never follows the ground, so the
+    /// navigation keeps the direct target and skips ground-only checks.
+    flying: bool,
 }
 
 impl PathNavigation {
@@ -102,6 +105,7 @@ impl PathNavigation {
             can_walk_over_fences: false,
             avoid_sun: false,
             can_path_to_targets_below_surface: false,
+            flying: false,
         }
     }
 
@@ -208,7 +212,16 @@ impl PathNavigation {
         self.avoid_sun = avoid_sun;
     }
 
-    #[must_use]
+    /// Vanilla `FlyingPathNavigation.canUpdatePath`'s flight mode.
+    pub const fn is_flying(&self) -> bool {
+        self.flying
+    }
+
+    /// Enables vanilla `FlyingPathNavigation` semantics on this navigation.
+    pub const fn set_flying(&mut self, flying: bool) {
+        self.flying = flying;
+    }
+
     pub const fn can_path_to_targets_below_surface(&self) -> bool {
         self.can_path_to_targets_below_surface
     }
@@ -247,7 +260,7 @@ impl PathNavigation {
 
     pub fn create_path(
         &mut self,
-        evaluator: &mut WalkNodeEvaluator,
+        evaluator: &mut impl crate::entity::ai::walk::NodeEvaluator,
         level: &dyn LevelReader,
         collision: &mut impl WalkNodeCollision,
         request: NavigationPathRequest<'_>,

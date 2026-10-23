@@ -101,11 +101,35 @@ pub trait StructureBiomeProvider {
         allowed: &dyn Fn(&Identifier) -> bool,
         rng: &mut LegacyRandom,
     ) -> Option<(i32, i32)>;
+
+    /// The owning generator's origin chunk — vanilla
+    /// `ChunkGeneratorStructureState.getDimensionOrigin()`.
+    ///
+    /// Vanilla's `ChunkGenerator.getOrigin` returns `ChunkPos.ZERO`; noise
+    /// generators override it with the chunk containing their noise settings'
+    /// spawn search result, and flat generators keep the zero origin. Providers
+    /// that cannot know their generator's origin keep the zero default.
+    fn dimension_origin(&self) -> ChunkPos {
+        ChunkPos::new(0, 0)
+    }
 }
 
 impl StructureBiomeProvider for BiomeSourceKind {
     fn possible_biomes(&self) -> FxHashSet<Identifier> {
         BiomeSourceKind::possible_biomes(self)
+    }
+
+    fn dimension_origin(&self) -> ChunkPos {
+        // Vanilla `NoiseBasedChunkGenerator.getOrigin`: the chunk containing
+        // `NoiseSpawnFinder.findSpawnPosition` for the dimension's noise
+        // settings. `FlatLevelSource` keeps `ChunkGenerator.getOrigin`, i.e.
+        // `ChunkPos.ZERO`.
+        match self {
+            Self::Overworld(_) | Self::Nether(_) | Self::End(_) => {
+                ChunkPos::from_block_pos(self.initial_spawn_search_origin())
+            }
+            Self::Fixed(_) | Self::Checkerboard(_) => ChunkPos::new(0, 0),
+        }
     }
 
     fn ring_position_cache_key(&self) -> Option<String> {
@@ -117,6 +141,16 @@ impl StructureBiomeProvider for BiomeSourceKind {
                 format!("multi_noise/minecraft:the_nether/{}", source.seed())
             }
             Self::End(source) => format!("minecraft:the_end/{}", source.seed()),
+            Self::Fixed(source) => format!("fixed/{}", source.biome().key),
+            Self::Checkerboard(source) => {
+                let biomes = source
+                    .biomes()
+                    .iter()
+                    .map(|biome| biome.key.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("checkerboard/{}/{biomes}", source.scale())
+            }
         };
         Some(key)
     }
@@ -195,7 +229,20 @@ impl StructureBiomeProvider for FixedStructureBiomeProvider {
 /// implementation dispatch.
 pub struct StructureGenerator {
     seed: i64,
+    /// Vanilla `ChunkGeneratorStructureState.getDimensionOrigin()`. Only used by
+    /// `dimension_origin` placements.
+    dimension_origin: ChunkPos,
+    /// Every structure set in registry order, including sets filtered out by
+    /// `hasBiomesForStructureSet` (vanilla resolves exclusion-zone targets
+    /// through the registry, not through the possible-set list).
     structure_sets: Vec<(Identifier, StructureSet)>,
+    /// Indices into `structure_sets` of the sets with at least one structure
+    /// whose biomes the provider can produce: vanilla `possibleStructureSets()`.
+    possible_structure_sets: Vec<usize>,
+    /// Vanilla `ChunkGeneratorStructureState.placementsForStructure`: set indices
+    /// per structure, recorded only for structures whose biomes the provider can
+    /// produce. `/locate` scans exactly these placements.
+    placements_for_structure: FxHashMap<Identifier, Vec<usize>>,
     structure_set_indices: FxHashMap<Identifier, usize>,
     structure_data: FxHashMap<Identifier, StructureRef>,
     ring_positions: FxHashMap<Identifier, Vec<ChunkPos>>,
@@ -259,6 +306,7 @@ pub struct StructureLocatePlan {
 /// A structure placement that can produce the requested structure.
 #[derive(Debug, Clone)]
 pub struct StructureLocatePlacement {
+    set_key: Identifier,
     placement: StructurePlacement,
     ring_positions: Option<Vec<ChunkPos>>,
     structures: Vec<Identifier>,
@@ -445,10 +493,10 @@ fn validate_structure_sets(structure_sets: &[(Identifier, StructureSet)]) {
             set.placement.frequency
         );
         if let Some(exclusion) = &set.placement.exclusion_zone
-            && exclusion.chunk_count < 0
+            && !(1..=16).contains(&exclusion.chunk_count)
         {
             panic!(
-                "Structure set {set_key} has negative exclusion chunk_count {}",
+                "Structure set {set_key} has exclusion chunk_count {} outside vanilla's 1..=16",
                 exclusion.chunk_count
             );
         }
@@ -478,19 +526,25 @@ fn validate_structure_sets(structure_sets: &[(Identifier, StructureSet)]) {
                 count,
                 ..
             } => {
+                // Vanilla codecs: `distance`/`spread` `intRange(0, 1023)`,
+                // `count` `intRange(1, 4095)`. A zero `spread` degenerates to
+                // every ring position landing on chunk (0, 0); the arithmetic
+                // below reproduces Java's `Infinity`/`NaN` path bit-for-bit.
                 assert!(
-                    *distance > 0,
-                    "Structure set {set_key} has non-positive ring distance {distance}"
+                    (0..=1023).contains(distance),
+                    "Structure set {set_key} has ring distance {distance} outside 0..=1023"
                 );
                 assert!(
-                    *spread > 0,
-                    "Structure set {set_key} has non-positive ring spread {spread}"
+                    (0..=1023).contains(spread),
+                    "Structure set {set_key} has ring spread {spread} outside 0..=1023"
                 );
                 assert!(
-                    *count >= 0,
-                    "Structure set {set_key} has negative ring count {count}"
+                    (0..=4095).contains(count),
+                    "Structure set {set_key} has ring count {count} outside 0..=4095"
                 );
             }
+            // Single-chunk origin placement has no spacing parameters.
+            PlacementKind::DimensionOrigin => {}
         }
     }
 }
@@ -620,6 +674,7 @@ impl StructureGenerator {
     ) -> Self {
         Self::vanilla_with_structure_sets(
             seed,
+            seed,
             world_path,
             biome_provider,
             load_vanilla_structure_sets(),
@@ -629,17 +684,22 @@ impl StructureGenerator {
 
     /// Creates a generator over an explicit structure-set list while keeping all
     /// template pools, templates, and structure implementation dispatch vanilla.
+    ///
+    /// `ring_position_seed` is vanilla's `concentricRingsSeed`: the level seed for
+    /// normal generation and `0` for superflat.
     #[must_use]
     pub fn vanilla_with_structure_sets(
         seed: i64,
+        ring_position_seed: i64,
         world_path: Option<&Path>,
         biome_provider: &(impl StructureBiomeProvider + Sync),
         structure_sets: Vec<(Identifier, StructureSet)>,
         thread_pool: &rayon::ThreadPool,
     ) -> Self {
-        Self::with_assets_for_ring_seed(
+        Self::with_assets_for_origin_and_ring_seed(
             seed,
-            seed,
+            ring_position_seed,
+            biome_provider.dimension_origin(),
             world_path,
             biome_provider,
             structure_sets,
@@ -661,9 +721,10 @@ impl StructureGenerator {
         structure_sets: Vec<(Identifier, StructureSet)>,
         thread_pool: &rayon::ThreadPool,
     ) -> Self {
-        Self::with_assets_for_ring_seed(
+        Self::with_assets_for_origin_and_ring_seed(
             seed,
             VANILLA_FLAT_RING_POSITION_SEED,
+            ChunkPos::new(0, 0),
             world_path,
             biome_provider,
             structure_sets,
@@ -673,18 +734,26 @@ impl StructureGenerator {
     }
 
     /// Creates a generator from explicit structure sets and explicit runtime assets.
+    ///
+    /// `ring_position_seed` and `dimension_origin` are vanilla
+    /// `ChunkGeneratorStructureState` fields: flat generators use ring seed `0`
+    /// and the zero origin; noise generators use the level seed and the chunk
+    /// containing their spawn search result.
     #[must_use]
     pub fn with_assets(
         seed: i64,
+        ring_position_seed: i64,
+        dimension_origin: ChunkPos,
         world_path: Option<&Path>,
         biome_provider: &(impl StructureBiomeProvider + Sync),
         structure_sets: Vec<(Identifier, StructureSet)>,
         assets: StructureGeneratorAssets,
         thread_pool: &rayon::ThreadPool,
     ) -> Self {
-        Self::with_assets_for_ring_seed(
+        Self::with_assets_for_origin_and_ring_seed(
             seed,
-            seed,
+            ring_position_seed,
+            dimension_origin,
             world_path,
             biome_provider,
             structure_sets,
@@ -693,9 +762,10 @@ impl StructureGenerator {
         )
     }
 
-    fn with_assets_for_ring_seed(
+    fn with_assets_for_origin_and_ring_seed(
         seed: i64,
         ring_position_seed: i64,
+        dimension_origin: ChunkPos,
         world_path: Option<&Path>,
         biome_provider: &(impl StructureBiomeProvider + Sync),
         structure_sets: Vec<(Identifier, StructureSet)>,
@@ -712,20 +782,25 @@ impl StructureGenerator {
         validate_structure_assets(&structure_sets, &structure_data, &assets.structure_impls);
 
         let possible_biomes = biome_provider.possible_biomes();
-        let structure_sets: Vec<_> = structure_sets
-            .into_iter()
-            .filter(|(_, set)| {
-                set.structures.iter().any(|entry| {
+        // Vanilla `ChunkGeneratorStructureState.hasBiomesForStructureSet`: a set
+        // is possible when any of its structures has at least one biome the
+        // source can produce. `generatePositions` applies the same test per
+        // structure when recording placements.
+        let possible_structure_sets: Vec<usize> = structure_sets
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (_, set))| {
+                let possible = set.structures.iter().any(|entry| {
                     structure_data
                         .get(&entry.structure)
                         .is_some_and(|structure| {
-                            structure.allowed_biomes.is_empty()
-                                || structure
-                                    .allowed_biomes
-                                    .iter()
-                                    .any(|biome| possible_biomes.contains(biome))
+                            structure
+                                .allowed_biomes
+                                .iter()
+                                .any(|biome| possible_biomes.contains(biome))
                         })
-                })
+                });
+                possible.then_some(index)
             })
             .collect();
 
@@ -735,10 +810,39 @@ impl StructureGenerator {
             .map(|(index, (key, _))| (key.clone(), index))
             .collect();
 
+        // Vanilla `generatePositions`: record a placement for every structure of
+        // a possible set whose own biomes the provider can produce. Structures
+        // outside that filter get no placement, so `/locate` reports "not found".
+        let mut placements_for_structure: FxHashMap<Identifier, Vec<usize>> = FxHashMap::default();
+        for &set_index in &possible_structure_sets {
+            for entry in &structure_sets[set_index].1.structures {
+                let placeable = structure_data
+                    .get(&entry.structure)
+                    .is_some_and(|structure| {
+                        structure
+                            .allowed_biomes
+                            .iter()
+                            .any(|biome| possible_biomes.contains(biome))
+                    });
+                if !placeable {
+                    continue;
+                }
+                let indices = placements_for_structure
+                    .entry(entry.structure.clone())
+                    .or_default();
+                if !indices.contains(&set_index) {
+                    indices.push(set_index);
+                }
+            }
+        }
+
         let data_manager = SavedDataManager::new(world_path);
-        let has_ring_placement = structure_sets
-            .iter()
-            .any(|(_, set)| matches!(&set.placement.kind, PlacementKind::ConcentricRings { .. }));
+        let has_ring_placement = possible_structure_sets.iter().any(|&index| {
+            matches!(
+                &structure_sets[index].1.placement.kind,
+                PlacementKind::ConcentricRings { .. }
+            )
+        });
         let mut persisted_ring_positions = if has_ring_placement {
             biome_provider
                 .ring_position_cache_key()
@@ -748,7 +852,8 @@ impl StructureGenerator {
         };
         let mut ring_cache_dirty = false;
         let mut ring_positions = FxHashMap::default();
-        for (key, set) in &structure_sets {
+        for &set_index in &possible_structure_sets {
+            let (key, set) = &structure_sets[set_index];
             if let PlacementKind::ConcentricRings {
                 distance,
                 spread,
@@ -787,7 +892,10 @@ impl StructureGenerator {
 
         Self {
             seed,
+            dimension_origin,
             structure_sets,
+            possible_structure_sets,
+            placements_for_structure,
             structure_set_indices,
             structure_data,
             ring_positions,
@@ -815,26 +923,34 @@ impl StructureGenerator {
         &self,
         structures: &[Identifier],
     ) -> Option<StructureLocatePlan> {
-        let mut placements = Vec::new();
-        for (set_key, set) in &self.structure_sets {
-            let matching_structures = structures
-                .iter()
-                .filter(|structure| {
-                    set.structures
-                        .iter()
-                        .any(|entry| entry.structure == **structure)
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            if matching_structures.is_empty() {
+        // Vanilla `findNearestMapStructure` iterates the wanted structures first
+        // and the placements for each structure second, so a placement's scan
+        // entry order and its structure list both follow the request order.
+        let mut placements: Vec<StructureLocatePlacement> = Vec::new();
+        for structure in structures {
+            let Some(set_indices) = self.placements_for_structure.get(structure) else {
                 continue;
-            }
+            };
+            for &set_index in set_indices {
+                let (set_key, set) = &self.structure_sets[set_index];
 
-            placements.push(StructureLocatePlacement {
-                placement: set.placement.clone(),
-                ring_positions: self.ring_positions.get(set_key).cloned(),
-                structures: matching_structures,
-            });
+                if let Some(existing) = placements
+                    .iter_mut()
+                    .find(|placement| placement.set_key == *set_key)
+                {
+                    if !existing.structures.contains(structure) {
+                        existing.structures.push(structure.clone());
+                    }
+                    continue;
+                }
+
+                placements.push(StructureLocatePlacement {
+                    set_key: set_key.clone(),
+                    placement: set.placement.clone(),
+                    ring_positions: self.ring_positions.get(set_key).cloned(),
+                    structures: vec![structure.clone()],
+                });
+            }
         }
 
         (!placements.is_empty()).then_some(StructureLocatePlan {
@@ -854,7 +970,8 @@ impl StructureGenerator {
         let mut generated_keys = FxHashSet::default();
         let mut starts = Vec::new();
 
-        for (set_key, set) in &self.structure_sets {
+        for &set_index in &self.possible_structure_sets {
+            let (set_key, set) = &self.structure_sets[set_index];
             if !self.is_structure_chunk_for_set(set_key, chunk_x, chunk_z, &mut Vec::new()) {
                 continue;
             }
@@ -875,9 +992,9 @@ impl StructureGenerator {
                 stub.pieces,
                 structure.terrain_adjustment,
             );
-            if !start.pieces.is_empty() {
-                generated_keys.insert(structure.key.clone());
-            }
+            // `select_structure` only yields non-empty stubs, so every start here
+            // is valid — vanilla never stores an invalid start either.
+            generated_keys.insert(structure.key.clone());
             starts.push(start);
         }
 
@@ -905,15 +1022,23 @@ impl StructureGenerator {
             panic!("Circular structure exclusion zone: {chain}");
         }
 
+        // Vanilla `ChunkGeneratorStructureState.hasStructureChunkInRange`
+        // resolves the other set through the registry, so a set that
+        // `hasBiomesForStructureSet` filtered out still contributes its
+        // placement. Its ring positions, however, are absent (vanilla only
+        // generates them for possible sets), which `rings_for_set` reports.
         let Some(&set_index) = self.structure_set_indices.get(set_key) else {
             return false;
         };
-        let (_, set) = &self.structure_sets[set_index];
+        let set = &self.structure_sets[set_index].1;
         let rings = self.rings_for_set(set_key);
-        if !set
-            .placement
-            .is_structure_chunk(self.seed, source_x, source_z, rings)
-        {
+        if !set.placement.is_structure_chunk(
+            self.seed,
+            source_x,
+            source_z,
+            self.dimension_origin,
+            rings,
+        ) {
             return false;
         }
 
@@ -993,10 +1118,16 @@ impl StructureGenerator {
         };
 
         if let Some(structure_impl) = self.structure_impls.get(&structure.structure_type) {
+            // Vanilla's `GenerationContext.makeRandom`: a fresh LCG seeded with
+            // `setLargeFeatureSeed(seed, chunkX, chunkZ)` for every attempt.
             let mut rng = LegacyRandom::from_seed(0);
             rng.set_large_feature_seed(self.seed, ctx.chunk_x(), ctx.chunk_z());
+            // Vanilla `Structure.generate` discards a start whose piece list is
+            // empty (`StructureStart.isValid`) and moves on to the next
+            // weighted option, so an empty stub counts as a failed attempt.
             return structure_impl
                 .find_generation_point(ctx, structure, &mut rng)
+                .filter(|stub| !stub.pieces.is_empty())
                 .map(|stub| (structure, stub));
         }
 
@@ -1056,6 +1187,7 @@ mod tests {
         StructureLocatePlan {
             seed: 0,
             placements: vec![StructureLocatePlacement {
+                set_key: Identifier::new("test", "set"),
                 placement: StructurePlacement {
                     salt: 10_387_312,
                     frequency: 1.0,
@@ -1081,7 +1213,7 @@ mod tests {
             frequency_reduction_method: FrequencyReductionMethod::Default,
             exclusion_zone: excludes.map(|other_set| ExclusionZone {
                 other_set,
-                chunk_count: 0,
+                chunk_count: 1,
             }),
             locate_offset: IVec3::ZERO,
             kind: PlacementKind::RandomSpread {
@@ -1108,10 +1240,14 @@ mod tests {
             .enumerate()
             .map(|(index, (key, _))| (key.clone(), index))
             .collect();
+        let possible_structure_sets: Vec<usize> = (0..sets.len()).collect();
 
         StructureGenerator {
             seed: 0,
+            dimension_origin: ChunkPos::new(0, 0),
             structure_sets: sets,
+            possible_structure_sets,
+            placements_for_structure: FxHashMap::default(),
             structure_set_indices,
             structure_data: FxHashMap::default(),
             ring_positions: FxHashMap::default(),
@@ -1163,6 +1299,7 @@ mod tests {
             .expect("Couldn't create a new thread pool.");
         let _ = StructureGenerator::vanilla_with_structure_sets(
             0,
+            0,
             None,
             &biome_provider,
             load_vanilla_structure_sets(),
@@ -1211,6 +1348,7 @@ mod tests {
 
         let first = StructureGenerator::vanilla_with_structure_sets(
             1,
+            1,
             Some(&world_dir),
             &biome_provider,
             sets.clone(),
@@ -1222,6 +1360,7 @@ mod tests {
         );
 
         let second = StructureGenerator::vanilla_with_structure_sets(
+            2,
             2,
             Some(&world_dir),
             &biome_provider,
@@ -1308,6 +1447,8 @@ mod tests {
 
         let _ = StructureGenerator::with_assets(
             0,
+            0,
+            ChunkPos::new(0, 0),
             None,
             &biome_provider,
             sets,
@@ -1452,6 +1593,7 @@ mod tests {
         let plan = StructureLocatePlan {
             seed: 0,
             placements: vec![StructureLocatePlacement {
+                set_key: Identifier::new("test", "set"),
                 placement: StructurePlacement {
                     salt: 0,
                     frequency: 1.0,

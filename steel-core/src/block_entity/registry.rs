@@ -230,6 +230,131 @@ pub fn init_block_entities() {
             Arc::new(BarrelBlockEntity::new(level, pos, state))
         });
 
+        registry.register(&vanilla_block_entity_types::CHEST, |level, pos, state| {
+            Arc::new(ChestBlockEntity::new(level, pos, state))
+        });
+
+        registry.register(
+            &vanilla_block_entity_types::TRAPPED_CHEST,
+            |level, pos, state| Arc::new(TrappedChestBlockEntity::new(level, pos, state)),
+        );
+
+        registry.register(
+            &vanilla_block_entity_types::DISPENSER,
+            |level, pos, state| Arc::new(DispenserBlockEntity::new(level, pos, state)),
+        );
+
+        registry.register(&vanilla_block_entity_types::DROPPER, |level, pos, state| {
+            Arc::new(DropperBlockEntity::new(level, pos, state))
+        });
+
+        registry.register(&vanilla_block_entity_types::HOPPER, |level, pos, state| {
+            Arc::new(HopperBlockEntity::new(level, pos, state))
+        });
+
+        registry.register(&vanilla_block_entity_types::CRAFTER, |level, pos, state| {
+            Arc::new(CrafterBlockEntity::new(level, pos, state))
+        });
+
+        registry.register(
+            &vanilla_block_entity_types::BREWING_STAND,
+            |level, pos, state| Arc::new(BrewingStandBlockEntity::new(level, pos, state)),
+        );
+
+        registry.register(
+            &vanilla_block_entity_types::ENCHANTING_TABLE,
+            |level, pos, state| Arc::new(EnchantingTableBlockEntity::new(level, pos, state)),
+        );
+
+        registry.register(&vanilla_block_entity_types::LECTERN, |level, pos, state| {
+            Arc::new(LecternBlockEntity::new(level, pos, state))
+        });
+
+        registry.register(
+            &vanilla_block_entity_types::MOB_SPAWNER,
+            |level, pos, state| Arc::new(SpawnerBlockEntity::new(level, pos, state)),
+        );
+
+        registry.register(
+            &vanilla_block_entity_types::TRIAL_SPAWNER,
+            |level, pos, state| Arc::new(TrialSpawnerBlockEntity::new(level, pos, state)),
+        );
+
+        registry.register(&vanilla_block_entity_types::VAULT, |level, pos, state| {
+            Arc::new(VaultBlockEntity::new(level, pos, state))
+        });
+
+        registry.register(&vanilla_block_entity_types::CONDUIT, |level, pos, state| {
+            Arc::new(ConduitBlockEntity::new(level, pos, state))
+        });
+
+        registry.register(&vanilla_block_entity_types::BANNER, |level, pos, state| {
+            Arc::new(BannerBlockEntity::new(level, pos, state))
+        });
+
+        registry.register(
+            &vanilla_block_entity_types::DECORATED_POT,
+            |level, pos, state| Arc::new(DecoratedPotBlockEntity::new(level, pos, state)),
+        );
+
+        registry.register(&vanilla_block_entity_types::SHELF, |level, pos, state| {
+            Arc::new(ShelfBlockEntity::new(level, pos, state))
+        });
+
+        registry.register(
+            &vanilla_block_entity_types::CREAKING_HEART,
+            |level, pos, state| Arc::new(CreakingHeartBlockEntity::new(level, pos, state)),
+        );
+
+        registry.register(
+            &vanilla_block_entity_types::SCULK_SENSOR,
+            |level, pos, state| Arc::new(SculkSensorBlockEntity::new(level, pos, state)),
+        );
+
+        registry.register(
+            &vanilla_block_entity_types::CALIBRATED_SCULK_SENSOR,
+            |level, pos, state| Arc::new(CalibratedSculkSensorBlockEntity::new(level, pos, state)),
+        );
+
+        registry.register(
+            &vanilla_block_entity_types::SCULK_SHRIEKER,
+            |level, pos, state| Arc::new(SculkShriekerBlockEntity::new(level, pos, state)),
+        );
+
+        registry.register(
+            &vanilla_block_entity_types::SCULK_CATALYST,
+            |level, pos, state| Arc::new(SculkCatalystBlockEntity::new(level, pos, state)),
+        );
+
+        registry.register(
+            &vanilla_block_entity_types::COMMAND_BLOCK,
+            |level, pos, state| Arc::new(CommandBlockEntity::new(level, pos, state)),
+        );
+
+        registry.register(
+            &vanilla_block_entity_types::STRUCTURE_BLOCK,
+            |level, pos, state| Arc::new(StructureBlockEntity::new(level, pos, state)),
+        );
+
+        registry.register(&vanilla_block_entity_types::JIGSAW, |level, pos, state| {
+            Arc::new(JigsawBlockEntity::new(level, pos, state))
+        });
+
+        registry.register(
+            &vanilla_block_entity_types::TEST_BLOCK,
+            |level, pos, state| Arc::new(TestBlockEntity::new(level, pos, state)),
+        );
+
+        registry.register(
+            &vanilla_block_entity_types::TEST_INSTANCE_BLOCK,
+            |level, pos, state| Arc::new(TestInstanceBlockEntity::new(level, pos, state)),
+        );
+
+        registry.register(
+            &vanilla_block_entity_types::COPPER_GOLEM_STATUE,
+            |level, pos, state| Arc::new(CopperGolemStatueBlockEntity::new(level, pos, state)),
+        );
+
         registry.register(&vanilla_block_entity_types::BEACON, |level, pos, state| {
             Arc::new(BeaconBlockEntity::new(level, pos, state))
         });

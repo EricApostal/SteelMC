@@ -177,12 +177,13 @@ impl ThrowableItemProjectile for SnowballEntity {
         &vanilla_items::SNOWBALL
     }
 
+    /// Vanilla `ThrowableItemProjectile.setItem`: the rendered stack is clamped to one.
     fn set_item(&self, item: ItemStack) {
         self.entity_data
             .lock()
             .throwable_item_projectile
             .item_stack
-            .set(item);
+            .set(item.copy_with_count(1));
     }
 
     fn get_item(&self) -> ItemStack {

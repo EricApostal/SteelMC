@@ -1,53 +1,568 @@
 use super::{
     BlockPredicateJson, DamageSourcePredicateJson, EnchantmentOptionsJson, EntityEquipmentJson,
     EntityFlagsJson, EntityPredicateJson, EquipmentSlotJson, FromStr, Ident, Identifier,
-    LevelRangeJson, LocationPredicateJson, NumberProviderJson, PredicateJson, Span,
-    ToShoutySnakeCase, TokenStream, quote,
+    LevelRangeJson, LocationPredicateJson, NumberProviderJson, NumberProviderObjectJson,
+    PredicateJson, Span, ToShoutySnakeCase, TokenStream, generate_condition, quote,
 };
 
 pub(crate) fn generate_number_provider(value: &NumberProviderJson) -> TokenStream {
     match value {
-        NumberProviderJson::Constant(v) => {
-            quote! { NumberProvider::Constant(#v) }
+        NumberProviderJson::Constant(value) => {
+            quote! { NumberProvider::Constant(#value) }
         }
-        NumberProviderJson::Object {
-            provider_type,
-            value,
-            min,
-            max,
-            n,
-            p,
-            inputs,
-        } => match provider_type.as_str() {
+        NumberProviderJson::Reference(key) => {
+            let key = generate_identifier_token(key);
+            quote! { NumberProvider::Reference { key: #key } }
+        }
+        NumberProviderJson::Object(object) => match object.provider_type.as_str() {
+            "minecraft:constant" => {
+                let value = object.value.as_ref().and_then(constant_of).unwrap_or(0.0);
+                quote! { NumberProvider::Constant(#value) }
+            }
             "minecraft:uniform" => {
-                let min = min.unwrap_or(0.0);
-                let max = max.unwrap_or(1.0);
-                quote! { NumberProvider::Uniform { min: #min, max: #max } }
+                let min = object.min.as_ref().and_then(constant_of);
+                let max = object.max.as_ref().and_then(constant_of);
+                match (min, max) {
+                    (Some(min), Some(max)) => {
+                        quote! { NumberProvider::Uniform { min: #min, max: #max } }
+                    }
+                    _ => {
+                        let min = provider_or_default(
+                            &object.min,
+                            quote! { NumberProvider::Constant(0.0) },
+                        );
+                        let max = provider_or_default(
+                            &object.max,
+                            quote! { NumberProvider::Constant(1.0) },
+                        );
+                        quote! {
+                            NumberProvider::UniformProviders {
+                                min: &#min,
+                                max: &#max,
+                            }
+                        }
+                    }
+                }
             }
             "minecraft:binomial" => {
-                let n = n.unwrap_or(1.0) as i32;
-                let p = p.unwrap_or(0.5);
-                quote! { NumberProvider::Binomial { n: #n, p: #p } }
+                let trials = object.n.as_ref().and_then(constant_of);
+                let chance = object.p.as_ref().and_then(constant_of);
+                match (trials, chance) {
+                    (Some(trials), Some(chance)) => {
+                        let n = trials as i32;
+                        quote! { NumberProvider::Binomial { n: #n, p: #chance } }
+                    }
+                    _ => {
+                        let n = provider_or_default(
+                            &object.n,
+                            quote! { NumberProvider::Constant(1.0) },
+                        );
+                        let p = provider_or_default(
+                            &object.p,
+                            quote! { NumberProvider::Constant(0.5) },
+                        );
+                        quote! { NumberProvider::BinomialProviders { n: &#n, p: &#p } }
+                    }
+                }
             }
-            "minecraft:add" => {
-                let inputs = inputs
-                    .as_ref()
-                    .unwrap_or_else(|| panic!("minecraft:add number provider is missing inputs"))
-                    .iter()
-                    .map(generate_number_provider)
-                    .collect::<Vec<_>>();
-                assert!(
-                    !inputs.is_empty(),
-                    "minecraft:add number provider requires at least one input"
-                );
+            "minecraft:add" | "add" => {
+                let inputs = aggregate_inputs(object, "add");
                 quote! { NumberProvider::Add { inputs: &[#(#inputs),*] } }
             }
-            _ => {
-                let v = value.unwrap_or(1.0);
-                quote! { NumberProvider::Constant(#v) }
+            "minecraft:avg" | "avg" => {
+                let inputs = aggregate_inputs(object, "avg");
+                quote! { NumberProvider::Average { inputs: &[#(#inputs),*] } }
             }
+            "minecraft:min" | "min" => {
+                let inputs = aggregate_inputs(object, "min");
+                quote! { NumberProvider::Minimum { inputs: &[#(#inputs),*] } }
+            }
+            "minecraft:max" | "max" => {
+                let inputs = aggregate_inputs(object, "max");
+                quote! { NumberProvider::Maximum { inputs: &[#(#inputs),*] } }
+            }
+            "minecraft:mul" | "mul" => {
+                let inputs = aggregate_inputs(object, "mul");
+                quote! { NumberProvider::Product { inputs: &[#(#inputs),*] } }
+            }
+            "minecraft:length" | "length" => {
+                let inputs = aggregate_inputs(object, "length");
+                quote! { NumberProvider::Length { inputs: &[#(#inputs),*] } }
+            }
+            "minecraft:sub" | "sub" => {
+                let (left, right) = binary_inputs(object);
+                quote! { NumberProvider::Difference { left: &#left, right: &#right } }
+            }
+            "minecraft:div" | "div" => {
+                let (left, right) = binary_inputs(object);
+                quote! { NumberProvider::Quotient { left: &#left, right: &#right } }
+            }
+            "minecraft:floor_div" | "floor_div" => {
+                let (left, right) = binary_inputs(object);
+                quote! {
+                    NumberProvider::FloorQuotient {
+                        left: &#left,
+                        right: &#right,
+                    }
+                }
+            }
+            "minecraft:mod" | "mod" => {
+                let (left, right) = binary_inputs(object);
+                quote! { NumberProvider::Modulus { left: &#left, right: &#right } }
+            }
+            "minecraft:floor_mod" | "floor_mod" => {
+                let (left, right) = binary_inputs(object);
+                quote! {
+                    NumberProvider::FloorModulus {
+                        left: &#left,
+                        right: &#right,
+                    }
+                }
+            }
+            "minecraft:pow" | "pow" => {
+                let base = object
+                    .base
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("minecraft:pow is missing `base`"));
+                let exponent = object
+                    .exponent
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("minecraft:pow is missing `exponent`"));
+                let base = generate_number_provider(base);
+                let exponent = generate_number_provider(exponent);
+                quote! {
+                    NumberProvider::Power {
+                        base: &#base,
+                        exponent: &#exponent,
+                    }
+                }
+            }
+            "minecraft:negate" | "negate" => {
+                let input = unary_input(object, "negate");
+                quote! { NumberProvider::Negate { input: &#input } }
+            }
+            "minecraft:abs" | "abs" => {
+                let input = unary_input(object, "abs");
+                quote! { NumberProvider::Absolute { input: &#input } }
+            }
+            "minecraft:ceil" | "ceil" => {
+                let input = unary_input(object, "ceil");
+                quote! { NumberProvider::Ceiling { input: &#input } }
+            }
+            "minecraft:floor" | "floor" => {
+                let input = unary_input(object, "floor");
+                quote! { NumberProvider::Floor { input: &#input } }
+            }
+            "minecraft:round" | "round" => {
+                let input = unary_input(object, "round");
+                quote! { NumberProvider::Round { input: &#input } }
+            }
+            "minecraft:truncate" | "truncate" => {
+                let input = unary_input(object, "truncate");
+                quote! { NumberProvider::Truncate { input: &#input } }
+            }
+            "minecraft:sqrt" | "sqrt" => {
+                let input = unary_input(object, "sqrt");
+                quote! { NumberProvider::SquareRoot { input: &#input } }
+            }
+            "minecraft:sin" | "sin" => {
+                let input = unary_input(object, "sin");
+                quote! { NumberProvider::Sine { input: &#input } }
+            }
+            "minecraft:cos" | "cos" => {
+                let input = unary_input(object, "cos");
+                quote! { NumberProvider::Cosine { input: &#input } }
+            }
+            "minecraft:from_float" | "from_float" => {
+                let input = unary_input(object, "from_float");
+                quote! { NumberProvider::FromFloat { input: &#input } }
+            }
+            "minecraft:from_int" | "from_int" => {
+                let input = unary_input(object, "from_int");
+                quote! { NumberProvider::FromInt { input: &#input } }
+            }
+            "minecraft:conditional" | "conditional" => {
+                let condition = object.condition.as_ref().unwrap_or_else(|| {
+                    panic!("minecraft:conditional number provider is missing `condition`")
+                });
+                let on_true = object.on_true.as_ref().unwrap_or_else(|| {
+                    panic!("minecraft:conditional number provider is missing `on_true`")
+                });
+                let on_false = object
+                    .on_false
+                    .as_ref()
+                    .map(generate_number_provider)
+                    .unwrap_or_else(|| quote! { &NumberProvider::Constant(0.0) });
+                let condition = generate_condition(condition);
+                let on_true = generate_number_provider(on_true);
+                quote! {
+                    NumberProvider::Conditional {
+                        condition: &#condition,
+                        on_true: &#on_true,
+                        on_false: #on_false,
+                    }
+                }
+            }
+            "minecraft:number_dispatcher" | "number_dispatcher" => {
+                let cases = object.cases.as_ref().unwrap_or_else(|| {
+                    panic!("minecraft:number_dispatcher number provider is missing `cases`")
+                });
+                let cases = cases.iter().map(|case| {
+                    let condition = generate_condition(&case.condition);
+                    let value = generate_number_provider(&case.value);
+                    quote! { (&#condition, #value) }
+                });
+                let default = object
+                    .default
+                    .as_ref()
+                    .map(generate_number_provider)
+                    .unwrap_or_else(|| quote! { &NumberProvider::Constant(0.0) });
+                quote! {
+                    NumberProvider::Dispatcher {
+                        cases: &[#(#cases),*],
+                        default: #default,
+                    }
+                }
+            }
+            "minecraft:weighted_list" | "weighted_list" => {
+                let distribution = object.distribution.as_ref().unwrap_or_else(|| {
+                    panic!("minecraft:weighted_list number provider is missing `distribution`")
+                });
+                assert!(
+                    !distribution.is_empty(),
+                    "minecraft:weighted_list requires at least one entry"
+                );
+                let distribution = distribution.iter().map(|entry| {
+                    let provider = generate_number_provider(&entry.data);
+                    let weight = entry.weight;
+                    assert!(
+                        weight >= 0,
+                        "minecraft:weighted_list weights must be non-negative"
+                    );
+                    quote! { (#provider, #weight) }
+                });
+                quote! { NumberProvider::WeightedList { distribution: &[#(#distribution),*] } }
+            }
+            "minecraft:score" | "score" => {
+                let target = object.target.as_ref().unwrap_or_else(|| {
+                    panic!("minecraft:score number provider is missing `target`")
+                });
+                let target = generate_scoreboard_target(target);
+                let score = object.score.as_ref().unwrap_or_else(|| {
+                    panic!("minecraft:score number provider is missing `score`")
+                });
+                let scale = object.scale.unwrap_or(1.0);
+                let fallback = object
+                    .fallback
+                    .as_ref()
+                    .map(generate_number_provider)
+                    .unwrap_or_else(|| quote! { &NumberProvider::Constant(0.0) });
+                quote! {
+                    NumberProvider::Score {
+                        target: #target,
+                        score: #score,
+                        scale: #scale,
+                        fallback: #fallback,
+                    }
+                }
+            }
+            "minecraft:storage" | "storage" => {
+                let storage = object.storage.as_ref().unwrap_or_else(|| {
+                    panic!("minecraft:storage number provider is missing `storage`")
+                });
+                let path = object.path.as_ref().unwrap_or_else(|| {
+                    panic!("minecraft:storage number provider is missing `path`")
+                });
+                let storage = generate_identifier_token(storage);
+                let fallback = object
+                    .fallback
+                    .as_ref()
+                    .map(generate_number_provider)
+                    .unwrap_or_else(|| quote! { &NumberProvider::Constant(0.0) });
+                quote! {
+                    NumberProvider::Storage {
+                        storage: #storage,
+                        path: #path,
+                        fallback: #fallback,
+                    }
+                }
+            }
+            "minecraft:enchantment_level" | "enchantment_level" => {
+                let amount = object.amount.as_ref().unwrap_or_else(|| {
+                    panic!("minecraft:enchantment_level number provider is missing `amount`")
+                });
+                let amount = generate_level_based_value_ref_token(amount);
+                quote! {
+                    NumberProvider::EnchantmentLevel {
+                        amount: #amount,
+                    }
+                }
+            }
+            "minecraft:environment_attribute" | "environment_attribute" => {
+                let attribute = object.attribute.as_ref().unwrap_or_else(|| {
+                    panic!("minecraft:environment_attribute number provider is missing `attribute`")
+                });
+                let attribute = generate_identifier_token(attribute);
+                quote! {
+                    NumberProvider::EnvironmentAttribute {
+                        attribute: #attribute,
+                    }
+                }
+            }
+            other => panic!("unsupported number provider type {other:?}"),
         },
     }
+}
+
+/// The token for a nested provider field, or `fallback` when the JSON omitted it.
+fn provider_or_default(
+    provider: &Option<NumberProviderJson>,
+    fallback: TokenStream,
+) -> TokenStream {
+    match provider {
+        Some(provider) => generate_number_provider(provider),
+        None => fallback,
+    }
+}
+
+/// The numeric value of a JSON number provider when it is a compile-time constant
+/// (a bare number or `minecraft:constant`), used to fold `uniform`/`binomial`
+/// bounds into their constant forms.
+fn constant_of(value: &NumberProviderJson) -> Option<f32> {
+    match value {
+        NumberProviderJson::Constant(value) => Some(*value),
+        NumberProviderJson::Reference(_) => None,
+        NumberProviderJson::Object(object) => match object.provider_type.as_str() {
+            "minecraft:constant" => object.value.as_ref().and_then(constant_of),
+            _ => None,
+        },
+    }
+}
+
+/// The required inputs of an aggregate provider (`inputs`, e.g. `minecraft:add`).
+fn aggregate_inputs(object: &NumberProviderObjectJson, provider_type: &str) -> Vec<TokenStream> {
+    let inputs = object
+        .inputs
+        .as_ref()
+        .unwrap_or_else(|| panic!("minecraft:{provider_type} number provider is missing `inputs`"));
+    assert!(
+        !inputs.is_empty(),
+        "minecraft:{provider_type} number provider requires at least one input"
+    );
+    inputs.iter().map(generate_number_provider).collect()
+}
+
+/// The required operands of a binary provider (`left`/`right`, e.g. `minecraft:div`).
+fn binary_inputs(object: &NumberProviderObjectJson) -> (TokenStream, TokenStream) {
+    let left = object
+        .left
+        .as_ref()
+        .map(generate_number_provider)
+        .unwrap_or_else(|| panic!("number provider is missing `left`"));
+    let right = object
+        .right
+        .as_ref()
+        .map(generate_number_provider)
+        .unwrap_or_else(|| panic!("number provider is missing `right`"));
+    (left, right)
+}
+
+/// The required operand of a unary provider (`input`, e.g. `minecraft:abs`).
+fn unary_input(object: &NumberProviderObjectJson, provider_type: &str) -> TokenStream {
+    object
+        .input
+        .as_ref()
+        .map(generate_number_provider)
+        .unwrap_or_else(|| panic!("minecraft:{provider_type} number provider is missing `input`"))
+}
+
+/// The score holder of a `minecraft:score` provider: either a bare holder-name
+/// string (vanilla `ContextScoreboardNameProvider.INLINE_CODEC`) or a
+/// `minecraft:fixed`/`minecraft:context` object.
+fn generate_scoreboard_target(target: &serde_json::Value) -> TokenStream {
+    if let Some(name) = target.as_str() {
+        return match name {
+            "this" => {
+                quote! { crate::loot_table::ScoreboardTarget::Context(LootContextEntity::This) }
+            }
+            "killer" | "attacker" => {
+                quote! { crate::loot_table::ScoreboardTarget::Context(LootContextEntity::Killer) }
+            }
+            "direct_killer" | "direct_attacker" => {
+                quote! { crate::loot_table::ScoreboardTarget::Context(LootContextEntity::DirectKiller) }
+            }
+            "killer_player" | "last_damage_player" => {
+                quote! { crate::loot_table::ScoreboardTarget::Context(LootContextEntity::KillerPlayer) }
+            }
+            _ => quote! { crate::loot_table::ScoreboardTarget::Fixed(#name) },
+        };
+    }
+    let object = target
+        .as_object()
+        .unwrap_or_else(|| panic!("minecraft:score `target` must be a string or object"));
+    let provider_type = object
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_else(|| panic!("minecraft:score `target` object is missing `type`"));
+    match provider_type {
+        "minecraft:fixed" => {
+            let name = object
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_else(|| panic!("minecraft:fixed scoreboard target is missing `name`"));
+            quote! { crate::loot_table::ScoreboardTarget::Fixed(#name) }
+        }
+        "minecraft:context" => {
+            let target = object
+                .get("target")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_else(|| {
+                    panic!("minecraft:context scoreboard target is missing `target`")
+                });
+            generate_scoreboard_target(&serde_json::Value::String(target.to_owned()))
+        }
+        other => panic!("unsupported scoreboard target type {other:?}"),
+    }
+}
+
+/// An identifier token (`Identifier::vanilla_static` for the `minecraft`
+/// namespace, `Identifier::new_static` otherwise).
+fn generate_identifier_token(id: &str) -> TokenStream {
+    let id = Identifier::from_str(id)
+        .unwrap_or_else(|error| panic!("invalid identifier {id:?}: {error}"));
+    let namespace = id.namespace.as_ref();
+    let path = id.path.as_ref();
+    if namespace == "minecraft" {
+        quote! { Identifier::vanilla_static(#path) }
+    } else {
+        quote! { Identifier::new_static(#namespace, #path) }
+    }
+}
+
+/// A `&'static LevelBasedValue` token for an `minecraft:enchantment_level`
+/// `amount`, handling the shapes the enchantment files use: a bare constant, a
+/// `linear` formula, or any other level-based-value object mirrored by the
+/// enchantment codegen's `LevelBasedValueJson`.
+fn generate_level_based_value_ref_token(amount: &serde_json::Value) -> TokenStream {
+    if let Some(constant) = amount.as_f64() {
+        let constant = constant as f32;
+        return quote! { &crate::enchantment::effect::LevelBasedValue::Constant(#constant) };
+    }
+    let object = amount.as_object().unwrap_or_else(|| {
+        panic!("minecraft:enchantment_level `amount` must be a number or object")
+    });
+    let provider_type = object
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_else(|| panic!("minecraft:enchantment_level `amount` object is missing `type`"));
+    /// Recursively generates a `LevelBasedValue` token for one `amount` shape.
+    fn generate(value: &serde_json::Value) -> TokenStream {
+        if let Some(constant) = value.as_f64() {
+            let constant = constant as f32;
+            return quote! { crate::enchantment::effect::LevelBasedValue::Constant(#constant) };
+        }
+        let object = value
+            .as_object()
+            .unwrap_or_else(|| panic!("level-based value must be a number or object"));
+        let provider_type = object
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_else(|| panic!("level-based value object is missing `type`"));
+        let field = |name: &str| {
+            object.get(name).unwrap_or_else(|| {
+                panic!("level-based value `{provider_type}` is missing `{name}`")
+            })
+        };
+        match provider_type {
+            "minecraft:clamped" => {
+                let value = generate(field("value"));
+                let min = field("min")
+                    .as_f64()
+                    .unwrap_or_else(|| panic!("level-based value `clamped` `min` must be a number"))
+                    as f32;
+                let max = field("max")
+                    .as_f64()
+                    .unwrap_or_else(|| panic!("level-based value `clamped` `max` must be a number"))
+                    as f32;
+                quote! {
+                    crate::enchantment::effect::LevelBasedValue::Clamped {
+                        value: &#value,
+                        min: #min,
+                        max: #max,
+                    }
+                }
+            }
+            "minecraft:exponent" => {
+                let base = generate(field("base"));
+                let power = generate(field("power"));
+                quote! {
+                    crate::enchantment::effect::LevelBasedValue::Exponent {
+                        base: &#base,
+                        power: &#power,
+                    }
+                }
+            }
+            "minecraft:fraction" => {
+                let numerator = generate(field("numerator"));
+                let denominator = generate(field("denominator"));
+                quote! {
+                    crate::enchantment::effect::LevelBasedValue::Fraction {
+                        numerator: &#numerator,
+                        denominator: &#denominator,
+                    }
+                }
+            }
+            "minecraft:levels_squared" => {
+                let added = field("added").as_f64().unwrap_or_else(|| {
+                    panic!("level-based value `levels_squared` `added` must be a number")
+                }) as f32;
+                quote! { crate::enchantment::effect::LevelBasedValue::LevelsSquared { added: #added } }
+            }
+            "minecraft:linear" => {
+                let base = field("base")
+                    .as_f64()
+                    .unwrap_or_else(|| panic!("level-based value `linear` `base` must be a number"))
+                    as f32;
+                let per_level_above_first =
+                    field("per_level_above_first").as_f64().unwrap_or_else(|| {
+                        panic!(
+                            "level-based value `linear` `per_level_above_first` must be a number"
+                        )
+                    }) as f32;
+                quote! {
+                    crate::enchantment::effect::LevelBasedValue::Linear {
+                        base: #base,
+                        per_level_above_first: #per_level_above_first,
+                    }
+                }
+            }
+            "minecraft:lookup" => {
+                let values = field("values")
+                    .as_array()
+                    .unwrap_or_else(|| {
+                        panic!("level-based value `lookup` `values` must be an array")
+                    })
+                    .iter()
+                    .map(|value| {
+                        value.as_f64().unwrap_or_else(|| {
+                            panic!("level-based value `lookup` `values` must be numbers")
+                        }) as f32
+                    })
+                    .collect::<Vec<_>>();
+                let fallback = generate(field("fallback"));
+                quote! {
+                    crate::enchantment::effect::LevelBasedValue::Lookup {
+                        values: &[#(#values),*],
+                        fallback: &#fallback,
+                    }
+                }
+            }
+            other => panic!("unsupported level-based value type {other:?}"),
+        }
+    }
+
+    let amount = generate(amount);
+    quote! { &#amount }
 }
 
 /// Generate the `LootContextEntity` enum variant at build time.

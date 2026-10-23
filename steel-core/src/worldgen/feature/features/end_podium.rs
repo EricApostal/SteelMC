@@ -20,29 +20,29 @@ impl FeatureDecorationRunner {
 
             if pos.y() < origin.y() {
                 if inside_rim {
-                    let _ = region.set_block_state(pos, bedrock, UpdateFlags::UPDATE_CLIENTS);
+                    let _ = region.set_block_state(pos, bedrock, UpdateFlags::UPDATE_ALL);
                 } else if active {
                     Self::drop_previous_and_set(region, pos, end_stone);
                 } else {
-                    let _ = region.set_block_state(pos, end_stone, UpdateFlags::UPDATE_CLIENTS);
+                    let _ = region.set_block_state(pos, end_stone, UpdateFlags::UPDATE_ALL);
                 }
             } else if pos.y() > origin.y() {
                 if active {
                     Self::drop_previous_and_set(region, pos, air);
                 } else {
-                    let _ = region.set_block_state(pos, air, UpdateFlags::UPDATE_CLIENTS);
+                    let _ = region.set_block_state(pos, air, UpdateFlags::UPDATE_ALL);
                 }
             } else if !inside_rim {
-                let _ = region.set_block_state(pos, bedrock, UpdateFlags::UPDATE_CLIENTS);
+                let _ = region.set_block_state(pos, bedrock, UpdateFlags::UPDATE_ALL);
             } else if active {
                 Self::drop_previous_and_set(region, pos, end_portal);
             } else {
-                let _ = region.set_block_state(pos, air, UpdateFlags::UPDATE_CLIENTS);
+                let _ = region.set_block_state(pos, air, UpdateFlags::UPDATE_ALL);
             }
         }
 
         for y in 0..4 {
-            let _ = region.set_block_state(origin.above_n(y), bedrock, UpdateFlags::UPDATE_CLIENTS);
+            let _ = region.set_block_state(origin.above_n(y), bedrock, UpdateFlags::UPDATE_ALL);
         }
 
         let center = origin.above_n(2);
@@ -50,8 +50,7 @@ impl FeatureDecorationRunner {
             let torch = vanilla_blocks::WALL_TORCH
                 .default_state()
                 .set_value(&BlockStateProperties::HORIZONTAL_FACING, facing);
-            let _ =
-                region.set_block_state(center.relative(facing), torch, UpdateFlags::UPDATE_CLIENTS);
+            let _ = region.set_block_state(center.relative(facing), torch, UpdateFlags::UPDATE_ALL);
         }
 
         true
@@ -70,6 +69,6 @@ impl FeatureDecorationRunner {
         }
 
         let _ = region.destroy_block(pos, true);
-        let _ = region.set_block_state(pos, state, UpdateFlags::UPDATE_CLIENTS);
+        let _ = region.set_block_state(pos, state, UpdateFlags::UPDATE_ALL);
     }
 }

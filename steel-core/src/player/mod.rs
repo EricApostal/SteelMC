@@ -1,6 +1,7 @@
 //! This module contains all things player-related.
 mod abilities;
 pub mod advancement;
+pub mod recipe_book;
 pub mod chat;
 pub mod chunk_sender;
 /// This module contains the `PlayerConnection` trait that abstracts network connections.
@@ -16,6 +17,7 @@ mod health_sync;
 mod item_cooldowns;
 mod lifecycle;
 pub mod movement;
+mod parity_packets;
 mod permissions;
 pub mod player_data;
 pub mod player_data_storage;
@@ -55,6 +57,7 @@ pub use session::PlayerSession;
 pub(crate) use session::PlayerSessionId;
 use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use sleep_state::PlayerSleepState;
+use std::net::SocketAddr;
 use std::ptr;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
@@ -73,7 +76,7 @@ use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entity_data::PlayerEntityData;
 use steel_registry::vanilla_game_rules::{
     DROWNING_DAMAGE, FALL_DAMAGE, FIRE_DAMAGE, FREEZE_DAMAGE, IMMEDIATE_RESPAWN, KEEP_INVENTORY,
-    SHOW_DEATH_MESSAGES,
+    PVP, SHOW_DEATH_MESSAGES,
 };
 use steel_registry::{
     level_events, sound_events, vanilla_attributes, vanilla_custom_stats, vanilla_damage_type_tags,
@@ -260,6 +263,8 @@ pub struct Player {
 
     /// The Player's Experience
     pub experience: SyncMutex<Experience>,
+    /// The seed the enchanting table uses for its three offers.
+    pub(crate) enchantment_seed: SyncMutex<i32>,
 
     /// Assigned groups, direct overrides, and the effective permission set.
     permissions: SyncMutex<PlayerPermissionState>,
@@ -291,6 +296,8 @@ pub struct Player {
 
     /// Manage the advancements of the player
     pub advancements: SyncMutex<PlayerAdvancement>,
+    /// Vanilla `ServerRecipeBook` (unlocked recipes + book UI state).
+    pub recipe_book: SyncMutex<recipe_book::ServerRecipeBook>,
 }
 
 // SAFETY: This key is owned by Steel and uniquely identifies `Player`.
@@ -336,6 +343,36 @@ impl PlayerResidenceState {
 }
 
 impl Player {
+    /// Vanilla `ServerPlayer.awardRecipes` entry point for a single recipe.
+    ///
+    /// Returns `false` when the player already knows the recipe.
+    pub fn unlock_recipe(&self, recipe: steel_registry::recipe::UntypedRecipeRef) -> bool {
+        let mut book = self.recipe_book.lock();
+        if book.contains(recipe.key()) {
+            return false;
+        }
+        book.add(recipe.key().clone());
+        true
+    }
+
+    /// Vanilla `ServerPlayer.resetRecipes` entry point for a single recipe.
+    ///
+    /// Returns `false` when the player did not know the recipe.
+    pub fn lock_recipe(&self, id: &steel_utils::Identifier) -> bool {
+        let mut book = self.recipe_book.lock();
+        if !book.contains(id) {
+            return false;
+        }
+        book.remove(id);
+        true
+    }
+
+    /// Returns this player's server-side recipe book.
+    #[must_use]
+    pub fn recipe_book(&self) -> parking_lot::MutexGuard<'_, recipe_book::ServerRecipeBook> {
+        self.recipe_book.lock()
+    }
+
     const USING_ITEM_FLAG: i8 = 1;
     const OFF_HAND_ACTIVE_ITEM_FLAG: i8 = 1 << 1;
 
@@ -347,6 +384,14 @@ impl Player {
     /// Returns chat protocol state owned by this connection session.
     pub(crate) fn chat(&self) -> &SyncMutex<ChatState> {
         &self.session.chat
+    }
+
+    /// The client's socket address, vanilla `ServerPlayer.getIpAddress`.
+    ///
+    /// `None` for in-process transports that never record one.
+    #[must_use]
+    pub fn remote_address(&self) -> Option<SocketAddr> {
+        self.session.remote_address()
     }
 
     /// Returns the hand currently driving active item use.
@@ -627,6 +672,7 @@ impl Player {
             food_data: SyncMutex::new(FoodData::new()),
             health_sync: SyncMutex::new(HealthSyncState::new()),
             experience: SyncMutex::new(Experience::default()),
+            enchantment_seed: SyncMutex::new(rand::random()),
             permissions: SyncMutex::new(PlayerPermissionState::default()),
             seen_credits: SyncMutex::new(false),
             won_game: SyncMutex::new(false),
@@ -637,6 +683,7 @@ impl Player {
             stats: SyncMutex::new(StatsCounter::new()),
             last_action_time: SyncMutex::new(Instant::now()),
             advancements: SyncMutex::new(PlayerAdvancement::default()), // TODO save the advancement
+            recipe_book: SyncMutex::new(recipe_book::ServerRecipeBook::new()),
         }
     }
 
@@ -803,6 +850,12 @@ impl Player {
             return false;
         }
 
+        // Vanilla `ServerPlayer.hurtServer`: another player, or an arrow shot by one,
+        // cannot damage this player unless `canHarmPlayer` allows it.
+        if self.is_harmed_by_forbidden_player(source) {
+            return false;
+        }
+
         {
             let abilities = self.abilities.lock();
             if abilities.invulnerable && !source.bypasses_invulnerability() {
@@ -810,10 +863,14 @@ impl Player {
             }
         }
 
-        // TODO: reset player noActionTime and remove shoulder entities.
+        // Vanilla `Player.hurtServer` resets the action timer before the death check.
+        self.set_no_action_time(0);
         if self.get_health() <= 0.0 {
             return false;
         }
+
+        // TODO: remove shoulder entities (`removeEntitiesOnShoulder`); Steel has no
+        // shoulder-parrot storage yet.
 
         // Difficulty scaling (vanilla: Player.hurtServer)
         let mut amount = amount;
@@ -838,6 +895,42 @@ impl Player {
         }
 
         LivingEntity::hurt_server(self, world, source, amount)
+    }
+
+    /// Vanilla `Player.canHarmPlayer` combined with the `ServerPlayer` override.
+    ///
+    /// `ServerPlayer.canHarmPlayer` is `!isPvpAllowed() ? false : super.canHarmPlayer(target)`,
+    /// and `Player.canHarmPlayer` is `doTeamsAllowDamage(target)`. Steel's `World` cannot
+    /// reach the server scoreboard, so the team term is always permissive here (reported
+    /// gap); the `pvp` game rule is exact.
+    #[must_use]
+    pub fn can_harm_player(&self, _target: &Player) -> bool {
+        self.get_world().get_game_rule(&PVP)
+    }
+
+    /// Whether `source` is a player, or an arrow shot by one, that may not damage this player.
+    ///
+    /// Vanilla `ServerPlayer.hurtServer`: the causing entity is checked directly when it is
+    /// a player, and again as an `AbstractArrow`'s owner. Other projectiles (potions, snowballs,
+    /// tridents' non-arrow paths) are deliberately not gated, matching vanilla.
+    fn is_harmed_by_forbidden_player(&self, source: &DamageSource) -> bool {
+        let Some(causing) = source.causing_entity() else {
+            return false;
+        };
+        if let Some(attacker) = causing.as_player() {
+            return !self.can_harm_player(attacker);
+        }
+        if !causing.is_abstract_arrow() {
+            return false;
+        }
+        causing
+            .projectile_owner()
+            .and_then(|owner| {
+                owner
+                    .as_player()
+                    .map(|attacker| !self.can_harm_player(attacker))
+            })
+            .unwrap_or(false)
     }
 
     fn disabled_damage_game_rule(source: &DamageSource) -> Option<GameRuleRef<bool>> {

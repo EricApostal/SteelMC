@@ -3,10 +3,9 @@ use std::collections::BTreeMap;
 use steel_registry::shared_structs::BlockStateData;
 use steel_registry::structure::{OceanRuinBiomeTempData, RuinedPortalPlacementData};
 use steel_registry::structure_processor::{
-    PosRuleTestData, ProcessorRuleData, RuleBlockEntityModifierData, StructureProcessorKind,
-    StructureRuleTestData,
+    PosRuleTestData, ProcessorRuleData, RuleBlockEntityModifierData, StructureProcessorBlockSet,
+    StructureProcessorKind, StructureRuleTestData,
 };
-use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::{Registry, RegistryExt};
 use steel_utils::Identifier;
 use steel_utils::value_providers::IntProvider;
@@ -102,7 +101,9 @@ impl StructurePiecePlacer {
                 mossiness: properties.mossiness,
             },
             StructureProcessorKind::ProtectedBlocks {
-                cannot_replace: BlockTag::FEATURES_CANNOT_REPLACE,
+                cannot_replace: StructureProcessorBlockSet::Tag(Identifier::vanilla_static(
+                    "features_cannot_replace",
+                )),
             },
             StructureProcessorKind::LavaSubmergedBlock,
         ];

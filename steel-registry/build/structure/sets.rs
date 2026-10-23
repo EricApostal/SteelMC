@@ -27,7 +27,10 @@ struct StructureEntryJson {
 struct PlacementJson {
     #[serde(rename = "type")]
     placement_type: String,
-    salt: i32,
+    /// Required by `AbstractSpreadingStructurePlacement`; absent from the
+    /// `dimension_origin` unit codec, which has no salt field at all.
+    #[serde(default)]
+    salt: Option<i32>,
     #[serde(default = "default_frequency")]
     frequency: f32,
     #[serde(default)]
@@ -51,7 +54,24 @@ struct PlacementJson {
     #[serde(default)]
     count: Option<i32>,
     #[serde(default)]
-    preferred_biomes: Option<String>,
+    preferred_biomes: Option<PreferredBiomesJson>,
+}
+
+/// Vanilla `RegistryCodecs.holderSet`: either a single id/tag or a list of them.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(untagged)]
+enum PreferredBiomesJson {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl PreferredBiomesJson {
+    fn into_entries(self) -> Vec<String> {
+        match self {
+            Self::One(entry) => vec![entry],
+            Self::Many(entries) => entries,
+        }
+    }
 }
 
 const fn default_frequency() -> f32 {
@@ -696,6 +716,16 @@ fn generate_frequency_method(method: &Option<String>) -> TokenStream {
     }
 }
 
+/// Vanilla `ExclusionZone`: `Codec.intRange(1, 16)`.
+fn exclusion_zone_chunk_count(set_name: &str, exclusion: &ExclusionZoneJson) -> i32 {
+    assert!(
+        (1..=16).contains(&exclusion.chunk_count),
+        "Structure set {set_name} has exclusion chunk_count {} outside 1..=16",
+        exclusion.chunk_count
+    );
+    exclusion.chunk_count
+}
+
 fn generate_spread_type(spread: &Option<String>) -> TokenStream {
     match spread.as_deref() {
         None | Some("linear") => quote! { SpreadTypeData::Linear },
@@ -1192,6 +1222,13 @@ pub(crate) fn build() -> TokenStream {
         );
         let freq_method = generate_frequency_method(&set.placement.frequency_reduction_method);
         let [locate_x, locate_y, locate_z] = set.placement.locate_offset.unwrap_or([0, 0, 0]);
+        // Vanilla `Vec3i.offsetCodec(16)`.
+        for offset in [locate_x, locate_y, locate_z] {
+            assert!(
+                (-16..=16).contains(&offset),
+                "Structure set {set_name} has locate_offset component {offset} outside -16..=16"
+            );
+        }
 
         let placement = match set.placement.placement_type.as_str() {
             "minecraft:random_spread" => {
@@ -1210,17 +1247,12 @@ pub(crate) fn build() -> TokenStream {
                     spacing > separation,
                     "Structure set {set_name} has spacing {spacing} <= separation {separation}"
                 );
-                let salt = set.placement.salt;
+                let salt = required(set.placement.salt, set_name, "placement.salt");
                 let spread_type = generate_spread_type(&set.placement.spread_type);
 
                 let exclusion = if let Some(ez) = &set.placement.exclusion_zone {
-                    assert!(
-                        ez.chunk_count >= 0,
-                        "Structure set {set_name} has negative exclusion chunk_count {}",
-                        ez.chunk_count
-                    );
+                    let count = exclusion_zone_chunk_count(set_name, ez);
                     let other = generate_identifier(&ez.other_set);
-                    let count = ez.chunk_count;
                     quote! {
                         Some(ExclusionZoneData {
                             other_set: #other,
@@ -1248,41 +1280,54 @@ pub(crate) fn build() -> TokenStream {
                 let distance = required(set.placement.distance, set_name, "placement.distance");
                 let spread = required(set.placement.spread, set_name, "placement.spread");
                 let count = required(set.placement.count, set_name, "placement.count");
+                // Vanilla `Codec.intRange(0, 1023)` / `intRange(1, 4095)`.
                 assert!(
-                    distance > 0,
-                    "Structure set {set_name} has non-positive ring distance {distance}"
+                    (0..=1023).contains(&distance),
+                    "Structure set {set_name} has ring distance {distance} outside 0..=1023"
                 );
                 assert!(
-                    spread > 0,
-                    "Structure set {set_name} has non-positive ring spread {spread}"
+                    (0..=1023).contains(&spread),
+                    "Structure set {set_name} has ring spread {spread} outside 0..=1023"
                 );
                 assert!(
-                    count >= 0,
-                    "Structure set {set_name} has negative ring count {count}"
+                    (1..=4095).contains(&count),
+                    "Structure set {set_name} has ring count {count} outside 1..=4095"
                 );
-                let salt = set.placement.salt;
+                let salt = required(set.placement.salt, set_name, "placement.salt");
+                let exclusion = if let Some(ez) = &set.placement.exclusion_zone {
+                    let count = exclusion_zone_chunk_count(set_name, ez);
+                    let other = generate_identifier(&ez.other_set);
+                    quote! {
+                        Some(ExclusionZoneData {
+                            other_set: #other,
+                            chunk_count: #count,
+                        })
+                    }
+                } else {
+                    quote! { None }
+                };
 
-                // Resolve preferred biomes from tag reference (e.g., "#minecraft:stronghold_biased_to")
-                let tag_ref = required(
+                // Resolve preferred biomes: each entry is either a biome id or a
+                // `#`-tag reference (vanilla `RegistryCodecs.holderSet`).
+                let tag_entries = required(
                     set.placement.preferred_biomes.clone(),
                     set_name,
                     "placement.preferred_biomes",
-                );
-                let preferred_biomes: Vec<String> = if let Some(tag_name) =
-                    tag_ref.strip_prefix('#')
-                {
-                    biome_tags
-                        .get(tag_name)
-                        .unwrap_or_else(|| {
+                )
+                .into_entries();
+                let mut preferred_biomes: Vec<String> = Vec::new();
+                for entry in tag_entries {
+                    if let Some(tag_name) = entry.strip_prefix('#') {
+                        let resolved = biome_tags.get(tag_name).unwrap_or_else(|| {
                             panic!(
                                 "Missing biome tag {tag_name} referenced by structure set {set_name}"
                             )
-                        })
-                        .clone()
-                } else {
-                    // Direct biome identifier
-                    vec![tag_ref]
-                };
+                        });
+                        preferred_biomes.extend(resolved.iter().cloned());
+                    } else {
+                        preferred_biomes.push(entry);
+                    }
+                }
                 let biome_tokens: Vec<TokenStream> = preferred_biomes
                     .iter()
                     .map(|b| generate_identifier(b))
@@ -1297,7 +1342,22 @@ pub(crate) fn build() -> TokenStream {
                         salt: #salt,
                         frequency: #freq,
                         frequency_reduction_method: #freq_method,
+                        exclusion_zone: #exclusion,
                         locate_offset: IVec3::new(#locate_x, #locate_y, #locate_z),
+                    }
+                }
+            }
+            "minecraft:dimension_origin" => {
+                // Vanilla's `dimension_origin` placement is `MapCodec.unit`:
+                // it has no salt/frequency/offset fields at all, so the generic
+                // placement fields keep their defaults and only the origin chunk
+                // comparison decides placement.
+                quote! {
+                    PlacementData::DimensionOrigin {
+                        salt: 0,
+                        frequency: 1.0,
+                        frequency_reduction_method: FrequencyMethodData::Default,
+                        locate_offset: IVec3::ZERO,
                     }
                 }
             }

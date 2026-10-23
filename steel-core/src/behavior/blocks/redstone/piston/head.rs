@@ -45,7 +45,8 @@ impl PistonHeadBlock {
 
 impl BlockBehavior for PistonHeadBlock {
     fn get_state_for_placement(&self, _context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
-        Some(vanilla_blocks::PISTON_HEAD.default_state())
+        // Vanilla's piston head has no placement state (no item exists for it).
+        None
     }
 
     fn player_will_destroy(

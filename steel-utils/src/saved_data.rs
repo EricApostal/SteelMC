@@ -31,6 +31,12 @@ pub mod names {
     pub const RAIDS: SavedDataName = SavedDataName::trusted("raids");
     /// Vanilla `WanderingTraderData.TYPE`, persisted as `data/wandering_trader.toml`.
     pub const WANDERING_TRADER: SavedDataName = SavedDataName::trusted("wandering_trader");
+    /// Vanilla `EnderDragonFight.TYPE`, persisted as `data/ender_dragon_fight.toml`.
+    pub const ENDER_DRAGON_FIGHT: SavedDataName = SavedDataName::trusted("ender_dragon_fight");
+    /// Vanilla `MapIndex.TYPE` plus every `MapItemSavedData.TYPE`, persisted as
+    /// `data/maps.toml`. Steel keeps all maps of a world in one file because its
+    /// saved-data names are static strings and vanilla keys each map by id.
+    pub const MAPS: SavedDataName = SavedDataName::trusted("maps");
 }
 
 /// Name of a per-world saved data entry.

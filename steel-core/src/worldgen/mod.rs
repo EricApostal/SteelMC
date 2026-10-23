@@ -19,7 +19,10 @@ pub use generator::context::{
     ChunkGeneratorType, EndGenerator, NetherGenerator, OverworldGenerator, WorldGenContext,
 };
 pub use generator::registry::{GeneratorOutput, WorldGeneratorRegistry};
-pub use generator::{ChunkGenerator, EmptyChunkGenerator, FlatChunkGenerator, VanillaGenerator};
+pub use generator::{
+    ChunkGenerator, DebugChunkGenerator, EmptyChunkGenerator, FlatChunkGenerator,
+    FlatGeneratorSettings, VanillaGenerator,
+};
 pub use region::WorldGenRegion;
 pub use steel_worldgen::density_functions::overworld::OverworldColumnCache;
 pub use steel_worldgen::noise::EndIslands;

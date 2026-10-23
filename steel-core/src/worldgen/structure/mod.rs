@@ -12,6 +12,15 @@ pub use steel_worldgen::structure::{
 };
 
 /// Generates structure starts and writes them into the chunk.
+///
+/// This is vanilla's `ChunkGenerator.createStructures`. Vanilla guards the call
+/// with `StructureCheck`, a per-chunk cache of "does a start exist here" answers
+/// used by `/locate` so it can avoid loading chunks. Steel has no storage-side
+/// cache: the structure-starts stage is the single place a chunk's starts are
+/// produced, and `/locate` requests those chunks at `StructureStarts` instead of
+/// scanning region files. Chunk-local results are identical (placement chunk +
+/// frequency + exclusion zone, then the structure's own biome-validated
+/// generation point); only the `/locate` chunk-loading strategy differs.
 pub fn create_structures(
     generator: &StructureGenerator,
     chunk: &Chunk,

@@ -280,6 +280,7 @@ impl Raids {
 
             if !raids_enabled {
                 raid.stop();
+                raid.sync_bar(world);
             }
 
             if raid.is_stopped() {

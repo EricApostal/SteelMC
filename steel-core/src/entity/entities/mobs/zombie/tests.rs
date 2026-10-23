@@ -10,8 +10,9 @@ use steel_registry::entity_data::VillagerData;
 use steel_registry::{REGISTRY, RegistryExt as _, init_vanilla_registry, vanilla_entities};
 use steel_utils::Identifier;
 
-use crate::entity::Entity;
+use crate::behavior::init_behaviors;
 use crate::entity::entities::mobs::zombie::{ZombieEntity, ZombieVillagerEntity};
+use crate::entity::{Entity, EntityFluidContact};
 
 /// Re-parses saved NBT and hands the borrowed view to `load_additional`,
 /// mirroring the entity reload path.
@@ -23,6 +24,14 @@ fn reload(nbt: &NbtCompound, load: impl FnOnce(simdnbt::borrow::NbtCompound<'_, 
     load((&borrowed).into());
 }
 
+/// Marks the zombie's eyes as being in water, the state vanilla gates
+/// `InWaterTime` on. A unit test cannot reach the fluid scan without a level.
+fn submerge(zombie: &ZombieEntity) {
+    zombie
+        .base()
+        .set_fluid_contact(EntityFluidContact::from_parts(0.5, 0.0, true, false));
+}
+
 #[test]
 fn zombie_nbt_round_trip_keeps_baby_doors_and_drowning_state() {
     init_vanilla_registry();
@@ -32,6 +41,7 @@ fn zombie_nbt_round_trip_keeps_baby_doors_and_drowning_state() {
     zombie.set_can_break_doors(true);
     zombie.set_conversion_time(123);
     zombie.set_in_water_time(400);
+    submerge(&zombie);
 
     let mut nbt = NbtCompound::new();
     zombie.save_additional(&mut nbt);
@@ -47,11 +57,20 @@ fn zombie_nbt_round_trip_keeps_baby_doors_and_drowning_state() {
     assert!(loaded.can_break_doors());
     assert!(loaded.is_under_water_converting());
     assert_eq!(loaded.conversion_time(), 123);
+
+    // `InWaterTime` is only written while the eyes are in water, so the reloaded
+    // timer is observable by saving the submerged zombie again.
+    submerge(&loaded);
+    let mut resaved = NbtCompound::new();
+    loaded.save_additional(&mut resaved);
+    assert_eq!(resaved.int("InWaterTime"), Some(400));
 }
 
 #[test]
 fn zombie_villager_nbt_round_trip_keeps_villager_data_and_conversion() {
     init_vanilla_registry();
+    // `start_converting` applies the strength effect, which needs the effect registry.
+    init_behaviors();
 
     let zombie_villager = ZombieVillagerEntity::new(
         &vanilla_entities::ZOMBIE_VILLAGER,

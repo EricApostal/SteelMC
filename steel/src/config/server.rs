@@ -6,6 +6,7 @@ use steel_core::{
         CompressionInfo, DEFAULT_MAX_CHAINED_NEIGHBOR_UPDATES, DEFAULT_SPAM_THRESHOLD_SECONDS,
         RuntimeConfig, ServerLinks, validate_login_security,
     },
+    permission::PermissionLevel,
 };
 
 const fn default_spam_threshold_seconds() -> i32 {
@@ -14,6 +15,20 @@ const fn default_spam_threshold_seconds() -> i32 {
 
 const fn default_max_chained_neighbor_updates() -> i32 {
     DEFAULT_MAX_CHAINED_NEIGHBOR_UPDATES
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+/// Vanilla `op-permission-level` default (`OWNER`).
+const fn default_op_permission_level() -> PermissionLevel {
+    PermissionLevel::Owners
+}
+
+/// Vanilla `function-permission-level` default (`GAMEMASTER`).
+const fn default_function_permission_level() -> PermissionLevel {
+    PermissionLevel::Gamemasters
 }
 
 /// Steel config minimum for packet compression threshold, in bytes.
@@ -84,6 +99,18 @@ pub struct ServerConfig {
     /// If this is equal to 0, no kicking will happen.
     #[serde(default)]
     pub player_idle_timeout: i32,
+    /// Vanilla `white-list`: whether the allowlist gates logins.
+    #[serde(default = "default_true")]
+    pub white_list: bool,
+    /// Vanilla `enforce-whitelist`: whether allowlist changes kick unlisted players.
+    #[serde(default)]
+    pub enforce_whitelist: bool,
+    /// Vanilla `op-permission-level`: the level `/op` grants.
+    #[serde(default = "default_op_permission_level")]
+    pub op_permission_level: PermissionLevel,
+    /// Vanilla `function-permission-level`: the level command functions run with.
+    #[serde(default = "default_function_permission_level")]
+    pub function_permission_level: PermissionLevel,
 }
 
 impl ServerConfig {
@@ -105,6 +132,10 @@ impl ServerConfig {
             use_favicon: self.use_favicon,
             favicon: self.favicon,
             enforce_secure_chat: self.enforce_secure_chat,
+            white_list: self.white_list,
+            enforce_whitelist: self.enforce_whitelist,
+            op_permission_level: self.op_permission_level,
+            function_permission_level: self.function_permission_level,
             chat_spam_threshold_seconds: self.chat_spam_threshold_seconds,
             command_spam_threshold_seconds: self.command_spam_threshold_seconds,
             compression: self.compression,

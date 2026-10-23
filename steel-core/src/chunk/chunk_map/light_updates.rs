@@ -73,11 +73,21 @@ impl ChunkMap {
         light_updates
             .pending
             .queue_change(chunk_pos, pos, check_block, empty_section_change);
+        drop(light_updates);
+
+        // Vanilla reports real-section emptiness to the engine through
+        // `LightEventListener.updateSectionStatus` in the same step.
+        if let Some(change) = empty_section_change {
+            self.update_light_section_status(change.section_pos, change.empty);
+        }
     }
 
     /// Drains all queued light updates and runs one scoped propagation per changed chunk.
     pub fn propagate_queued_light_changes(&self) {
         let Some((tasks, in_flight_updates)) = self.drain_pending_light_updates() else {
+            // Vanilla keeps running the epilogue while the storage still reports
+            // inconsistencies, even with no queued propagation work.
+            self.apply_light_engine_inconsistencies();
             return;
         };
 
@@ -104,6 +114,10 @@ impl ChunkMap {
                 .prepend_drained(blocked_tasks);
         }
         drop(in_flight_updates);
+
+        // Vanilla `LightEngine.runLightUpdates` ends with
+        // `markNewInconsistencies` + `swapSectionMap`.
+        self.apply_light_engine_inconsistencies();
     }
 
     pub(super) async fn flush_queued_light_changes_for_save(&self) {

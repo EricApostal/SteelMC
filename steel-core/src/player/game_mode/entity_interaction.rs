@@ -529,7 +529,14 @@ impl Player {
         location: DVec3,
     ) -> InteractionResult {
         if self.is_spectator() {
-            // TODO: Open entity menu providers in spectator once that foundation exists.
+            // Vanilla `Player.interactOn` opens entity menus (villagers, horses)
+            // in spectator mode; Steel's entity behaviors have no generic
+            // menu-provider hook yet, so this stays a pass-only path for
+            // non-consuming interactions.
+            let result = entity.interact(self, hand, location);
+            if result.consumes_action() {
+                return result;
+            }
             return InteractionResult::Pass;
         }
 

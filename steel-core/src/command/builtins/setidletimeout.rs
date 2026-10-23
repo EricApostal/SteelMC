@@ -5,6 +5,7 @@ use crate::command::execution::{
     CommandSource, SteelCommandContext, SteelCommandRuntime, argument, literal,
 };
 use crate::command::registration::CommandRegistration;
+use crate::permission::PermissionLevel;
 use std::sync::atomic::Ordering;
 use steel_utils::Identifier;
 use steel_utils::translations::{
@@ -14,6 +15,7 @@ use text_components::TextComponent;
 
 pub(super) fn registration() -> CommandRegistration<CommandSource> {
     CommandRegistration::new(Identifier::vanilla_static("setidletimeout"), |_| command())
+        .at_level(PermissionLevel::Admins)
 }
 
 fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {

@@ -41,7 +41,7 @@ impl FeatureDecorationRunner {
     ) -> bool {
         for y in 0..config.root_column_max_height {
             *tree_pos = tree_pos.above();
-            if region.height_at(HeightmapType::WorldSurfaceWg, tree_pos.x(), tree_pos.z())
+            if region.height_at(HeightmapType::WorldSurface, tree_pos.x(), tree_pos.z())
                 < tree_pos.y()
             {
                 return false;

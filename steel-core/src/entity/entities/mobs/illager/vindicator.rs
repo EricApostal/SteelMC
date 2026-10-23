@@ -90,9 +90,9 @@ impl VindicatorEntity {
                     }),
                 );
             }
-            // Vanilla goal 2 `VindicatorBreakDoorGoal` and goal 3 `RaiderOpenDoorGoal` break
-            // and open doors while raiding; Steel's `BreakDoorGoal` does not exist yet
-            // (`GoalDependency::BreakDoor`), so only the raider door gate is registered.
+            // Vanilla goal 2 `VindicatorBreakDoorGoal` breaks doors while raiding on normal
+            // or hard difficulty; goal 3 `RaiderOpenDoorGoal` opens doors while raiding.
+            goals.add_goal(2, crate::entity::ai::goal::VindicatorBreakDoorGoal::new());
             goals.add_goal(3, crate::entity::ai::goal::RaiderOpenDoorGoal::new());
             goals.add_goal(4, super::raider_goals::hold_ground_attack(10.0));
             goals.add_goal(5, MeleeAttackGoal::new(1.0, false));
@@ -391,21 +391,25 @@ impl Raider for VindicatorEntity {
 
     fn apply_raid_buffs(
         &self,
-        _world: &Arc<World>,
+        world: &Arc<World>,
         raid: &RaidSnapshot,
         wave: i32,
         _is_captain: bool,
     ) {
-        // Vanilla equips an iron axe and enchants it through
-        // `EnchantmentHelper.enchantItemFromProvider` with
-        // `RAID_VINDICATOR_POST_WAVE_5`/`RAID_VINDICATOR`. The provider registry does not
-        // exist in Steel (`IllagerDependency::EnchantmentProvider`), so the roll and wave gate
-        // run and the provider step is skipped, not randomised.
+        // Vanilla `Vindicator.applyRaidBuffs`: always equip an iron axe, and enchant it from
+        // `RAID_VINDICATOR_POST_WAVE_5` (past the normal wave gate) or `RAID_VINDICATOR` when
+        // the raid enchant roll succeeds.
         let mut axe = ItemStack::new(&vanilla_items::IRON_AXE);
         if rand::random::<f32>() <= raid.enchant_odds {
-            let _provider_wave = super::raider_goals::raid_enchant_provider_wave(raid, wave);
+            let provider = crate::entity::raid::vindicator_raid_enchant_provider(wave);
+            provider.enchant(
+                &mut axe,
+                world
+                    .current_difficulty_at(self.block_position())
+                    .special_multiplier(),
+                &mut steel_registry::enchantment::table::RandRngAdapter(&mut rand::rng()),
+            );
         }
-        let _ = &mut axe;
         self.living_base()
             .equipment()
             .lock()

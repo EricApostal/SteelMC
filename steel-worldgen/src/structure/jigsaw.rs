@@ -28,23 +28,18 @@ use crate::structure::{
 pub struct PlacedPiece {
     /// Selected pool element.
     pub element: PoolElement,
-    /// Template location (Single/LegacySingle).
-    pub template_location: Option<Identifier>,
     /// World-space origin.
     pub position: IVec3,
     /// Rotation.
     pub rotation: Rotation,
-    /// Template-sized BB (used for beardifier + world save).
-    pub bounding_box: BoundingBox,
-    /// Assembly-time BB, possibly expanded vertically by the expansion hack.
-    /// Used only during assembly — not persisted.
+    /// Piece bounding box, possibly expanded vertically by the expansion hack.
+    /// Vanilla uses this same box for assembly collision, the Beardifier, and the
+    /// saved structure start.
     pub assembly_bb: BoundingBox,
     /// Ground-level delta for Beardifier.
     pub ground_level_delta: i32,
     /// Rigid or terrain-matching.
     pub projection: Projection,
-    /// BFS tree depth.
-    pub depth: i32,
     /// Junctions to neighbors.
     pub junctions: Vec<JigsawJunction>,
 }
@@ -129,8 +124,9 @@ const fn java_center(min: i32, max: i32) -> i32 {
     min.wrapping_add(max) / 2
 }
 
-static SYNTHETIC_BOTTOM_JIGSAW: Identifier = Identifier::new_static("minecraft", "bottom");
-static SYNTHETIC_EMPTY_POOL: Identifier = Identifier::new_static("minecraft", "empty");
+/// `minecraft:empty` — vanilla's `Pools.EMPTY` pool key, also the synthetic
+/// feature jigsaw's target and pool (`JigsawBlockEntity.EMPTY_ID`).
+static EMPTY_POOL: Identifier = Identifier::new_static("minecraft", "empty");
 
 type PoolTemplateCache<'a> = FxHashMap<Identifier, Vec<&'a PoolElement>>;
 type JigsawRotationCache<'a> = FxHashMap<Identifier, [Option<Vec<TransformedJigsaw<'a>>>; 4]>;
@@ -318,7 +314,7 @@ fn transform_template_jigsaws(
             TransformedJigsaw {
                 pos,
                 orientation: jigsaw.orientation.rotate(rotation),
-                name: &jigsaw.name,
+                name: Some(&jigsaw.name),
                 target: &jigsaw.target,
                 pool: &jigsaw.pool,
                 joint: jigsaw.joint,
@@ -416,12 +412,14 @@ fn prime_duplicate_candidate_rng(
 }
 
 fn feature_synthetic_jigsaw() -> TransformedJigsaw<'static> {
+    // Vanilla's `FeaturePoolElement.getShuffledJigsawBlocks`: a down-facing rollable
+    // jigsaw with a null name, so any source jigsaw may attach to it.
     TransformedJigsaw {
         pos: IVec3::ZERO,
         orientation: JigsawOrientation::DownSouth,
-        name: &SYNTHETIC_BOTTOM_JIGSAW,
-        target: &SYNTHETIC_EMPTY_POOL,
-        pool: &SYNTHETIC_EMPTY_POOL,
+        name: None,
+        target: &EMPTY_POOL,
+        pool: &EMPTY_POOL,
         joint: JointType::Rollable,
         placement_priority: 0,
     }
@@ -457,9 +455,9 @@ fn shuffled_element_jigsaws<'a>(
                 .collect()
         }
         PoolElement::Feature { .. } => vec![feature_synthetic_jigsaw()],
-        PoolElement::List { elements, .. } => elements.first().map_or_else(Vec::new, |element| {
-            shuffled_element_jigsaws(element, templates, rotation, rng)
-        }),
+        PoolElement::List { .. } => {
+            shuffled_element_jigsaws(first_element(element), templates, rotation, rng)
+        }
         PoolElement::Empty => Vec::new(),
     }
 }
@@ -471,6 +469,7 @@ struct ActiveSourceJigsaw<'a> {
 }
 
 impl ActiveSourceJigsaw<'_> {
+    /// Vanilla's `JigsawBlock.canAttach`.
     fn can_attach_to(&self, target: &TransformedJigsaw<'_>) -> bool {
         if self.block.orientation.front_direction()
             != target.orientation.front_direction().opposite()
@@ -482,7 +481,8 @@ impl ActiveSourceJigsaw<'_> {
         {
             return false;
         }
-        self.block.target == target.name
+        // A null target name (the synthetic feature jigsaw) accepts any source target.
+        target.name.is_none_or(|name| self.block.target == name)
     }
 }
 
@@ -491,41 +491,51 @@ impl ActiveSourceJigsaw<'_> {
 struct TransformedJigsaw<'a> {
     pos: IVec3,
     orientation: JigsawOrientation,
-    name: &'a Identifier,
+    /// Connector name; `None` only for vanilla's synthetic feature jigsaw.
+    name: Option<&'a Identifier>,
     target: &'a Identifier,
     pool: &'a Identifier,
     joint: JointType,
     placement_priority: i32,
 }
 
-/// Gets the template location from a pool element.
+/// Vanilla's `ListPoolElement` forwards every jigsaw query to `elements.get(0)`.
+fn first_element(element: &PoolElement) -> &PoolElement {
+    let mut current = element;
+    while let PoolElement::List { elements, .. } = current {
+        match elements.first() {
+            Some(first) => current = first,
+            None => return current,
+        }
+    }
+    current
+}
+
+/// Gets the template location a pool element draws jigsaws and bounds from.
 ///
-/// For `List` elements, delegates to the first sub-element matching vanilla's
-/// `ListPoolElement` which uses `elements.get(0)` for jigsaws and BB.
+/// Vanilla's `ListPoolElement.getShuffledJigsawBlocks` delegates to its first
+/// element, so a list resolves to its first leaf's template.
 fn element_location(element: &PoolElement) -> Option<&Identifier> {
-    match element {
+    match first_element(element) {
         PoolElement::Single { location, .. } | PoolElement::LegacySingle { location, .. } => {
             Some(location)
         }
-        PoolElement::List { elements, .. } => elements.first().and_then(element_location),
         _ => None,
     }
 }
 
-/// Vanilla's `StructureTemplatePool.getMaxSize` — max Y span across all templates.
+/// Vanilla's `StructureTemplatePool.getMaxSize` — the largest Y span of any
+/// non-empty element bounding box at the origin with no rotation.
 fn pool_max_y_size(
     pool: &TemplatePoolData,
     templates: &FxHashMap<Identifier, TemplateData>,
 ) -> i32 {
     pool.elements
         .iter()
+        .filter(|(element, _)| !element.is_empty())
         .filter_map(|(element, _)| {
-            let (PoolElement::Single { location: loc, .. }
-            | PoolElement::LegacySingle { location: loc, .. }) = element
-            else {
-                return None;
-            };
-            templates.get(loc).map(|t| t.size[1])
+            element_bounding_box(element, templates, IVec3::ZERO, Rotation::None)
+                .map(|bb| bb.max_y() - bb.min_y() + 1)
         })
         .max()
         .unwrap_or(0)
@@ -715,6 +725,7 @@ struct StartedAssembly {
 )]
 fn start_assembly(
     config: &JigsawConfig,
+    start_y: i32,
     rng: &mut LegacyRandom,
     chunk_x: i32,
     chunk_z: i32,
@@ -725,24 +736,26 @@ fn start_assembly(
     min_y: i32,
     max_y: i32,
 ) -> Option<StartedAssembly> {
-    let start_y = sample_start_height(config, rng);
     let start_x = chunk_x * 16;
     let start_z = chunk_z * 16;
     let center_rotation = Rotation::get_random(rng);
 
+    // Vanilla falls back to the unaliased start pool when the alias target is absent.
     let start_pool_key = alias_map
         .get(&config.start_pool)
         .unwrap_or(&config.start_pool);
-    let start_pool = pools.get(start_pool_key)?;
+    let start_pool = pools
+        .get(start_pool_key)
+        .or_else(|| pools.get(&config.start_pool))?;
     let center_element = get_random_template(start_pool, rng);
     if center_element.is_empty() {
         return None;
     }
 
-    let anchor_offset = if let Some(ref jigsaw_name) = config.start_jigsaw_name {
+    let anchor_offset = if let Some(jigsaw_name) = &config.start_jigsaw_name {
         shuffled_element_jigsaws(center_element, templates, center_rotation, rng)
             .into_iter()
-            .find_map(|block| (block.name == jigsaw_name).then_some(block.pos))?
+            .find_map(|block| (block.name == Some(jigsaw_name)).then_some(block.pos))?
     } else {
         IVec3::ZERO
     };
@@ -771,21 +784,22 @@ fn start_assembly(
     );
     let adjusted_y = adjusted.y + dy;
 
+    // Vanilla compares `DimensionPadding.ZERO` by identity, so the default (absent)
+    // padding skips the world-height check; steel cannot tell absent from explicit `0`.
     let padding = &config.dimension_padding;
-    if center_bb.min_y() < min_y + padding.bottom || center_bb.max_y() > max_y - 1 - padding.top {
+    if (padding.bottom != 0 || padding.top != 0)
+        && (center_bb.min_y() < min_y + padding.bottom || center_bb.max_y() > max_y - padding.top)
+    {
         return None;
     }
 
     let pieces = vec![PlacedPiece {
         element: center_element.clone(),
-        template_location: element_location(center_element).cloned(),
         position: IVec3::new(adjusted.x, adjusted_y, adjusted.z),
         rotation: center_rotation,
-        bounding_box: center_bb,
         assembly_bb: center_bb,
         ground_level_delta,
         projection: center_element.projection(),
-        depth: 0,
         junctions: Vec::new(),
     }];
 
@@ -844,7 +858,7 @@ fn finish_assembly<'a>(
         ),
         IVec3::new(
             center_stub_x + max_dist,
-            (center_stub_y + max_dist).min(max_y - 1 - config.dimension_padding.top),
+            (center_stub_y + max_dist).min(max_y - config.dimension_padding.top),
             center_stub_z + max_dist,
         ),
     );
@@ -922,8 +936,10 @@ pub fn assemble(
     min_y: i32,
     max_y: i32,
 ) -> Option<AssemblyResult> {
+    let start_y = sample_start_height(config, rng);
     let started = start_assembly(
-        config, rng, chunk_x, chunk_z, pools, templates, alias_map, get_height, min_y, max_y,
+        config, start_y, rng, chunk_x, chunk_z, pools, templates, alias_map, get_height, min_y,
+        max_y,
     )?;
     Some(finish_assembly(
         started, config, rng, pools, templates, alias_map, get_height, min_y, max_y,
@@ -939,13 +955,13 @@ impl Structure for JigsawStructure {
         &self,
         ctx: &mut dyn StructureGenerationContext,
         structure: &StructureData,
-        _rng: &mut LegacyRandom,
+        rng: &mut LegacyRandom,
     ) -> Option<GenerationStub> {
         let config = structure.config.as_jigsaw()?;
 
-        let mut alias_position_rng = LegacyRandom::from_seed(0);
-        alias_position_rng.set_large_feature_seed(ctx.seed(), ctx.chunk_x(), ctx.chunk_z());
-        let start_y = sample_start_height(config, &mut alias_position_rng);
+        // `JigsawStructure.findGenerationPoint`: sample the start height from the
+        // structure RNG, then resolve pool aliases with their own positional RNG.
+        let start_y = sample_start_height(config, rng);
         let mut alias_source = LegacyRandom::from_seed(ctx.seed() as u64);
         let mut alias_rng =
             alias_source
@@ -953,14 +969,12 @@ impl Structure for JigsawStructure {
                 .at(ctx.chunk_min_x(), start_y, ctx.chunk_min_z());
         let alias_map = resolve_aliases(&config.pool_aliases, &mut alias_rng);
 
-        let mut assembly_rng = LegacyRandom::from_seed(0);
-        assembly_rng.set_large_feature_seed(ctx.seed(), ctx.chunk_x(), ctx.chunk_z());
-
         let started = {
             let mut get_height = |x: i32, z: i32| ctx.terrain_surface_height(x, z, false);
             start_assembly(
                 config,
-                &mut assembly_rng,
+                start_y,
+                rng,
                 ctx.chunk_x(),
                 ctx.chunk_z(),
                 ctx.template_pools(),
@@ -990,7 +1004,7 @@ impl Structure for JigsawStructure {
             finish_assembly(
                 started,
                 config,
-                &mut assembly_rng,
+                rng,
                 ctx.template_pools(),
                 ctx.templates(),
                 &alias_map,
@@ -1059,18 +1073,21 @@ fn try_placing_children<'a>(
     get_height: &mut dyn FnMut(i32, i32) -> i32,
 ) {
     let source_piece = &pieces[source_idx];
-    let source_location = element_location(&source_piece.element).cloned();
-    let source_element_empty = source_piece.element.is_empty();
+    let source_leaf = first_element(&source_piece.element);
     let source_rotation = source_piece.rotation;
     let origin = source_piece.position;
     let source_bb = source_piece.assembly_bb;
     let source_projection = source_piece.projection;
     let source_ground_level_delta = source_piece.ground_level_delta;
-    let source_template = source_location
-        .as_ref()
-        .and_then(|location| templates.get(location).map(|template| (location, template)));
+    // `element_location` borrows from `pieces`; clone it so the immutable borrow
+    // of `pieces` ends here and the candidate closure can mutate `pieces`.
+    let source_template = element_location(source_leaf).cloned().and_then(|location| {
+        templates
+            .get(&location)
+            .map(|template| (location, template))
+    });
 
-    if let Some((location, template)) = source_template {
+    if let Some((location, template)) = &source_template {
         shuffle_jigsaw_indices_with_priority_cache(
             location,
             template,
@@ -1083,7 +1100,8 @@ fn try_placing_children<'a>(
         if scratch.source_jigsaw_indices.is_empty() {
             return;
         }
-    } else if source_element_empty {
+    } else if !matches!(source_leaf, PoolElement::Feature { .. }) {
+        // Empty elements expose no connectors, so nothing can attach to this piece.
         return;
     }
 
@@ -1099,7 +1117,7 @@ fn try_placing_children<'a>(
     let mut candidates: Vec<&PoolElement> = Vec::new();
 
     'source_jigsaw: for source_jigsaw_i in 0..source_jigsaw_count {
-        let source = if let Some((location, template)) = source_template {
+        let source = if let Some((location, template)) = &source_template {
             let rotated = cached_runtime_rotated_jigsaws(
                 location,
                 template,
@@ -1125,11 +1143,16 @@ fn try_placing_children<'a>(
         let pool_key = alias_map
             .get(source.block.pool)
             .unwrap_or(source.block.pool);
-        let raw_pool = pools.get(pool_key);
-        let target_pool = raw_pool.filter(|p| !p.elements.is_empty());
-        let fallback_pool = raw_pool
-            .and_then(|p| pools.get(&p.fallback))
-            .filter(|p| !p.elements.is_empty());
+        // Vanilla skips a jigsaw whose pool exists but is empty, unless that pool is
+        // `minecraft:empty` (which is legal and simply contributes no templates).
+        // The same applies to the fallback pool: an empty, non-`empty` fallback drops
+        // the whole connector.
+        let usable_pool = pools
+            .get(pool_key)
+            .filter(|pool| !pool.elements.is_empty() || pool_key == &EMPTY_POOL);
+        let usable_fallback = usable_pool
+            .and_then(|pool| pools.get(&pool.fallback).map(|fallback| (pool, fallback)))
+            .filter(|(_, fallback)| !fallback.elements.is_empty() || fallback.key == EMPTY_POOL);
 
         let attach_inside = source_bb.contains_xyz(
             target_jigsaw_world.x,
@@ -1137,12 +1160,10 @@ fn try_placing_children<'a>(
             target_jigsaw_world.z,
         );
 
-        if depth != config.max_depth
-            && let Some(pool) = target_pool
-        {
-            append_shuffled_templates_cached(pool, pool_template_cache, rng, &mut candidates);
-        }
-        if let Some(fallback) = fallback_pool {
+        if let Some((pool, fallback)) = usable_fallback {
+            if depth != config.max_depth {
+                append_shuffled_templates_cached(pool, pool_template_cache, rng, &mut candidates);
+            }
             append_shuffled_templates_cached(fallback, pool_template_cache, rng, &mut candidates);
         }
 
@@ -1174,63 +1195,63 @@ fn try_placing_children<'a>(
                 continue;
             }
 
-            let candidate_location = element_location(candidate_element);
-            let candidate_template = candidate_location
+            let candidate_template = element_location(candidate_element)
                 .and_then(|location| templates.get(location).map(|template| (location, template)));
             let candidate_template_data = candidate_template.map(|(_, template)| template);
             let candidate_projection = candidate_element.projection();
             let candidate_rigid = candidate_projection == Projection::Rigid;
 
             for candidate_rotation in rotations {
-                let expand_to = if config.use_expansion_hack {
-                    if let Some((hack_location, template_data)) = candidate_template {
-                        let hack_box = candidate_rotation
-                            .get_bounding_box(IVec3::ZERO, IVec3::from(template_data.size));
-                        if hack_box.max_y() - hack_box.min_y() < 16 {
-                            let rotated = cached_runtime_rotated_jigsaws(
-                                hack_location,
-                                template_data,
-                                candidate_rotation,
-                                &mut scratch.jigsaw_rotation_cache,
-                            );
-                            rotated
-                                .iter()
-                                .map(|j| {
-                                    let pos = j.pos;
-                                    let front = j.orientation.front_direction();
-                                    let front_pos = pos + front.offset_vec();
-                                    if !hack_box.contains_xyz(front_pos.x, front_pos.y, front_pos.z)
-                                    {
-                                        return 0;
-                                    }
-                                    let child_pool_key = alias_map.get(j.pool).unwrap_or(j.pool);
-                                    let child_pool_size = cached_pool_max_y_size(
-                                        child_pool_key,
-                                        pools,
-                                        templates,
-                                        &mut scratch.pool_max_y_cache,
-                                    );
-                                    let child_fallback_size =
-                                        pools.get(child_pool_key).map_or(0, |pool| {
-                                            cached_pool_max_y_size(
-                                                &pool.fallback,
-                                                pools,
-                                                templates,
-                                                &mut scratch.pool_max_y_cache,
-                                            )
-                                        });
-                                    child_pool_size.max(child_fallback_size)
-                                })
-                                .max()
-                                .unwrap_or(0)
-                        } else {
-                            0
-                        }
-                    } else {
-                        0
+                // Vanilla's `getBoundingBox(manager, BlockPos.ZERO, rotation)` — for a
+                // list element this is the encapsulating box of all sub-elements.
+                let hack_box = candidate_bounding_box_at_origin(
+                    candidate_element,
+                    templates,
+                    candidate_template.map(|(_, template)| template),
+                    candidate_rotation,
+                );
+                let expand_to = match (hack_box, candidate_template) {
+                    (Some(hack_box), Some((hack_location, template_data)))
+                        if config.use_expansion_hack
+                            && hack_box.max_y() - hack_box.min_y() < 16 =>
+                    {
+                        let rotated = cached_runtime_rotated_jigsaws(
+                            hack_location,
+                            template_data,
+                            candidate_rotation,
+                            &mut scratch.jigsaw_rotation_cache,
+                        );
+                        rotated
+                            .iter()
+                            .map(|j| {
+                                let pos = j.pos;
+                                let front = j.orientation.front_direction();
+                                let front_pos = pos + front.offset_vec();
+                                if !hack_box.contains_xyz(front_pos.x, front_pos.y, front_pos.z) {
+                                    return 0;
+                                }
+                                let child_pool_key = alias_map.get(j.pool).unwrap_or(j.pool);
+                                let child_pool_size = cached_pool_max_y_size(
+                                    child_pool_key,
+                                    pools,
+                                    templates,
+                                    &mut scratch.pool_max_y_cache,
+                                );
+                                let child_fallback_size =
+                                    pools.get(child_pool_key).map_or(0, |pool| {
+                                        cached_pool_max_y_size(
+                                            &pool.fallback,
+                                            pools,
+                                            templates,
+                                            &mut scratch.pool_max_y_cache,
+                                        )
+                                    });
+                                child_pool_size.max(child_fallback_size)
+                            })
+                            .max()
+                            .unwrap_or(0)
                     }
-                } else {
-                    0
+                    _ => 0,
                 };
 
                 let mut candidate_bb_at_origin: Option<BoundingBox> = None;
@@ -1345,14 +1366,11 @@ fn try_placing_children<'a>(
                     let new_piece_idx = pieces.len();
                     let mut target_piece = PlacedPiece {
                         element: candidate_element.clone(),
-                        template_location: candidate_location.cloned(),
                         position: target_position,
                         rotation: candidate_rotation,
-                        bounding_box: candidate_bb,
                         assembly_bb: expanded_bb,
                         ground_level_delta: target_ground_level_delta,
                         projection: candidate_projection,
-                        depth: depth + 1,
                         junctions: Vec::new(),
                     };
 
@@ -1403,7 +1421,11 @@ fn try_placing_children<'a>(
                             continue 'source_jigsaw;
                         }
                     }
-                } else if try_target_jigsaw(&feature_synthetic_jigsaw()) {
+                } else if matches!(
+                    first_element(candidate_element),
+                    PoolElement::Feature { .. }
+                ) && try_target_jigsaw(&feature_synthetic_jigsaw())
+                {
                     continue 'source_jigsaw;
                 }
             }
@@ -1470,7 +1492,9 @@ mod tests {
     }
 
     #[test]
-    fn start_jigsaw_name_can_anchor_feature_pool_element() {
+    fn named_start_jigsaw_cannot_anchor_feature_pool_element() {
+        // Vanilla's `FeaturePoolElement` synthetic jigsaw has a null name, so
+        // `getRandomNamedJigsaw` can never match it and the start is rejected.
         let pool_key = Identifier::vanilla_static("test/feature_start");
         let mut pools = FxHashMap::default();
         pools.insert(
@@ -1489,8 +1513,8 @@ mod tests {
         );
         let templates = FxHashMap::default();
         let alias_map = FxHashMap::default();
-        let config = JigsawConfig {
-            start_pool: pool_key,
+        let mut config = JigsawConfig {
+            start_pool: pool_key.clone(),
             max_depth: 0,
             use_expansion_hack: false,
             project_start_to_heightmap: None,
@@ -1501,9 +1525,28 @@ mod tests {
             pool_aliases: Vec::new(),
             liquid_settings: LiquidSettingsData::IgnoreWaterlogging,
         };
-        let mut rng = LegacyRandom::from_seed(1);
         let mut get_height = |_: i32, _: i32| 64;
 
+        let mut rng = LegacyRandom::from_seed(1);
+        assert!(
+            assemble(
+                &config,
+                &mut rng,
+                0,
+                0,
+                &pools,
+                &templates,
+                &alias_map,
+                &mut get_height,
+                -64,
+                320,
+            )
+            .is_none()
+        );
+
+        // Without a named anchor the feature start piece is placed at the start height.
+        config.start_jigsaw_name = None;
+        let mut rng = LegacyRandom::from_seed(1);
         let assembly = assemble(
             &config,
             &mut rng,
@@ -1516,8 +1559,11 @@ mod tests {
             -64,
             320,
         )
-        .expect("feature pool element exposes vanilla's synthetic bottom jigsaw");
-
+        .expect("feature start piece places without a named anchor");
         assert_eq!(assembly.pieces.len(), 1);
+        assert_eq!(
+            assembly.pieces[0].assembly_bb,
+            bbox(IVec3::ZERO, IVec3::ZERO).translate(IVec3::new(0, 69, 0))
+        );
     }
 }

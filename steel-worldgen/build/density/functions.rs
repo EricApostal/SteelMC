@@ -274,6 +274,13 @@ struct AquifersJson {
     surface_level: Option<DensityFunctionJson>,
 }
 
+/// One `spawn_target` entry from a `noise_settings` file.
+///
+/// Vanilla's `SpawnTargetPoint` codec is an unbounded map of density-function
+/// reference to `[min, max]` climate span.
+#[derive(Deserialize)]
+struct SpawnTargetJson(BTreeMap<String, [f32; 2]>);
+
 /// Full noise settings from a datapack file.
 #[derive(Deserialize)]
 struct NoiseSettingsJson {
@@ -290,6 +297,8 @@ struct NoiseSettingsJson {
     surface_rule: Option<SurfaceRuleJson>,
     #[serde(default)]
     material_rule: Option<String>,
+    #[serde(default)]
+    spawn_target: Vec<SpawnTargetJson>,
 }
 
 // ── Datapack file reading ───────────────────────────────────────────────────
@@ -972,22 +981,138 @@ fn find_interpolated_cell_size(
     }
 }
 
-/// Transpile density functions for a single dimension.
+/// Climate parameters a `spawn_target` entry may constrain, in vanilla's
+/// `SpawnTargetPoint` map order.
+const SPAWN_TARGET_PARAMETERS: [&str; 6] = [
+    "temperature",
+    "vegetation",
+    "continents",
+    "erosion",
+    "depth",
+    "ridges",
+];
+
+/// The climate parameter a `spawn_target` reference constrains, matched by the
+/// last path segment (`minecraft:overworld_large_biomes/temperature` ->
+/// `temperature`).
+fn spawn_target_parameter(id: &str) -> Option<&'static str> {
+    let path = id.rsplit(':').next().unwrap_or(id);
+    let name = path.rsplit('/').next().unwrap_or(path);
+    SPAWN_TARGET_PARAMETERS
+        .iter()
+        .copied()
+        .find(|parameter| *parameter == name)
+}
+
+/// Generate the data-driven `spawn_target` table for a `noise_settings` file.
+///
+/// Vanilla's `NoiseBasedChunkGenerator.getOrigin` feeds these entries to
+/// `NoiseSpawnFinder`, so the table has to come from the datapack rather than
+/// being hardcoded per dimension.
+fn spawn_target_tokens(settings: &NoiseSettingsJson) -> TokenStream {
+    let entries: Vec<TokenStream> = settings
+        .spawn_target
+        .iter()
+        .map(|SpawnTargetJson(parameters)| {
+            let mut spans: BTreeMap<&str, [f32; 2]> = BTreeMap::new();
+            for (id, span) in parameters {
+                let parameter = spawn_target_parameter(id).unwrap_or_else(|| {
+                    panic!(
+                        "spawn_target entry references `{id}`, which is not one of {SPAWN_TARGET_PARAMETERS:?}"
+                    )
+                });
+                spans.insert(parameter, *span);
+            }
+
+            let fields: Vec<TokenStream> = SPAWN_TARGET_PARAMETERS
+                .iter()
+                .map(|parameter| {
+                    let ident = Ident::new(parameter, Span::call_site());
+                    match spans.get(parameter) {
+                        // Quantized exactly like `steel_utils::climate::Parameter::span`,
+                        // which is what vanilla's `Climate.Parameter.CODEC` does.
+                        Some([min, max]) => {
+                            let min = Literal::i64_suffixed((min * 10_000.0_f32) as i64);
+                            let max = Literal::i64_suffixed((max * 10_000.0_f32) as i64);
+                            quote! {
+                                #ident: Some(steel_utils::climate::Parameter::new(#min, #max))
+                            }
+                        }
+                        None => quote! { #ident: None },
+                    }
+                })
+                .collect();
+
+            quote! { SpawnTarget { #(#fields),* } }
+        })
+        .collect();
+
+    quote! {
+        /// One `spawn_target` entry from this dimension's noise settings JSON.
+        ///
+        /// Each listed field is the range that field's density function must fall
+        /// in; `None` means the JSON entry does not constrain that parameter
+        /// (vanilla only sums the entries that are present).
+        pub struct SpawnTarget {
+            /// Temperature range, if constrained.
+            pub temperature: Option<steel_utils::climate::Parameter>,
+            /// Vegetation range, if constrained.
+            pub vegetation: Option<steel_utils::climate::Parameter>,
+            /// Continentalness range, if constrained.
+            pub continents: Option<steel_utils::climate::Parameter>,
+            /// Erosion range, if constrained.
+            pub erosion: Option<steel_utils::climate::Parameter>,
+            /// Depth range, if constrained.
+            pub depth: Option<steel_utils::climate::Parameter>,
+            /// Ridges range, if constrained.
+            pub ridges: Option<steel_utils::climate::Parameter>,
+        }
+
+        /// The `spawn_target` entries for this dimension, in JSON order.
+        ///
+        /// Empty when the JSON has no `spawn_target`, in which case vanilla's
+        /// `getOrigin` falls back to chunk `(0, 0)`.
+        pub static SPAWN_TARGETS: &[SpawnTarget] = &[#(#entries),*];
+    }
+}
+
+/// The interpolation cell size a settings entry's chunk volume uses.
+///
+/// Vanilla interpolates every function on its own declared grid, but Steel's
+/// column cache uses one grid per module: the one declared by the terrain
+/// `final_density` function (vanilla's chunk-volume function). Router entries
+/// declaring a different grid are handled per-entry by the transpiler.
+fn dimension_cell_size(
+    router_entries: &BTreeMap<String, DensityFunction>,
+    registry: &BTreeMap<String, DensityFunction>,
+) -> (i32, i32) {
+    router_entries
+        .get("final_density")
+        .and_then(|df| find_interpolated_cell_size(df, registry))
+        .or_else(|| {
+            router_entries
+                .values()
+                .find_map(|df| find_interpolated_cell_size(df, registry))
+        })
+        .unwrap_or((4, 8))
+}
+
+/// Transpile density functions for a single `noise_settings` entry.
+///
+/// `settings_key` is the datapack file stem (which is also the registry path
+/// below `minecraft:`); `prefix` is the CamelCase form used for generated type names.
 fn transpile_dimension(
-    dimension: &str,
+    settings_key: &str,
     prefix: &str,
     registry: &BTreeMap<String, DensityFunction>,
 ) -> TokenStream {
-    let settings = read_noise_settings(dimension);
+    let settings = read_noise_settings(settings_key);
     let mut router_entries = router_to_entries(&settings.noise_router, settings.aquifers.as_ref());
     router_entries.extend(material_ore_router_entries(
         surface_rule(&settings).as_ref(),
     ));
 
-    let (cell_width, cell_height) = router_entries
-        .values()
-        .find_map(|df| find_interpolated_cell_size(df, registry))
-        .unwrap_or((4, 8));
+    let (cell_width, cell_height) = dimension_cell_size(&router_entries, registry);
     let input = TranspilerInput {
         registry: registry.clone(),
         router_entries,
@@ -1000,14 +1125,17 @@ fn transpile_dimension(
     transpile(&input)
 }
 
-/// Generate noise settings constants and trait impls for a dimension.
+/// Generate noise settings constants and trait impls for a `noise_settings` entry.
+///
+/// `settings_key` selects the datapack file, `prefix` names the generated types.
 #[expect(
     clippy::too_many_lines,
     reason = "generated noise settings include all trait glue in one quoted block"
 )]
-fn generate_noise_settings(dimension: &str, prefix: &str) -> TokenStream {
-    let settings = read_noise_settings(dimension);
+fn generate_noise_settings(settings_key: &str, prefix: &str) -> TokenStream {
+    let settings = read_noise_settings(settings_key);
 
+    let spawn_targets = spawn_target_tokens(&settings);
     let settings_struct = Ident::new(&format!("{prefix}NoiseSettings"), Span::call_site());
     let noises_struct = Ident::new(&format!("{prefix}Noises"), Span::call_site());
     let cache_struct = Ident::new(&format!("{prefix}ColumnCache"), Span::call_site());
@@ -1094,7 +1222,10 @@ fn generate_noise_settings(dimension: &str, prefix: &str) -> TokenStream {
     let height = settings.noise.height;
     let sea_level = settings.sea_level;
     let aquifers_enabled = settings.aquifers.is_some();
-    let ore_veins_enabled = false;
+    // Vanilla's `NoiseRouter` no longer carries vein functions — ore veins live in
+    // the material rule — so the flag is derived from the legacy router entries
+    // that older datapacks still use instead of being hardcoded.
+    let ore_veins_enabled = settings.noise_router.vein_toggle.is_some();
     let material_ore_veins_enabled = !material_ore_veins.is_empty();
     let material_ore_vein_value_count = material_ore_veins.len() * 2;
     let legacy_random_source = settings.legacy_random_source;
@@ -1105,10 +1236,7 @@ fn generate_noise_settings(dimension: &str, prefix: &str) -> TokenStream {
         .collect();
     let mut router_entries = router_to_entries(&settings.noise_router, settings.aquifers.as_ref());
     router_entries.extend(material_ore_router_entries(material_rule.as_ref()));
-    let (cell_width, cell_height) = router_entries
-        .values()
-        .find_map(|df| find_interpolated_cell_size(df, &registry))
-        .unwrap_or((4, 8));
+    let (cell_width, cell_height) = dimension_cell_size(&router_entries, &registry);
 
     // Dimensions without a router entry for these (e.g. nether, end) return `0.0`;
     // callers are expected to check `AQUIFERS_ENABLED`/`ORE_VEINS_ENABLED` first.
@@ -1473,81 +1601,109 @@ fn generate_noise_settings(dimension: &str, prefix: &str) -> TokenStream {
         impl #noises_struct {
             #surface_rule_body
         }
+
+        #spawn_targets
     }
 }
 
-use proc_macro2::{Ident, Span};
+use proc_macro2::{Ident, Literal, Span};
 
-/// Output of the density functions build step: one `TokenStream` per dimension,
-/// plus an index file that declares the submodules.
+/// One `noise_settings` datapack entry transpiled into its own generated module.
+struct NoiseSettingsEntry {
+    /// Datapack file stem, which is also the registry path (`minecraft:<key>`)
+    /// and the generated module name.
+    key: &'static str,
+    /// CamelCase prefix for the generated types (`<Prefix>Noises`,
+    /// `<Prefix>NoiseSettings`, `<Prefix>ColumnCache`).
+    prefix: &'static str,
+}
+
+/// Every vanilla `noise_settings` entry, in datapack file order.
+///
+/// Vanilla registers these as `minecraft:<key>` in the `noise_settings` registry;
+/// each one gets a generated module under `vanilla_density_functions/`.
+const NOISE_SETTINGS_ENTRIES: &[NoiseSettingsEntry] = &[
+    NoiseSettingsEntry {
+        key: "overworld",
+        prefix: "Overworld",
+    },
+    NoiseSettingsEntry {
+        key: "nether",
+        prefix: "Nether",
+    },
+    NoiseSettingsEntry {
+        key: "end",
+        prefix: "End",
+    },
+    NoiseSettingsEntry {
+        key: "large_biomes",
+        prefix: "LargeBiomes",
+    },
+    NoiseSettingsEntry {
+        key: "amplified",
+        prefix: "Amplified",
+    },
+    NoiseSettingsEntry {
+        key: "caves",
+        prefix: "Caves",
+    },
+    NoiseSettingsEntry {
+        key: "floating_islands",
+        prefix: "FloatingIslands",
+    },
+];
+
+/// Output of the density functions build step: one `TokenStream` per
+/// `noise_settings` entry, plus an index file that declares the submodules.
 pub(crate) struct DensityFunctionFiles {
-    /// Contents for `vanilla_density_functions/overworld.rs`.
-    pub overworld: TokenStream,
-    /// Contents for `vanilla_density_functions/nether.rs`.
-    pub nether: TokenStream,
-    /// Contents for `vanilla_density_functions/end.rs`.
-    pub end: TokenStream,
-    /// Contents for `vanilla_density_functions.rs` (declares the three submodules).
+    /// Generated module contents, as `(file stem, tokens)` pairs.
+    pub modules: Vec<(String, TokenStream)>,
+    /// Contents for `vanilla_density_functions/mod.rs` (declares the submodules).
     pub index: TokenStream,
 }
 
-/// Generate density function code for all dimensions, split into one file per dimension.
+/// Generate density function code for every `noise_settings` entry, split into
+/// one file per entry.
 pub(crate) fn build() -> DensityFunctionFiles {
     let registry_json = read_density_function_registry();
 
-    // Convert JSON registry to DensityFunction values (shared across dimensions)
+    // Convert JSON registry to DensityFunction values (shared across entries)
     let registry: BTreeMap<String, DensityFunction> = registry_json
         .iter()
         .map(|(id, json)| (id.clone(), json_to_df(json)))
         .collect();
 
-    let overworld_df = transpile_dimension("overworld", "Overworld", &registry);
-    let overworld_settings = generate_noise_settings("overworld", "Overworld");
-    let nether_df = transpile_dimension("nether", "Nether", &registry);
-    let nether_settings = generate_noise_settings("nether", "Nether");
-    let end_df = transpile_dimension("end", "End", &registry);
-    let end_settings = generate_noise_settings("end", "End");
+    let mut modules = Vec::with_capacity(NOISE_SETTINGS_ENTRIES.len());
+    for entry in NOISE_SETTINGS_ENTRIES {
+        let density_functions = transpile_dimension(entry.key, entry.prefix, &registry);
+        let settings = generate_noise_settings(entry.key, entry.prefix);
 
-    // Note: the transpiler already emits `use` imports in #overworld_df / #nether_df / #end_df.
-    let overworld = quote! {
-        use steel_registry::RegistryExt;
-        use steel_registry::blocks::block_state_ext::BlockStateExt;
+        // Note: the transpiler already emits its own `use` imports in #density_functions.
+        let content = quote! {
+            use steel_registry::RegistryExt;
+            use steel_registry::blocks::block_state_ext::BlockStateExt;
 
-        #overworld_df
-        #overworld_settings
-    };
+            #density_functions
+            #settings
+        };
+        modules.push((entry.key.to_string(), content));
+    }
 
-    let nether = quote! {
-        use steel_registry::RegistryExt;
-        use steel_registry::blocks::block_state_ext::BlockStateExt;
-
-        #nether_df
-        #nether_settings
-    };
-
-    let end = quote! {
-        use steel_registry::RegistryExt;
-        use steel_registry::blocks::block_state_ext::BlockStateExt;
-
-        #end_df
-        #end_settings
-    };
+    let index_modules: Vec<TokenStream> = NOISE_SETTINGS_ENTRIES
+        .iter()
+        .map(|entry| {
+            let module = Ident::new(entry.key, Span::call_site());
+            let doc = format!("{} density functions.", entry.prefix);
+            quote! {
+                #[doc = #doc]
+                pub mod #module;
+            }
+        })
+        .collect();
 
     let index = quote! {
-        /// Overworld density functions.
-        pub mod overworld;
-
-        /// Nether density functions.
-        pub mod nether;
-
-        /// End density functions.
-        pub mod end;
+        #(#index_modules)*
     };
 
-    DensityFunctionFiles {
-        overworld,
-        nether,
-        end,
-        index,
-    }
+    DensityFunctionFiles { modules, index }
 }

@@ -98,6 +98,15 @@ impl BlockBehavior for BarrelBlock {
         ))
     }
 
+    fn tick(&self, _state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
+        // Vanilla `BarrelBlock.tick` rechecks who still has the barrel open.
+        if let Some(entity) = world.get_block_entity(pos)
+            && let Some(viewers) = entity.container_viewers()
+        {
+            viewers.recheck_open();
+        }
+    }
+
     fn has_analog_output_signal(&self, _state: BlockStateId) -> bool {
         true
     }

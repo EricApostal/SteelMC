@@ -9,6 +9,7 @@ use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
+use steel_registry::blocks::behavior::PushReaction;
 use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::vanilla_entity_data::BlockDisplayEntityData;
 use steel_utils::BlockStateId;
@@ -16,6 +17,8 @@ use steel_utils::locks::SyncMutex;
 use steel_utils::{DowncastType, DowncastTypeKey};
 use uuid::Uuid;
 
+use super::display_data;
+use crate::entity::damage::DamageSource;
 use crate::entity::{Entity, EntityBase, EntityBaseLoad, EntitySyncedData};
 use crate::world::World;
 
@@ -111,19 +114,30 @@ impl Entity for BlockDisplayEntity {
         true
     }
 
+    fn piston_push_reaction(&self) -> PushReaction {
+        PushReaction::IgnoreEntity
+    }
+
+    fn no_physics(&self) -> bool {
+        true
+    }
+
+    fn hurt(&self, _world: &World, _source: &DamageSource, _amount: f32) -> bool {
+        false
+    }
+
     fn save_additional(&self, nbt: &mut NbtCompound) {
-        // Save block state ID directly - these are deterministic in Minecraft
-        let block_state_id = *self.entity_data.lock().block_state.get();
-        nbt.insert("block_state", i32::from(block_state_id.0));
+        let entity_data = self.entity_data.lock();
+        display_data::save(&entity_data.display, nbt);
+        // Block state IDs are deterministic in Minecraft.
+        nbt.insert("block_state", i32::from(entity_data.block_state.get().0));
     }
 
     fn load_additional(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
-        // Load block state ID
+        let mut entity_data = self.entity_data.lock();
+        display_data::load(&mut entity_data.display, nbt);
         if let Some(state_id) = nbt.int("block_state") {
-            self.entity_data
-                .lock()
-                .block_state
-                .set(BlockStateId(state_id as u16));
+            entity_data.block_state.set(BlockStateId(state_id as u16));
         }
     }
 }

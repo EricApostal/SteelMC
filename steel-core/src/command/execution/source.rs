@@ -8,8 +8,8 @@ use crate::{
     },
     entity::{Entity, EntityAnchor, SharedEntity},
     permission::{
-        PermissionContext, PermissionExpr, PermissionKey, PermissionMetadataExpression,
-        PermissionRuleExpression, PermissionSet, PermissionState,
+        PermissionContext, PermissionExpr, PermissionKey, PermissionLevel,
+        PermissionMetadataExpression, PermissionRuleExpression, PermissionSet, PermissionState,
     },
     player::{DomainResidenceToken, KnownPlayer, Player},
     scoreboard::Scoreboard,
@@ -196,6 +196,7 @@ pub(crate) trait CommandPermissionSource: ExecutionCommandSource {
 struct CommandAuthorizationContext {
     permission_context: PermissionContext,
     player_permissions: Option<PermissionSet>,
+    player_level: PermissionLevel,
     world_scope: CommandWorldScope,
 }
 
@@ -206,11 +207,16 @@ enum CommandWorldScope {
 }
 
 impl CommandAuthorizationContext {
-    fn for_player(world: steel_utils::Identifier, permissions: PermissionSet) -> Self {
+    fn for_player(
+        world: steel_utils::Identifier,
+        permissions: PermissionSet,
+        level: PermissionLevel,
+    ) -> Self {
         let domain = world.namespace.to_string().into_boxed_str();
         Self {
             permission_context: PermissionContext::for_world(world),
             player_permissions: Some(permissions),
+            player_level: level,
             world_scope: CommandWorldScope::Domain(domain),
         }
     }
@@ -219,6 +225,7 @@ impl CommandAuthorizationContext {
         Self {
             permission_context: PermissionContext::for_world(world),
             player_permissions: None,
+            player_level: PermissionLevel::Owners,
             world_scope: CommandWorldScope::Global,
         }
     }
@@ -231,7 +238,7 @@ impl CommandAuthorizationContext {
         let Some(permissions) = &self.player_permissions else {
             return Some(PermissionState::Allow);
         };
-        permissions.resolve_in(permission, self.permission_context())
+        permissions.resolve_with_level(permission, self.permission_context(), self.player_level)
     }
 
     fn allows_execution_domain(&self, domain: &str) -> bool {
@@ -292,6 +299,7 @@ impl CommandSource {
             CommandSender::Player(player) => CommandAuthorizationContext::for_player(
                 world.key.clone(),
                 server.command_permission_snapshot(player.gameprofile.id()),
+                server.op_level(player.gameprofile.id()),
             ),
             CommandSender::Console | CommandSender::Rcon => {
                 CommandAuthorizationContext::unrestricted(world.key.clone())
@@ -898,8 +906,8 @@ mod tests {
     use crate::command::sender::CommandSender;
     use crate::entity::{Entity, EntityBase};
     use crate::permission::{
-        PermissionContext, PermissionEntry, PermissionExpr, PermissionKey, PermissionSet,
-        PermissionState,
+        PermissionContext, PermissionEntry, PermissionExpr, PermissionKey, PermissionLevel,
+        PermissionSet, PermissionState,
     };
 
     use super::{CommandAuthorizationContext, admin_broadcast_source_name, normalize_rotation};
@@ -962,7 +970,11 @@ mod tests {
     fn authorization_context_captures_initial_world_scope() {
         let world = Identifier::new("lobby", "spawn");
         let authorization =
-            CommandAuthorizationContext::for_player(world.clone(), PermissionSet::new());
+            CommandAuthorizationContext::for_player(
+                world.clone(),
+                PermissionSet::new(),
+                PermissionLevel::All,
+            );
 
         assert_eq!(
             authorization.permission_context(),
@@ -980,7 +992,11 @@ mod tests {
             PermissionSet::from_entries([PermissionEntry::allow(permission.clone())]);
         assert!(stale_player_permissions.allows_key(&permission));
 
-        let authorization = CommandAuthorizationContext::for_player(world, PermissionSet::new());
+        let authorization = CommandAuthorizationContext::for_player(
+            world,
+            PermissionSet::new(),
+            PermissionLevel::All,
+        );
 
         assert_eq!(
             authorization.permission_state(&PermissionExpr::key(permission)),

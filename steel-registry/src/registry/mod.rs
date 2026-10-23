@@ -75,6 +75,17 @@ use crate::{
     trade::{TradeSetRegistry, VillagerTradeRegistry},
     trim_material::TrimMaterialRegistry,
     trim_pattern::TrimPatternRegistry,
+    trial_spawner::TrialSpawnerConfigRegistry,
+    context_int_provider::ContextIntProviderRegistry,
+    context_float_provider::ContextFloatProviderRegistry,
+    predicate::PredicateRegistry,
+    item_modifier::ItemModifierRegistry,
+    slot_source::SlotSourceRegistry,
+    test_environment::TestEnvironmentRegistry,
+    test_instance::TestInstanceRegistry,
+    sulfur_cube_archetype::SulfurCubeArchetypeRegistry,
+    world_preset::WorldPresetRegistry,
+    flat_level_generator_preset::FlatLevelGeneratorPresetRegistry,
     vanilla_advancements, vanilla_attributes, vanilla_banner_pattern_tags, vanilla_banner_patterns,
     vanilla_biome_tags, vanilla_biomes, vanilla_block_entity_types, vanilla_block_state_providers,
     vanilla_block_tags, vanilla_block_transformers, vanilla_blocks, vanilla_cat_sound_variants,
@@ -102,6 +113,10 @@ use crate::{
     wolf_sound_variant::WolfSoundVariantRegistry,
     wolf_variant::WolfVariantRegistry,
     zombie_nautilus_variant::ZombieNautilusVariantRegistry,
+    vanilla_context_float_providers, vanilla_context_int_providers, vanilla_feature_tags, vanilla_flat_level_generator_preset_tags,
+    vanilla_flat_level_generator_presets, vanilla_game_event_tags, vanilla_item_modifiers, vanilla_predicates,
+    vanilla_slot_sources, vanilla_sulfur_cube_archetypes, vanilla_test_environments, vanilla_test_instances,
+    vanilla_trial_spawners, vanilla_world_preset_tags, vanilla_world_presets,
 };
 use std::{
     fmt::Debug,
@@ -246,6 +261,21 @@ pub const STRUCTURE_PROCESSOR_LIST_REGISTRY: Identifier =
 pub const CUSTOM_STAT_REGISTRY: Identifier = Identifier::vanilla_static("custom_stat");
 pub const STAT_TYPE_REGISTRY: Identifier = Identifier::vanilla_static("stat_type");
 pub const TICKET_TYPE_REGISTRY: Identifier = Identifier::vanilla_static("ticket_type");
+pub const TRIAL_SPAWNER_CONFIG_REGISTRY: Identifier = Identifier::vanilla_static("trial_spawner");
+pub const SULFUR_CUBE_ARCHETYPE_REGISTRY: Identifier =
+    Identifier::vanilla_static("sulfur_cube_archetype");
+pub const WORLD_PRESET_REGISTRY: Identifier = Identifier::vanilla_static("worldgen/world_preset");
+pub const FLAT_LEVEL_GENERATOR_PRESET_REGISTRY: Identifier =
+    Identifier::vanilla_static("worldgen/flat_level_generator_preset");
+pub const CONTEXT_INT_PROVIDER_REGISTRY: Identifier =
+    Identifier::vanilla_static("context_int_provider");
+pub const CONTEXT_FLOAT_PROVIDER_REGISTRY: Identifier =
+    Identifier::vanilla_static("context_float_provider");
+pub const PREDICATE_REGISTRY: Identifier = Identifier::vanilla_static("predicate");
+pub const ITEM_MODIFIER_REGISTRY: Identifier = Identifier::vanilla_static("item_modifier");
+pub const SLOT_SOURCE_REGISTRY: Identifier = Identifier::vanilla_static("slot_source");
+pub const TEST_ENVIRONMENT_REGISTRY: Identifier = Identifier::vanilla_static("test_environment");
+pub const TEST_INSTANCE_REGISTRY: Identifier = Identifier::vanilla_static("test_instance");
 
 pub struct Registry {
     pub attributes: AttributeRegistry,
@@ -314,6 +344,17 @@ pub struct Registry {
     pub stat_types: StatTypeRegistry,
     pub ticket_types: TicketTypeRegistry,
     pub advancements: AdvancementRegistry,
+    pub trial_spawner_configs: TrialSpawnerConfigRegistry,
+    pub sulfur_cube_archetypes: SulfurCubeArchetypeRegistry,
+    pub world_presets: WorldPresetRegistry,
+    pub flat_level_generator_presets: FlatLevelGeneratorPresetRegistry,
+    pub context_int_providers: ContextIntProviderRegistry,
+    pub context_float_providers: ContextFloatProviderRegistry,
+    pub predicates: PredicateRegistry,
+    pub item_modifiers: ItemModifierRegistry,
+    pub slot_sources: SlotSourceRegistry,
+    pub test_environments: TestEnvironmentRegistry,
+    pub test_instances: TestInstanceRegistry,
 }
 
 impl Debug for Registry {
@@ -329,6 +370,31 @@ impl Registry {
     pub fn new_vanilla() -> Self {
         let mut registry = Self::new_empty();
         vanilla_advancements::register_advancements(&mut registry.advancements);
+        vanilla_trial_spawners::register_trial_spawner_configs(&mut registry.trial_spawner_configs);
+        vanilla_sulfur_cube_archetypes::register_sulfur_cube_archetypes(
+            &mut registry.sulfur_cube_archetypes,
+        );
+        vanilla_world_presets::register_world_presets(&mut registry.world_presets);
+        vanilla_world_preset_tags::WorldPresetTag::register_world_preset_tags(
+            &mut registry.world_presets,
+        );
+        vanilla_flat_level_generator_presets::register_flat_level_generator_presets(
+            &mut registry.flat_level_generator_presets,
+        );
+        vanilla_flat_level_generator_preset_tags::FlatLevelGeneratorPresetTag::register_flat_level_generator_preset_tags(
+            &mut registry.flat_level_generator_presets,
+        );
+        vanilla_context_int_providers::register_context_int_providers(
+            &mut registry.context_int_providers,
+        );
+        vanilla_context_float_providers::register_context_float_providers(
+            &mut registry.context_float_providers,
+        );
+        vanilla_predicates::register_predicates(&mut registry.predicates);
+        vanilla_item_modifiers::register_item_modifiers(&mut registry.item_modifiers);
+        vanilla_slot_sources::register_slot_sources(&mut registry.slot_sources);
+        vanilla_test_environments::register_test_environments(&mut registry.test_environments);
+        vanilla_test_instances::register_test_instances(&mut registry.test_instances);
         vanilla_attributes::register_attributes(&mut registry.attributes);
 
         vanilla_blocks::register_blocks(&mut registry.blocks);
@@ -425,6 +491,7 @@ impl Registry {
         vanilla_block_entity_types::register_block_entity_types(&mut registry.block_entity_types);
         vanilla_game_rules::register_game_rules(&mut registry.game_rules);
         vanilla_game_events::register_game_events(&mut registry.game_events);
+        vanilla_game_event_tags::GameEventTag::register_game_events_tags(&mut registry.game_events);
         sound_events::register_sound_events(&mut registry.sound_events);
 
         vanilla_fluids::register_fluids(&mut registry.fluids);
@@ -455,6 +522,7 @@ impl Registry {
             &mut registry.configured_features,
         );
         vanilla_placed_features::register_placed_features(&mut registry.placed_features);
+        vanilla_feature_tags::FeatureTag::register_feature_tags(&mut registry.configured_features);
 
         vanilla_custom_stats::register_custom_stats(&mut registry.custom_stats);
         vanilla_stat_types::register_vanilla_stat_types(&mut registry.stat_types);
@@ -533,6 +601,17 @@ impl Registry {
         self.custom_stats.freeze();
         self.stat_types.freeze();
         self.ticket_types.freeze();
+        self.trial_spawner_configs.freeze();
+        self.sulfur_cube_archetypes.freeze();
+        self.world_presets.freeze();
+        self.flat_level_generator_presets.freeze();
+        self.context_int_providers.freeze();
+        self.context_float_providers.freeze();
+        self.predicates.freeze();
+        self.item_modifiers.freeze();
+        self.slot_sources.freeze();
+        self.test_environments.freeze();
+        self.test_instances.freeze();
         self.advancements.update_tree();
     }
 
@@ -801,6 +880,17 @@ impl Registry {
             stat_types: StatTypeRegistry::new(),
             ticket_types: TicketTypeRegistry::new(),
             advancements: AdvancementRegistry::new(),
+            trial_spawner_configs: TrialSpawnerConfigRegistry::new(),
+            sulfur_cube_archetypes: SulfurCubeArchetypeRegistry::new(),
+            world_presets: WorldPresetRegistry::new(),
+            flat_level_generator_presets: FlatLevelGeneratorPresetRegistry::new(),
+            context_int_providers: ContextIntProviderRegistry::new(),
+            context_float_providers: ContextFloatProviderRegistry::new(),
+            predicates: PredicateRegistry::new(),
+            item_modifiers: ItemModifierRegistry::new(),
+            slot_sources: SlotSourceRegistry::new(),
+            test_environments: TestEnvironmentRegistry::new(),
+            test_instances: TestInstanceRegistry::new(),
         }
     }
 }

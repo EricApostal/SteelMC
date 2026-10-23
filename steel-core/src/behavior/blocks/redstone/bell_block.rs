@@ -30,7 +30,8 @@ use crate::player::Player;
 use crate::world::game_event::GameEventContext;
 use crate::world::{ClipHitResult, LevelReader, ScheduledTickAccess, SignalGetter as _, World};
 
-const MAX_HIT_HEIGHT: f64 = 0.8125;
+/// Vanilla compares against the promoted `0.8124F` literal used by `BellBlock.isProperHit`.
+const MAX_HIT_HEIGHT: f64 = 0.8124_f32 as f64;
 const FACING: &EnumProperty<Direction> = &BlockStateProperties::FACING;
 const BELL_ATTACHMENT: &EnumProperty<BellAttachType> = &BlockStateProperties::BELL_ATTACHMENT;
 const POWERED: &BoolProperty = &BlockStateProperties::POWERED;

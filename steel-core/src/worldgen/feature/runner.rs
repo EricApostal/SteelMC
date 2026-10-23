@@ -5,7 +5,7 @@ use steel_registry::structure::StructureRef;
 use steel_utils::{BoundingBox, ChunkPos};
 
 use super::prelude::*;
-use super::sorter::{FeatureSorter, FeatureStepData};
+use super::sorter::{FeatureSorter, FeatureStepData, StagedFeature};
 use crate::worldgen::structure::piece_placer::StructurePiecePlacer;
 #[cfg(test)]
 use steel_worldgen::structure::StructureReferenceMap;
@@ -119,19 +119,54 @@ impl FeatureDecorationRunner {
 
     #[must_use]
     pub(crate) fn new(possible_biomes: &[BiomeRef], registry: &Registry) -> Self {
+        let staged: Vec<(BiomeRef, Vec<Vec<StagedFeature>>)> = possible_biomes
+            .iter()
+            .map(|biome| {
+                let stages = biome
+                    .features
+                    .iter()
+                    .map(|stage| {
+                        stage
+                            .iter()
+                            .map(|key| StagedFeature::registry(key.clone()))
+                            .collect()
+                    })
+                    .collect();
+                (*biome, stages)
+            })
+            .collect();
+        Self::from_staged_biomes(&staged, registry)
+    }
+
+    /// Creates a runner for a single biome whose feature stages replace the biome's
+    /// own `features` lists.
+    ///
+    /// Used by flat generators, which run vanilla's
+    /// `FlatLevelGeneratorSettings.adjustGenerationSettings` (drop some steps, append
+    /// lava-lake and fill-layer features) instead of the raw biome decoration order.
+    #[must_use]
+    pub(crate) fn new_with_feature_stages(
+        biome: BiomeRef,
+        stages: Vec<Vec<StagedFeature>>,
+        registry: &Registry,
+    ) -> Self {
+        let staged = vec![(biome, stages)];
+        Self::from_staged_biomes(&staged, registry)
+    }
+
+    fn from_staged_biomes(
+        staged_biomes: &[(BiomeRef, Vec<Vec<StagedFeature>>)],
+        registry: &Registry,
+    ) -> Self {
         let mut source_biome_ids = FxHashSet::default();
-        let mut unique_biomes = Vec::new();
         let mut max_biome_id = 0;
 
-        for &biome in possible_biomes {
+        for (biome, _) in staged_biomes {
             let Some(biome_id) = biome.try_id() else {
                 panic!("possible biome {} is not registered", biome.key);
             };
             max_biome_id = max_biome_id.max(biome_id);
-
-            if source_biome_ids.insert(biome_id) {
-                unique_biomes.push(biome);
-            }
+            source_biome_ids.insert(biome_id);
         }
 
         let mut source_biome_lookup = vec![false; max_biome_id + 1].into_boxed_slice();
@@ -139,8 +174,13 @@ impl FeatureDecorationRunner {
             source_biome_lookup[biome_id] = true;
         }
 
+        let borrowed: Vec<(BiomeRef, &[Vec<StagedFeature>])> = staged_biomes
+            .iter()
+            .map(|(biome, stages)| (*biome, stages.as_slice()))
+            .collect();
+
         Self {
-            sorter: FeatureSorter::build(&unique_biomes, registry),
+            sorter: FeatureSorter::build_with_stages(&borrowed, registry),
             source_biome_lookup,
         }
     }
@@ -151,6 +191,33 @@ impl FeatureDecorationRunner {
         registry: &Registry,
         seed: i64,
         biome_zoom_seed: i64,
+    ) {
+        self.decorate_impl(region, registry, seed, biome_zoom_seed, false);
+    }
+
+    /// Runs the decoration pass for a flat generator.
+    ///
+    /// Identical to [`Self::decorate`] except that placed features are placed without
+    /// vanilla's key-based biome check: the flat generator's stage list already is the
+    /// result of `FlatLevelGeneratorSettings.adjustGenerationSettings`, so every entry
+    /// is allowed by construction (see [`Self::place_flat_feature`]).
+    pub(crate) fn decorate_flat(
+        &self,
+        region: &mut WorldGenRegion<'_>,
+        registry: &Registry,
+        seed: i64,
+        biome_zoom_seed: i64,
+    ) {
+        self.decorate_impl(region, registry, seed, biome_zoom_seed, true);
+    }
+
+    fn decorate_impl(
+        &self,
+        region: &mut WorldGenRegion<'_>,
+        registry: &Registry,
+        seed: i64,
+        biome_zoom_seed: i64,
+        flat: bool,
     ) {
         let center = region.center();
         let origin = BlockPos::new(center.0.x * 16, region.min_y(), center.0.y * 16);
@@ -183,6 +250,7 @@ impl FeatureDecorationRunner {
                 step_features,
                 &possible_biomes,
                 biome_zoom_seed,
+                flat,
             );
         }
     }
@@ -368,6 +436,7 @@ impl FeatureDecorationRunner {
         step_features: &FeatureStepData,
         possible_biomes: &[usize],
         biome_zoom_seed: i64,
+        flat: bool,
     ) {
         let mut feature_indices = SmallVec::<[usize; 64]>::new();
 
@@ -391,14 +460,35 @@ impl FeatureDecorationRunner {
                 panic!("decoration step {step} references missing feature index {feature_index}");
             };
             random.set_feature_seed(decoration_seed, feature_index_i32, step_i32);
-            Self::place_placed_feature_entry(
-                region,
-                registry,
-                random,
-                origin,
-                feature,
-                biome_zoom_seed,
-            );
+            if flat {
+                Self::place_flat_feature(
+                    region,
+                    registry,
+                    random,
+                    origin,
+                    feature,
+                    biome_zoom_seed,
+                );
+            } else {
+                match feature {
+                    PlacedFeatureRef::Reference(entry) => Self::place_placed_feature_entry(
+                        region,
+                        registry,
+                        random,
+                        origin,
+                        *entry,
+                        biome_zoom_seed,
+                    ),
+                    PlacedFeatureRef::Inline(_) => Self::place_placed_feature_ref(
+                        region,
+                        registry,
+                        random,
+                        origin,
+                        feature,
+                        biome_zoom_seed,
+                    ),
+                };
+            }
         }
     }
 }

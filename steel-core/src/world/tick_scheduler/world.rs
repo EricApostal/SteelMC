@@ -1,4 +1,6 @@
 use super::super::*;
+use glam::IVec3;
+use steel_utils::BoundingBox;
 
 impl World {
     /// Schedules a block tick at the given position.
@@ -177,6 +179,32 @@ impl World {
     ) -> super::ScheduledTickBatch<FluidRef> {
         self.scheduled_ticks
             .collect_fluid_ticks(current_tick, max_ticks)
+    }
+
+    /// Removes every scheduled block and fluid tick whose position is inside `area`.
+    ///
+    /// Mirrors vanilla `LevelTicks.clearArea` on the block ticks (plus fluid ticks, which
+    /// share Steel's scheduler). Each overlapping chunk container keeps its head/deadline
+    /// index consistent, so later collection still finds the remaining ticks in order.
+    /// Ticks already collected into an executor batch keep running.
+    pub fn clear_scheduled_ticks_in_area(&self, area: BoundingBox) {
+        self.scheduled_ticks.clear_area(area);
+    }
+
+    /// Copies this world's block ticks inside `area`, re-scheduled at `offset` positions.
+    ///
+    /// Mirrors vanilla `LevelTicks.copyArea`: every copied tick keeps its trigger tick and
+    /// priority, with sub-tick orders shifted by `-min + max + 1` over the collected set.
+    pub fn copy_scheduled_ticks_in_area(&self, area: BoundingBox, offset: IVec3) {
+        self.scheduled_ticks.copy_area(area, offset);
+    }
+
+    /// Copies `source`'s block ticks inside `area` into this world at `offset` positions.
+    ///
+    /// Mirrors vanilla `LevelTicks.copyAreaFrom`, used by `/clone` across dimensions.
+    pub fn copy_scheduled_ticks_from_area(&self, source: &World, area: BoundingBox, offset: IVec3) {
+        self.scheduled_ticks
+            .copy_area_from(&source.scheduled_ticks, area, offset);
     }
 
     /// Returns whether a selected block tick at `(pos, block)` has not started yet.

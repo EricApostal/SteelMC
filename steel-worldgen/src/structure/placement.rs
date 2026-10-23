@@ -228,6 +228,9 @@ pub enum PlacementKind {
         /// Preferred snap biomes.
         preferred_biomes: Vec<Identifier>,
     },
+    /// Vanilla's `DimensionOriginStructurePlacement`: the single chunk at the
+    /// owning generator's origin (`ChunkGeneratorStructureState.getDimensionOrigin`).
+    DimensionOrigin,
 }
 
 /// Structure placement configuration.
@@ -259,17 +262,25 @@ impl StructurePlacement {
     }
 
     /// Valid placement chunk + frequency check. For `ConcentricRings`,
-    /// `ring_positions` must be pre-computed.
+    /// `ring_positions` must be pre-computed; `dimension_origin` is the owning
+    /// generator's origin chunk (vanilla `ChunkGeneratorStructureState.getDimensionOrigin`).
     #[must_use]
     pub fn is_structure_chunk(
         &self,
         seed: i64,
         source_x: i32,
         source_z: i32,
+        dimension_origin: ChunkPos,
         ring_positions: Option<&[ChunkPos]>,
     ) -> bool {
-        if !self.is_placement_chunk(seed, source_x, source_z, ring_positions) {
+        if !self.is_placement_chunk(seed, source_x, source_z, dimension_origin, ring_positions) {
             return false;
+        }
+        // Vanilla's `DimensionOriginStructurePlacement` is not an
+        // `AbstractSpreadingStructurePlacement`: it has neither frequency nor
+        // an exclusion zone, so only the origin comparison applies.
+        if matches!(self.kind, PlacementKind::DimensionOrigin) {
+            return true;
         }
         if self.frequency < 1.0
             && !self.frequency_reduction_method.should_generate(
@@ -290,6 +301,7 @@ impl StructurePlacement {
         seed: i64,
         source_x: i32,
         source_z: i32,
+        dimension_origin: ChunkPos,
         ring_positions: Option<&[ChunkPos]>,
     ) -> bool {
         match &self.kind {
@@ -311,6 +323,10 @@ impl StructurePlacement {
             }
             PlacementKind::ConcentricRings { .. } => ring_positions
                 .is_some_and(|positions| positions.contains(&ChunkPos::new(source_x, source_z))),
+            // Vanilla compares against `state.getDimensionOrigin()`: chunk
+            // (0, 0) for every generator except noise generators whose noise
+            // settings declare a non-empty `spawn_target`.
+            PlacementKind::DimensionOrigin => ChunkPos::new(source_x, source_z) == dimension_origin,
         }
     }
 
@@ -423,12 +439,16 @@ fn convert_structure_set(data: StructureSetData) -> (Identifier, StructureSet) {
             salt,
             frequency,
             frequency_reduction_method,
+            exclusion_zone,
             locate_offset,
         } => StructurePlacement {
             salt,
             frequency,
             frequency_reduction_method: frequency_reduction_method.into(),
-            exclusion_zone: None,
+            exclusion_zone: exclusion_zone.map(|ez| ExclusionZone {
+                other_set: ez.other_set,
+                chunk_count: ez.chunk_count,
+            }),
             locate_offset,
             kind: PlacementKind::ConcentricRings {
                 distance,
@@ -436,6 +456,19 @@ fn convert_structure_set(data: StructureSetData) -> (Identifier, StructureSet) {
                 count,
                 preferred_biomes,
             },
+        },
+        PlacementData::DimensionOrigin {
+            salt,
+            frequency,
+            frequency_reduction_method,
+            locate_offset,
+        } => StructurePlacement {
+            salt,
+            frequency,
+            frequency_reduction_method: frequency_reduction_method.into(),
+            exclusion_zone: None,
+            locate_offset,
+            kind: PlacementKind::DimensionOrigin,
         },
     };
 
@@ -463,6 +496,8 @@ mod tests {
     use steel_utils::random::Random;
 
     use super::*;
+
+    const ORIGIN: ChunkPos = ChunkPos::new(0, 0);
 
     #[test]
     fn test_spread_type_linear() {
@@ -517,11 +552,11 @@ mod tests {
 
         // The structure chunk for (0,0) should only match if we query the
         // exact potential position
-        assert!(placement.is_structure_chunk(0, potential.0.x, potential.0.y, None));
+        assert!(placement.is_structure_chunk(0, potential.0.x, potential.0.y, ORIGIN, None));
         // Some other chunk in the same grid cell should NOT match (unless it
         // happens to be the potential chunk)
         if potential != ChunkPos::new(0, 0) {
-            assert!(!placement.is_structure_chunk(0, 0, 0, None));
+            assert!(!placement.is_structure_chunk(0, 0, 0, ORIGIN, None));
         }
     }
 
@@ -570,7 +605,7 @@ mod tests {
             SpreadType::Linear,
         );
         // With frequency=1.0, should always pass
-        assert!(placement.is_structure_chunk(0, potential.0.x, potential.0.y, None));
+        assert!(placement.is_structure_chunk(0, potential.0.x, potential.0.y, ORIGIN, None));
     }
 
     #[test]
@@ -650,12 +685,12 @@ mod tests {
 
         let positions = vec![ChunkPos::new(10, 20), ChunkPos::new(-5, 15)];
 
-        assert!(placement.is_structure_chunk(0, 10, 20, Some(&positions)));
-        assert!(placement.is_structure_chunk(0, -5, 15, Some(&positions)));
-        assert!(!placement.is_structure_chunk(0, 0, 0, Some(&positions)));
+        assert!(placement.is_structure_chunk(0, 10, 20, ORIGIN, Some(&positions)));
+        assert!(placement.is_structure_chunk(0, -5, 15, ORIGIN, Some(&positions)));
+        assert!(!placement.is_structure_chunk(0, 0, 0, ORIGIN, Some(&positions)));
 
         // Without positions, always false
-        assert!(!placement.is_structure_chunk(0, 10, 20, None));
+        assert!(!placement.is_structure_chunk(0, 10, 20, ORIGIN, None));
     }
 
     #[test]
@@ -714,5 +749,24 @@ mod tests {
         assert_eq!(java_round(-1.5), -1);
         assert_eq!(java_round(2.3), 2);
         assert_eq!(java_round(-2.3), -2);
+    }
+
+    #[test]
+    fn test_dimension_origin_placement_uses_generator_origin() {
+        // Vanilla's `dimension_origin` is a unit placement: it matches only the
+        // owning generator's origin chunk and ignores frequency.
+        let placement = StructurePlacement {
+            salt: 0,
+            frequency: 0.0,
+            frequency_reduction_method: FrequencyReductionMethod::Default,
+            exclusion_zone: None,
+            locate_offset: IVec3::ZERO,
+            kind: PlacementKind::DimensionOrigin,
+        };
+
+        let origin = ChunkPos::new(-3, 7);
+        assert!(placement.is_structure_chunk(0, -3, 7, origin, None));
+        assert!(!placement.is_structure_chunk(0, 0, 0, origin, None));
+        assert!(placement.is_structure_chunk(0, 0, 0, ORIGIN, None));
     }
 }

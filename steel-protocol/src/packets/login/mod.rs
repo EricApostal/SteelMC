@@ -13,3 +13,10 @@ pub use c_login_finished::CLoginFinished;
 pub use s_hello::SHello;
 pub use s_key::SKey;
 pub use s_login_acknowledged::SLoginAcknowledged;
+
+// §8 parity packets.
+mod c_custom_query;
+mod s_custom_query_answer;
+
+pub use c_custom_query::{CCustomQuery, MAX_CUSTOM_QUERY_PAYLOAD_SIZE};
+pub use s_custom_query_answer::{CustomQueryAnswerPayload, MAX_PAYLOAD_SIZE, SCustomQueryAnswer};

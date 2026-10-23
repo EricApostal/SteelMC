@@ -43,11 +43,12 @@ use std::{
     },
 };
 
+use glam::IVec3;
 use rustc_hash::{FxHashMap, FxHashSet};
 use steel_registry::blocks::BlockRef;
 use steel_registry::fluid::FluidRef;
 use steel_utils::{
-    BlockPos, ChunkPos, PackedChunkPos,
+    BlockPos, BoundingBox, ChunkPos, PackedChunkPos, SectionPos,
     locks::{SyncMutex, SyncRwLock},
 };
 

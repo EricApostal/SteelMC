@@ -6,10 +6,11 @@ use serde_json::Value;
 
 use super::RecipeGenerator;
 use super::cooking::CookingSerializer;
-use super::{crafting, smithing, stonecutting};
+use super::{brewing, crafting, smithing, stonecutting};
 
 #[derive(Clone, Copy)]
 pub(super) enum RecipeSerializer {
+    Brewing,
     Crafting(RecipeGenerator),
     Cooking(CookingSerializer),
     Stonecutting,
@@ -19,6 +20,9 @@ pub(super) enum RecipeSerializer {
 impl RecipeSerializer {
     pub(super) fn from_identifier(identifier: &str) -> Option<Self> {
         let path = identifier.strip_prefix("minecraft:")?;
+        if path == "brewing" {
+            return Some(Self::Brewing);
+        }
         if let Some(generate) = crafting::generator(path) {
             return Some(Self::Crafting(generate));
         }
@@ -33,6 +37,7 @@ impl RecipeSerializer {
 
     pub(super) fn generate_data(self, value: &Value) -> TokenStream {
         match self {
+            Self::Brewing => brewing::generate(value),
             Self::Crafting(generate) | Self::Smithing(generate) => generate(value),
             Self::Cooking(serializer) => serializer.generate(value),
             Self::Stonecutting => stonecutting::generate(value),
@@ -41,6 +46,10 @@ impl RecipeSerializer {
 
     pub(super) fn recipe_type_tokens(self) -> (TokenStream, TokenStream) {
         match self {
+            Self::Brewing => (
+                quote! { Recipe<BrewingRecipe, BrewingInput> },
+                quote! { vanilla_recipe_types::BREWING },
+            ),
             Self::Crafting(_) => (
                 quote! { Recipe<CraftingRecipe, CraftingInput> },
                 quote! { vanilla_recipe_types::CRAFTING },

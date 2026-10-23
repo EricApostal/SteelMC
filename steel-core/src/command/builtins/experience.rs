@@ -85,7 +85,7 @@ fn query_experience(
     };
     let message = translation
         .message([
-            TextComponent::plain(player.plain_text_name()),
+            player.display_name(),
             TextComponent::from(amount.to_string()),
         ])
         .component();
@@ -132,7 +132,7 @@ fn set_experience(
 ) -> Result<i32, CommandSyntaxError> {
     let players = context.players("target")?;
     let amount = required_amount(context)?;
-    let mut success = 0usize;
+    let mut changed_players = Vec::new();
     for player in &players {
         let changed = match experience_type {
             ExperienceType::Points => {
@@ -149,17 +149,25 @@ fn set_experience(
                 true
             }
         };
-        success += usize::from(changed);
+        if changed {
+            changed_players.push(Arc::clone(player));
+        }
     }
 
-    if success == 0 {
+    if changed_players.is_empty() {
         return Err(CommandSyntaxError::dynamic(TextComponent::from(
             &translations::COMMANDS_EXPERIENCE_SET_POINTS_INVALID,
         )));
     }
 
-    send_mutation_success(context, &players, amount, experience_type, Mutation::Set);
-    player_count_result(&players)
+    send_mutation_success(
+        context,
+        &changed_players,
+        amount,
+        experience_type,
+        Mutation::Set,
+    );
+    player_count_result(&changed_players)
 }
 
 fn send_mutation_success(
@@ -186,7 +194,7 @@ fn send_mutation_success(
             }
         };
         translation
-            .message([amount, TextComponent::plain(player.plain_text_name())])
+            .message([amount, player.display_name()])
             .component()
     } else {
         let translation = match (mutation, experience_type) {

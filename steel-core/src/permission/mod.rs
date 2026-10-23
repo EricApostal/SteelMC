@@ -4,6 +4,7 @@ mod context;
 mod expression;
 mod groups;
 mod key;
+pub mod level;
 mod manager;
 mod metadata;
 mod rule_expression;
@@ -21,6 +22,7 @@ pub use groups::{
     PermissionGroupsConfig, PermissionMetadataRuleConfig,
 };
 pub use key::{PermissionKey, PermissionKeyError, PermissionSegment};
+pub use level::{LevelBasedPermissionSet, PermissionLevel};
 pub use manager::{
     PermissionGroupManager, PermissionGroupManagerError, PermissionGroupStore,
     PermissionGroupStoreError, PermissionGroupUpdateError,

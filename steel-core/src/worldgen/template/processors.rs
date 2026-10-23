@@ -1,4 +1,7 @@
 use super::*;
+use steel_registry::structure_processor::{
+    StructureProcessorBlockSet, StructureProcessorHeightmap,
+};
 
 impl StructureTemplate {
     /// `StructureLayoutOptimizer`: skip out-of-bounds blocks before processors run.
@@ -106,20 +109,39 @@ impl StructureTemplate {
                 rottable_blocks,
                 integrity,
             } => {
-                if rottable_blocks.as_ref().is_some_and(|tag| {
-                    !registry
-                        .blocks
-                        .is_in_tag(Self::block_for_state(registry, original.state), tag)
+                if rottable_blocks.as_ref().is_some_and(|set| {
+                    !Self::block_set_contains(
+                        registry,
+                        set,
+                        Self::block_for_state(registry, current.state),
+                    )
                 }) {
                     return Some(current);
                 }
                 (Self::processor_next_f32(settings, current.world_pos, random) <= *integrity)
                     .then_some(current)
             }
+            StructureProcessorKind::BlockIgnore { blocks } => {
+                let block = Self::block_for_state(registry, current.state);
+                (!blocks.iter().any(|data| {
+                    registry
+                        .blocks
+                        .by_key(&data.name)
+                        .is_some_and(|ignored| ignored == block)
+                }))
+                .then_some(current)
+            }
+            StructureProcessorKind::Gravity { heightmap, offset } => Some(Self::process_gravity(
+                region, original, current, *heightmap, *offset,
+            )),
+            StructureProcessorKind::Nop => Some(current),
+            StructureProcessorKind::JigsawReplacement => {
+                Self::replace_jigsaw_block(registry, current)
+            }
             StructureProcessorKind::ProtectedBlocks { cannot_replace } => {
                 let existing =
                     Self::block_for_state(registry, region.block_state(current.world_pos));
-                (!existing.has_tag(cannot_replace)).then_some(current)
+                (!Self::block_set_contains(registry, cannot_replace, existing)).then_some(current)
             }
             StructureProcessorKind::Rule { rules } => {
                 let mut rule_random =
@@ -330,6 +352,60 @@ impl StructureTemplate {
         registry
             .blocks
             .set_property(state, &BlockStateProperties::HALF, half)
+    }
+
+    /// Vanilla `HolderSet.contains` for the block sets used by `block_rot` and
+    /// `protected_blocks`.
+    pub(super) fn block_set_contains(
+        registry: &Registry,
+        set: &StructureProcessorBlockSet,
+        block: BlockRef,
+    ) -> bool {
+        match set {
+            StructureProcessorBlockSet::Tag(tag) => registry.blocks.is_in_tag(block, tag),
+            StructureProcessorBlockSet::Entries(entries) => entries
+                .iter()
+                .filter_map(|entry| registry.blocks.by_key(entry))
+                .any(|entry| entry == block),
+        }
+    }
+
+    /// Mirrors vanilla `GravityProcessor.processBlock`: the block's world X/Z stay
+    /// put while its Y becomes the heightmap column height plus `offset` plus the
+    /// block's template-relative Y.
+    pub(super) fn process_gravity(
+        region: &WorldGenRegion<'_>,
+        original: &ProcessedBlockInfo,
+        mut current: ProcessedBlockInfo,
+        heightmap: StructureProcessorHeightmap,
+        offset: i32,
+    ) -> ProcessedBlockInfo {
+        // Structure placement only runs against a `WorldGenRegion`, never a
+        // `ServerLevel`, so vanilla keeps the configured heightmap type.
+        let height = region.height_at(
+            Self::heightmap_type(heightmap),
+            current.world_pos.x(),
+            current.world_pos.z(),
+        ) + offset;
+        current.world_pos = BlockPos::new(
+            current.world_pos.x(),
+            height + original.template_pos.y(),
+            current.world_pos.z(),
+        );
+        current
+    }
+
+    pub(super) const fn heightmap_type(heightmap: StructureProcessorHeightmap) -> HeightmapType {
+        match heightmap {
+            StructureProcessorHeightmap::WorldSurfaceWg => HeightmapType::WorldSurfaceWg,
+            StructureProcessorHeightmap::WorldSurface => HeightmapType::WorldSurface,
+            StructureProcessorHeightmap::OceanFloorWg => HeightmapType::OceanFloorWg,
+            StructureProcessorHeightmap::OceanFloor => HeightmapType::OceanFloor,
+            StructureProcessorHeightmap::MotionBlocking => HeightmapType::MotionBlocking,
+            StructureProcessorHeightmap::MotionBlockingNoLeaves => {
+                HeightmapType::MotionBlockingNoLeaves
+            }
+        }
     }
 
     pub(super) fn process_lava_submerged_block(
@@ -602,8 +678,8 @@ impl StructureTemplate {
         let final_state = nbt
             .string("final_state")
             .map_or_else(|| "minecraft:air".into(), |value| value.to_str());
-        current.state = Self::parse_block_state_string(registry, final_state.as_ref())
-            .unwrap_or_else(|| vanilla_blocks::AIR.default_state());
+        // Vanilla logs and drops the block when `final_state` fails to parse.
+        current.state = Self::parse_block_state_string(registry, final_state.as_ref())?;
         current.nbt = None;
 
         (Self::block_for_state(registry, current.state) != &vanilla_blocks::STRUCTURE_VOID)
@@ -686,7 +762,7 @@ impl StructureTemplate {
             registry,
             &rule.input_predicate,
             input_state,
-            template_pos,
+            world_pos,
             random,
         ) && Self::rule_test_matches(
             registry,
@@ -703,12 +779,12 @@ impl StructureTemplate {
         )
     }
 
-    pub(super) fn rule_test_matches(
+    pub(crate) fn rule_test_matches(
         registry: &Registry,
         test: &StructureRuleTestData,
         state: BlockStateId,
         pos: BlockPos,
-        random: &mut LegacyRandom,
+        random: &mut impl Random,
     ) -> bool {
         match test {
             StructureRuleTestData::AlwaysTrue => true,
@@ -792,6 +868,24 @@ impl StructureTemplate {
                         *max_chance,
                     )
             }
+            PosRuleTestData::LinearPos {
+                min_chance,
+                max_chance,
+                min_dist,
+                max_dist,
+            } => {
+                let dist = (world_pos.x() - reference_pos.x()).abs()
+                    + (world_pos.y() - reference_pos.y()).abs()
+                    + (world_pos.z() - reference_pos.z()).abs();
+                random.next_f32()
+                    <= Self::clamped_lerp_inverse(
+                        dist,
+                        *min_dist,
+                        *max_dist,
+                        *min_chance,
+                        *max_chance,
+                    )
+            }
         }
     }
 
@@ -808,13 +902,44 @@ impl StructureTemplate {
         );
         current.nbt = match &rule.block_entity_modifier {
             RuleBlockEntityModifierData::Passthrough => current.nbt,
+            RuleBlockEntityModifierData::Clear => Some(NbtCompound::new()),
+            RuleBlockEntityModifierData::AppendStatic { data } => {
+                let mut nbt = current.nbt.unwrap_or_default();
+                Self::merge_nbt_compound(&mut nbt, data);
+                Some(nbt)
+            }
             RuleBlockEntityModifierData::AppendLoot { loot_table } => {
                 let mut nbt = current.nbt.unwrap_or_default();
-                nbt.insert("LootTable", NbtTag::String(loot_table.to_string().into()));
-                nbt.insert("LootTableSeed", NbtTag::Long(random.next_i64()));
+                Self::put_nbt_tag(
+                    &mut nbt,
+                    "LootTable",
+                    NbtTag::String(loot_table.to_string().into()),
+                );
+                Self::put_nbt_tag(&mut nbt, "LootTableSeed", NbtTag::Long(random.next_i64()));
                 Some(nbt)
             }
         };
         current
+    }
+
+    /// `CompoundTag.put`: replaces an existing entry instead of appending a
+    /// duplicate key.
+    pub(super) fn put_nbt_tag(compound: &mut NbtCompound, name: &str, tag: NbtTag) {
+        compound.remove(name);
+        compound.insert(name, tag);
+    }
+
+    /// Mirrors `CompoundTag.merge`: nested compounds merge recursively, every
+    /// other value replaces the existing entry.
+    pub(super) fn merge_nbt_compound(target: &mut NbtCompound, source: &NbtCompound) {
+        for (key, tag) in source.iter() {
+            if let NbtTag::Compound(source_compound) = tag
+                && let Some(NbtTag::Compound(target_compound)) = target.get_mut(&key.to_str())
+            {
+                Self::merge_nbt_compound(target_compound, source_compound);
+                continue;
+            }
+            Self::put_nbt_tag(target, &key.to_str(), tag.clone());
+        }
     }
 }

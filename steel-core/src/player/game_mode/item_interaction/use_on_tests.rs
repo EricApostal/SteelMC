@@ -369,6 +369,11 @@ fn honeycomb_can_wax_blank_signs_without_consuming_in_creative() {
     interaction
         .player
         .restore_game_modes(GameType::Creative, None);
+    interaction
+        .player
+        .abilities
+        .lock()
+        .update_for_game_mode(GameType::Creative);
     interaction.hold(
         InteractionHand::MainHand,
         ItemStack::new(&vanilla_items::HONEYCOMB),

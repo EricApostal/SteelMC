@@ -8,7 +8,7 @@ use steel_registry::{
     equipment::EquipmentSlot,
     vanilla_enchantment_tags::EnchantmentTag,
 };
-use steel_utils::{Identifier, translations};
+use steel_utils::{Identifier, text::DisplayResolutor, translations};
 use text_components::{Modifier, TextComponent, format::Color, translation::TranslatedMessage};
 
 use super::super::{
@@ -19,10 +19,15 @@ use super::super::{
     },
     registration::CommandRegistration,
 };
-use crate::entity::{LivingEntity, SharedEntity};
+use crate::{
+    behavior::ITEM_BEHAVIORS,
+    entity::{LivingEntity, SharedEntity},
+    permission::PermissionLevel,
+};
 
 pub(super) fn registration() -> CommandRegistration<CommandSource> {
     CommandRegistration::new(Identifier::vanilla_static("enchant"), |_| command())
+        .at_level(PermissionLevel::Gamemasters)
 }
 
 fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
@@ -66,7 +71,7 @@ fn enchant(
         return Err(CommandSyntaxError::dynamic(message));
     }
 
-    let mut success = 0usize;
+    let mut enchanted = Vec::new();
     for target in &targets {
         let Some(living) = target.as_living_entity() else {
             if targets.len() == 1 {
@@ -76,7 +81,7 @@ fn enchant(
         };
 
         match enchant_main_hand(living, enchantment, level) {
-            EnchantTargetResult::Enchanted => success += 1,
+            EnchantTargetResult::Enchanted => enchanted.push(target),
             EnchantTargetResult::Itemless if targets.len() == 1 => {
                 return Err(itemless_error(target));
             }
@@ -87,31 +92,27 @@ fn enchant(
         }
     }
 
-    if success == 0 {
+    if enchanted.is_empty() {
         return Err(CommandSyntaxError::dynamic(TextComponent::from(
             &translations::COMMANDS_ENCHANT_FAILED,
         )));
     }
 
     let enchantment_name = enchantment_display_name(enchantment, level);
-    let message = if let [target] = targets.as_slice() {
-        translations::COMMANDS_ENCHANT_SUCCESS_SINGLE
+    let message = match enchanted.as_slice() {
+        [target] => translations::COMMANDS_ENCHANT_SUCCESS_SINGLE
+            .message([enchantment_name, target.display_name()])
+            .component(),
+        _ => translations::COMMANDS_ENCHANT_SUCCESS_MULTIPLE
             .message([
                 enchantment_name,
-                TextComponent::plain(target.plain_text_name()),
+                TextComponent::from(enchanted.len().to_string()),
             ])
-            .component()
-    } else {
-        translations::COMMANDS_ENCHANT_SUCCESS_MULTIPLE
-            .message([
-                enchantment_name,
-                TextComponent::from(targets.len().to_string()),
-            ])
-            .component()
+            .component(),
     };
     context.source().send_success(&message, true);
 
-    i32::try_from(success).map_err(|_| {
+    i32::try_from(enchanted.len()).map_err(|_| {
         CommandSyntaxError::dynamic("Enchanted entity count exceeds the command result range")
     })
 }
@@ -136,8 +137,12 @@ fn enchant_main_hand(
         if !enchantment.can_enchant(item.item())
             || !Enchantment::is_compatible_with_existing(enchantment, item)
         {
-            result =
-                EnchantTargetResult::Incompatible(item.item().key.to_string().into_boxed_str());
+            result = EnchantTargetResult::Incompatible(
+                ITEM_BEHAVIORS
+                    .hover_name(item)
+                    .to_plain(&DisplayResolutor)
+                    .into_boxed_str(),
+            );
             return;
         }
         result = EnchantTargetResult::Enchanted;

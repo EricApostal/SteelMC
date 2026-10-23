@@ -53,6 +53,9 @@ use steel_utils::{
     locks::{SyncMutex, SyncRwLock},
 };
 
+pub use entities::openers_counter::{
+    ContainerOpenersCounter, ContainerOpenersHost, ContainerViewers,
+};
 pub use registry::{BLOCK_ENTITIES, BlockEntityFactory, BlockEntityRegistry, init_block_entities};
 pub(crate) use storage::{
     BlockEntityInsert, BlockEntityLookup, BlockEntityStorage, ClearedBlockEntities,
@@ -319,14 +322,16 @@ impl BlockEntityBase {
         if self.is_removed() {
             return false;
         }
-        let Some(world) = self.level() else {
-            return false;
-        };
-        let Some(current) = world.get_block_entity(self.pos) else {
-            return false;
-        };
-        ptr::eq(current.base(), self)
+        self.current_block_entity().is_some()
             && player.is_within_block_interaction_range_with_buffer(self.pos, 4.0)
+    }
+
+    /// Returns the block entity currently stored at this base's position, if it
+    /// is still this entity.
+    pub(crate) fn current_block_entity(&self) -> Option<SharedBlockEntity> {
+        let world = self.level()?;
+        let current = world.get_block_entity(self.pos)?;
+        ptr::eq(current.base(), self).then_some(current)
     }
 }
 
@@ -496,6 +501,15 @@ pub trait BlockEntity: ErasedType + Send + Sync {
 
     /// Returns the independently lockable container capability owned by this entity.
     fn container_ref(&self) -> Option<ContainerRef> {
+        None
+    }
+
+    /// Returns the container-viewer accounting capability owned by this entity.
+    ///
+    /// Mirrors vanilla `ContainerOpenersCounter` ownership: block entities whose
+    /// blocks sound off, light up, or emit redstone while open expose their
+    /// counter so the menu open/close path can drive it without downcasting.
+    fn container_viewers(&self) -> Option<&dyn crate::block_entity::ContainerViewers> {
         None
     }
 

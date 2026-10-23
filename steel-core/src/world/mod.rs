@@ -26,6 +26,7 @@ use crate::world::game_event::{
     GameEventContext, GameEventDispatcher, GameEventListenerCount, GameEventListenerStorage,
     SharedGameEventListener,
 };
+use crate::world::spawn::ChunkInhabitedTimes;
 use crate::{chunk::chunk_map::ChunkMapGameTickTimings, world::weather::Weather};
 use steel_utils::saved_data::{SavedDataManager, names as saved_data_names};
 
@@ -120,20 +121,25 @@ mod domain_entity_directory;
 mod entity_management;
 mod environment;
 mod events;
+pub mod explosion;
+mod fire;
 /// Vanilla game-event contexts, listeners, and dispatch storage.
 pub mod game_event;
 mod level_effects;
-mod level_reader;
+pub(crate) mod level_reader;
+pub mod levelgen;
+mod lightning;
 mod player_index;
 pub(crate) mod player_spawn_finder;
 mod portals;
+pub mod precipitation;
 mod properties;
 mod raycast;
 mod redstone;
 mod signal_getter;
 mod sleep;
 mod sleep_status;
-mod spawn;
+pub(crate) mod spawn;
 pub mod tick_scheduler;
 pub mod village;
 mod weather;
@@ -155,6 +161,7 @@ pub(crate) use domain_entity_directory::DomainEntityDirectory;
 use entity_management::NavigatingMobTracker;
 #[cfg(test)]
 use entity_management::nearest_player_distance_in_range;
+pub use fire::fire_tick_delay;
 pub use level_reader::{LevelAccessor, LevelReader, ScheduledTickAccess};
 pub use player_index::{PlayerAreaMap, PlayerMap};
 pub use raycast::{ClipBlockShape, ClipFluid, ClipHitResult, RaytraceAction};
@@ -318,6 +325,11 @@ pub struct World {
     raids: SyncMutex<Raids>,
     /// Vanilla `SavedData.setDirty` for [`Self::raids`].
     raids_dirty: AtomicBool,
+    /// Per-chunk inhabited time feeding `getCurrentDifficultyAt`.
+    pub(crate) inhabited_times: ChunkInhabitedTimes,
+    /// Vanilla `ServerLevel.dragonFight`: the ender dragon fight, present only in
+    /// dimensions whose type opts in with `has_ender_dragon_fight`.
+    ender_dragon_fight: Option<SyncMutex<crate::entity::boss::EnderDragonFight>>,
     /// Vanilla `ServerLevel.customSpawners`: per-level spawners ticked every tick.
     custom_spawners: SyncMutex<Vec<Box<dyn CustomSpawner>>>,
     /// World-change requests queued by world-local ticks for server safe-point processing.
@@ -400,6 +412,19 @@ impl World {
         }
         let ticket_storage = ChunkTicketStorage::load(&saved_data, &key).await;
         let raids = Raids::load(&saved_data, saved_data_names::RAIDS).await;
+        let ender_dragon_fight = if dimension_type.has_ender_dragon_fight {
+            let data = saved_data
+                .load_or_default::<crate::entity::boss::dragon_fight::EnderDragonFightData>(
+                    saved_data_names::ENDER_DRAGON_FIGHT,
+                )
+                .await
+                .unwrap_or_default();
+            let mut fight = crate::entity::boss::EnderDragonFight::from_saved(data);
+            fight.init(seed, BlockPos::new(0, 0, 0));
+            Some(SyncMutex::new(fight))
+        } else {
+            None
+        };
         let world_border = WorldBorder::new(level_data.data().world_border)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         // let generator = Arc::new(ChunkGeneratorType::Flat(FlatChunkGenerator::new(
@@ -420,7 +445,7 @@ impl World {
             }
         }
 
-        Ok(Arc::new_cyclic(|weak_self: &Weak<World>| {
+        let world = Arc::new_cyclic(|weak_self: &Weak<World>| {
             let chunk_map = Arc::new(ChunkMap::new_with_storage_and_ticket_storage(
                 chunk_runtime,
                 Weak::clone(weak_self),
@@ -474,10 +499,24 @@ impl World {
                 poi_storage: SyncMutex::new(PointOfInterestStorage::new()),
                 raids: SyncMutex::new(raids),
                 raids_dirty: AtomicBool::new(false),
+                inhabited_times: ChunkInhabitedTimes::new(),
+                ender_dragon_fight,
                 custom_spawners: SyncMutex::new(Vec::new()),
                 pending_world_changes: SyncMutex::new(Vec::new()),
             }
-        }))
+        });
+
+        // Vanilla `MinecraftServer` builds the custom spawner list for the
+        // overworld only: `PhantomSpawner`, `PatrolSpawner`, `CatSpawner`,
+        // `VillageSiege`, `WanderingTraderSpawner`. Other dimensions get none.
+        if dimension_type.key == vanilla_dimension_types::OVERWORLD.key {
+            world.register_custom_spawner(Box::new(crate::world::levelgen::PhantomSpawner::new()));
+            world.register_custom_spawner(Box::new(crate::entity::raid::PatrolSpawner::default()));
+            world.register_custom_spawner(Box::new(crate::world::levelgen::CatSpawner::new()));
+            world.register_custom_spawner(Box::new(crate::world::levelgen::VillageSiege::new()));
+        }
+
+        Ok(world)
     }
 
     /// Cleans up the world by saving all chunks.
@@ -507,6 +546,21 @@ impl World {
             .save(&self.saved_data, saved_data_names::RAIDS)
             .await;
 
+        if let Some(fight) = &self.ender_dragon_fight {
+            let mut fight = fight.lock();
+            if fight.is_dirty() {
+                let data = fight.to_saved();
+                match self
+                    .saved_data
+                    .save(saved_data_names::ENDER_DRAGON_FIGHT, &data)
+                    .await
+                {
+                    Ok(()) => fight.mark_saved(),
+                    Err(e) => log::error!("Failed to save ender dragon fight: {e}"),
+                }
+            }
+        }
+
         self.save_custom_spawners().await;
 
         match self.save_all_chunks().await {
@@ -521,10 +575,23 @@ impl World {
     }
 
     /// Vanilla `ServerLevel.tickCustomSpawners`.
-    fn tick_custom_spawners(self: &Arc<Self>) {
+    pub(crate) fn tick_custom_spawners(self: &Arc<Self>, spawn_enemies: bool) {
         for spawner in self.custom_spawners.lock().iter_mut() {
-            spawner.tick(self);
+            spawner.tick_with_settings(self, spawn_enemies);
         }
+    }
+
+    /// Vanilla `ServerLevel.tick` `dragonFight` profiler section.
+    fn tick_ender_dragon_fight(self: &Arc<Self>) {
+        if let Some(fight) = &self.ender_dragon_fight {
+            fight.lock().tick(self);
+        }
+    }
+
+    /// Vanilla `ServerLevel.getDragonFight`.
+    #[must_use]
+    pub fn dragon_fight(&self) -> Option<&SyncMutex<crate::entity::boss::EnderDragonFight>> {
+        self.ender_dragon_fight.as_ref()
     }
 
     /// Persists every custom spawner's counters.
@@ -593,10 +660,20 @@ impl World {
         self.tick_raids();
         if runs_normally {
             self.tick_time();
-            self.tick_custom_spawners();
+            self.tick_ender_dragon_fight();
         }
 
         let random_tick_speed = self.get_game_rule(&RANDOM_TICK_SPEED) as u32;
+
+        // Vanilla `MinecraftServer.updateMobSpawningFlags` -> `ServerChunkCache.spawnEnemies`.
+        let spawn_enemies = runs_normally && self.is_spawning_monsters();
+
+        // Vanilla `ServerChunkCache.tickChunks` runs the natural spawn pass before
+        // the per-chunk `ServerLevel.tickChunk` random-tick pass.
+        if runs_normally {
+            let _span = tracing::trace_span!("natural_spawning").entered();
+            self.tick_natural_spawning(spawn_enemies);
+        }
 
         let early_lookup_stats = lookup_cache_scope.finish();
         let mut chunk_map_timings =
@@ -604,6 +681,13 @@ impl World {
                 .tick_game(self, tick_count, random_tick_speed, runs_normally);
         chunk_map_timings.lookup_cache.merge(early_lookup_stats);
         let lookup_cache_scope = GameplayChunkLookupCacheScope::enter(&self.chunk_map);
+
+        // Vanilla runs `tickCustomSpawners` after the chunk pass, inside
+        // `ServerChunkCache.tickChunks`.
+        if runs_normally {
+            let _span = tracing::trace_span!("custom_spawners").entered();
+            self.tick_custom_spawners(spawn_enemies);
+        }
 
         if runs_normally {
             let _span = tracing::trace_span!("block_events").entered();

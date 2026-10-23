@@ -35,8 +35,18 @@ fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
                 }),
             ),
     )
-    // TODO: Add the vanilla compound-NBT branch once Steel has an SNBT compound
-    // argument and recursive command entity loading.
+    // TODO: Add the vanilla `summon <entity> [<pos>] [<nbt>]` branch once Steel has an
+    // SNBT compound argument and recursive command entity loading.
+    // `nbt` needs `SteelArgumentType::nbt_tag()` (`execution/argument.rs` +
+    // `SteelCommandContext::nbt_tag()`, owner: `CommandArguments`); the tag is parsed
+    // from SNBT, which `steel_utils::nbt::parse_snbt_argument` already supports.
+    // Loading needs vanilla's `EntityType.loadEntityRecursive(tag, level, reason, consumer)`
+    // equivalent: merge the compound into the created entity and re-read every
+    // command-visible field (`Pos`, `Motion`, `Rotation`, `NoGravity`, `CustomName`,
+    // `Tags`, `data`, …) plus `Passengers`/`Vehicle` and the entity-specific
+    // `loadAdditional`. Steel only has creation-time `load_additional`/
+    // `apply_spawn_data` on an existing entity and no owned-compound recursive
+    // loader (owner: entity lane, `entity/entity/mod.rs` + `entity/mod.rs`).
 }
 
 fn summon_entity(

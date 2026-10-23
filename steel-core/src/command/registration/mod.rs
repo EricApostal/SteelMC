@@ -14,7 +14,8 @@ use super::{
     execution::{CommandPermissionSource, SteelCommandRuntime},
 };
 use crate::permission::{
-    PermissionExpr, PermissionKey, PermissionKeyError, PermissionSegment, PermissionState,
+    PermissionExpr, PermissionKey, PermissionKeyError, PermissionLevel, PermissionSegment,
+    PermissionState,
 };
 
 type CommandFactory<S> =
@@ -40,6 +41,7 @@ where
     id: Identifier,
     aliases: Vec<Box<str>>,
     permission: Option<PermissionExpr>,
+    level: Option<PermissionLevel>,
     subcommand_permissions: Vec<Vec<Box<str>>>,
     default_access: bool,
     factory: Box<CommandFactory<S>>,
@@ -58,6 +60,7 @@ where
             id,
             aliases: Vec::new(),
             permission: None,
+            level: None,
             subcommand_permissions: Vec::new(),
             default_access: false,
             factory: Box::new(factory),
@@ -75,6 +78,17 @@ where
     #[must_use]
     pub(crate) const fn default_access(mut self) -> Self {
         self.default_access = true;
+        self
+    }
+
+    /// Adds the vanilla command level that may run this command.
+    ///
+    /// The derived Steel key (`minecraft.command.<name>`) remains an additional
+    /// grant, so existing group configuration keeps working. Vanilla command
+    /// levels are the only accepted source of that grant.
+    #[must_use]
+    pub(crate) const fn at_level(mut self, level: PermissionLevel) -> Self {
+        self.level = Some(level);
         self
     }
 
@@ -120,7 +134,9 @@ where
                 });
             }
         }
-        if self.permission.is_some() && !self.subcommand_permissions.is_empty() {
+        if (self.permission.is_some() || self.level.is_some())
+            && !self.subcommand_permissions.is_empty()
+        {
             return Err(
                 CommandRegistrationError::SubcommandPermissionsRequireDerivedRoot {
                     id: self.id.clone(),
@@ -252,6 +268,7 @@ where
                 id,
                 aliases,
                 permission,
+                level,
                 subcommand_permissions,
                 default_access,
                 factory,
@@ -260,7 +277,11 @@ where
                 (permission, None)
             } else {
                 let key = derived_command_permission_key(&id)?;
-                (PermissionExpr::key(key.clone()), Some(key))
+                let permission = match level {
+                    Some(level) => PermissionExpr::key(key.clone()) | PermissionExpr::level(level),
+                    None => PermissionExpr::key(key.clone()),
+                };
+                (permission, Some(key))
             };
             collect_permission_keys(&root_permission, &mut permissions);
             let root = apply_registration_requirements(
@@ -516,6 +537,7 @@ fn collect_permission_keys(expression: &PermissionExpr, keys: &mut BTreeSet<Perm
             keys.insert(parent.clone());
             keys.insert(key.clone());
         }
+        PermissionExpr::Level(_) => {}
         PermissionExpr::All(expressions) | PermissionExpr::Any(expressions) => {
             for expression in expressions {
                 collect_permission_keys(expression, keys);

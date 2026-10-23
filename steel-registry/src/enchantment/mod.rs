@@ -1,4 +1,6 @@
 pub mod effect;
+pub mod provider;
+pub mod table;
 
 use crate::equipment::EquipmentSlot;
 pub use crate::equipment::EquipmentSlotGroup;
@@ -107,6 +109,57 @@ impl Enchantment {
     #[must_use]
     pub fn matching_slot(&self, slot: EquipmentSlot) -> bool {
         self.slots.iter().any(|group| group.test(slot))
+    }
+
+    /// Vanilla `Enchantment.getMinLevel`.
+    #[must_use]
+    pub const fn get_min_level(&self) -> i32 {
+        1
+    }
+
+    /// Vanilla `Enchantment.getMaxLevel`.
+    #[must_use]
+    pub fn get_max_level(&self) -> i32 {
+        self.max_level as i32
+    }
+
+    /// Vanilla `Enchantment.getMinCost`: `EnchantmentCost.calculate`.
+    #[must_use]
+    pub const fn get_min_cost(&self, level: i32) -> i32 {
+        self.min_cost.base + self.min_cost.per_level_above_first * (level - 1)
+    }
+
+    /// Vanilla `Enchantment.getMaxCost`: `EnchantmentCost.calculate`.
+    #[must_use]
+    pub const fn get_max_cost(&self, level: i32) -> i32 {
+        self.max_cost.base + self.max_cost.per_level_above_first * (level - 1)
+    }
+
+    /// Vanilla `Enchantment.isSupportedItem`.
+    #[must_use]
+    pub fn is_supported_item(&self, item: &crate::item_stack::ItemStack) -> bool {
+        self.can_enchant(item.item)
+    }
+
+    /// Vanilla `Enchantment.isPrimaryItem`.
+    #[must_use]
+    pub fn is_primary_item(&self, item: &crate::item_stack::ItemStack) -> bool {
+        if !self.is_supported_item(item) {
+            return false;
+        }
+        let Some(primary) = self.primary_items else {
+            return true;
+        };
+        let Some(tag) = parse_tag_ref(primary) else {
+            return false;
+        };
+        REGISTRY.items.is_in_tag(item.item, &tag)
+    }
+
+    /// Vanilla `Enchantment.canEnchant` for an item stack.
+    #[must_use]
+    pub fn can_enchant_stack(&self, item: &crate::item_stack::ItemStack) -> bool {
+        self.can_enchant(item.item)
     }
 
     /// Checks if this enchantment can be applied to the given item via `supported_items` tag.
@@ -507,6 +560,9 @@ mod tests {
             | EnchantmentEntityEffect::PlaySound { .. }
             | EnchantmentEntityEffect::Ignite { .. }
             | EnchantmentEntityEffect::ApplyMobEffect { .. }
+            | EnchantmentEntityEffect::SummonEntity { .. }
+            | EnchantmentEntityEffect::SpawnParticles { .. }
+            | EnchantmentEntityEffect::Attribute(_)
             | EnchantmentEntityEffect::Unsupported { .. } => false,
         }
     }
@@ -523,6 +579,9 @@ mod tests {
             | EnchantmentEntityEffect::DamageEntity { .. }
             | EnchantmentEntityEffect::Ignite { .. }
             | EnchantmentEntityEffect::ApplyMobEffect { .. }
+            | EnchantmentEntityEffect::SummonEntity { .. }
+            | EnchantmentEntityEffect::SpawnParticles { .. }
+            | EnchantmentEntityEffect::Attribute(_)
             | EnchantmentEntityEffect::Unsupported { .. } => false,
         }
     }

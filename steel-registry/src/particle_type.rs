@@ -60,6 +60,17 @@ impl ParticleType {
             network_writer: write_network::<T>,
         }
     }
+
+    /// Whether this type's payload is [`SimpleParticleOptions`], i.e. the type
+    /// carries no extra fields beyond the discriminator.
+    ///
+    /// Vanilla's `ParticleTypes` splits its entries into `SimpleParticleType`
+    /// (no payload) and option-carrying types (`dust`, `block`, `item`, …);
+    /// this mirrors that split for callers that only have a bare registry id.
+    #[must_use]
+    pub const fn is_simple(&self) -> bool {
+        self.expected_type_key.as_str() == SimpleParticleOptions::TYPE_KEY.as_str()
+    }
 }
 
 impl Debug for ParticleType {
@@ -98,6 +109,18 @@ impl ParticleData {
     #[must_use]
     pub fn simple(particle_type: ParticleTypeRef) -> Self {
         Self::new(particle_type, SimpleParticleOptions)
+    }
+
+    /// Builds a particle value with the type's zero-argument payload.
+    ///
+    /// Returns `None` for option-carrying types (`dust`, `block`, `item`, …),
+    /// whose payload a bare registry id cannot supply — vanilla's
+    /// `/particle <name>` likewise requires an options argument for those.
+    #[must_use]
+    pub fn with_default_options(particle_type: ParticleTypeRef) -> Option<Self> {
+        particle_type
+            .is_simple()
+            .then(|| Self::simple(particle_type))
     }
 
     #[must_use]

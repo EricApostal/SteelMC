@@ -5,6 +5,7 @@
 
 use super::prelude::*;
 use super::runner::FeatureDecorationRunner;
+use smallvec::SmallVec;
 
 #[derive(Clone, Copy)]
 enum BiomeFilterMode<'a> {
@@ -83,8 +84,48 @@ impl FeatureDecorationRunner {
             );
         };
 
+        let positions = Self::apply_placement_modifier(
+            region,
+            registry,
+            random,
+            origin,
+            biome_filter,
+            biome_zoom_seed,
+            modifier,
+        );
         let mut placed = false;
+        for position in positions {
+            if Self::place_placed_feature_from_modifier(
+                region,
+                registry,
+                random,
+                position,
+                feature,
+                biome_filter,
+                biome_zoom_seed,
+                modifier_index + 1,
+            ) {
+                placed = true;
+            }
+        }
+        placed
+    }
 
+    /// Applies one vanilla `PlacementModifier` to `origin`, returning the
+    /// positions the next modifier in the chain runs on.
+    ///
+    /// Mirrors the `Consumer<BlockPos>` output of `PlacementModifier.modify`.
+    /// `RandomlySelected` recurses here so it accepts any nested modifier
+    /// (`RandomlySelectedPlacement.java:33-35`), not only `Offset`.
+    fn apply_placement_modifier(
+        region: &mut WorldGenRegion<'_>,
+        registry: &Registry,
+        random: &mut WorldgenRandom,
+        origin: BlockPos,
+        biome_filter: BiomeFilterMode<'_>,
+        biome_zoom_seed: i64,
+        modifier: &PlacementModifier,
+    ) -> SmallVec<[BlockPos; 4]> {
         match modifier {
             PlacementModifier::Biome => {
                 let biome_allows = match biome_filter {
@@ -99,99 +140,48 @@ impl FeatureDecorationRunner {
                 };
 
                 if biome_allows {
-                    placed = Self::place_placed_feature_from_modifier(
-                        region,
-                        registry,
-                        random,
-                        origin,
-                        feature,
-                        biome_filter,
-                        biome_zoom_seed,
-                        modifier_index + 1,
-                    );
+                    SmallVec::from_elem(origin, 1)
+                } else {
+                    SmallVec::new()
                 }
             }
             PlacementModifier::BlockPredicateFilter { predicate } => {
                 if BlockStateProviderEvaluator::test_block_predicate(
                     region, registry, predicate, origin,
                 ) {
-                    placed = Self::place_placed_feature_from_modifier(
-                        region,
-                        registry,
-                        random,
-                        origin,
-                        feature,
-                        biome_filter,
-                        biome_zoom_seed,
-                        modifier_index + 1,
-                    );
+                    SmallVec::from_elem(origin, 1)
+                } else {
+                    SmallVec::new()
                 }
             }
             PlacementModifier::Count { count } => {
-                if let Ok(count) = usize::try_from(count.sample(random)) {
-                    for _ in 0..count {
-                        if Self::place_placed_feature_from_modifier(
-                            region,
-                            registry,
-                            random,
-                            origin,
-                            feature,
-                            biome_filter,
-                            biome_zoom_seed,
-                            modifier_index + 1,
-                        ) {
-                            placed = true;
-                        }
-                    }
-                }
+                let count = usize::try_from(count.sample(random)).unwrap_or(0);
+                SmallVec::from_elem(origin, count)
             }
             PlacementModifier::CountOnEveryLayer { count } => {
-                for position in Self::count_on_every_layer_positions(region, random, origin, count)
-                {
-                    if Self::place_placed_feature_from_modifier(
-                        region,
-                        registry,
-                        random,
-                        position,
-                        feature,
-                        biome_filter,
-                        biome_zoom_seed,
-                        modifier_index + 1,
-                    ) {
-                        placed = true;
-                    }
-                }
+                Self::count_on_every_layer_positions(region, random, origin, count)
+                    .into_iter()
+                    .collect()
             }
             PlacementModifier::EnvironmentScan {
                 direction_of_search,
                 target_condition,
                 allowed_search_condition,
                 max_steps,
-            } => {
-                if let Some(position) = Self::environment_scan_position(
-                    region,
-                    registry,
-                    origin,
-                    *direction_of_search,
-                    target_condition,
-                    allowed_search_condition.as_ref(),
-                    *max_steps,
-                ) {
-                    placed = Self::place_placed_feature_from_modifier(
-                        region,
-                        registry,
-                        random,
-                        position,
-                        feature,
-                        biome_filter,
-                        biome_zoom_seed,
-                        modifier_index + 1,
-                    );
-                }
-            }
+            } => Self::environment_scan_position(
+                region,
+                registry,
+                origin,
+                *direction_of_search,
+                target_condition,
+                allowed_search_condition.as_ref(),
+                *max_steps,
+            )
+            .map_or_else(SmallVec::new, |position| SmallVec::from_elem(position, 1)),
             PlacementModifier::FixedPlacement { positions } => {
                 let chunk_x = SectionPos::block_to_section_coord(origin.x());
                 let chunk_z = SectionPos::block_to_section_coord(origin.z());
+                let mut result = SmallVec::new();
                 for position in positions {
                     let position = BlockPos::new(position[0], position[1], position[2]);
                     if chunk_x != SectionPos::block_to_section_coord(position.x())
@@ -199,22 +189,12 @@ impl FeatureDecorationRunner {
                     {
                         continue;
                     }
-                    if Self::place_placed_feature_from_modifier(
-                        region,
-                        registry,
-                        random,
-                        position,
-                        feature,
-                        biome_filter,
-                        biome_zoom_seed,
-                        modifier_index + 1,
-                    ) {
-                        placed = true;
-                    }
+                    result.push(position);
                 }
+                result
             }
-            PlacementModifier::HeightRange { height } => {
-                let position = BlockPos::new(
+            PlacementModifier::HeightRange { height } => SmallVec::from_elem(
+                BlockPos::new(
                     origin.x(),
                     height.sample(
                         random,
@@ -223,18 +203,9 @@ impl FeatureDecorationRunner {
                         region.sea_level(),
                     ),
                     origin.z(),
-                );
-                placed = Self::place_placed_feature_from_modifier(
-                    region,
-                    registry,
-                    random,
-                    position,
-                    feature,
-                    biome_filter,
-                    biome_zoom_seed,
-                    modifier_index + 1,
-                );
-            }
+                ),
+                1,
+            ),
             PlacementModifier::Heightmap { heightmap } => {
                 let height = region.height_at(
                     Self::feature_heightmap_type(*heightmap),
@@ -242,35 +213,19 @@ impl FeatureDecorationRunner {
                     origin.z(),
                 );
                 if height > region.min_y() {
-                    placed = Self::place_placed_feature_from_modifier(
-                        region,
-                        registry,
-                        random,
-                        BlockPos::new(origin.x(), height, origin.z()),
-                        feature,
-                        biome_filter,
-                        biome_zoom_seed,
-                        modifier_index + 1,
-                    );
+                    SmallVec::from_elem(BlockPos::new(origin.x(), height, origin.z()), 1)
+                } else {
+                    SmallVec::new()
                 }
             }
-            PlacementModifier::InSquare => {
-                let position = BlockPos::new(
+            PlacementModifier::InSquare => SmallVec::from_elem(
+                BlockPos::new(
                     origin.x() + random.next_i32_bounded(16),
                     origin.y(),
                     origin.z() + random.next_i32_bounded(16),
-                );
-                placed = Self::place_placed_feature_from_modifier(
-                    region,
-                    registry,
-                    random,
-                    position,
-                    feature,
-                    biome_filter,
-                    biome_zoom_seed,
-                    modifier_index + 1,
-                );
-            }
+                ),
+                1,
+            ),
             PlacementModifier::NoiseBasedCount {
                 noise_to_count_ratio,
                 noise_factor,
@@ -282,22 +237,8 @@ impl FeatureDecorationRunner {
                 );
                 let count =
                     ((noise + *noise_offset) * f64::from(*noise_to_count_ratio)).ceil() as i32;
-                if let Ok(count) = usize::try_from(count) {
-                    for _ in 0..count {
-                        if Self::place_placed_feature_from_modifier(
-                            region,
-                            registry,
-                            random,
-                            origin,
-                            feature,
-                            biome_filter,
-                            biome_zoom_seed,
-                            modifier_index + 1,
-                        ) {
-                            placed = true;
-                        }
-                    }
-                }
+                let count = usize::try_from(count).unwrap_or(0);
+                SmallVec::from_elem(origin, count)
             }
             PlacementModifier::NoiseThresholdCount {
                 noise_level,
@@ -313,59 +254,29 @@ impl FeatureDecorationRunner {
                 } else {
                     *above_noise
                 };
-                if let Ok(count) = usize::try_from(count) {
-                    for _ in 0..count {
-                        if Self::place_placed_feature_from_modifier(
-                            region,
-                            registry,
-                            random,
-                            origin,
-                            feature,
-                            biome_filter,
-                            biome_zoom_seed,
-                            modifier_index + 1,
-                        ) {
-                            placed = true;
-                        }
-                    }
-                }
+                let count = usize::try_from(count).unwrap_or(0);
+                SmallVec::from_elem(origin, count)
             }
             PlacementModifier::RandomOffset {
                 xz_spread,
                 y_spread,
-            } => {
-                let position = BlockPos::new(
+            } => SmallVec::from_elem(
+                BlockPos::new(
                     origin.x() + xz_spread.sample(random),
                     origin.y() + y_spread.sample(random),
                     origin.z() + xz_spread.sample(random),
-                );
-                placed = Self::place_placed_feature_from_modifier(
-                    region,
-                    registry,
-                    random,
-                    position,
-                    feature,
-                    biome_filter,
-                    biome_zoom_seed,
-                    modifier_index + 1,
-                );
-            }
+                ),
+                1,
+            ),
             PlacementModifier::RarityFilter { chance } => {
                 assert!(
                     *chance > 0,
                     "rarity filter chance must be positive, got {chance}"
                 );
                 if random.next_f32() < 1.0 / (*chance as f32) {
-                    placed = Self::place_placed_feature_from_modifier(
-                        region,
-                        registry,
-                        random,
-                        origin,
-                        feature,
-                        biome_filter,
-                        biome_zoom_seed,
-                        modifier_index + 1,
-                    );
+                    SmallVec::from_elem(origin, 1)
+                } else {
+                    SmallVec::new()
                 }
             }
             PlacementModifier::SurfaceRelativeThresholdFilter {
@@ -382,16 +293,9 @@ impl FeatureDecorationRunner {
                 let max_y = surface_y + i64::from(max_inclusive.unwrap_or(i32::MAX));
                 let origin_y = i64::from(origin.y());
                 if min_y <= origin_y && origin_y <= max_y {
-                    placed = Self::place_placed_feature_from_modifier(
-                        region,
-                        registry,
-                        random,
-                        origin,
-                        feature,
-                        biome_filter,
-                        biome_zoom_seed,
-                        modifier_index + 1,
-                    );
+                    SmallVec::from_elem(origin, 1)
+                } else {
+                    SmallVec::new()
                 }
             }
             PlacementModifier::SurfaceWaterDepthFilter { max_water_depth } => {
@@ -399,76 +303,45 @@ impl FeatureDecorationRunner {
                     region.height_at(HeightmapType::OceanFloor, origin.x(), origin.z());
                 let surface = region.height_at(HeightmapType::WorldSurface, origin.x(), origin.z());
                 if surface - ocean_floor <= *max_water_depth {
-                    placed = Self::place_placed_feature_from_modifier(
-                        region,
-                        registry,
-                        random,
-                        origin,
-                        feature,
-                        biome_filter,
-                        biome_zoom_seed,
-                        modifier_index + 1,
-                    );
+                    SmallVec::from_elem(origin, 1)
+                } else {
+                    SmallVec::new()
                 }
             }
-            PlacementModifier::Offset { x, y, z } => {
-                let position = BlockPos::new(
+            PlacementModifier::Offset { x, y, z } => SmallVec::from_elem(
+                BlockPos::new(
                     origin.x() + x.sample(random),
                     origin.y() + y.sample(random),
                     origin.z() + z.sample(random),
-                );
-                placed = Self::place_placed_feature_from_modifier(
-                    region,
-                    registry,
-                    random,
-                    position,
-                    feature,
-                    biome_filter,
-                    biome_zoom_seed,
-                    modifier_index + 1,
-                );
-            }
+                ),
+                1,
+            ),
             PlacementModifier::RandomChance { chance } => {
                 if random.next_f32() < *chance {
-                    placed = Self::place_placed_feature_from_modifier(
-                        region,
-                        registry,
-                        random,
-                        origin,
-                        feature,
-                        biome_filter,
-                        biome_zoom_seed,
-                        modifier_index + 1,
-                    );
+                    SmallVec::from_elem(origin, 1)
+                } else {
+                    SmallVec::new()
                 }
             }
             PlacementModifier::RandomlySelected { placements } => {
+                assert!(
+                    !placements.is_empty(),
+                    "vanilla randomly selected placement requires a non-empty list"
+                );
                 let Ok(count) = i32::try_from(placements.len()) else {
                     panic!("vanilla randomly selected placement count exceeds i32")
                 };
 
                 let index = random.next_i32_bounded(count) as usize;
-                let modifier = &placements[index];
-                match modifier {
-                    PlacementModifier::Offset { x, y, z } => {
-                        let position = BlockPos::new(
-                            origin.x() + x.sample(random),
-                            origin.y() + y.sample(random),
-                            origin.z() + z.sample(random),
-                        );
-                        placed = Self::place_placed_feature_from_modifier(
-                            region,
-                            registry,
-                            random,
-                            position,
-                            feature,
-                            biome_filter,
-                            biome_zoom_seed,
-                            modifier_index + 1,
-                        );
-                    }
-                    _ => panic!("unsupported nested vanilla placement modifier: {modifier:?}"),
-                }
+                Self::apply_placement_modifier(
+                    region,
+                    registry,
+                    random,
+                    origin,
+                    biome_filter,
+                    biome_zoom_seed,
+                    &placements[index],
+                )
             }
             PlacementModifier::Cuboid {
                 xz_size,
@@ -479,6 +352,7 @@ impl FeatureDecorationRunner {
                 let height = y_size.sample(random);
                 let width = xz_size.sample(random);
                 let length = xz_size.sample(random);
+                let mut result = SmallVec::new();
                 for x in 0..=width {
                     for y in 0..=height {
                         for z in 0..=length {
@@ -497,30 +371,19 @@ impl FeatureDecorationRunner {
                                         || y == height
                                         || z == 0
                                         || z == length);
-                            if !included {
-                                continue;
-                            }
-                            let position =
-                                BlockPos::new(origin.x() + x, origin.y() + y, origin.z() + z);
-                            if Self::place_placed_feature_from_modifier(
-                                region,
-                                registry,
-                                random,
-                                position,
-                                feature,
-                                biome_filter,
-                                biome_zoom_seed,
-                                modifier_index + 1,
-                            ) {
-                                placed = true;
+                            if included {
+                                result.push(BlockPos::new(
+                                    origin.x() + x,
+                                    origin.y() + y,
+                                    origin.z() + z,
+                                ));
                             }
                         }
                     }
                 }
+                result
             }
         }
-
-        placed
     }
 
     pub(super) fn place_placed_feature_ref(
@@ -544,6 +407,37 @@ impl FeatureDecorationRunner {
             feature_data,
             None,
             biome_zoom_seed,
+        )
+    }
+
+    /// Places a placed feature for a flat generator, bypassing the key-based biome check.
+    ///
+    /// Vanilla's flat generator compares the biome by identity against
+    /// `FlatLevelGeneratorSettings.adjustGenerationSettings`'s already-substituted
+    /// stage list, so the key-based check must be bypassed here: the stage list is
+    /// fully controlled by the generator and every entry in it is allowed.
+    pub(super) fn place_flat_feature(
+        region: &mut WorldGenRegion<'_>,
+        registry: &Registry,
+        random: &mut WorldgenRandom,
+        origin: BlockPos,
+        feature: &PlacedFeatureRef,
+        biome_zoom_seed: i64,
+    ) -> bool {
+        let feature_data = match feature {
+            PlacedFeatureRef::Reference(feature) => &feature.data,
+            PlacedFeatureRef::Inline(feature) => feature,
+        };
+
+        Self::place_placed_feature_from_modifier(
+            region,
+            registry,
+            random,
+            origin,
+            feature_data,
+            BiomeFilterMode::Ignore,
+            biome_zoom_seed,
+            0,
         )
     }
 

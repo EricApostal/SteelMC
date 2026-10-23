@@ -5,10 +5,10 @@ use crate::{
     inventory::{
         click::Click,
         container::{Container, CraftingContainer, clear_or_count_matching_stack},
-        lock::{ContainerId, ContainerLockGuard},
+        lock::{ContainerId, ContainerLockGuard, ContainerRef},
         menu::{
             Menu,
-            kinds::{INVENTORY_MENU_CONTAINER_ID, InventoryKind, MerchantMenuKind, merchant_menu},
+            kinds::{InventoryKind, MerchantMenuKind, merchant_menu},
         },
         slots::CraftingHandler,
     },
@@ -243,19 +243,45 @@ impl Player {
     }
 
     /// Handles a container button click packet (e.g., enchanting table buttons).
+    ///
+    /// Mirrors vanilla `ServerGamePacketListenerImpl.handleContainerButtonClick`:
+    /// spectator and mismatched container ids are ignored, buttons on stale
+    /// menus are dropped, and an unaccepted button is ignored without
+    /// disconnecting the client.
     pub fn handle_container_button_click(&self, packet: SContainerButtonClick) {
+        self.reset_last_action_time();
         log::debug!(
             "Player {} clicked button {} in container {}",
             self.gameprofile.name(),
             packet.button_id,
             packet.container_id
         );
-        // TODO: Implement container button click handling
-        // This is used for things like:
-        // - Enchanting table level selection
-        // - Stonecutter recipe selection
-        // - Loom pattern selection
-        // - Lectern page turning
+        let Ok(mut menu) = self.take_open_menu_for_callback(Some(packet.container_id)) else {
+            return;
+        };
+        if self.game_mode() == GameType::Spectator {
+            self.finish_open_menu_callback(menu);
+            return;
+        }
+        if !menu.still_valid(self) {
+            log::debug!(
+                "Player {} clicked a button in an invalid menu",
+                self.gameprofile.name()
+            );
+            self.finish_open_menu_callback(menu);
+            return;
+        }
+        if menu.click_menu_button(packet.button_id, self, &self.connection) {
+            self.finish_open_menu_callback(menu);
+            return;
+        }
+        log::debug!(
+            "Player {} sent an unaccepted button click {} in container {}",
+            self.gameprofile.name(),
+            packet.button_id,
+            packet.container_id
+        );
+        self.finish_open_menu_callback(menu);
     }
 
     /// Handles a trade selection from a merchant screen.
@@ -468,7 +494,10 @@ impl Player {
 
     /// Handles a container close packet.
     ///
-    /// Based on Java's `ServerGamePacketListenerImpl::handleContainerClose`.
+    /// Based on Java's `ServerGamePacketListenerImpl::handleContainerClose`,
+    /// which ignores the packet's container id and closes whatever menu is
+    /// currently open. With no external menu open, the always-open inventory
+    /// menu is the one being removed.
     pub fn handle_container_close(&self, packet: SContainerClose) {
         log::debug!(
             "Player {} closed container {}",
@@ -476,26 +505,12 @@ impl Player {
             packet.container_id
         );
 
-        let open_menu = self.open_menu.lock();
-        let closes_open_menu = open_menu
-            .menu
-            .as_ref()
-            .is_some_and(|menu| i32::from(menu.container_id()) == packet.container_id)
-            || open_menu
-                .dispatch
-                .as_ref()
-                .is_some_and(|dispatch| i32::from(dispatch.container_id) == packet.container_id);
-        drop(open_menu);
-
-        if closes_open_menu {
+        if self.has_container_open() {
             self.do_close_container();
             return;
         }
 
-        if packet.container_id == i32::from(INVENTORY_MENU_CONTAINER_ID) {
-            let mut menu = self.inventory_menu.lock();
-            menu.removed(self);
-        }
+        self.inventory_menu.lock().removed(self);
     }
 
     /// Handles an anvil rename packet.
@@ -515,6 +530,11 @@ impl Player {
     }
 
     /// Handles a container slot state changed packet (e.g., crafter slot toggle).
+    ///
+    /// Mirrors vanilla `ServerGamePacketListenerImpl.handleContainerSlotStateChanged`:
+    /// spectator and mismatched container ids are ignored, slots on stale menus
+    /// are dropped, and a kind that rejects the toggle leaves the client state
+    /// untouched.
     pub fn handle_container_slot_state_changed(&self, packet: SContainerSlotStateChanged) {
         log::debug!(
             "Player {} changed slot {} state to {} in container {}",
@@ -523,13 +543,30 @@ impl Player {
             packet.new_state,
             packet.container_id
         );
-        // TODO: Implement slot state change handling
-        // This is used for the crafter block to enable/disable slots
+        let Ok(mut menu) = self.take_open_menu_for_callback(Some(packet.container_id)) else {
+            return;
+        };
+        if self.game_mode() == GameType::Spectator {
+            self.finish_open_menu_callback(menu);
+            return;
+        }
+        if !menu.still_valid(self) {
+            log::debug!(
+                "Player {} toggled a slot in an invalid menu",
+                self.gameprofile.name()
+            );
+            self.finish_open_menu_callback(menu);
+            return;
+        }
+        menu.set_slot_state(packet.slot_id, packet.new_state, self, &self.connection);
+        self.finish_open_menu_callback(menu);
     }
 
     /// Handles a creative mode slot set packet.
     pub fn handle_set_creative_mode_slot(&self, packet: SSetCreativeModeSlot) {
-        if self.game_mode() != GameType::Creative {
+        // Vanilla gates on `hasInfiniteMaterials()` (the instabuild ability), not
+        // the game mode, so ability edits and restored player data are honoured.
+        if !self.has_infinite_materials() {
             return;
         }
 
@@ -939,6 +976,34 @@ impl Player {
     pub fn has_container_open(&self) -> bool {
         let open_menu = self.open_menu.lock();
         open_menu.menu.is_some() || open_menu.dispatch.is_some()
+    }
+
+    /// Returns whether this player currently has `container` open.
+    ///
+    /// Mirrors the vanilla `player.containerMenu` container identity check used by
+    /// `ContainerOpenersCounter.isOwnContainer`. A combined (double-chest) menu
+    /// reports both halves.
+    #[must_use]
+    pub fn has_open_container(&self, container: &ContainerRef) -> bool {
+        let container_id = container.container_id();
+        let open_menu = self.open_menu.lock();
+        if let Some(menu) = open_menu.menu.as_ref() {
+            return menu
+                .behavior()
+                .container_refs()
+                .iter()
+                .any(|candidate| candidate.container_id() == container_id);
+        }
+        if open_menu.dispatch.is_some() {
+            return false;
+        }
+        drop(open_menu);
+        self.inventory_menu
+            .lock()
+            .behavior()
+            .container_refs()
+            .iter()
+            .any(|candidate| candidate.container_id() == container_id)
     }
 
     /// Returns the container id of the open merchant menu, if one is open.

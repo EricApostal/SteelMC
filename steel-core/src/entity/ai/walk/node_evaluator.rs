@@ -17,7 +17,9 @@ pub struct AcceptedNodeRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WalkNeighbors {
-    nodes: [Option<i32>; 8],
+    /// Vanilla `WalkNodeEvaluator` writes at most 8 nodes; `FlyNodeEvaluator`'s
+    /// 26-neighbourhood reuses the same buffer, so it is sized for the larger set.
+    nodes: [Option<i32>; 26],
     len: usize,
 }
 
@@ -25,7 +27,7 @@ impl WalkNeighbors {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            nodes: [None; 8],
+            nodes: [None; 26],
             len: 0,
         }
     }
@@ -44,9 +46,11 @@ impl WalkNeighbors {
         self.nodes[..self.len].iter().copied().flatten()
     }
 
-    const fn push(&mut self, node: i32) {
-        self.nodes[self.len] = Some(node);
-        self.len += 1;
+    pub(super) const fn push(&mut self, node: i32) {
+        if self.len < self.nodes.len() {
+            self.nodes[self.len] = Some(node);
+            self.len += 1;
+        }
     }
 }
 
@@ -86,15 +90,15 @@ impl WalkNodeEvaluator {
         self.nodes.get(hash)
     }
 
-    pub(crate) fn node_mut(&mut self, hash: i32) -> Option<&mut Node> {
+    pub fn node_mut(&mut self, hash: i32) -> Option<&mut Node> {
         self.nodes.get_mut(hash)
     }
 
-    pub(crate) const fn nodes_mut(&mut self) -> &mut NodeStore {
+    pub const fn nodes_mut(&mut self) -> &mut NodeStore {
         &mut self.nodes
     }
 
-    pub(crate) fn reset_search_state(&mut self) {
+    pub fn reset_search_state(&mut self) {
         self.nodes.reset_search_state();
     }
 
@@ -493,7 +497,11 @@ impl WalkNodeEvaluator {
         .find(|pos| self.can_start_at(context, *pos))
     }
 
-    fn get_start_node(&mut self, context: &mut PathfindingContext<'_>, pos: BlockPos) -> i32 {
+    pub(crate) fn get_start_node(
+        &mut self,
+        context: &mut PathfindingContext<'_>,
+        pos: BlockPos,
+    ) -> i32 {
         let path_type = self.get_path_type_of_mob(context, pos.x(), pos.y(), pos.z());
         let cost_malus = self.settings.pathfinding_malus(path_type);
         let node = self.nodes.get_node(pos.x(), pos.y(), pos.z());
@@ -507,7 +515,7 @@ impl WalkNodeEvaluator {
         path_type != PathType::Open && self.settings.pathfinding_malus(path_type) >= 0.0
     }
 
-    fn is_neighbor_valid(&self, node: Option<i32>, current_cost_malus: f32) -> bool {
+    pub(crate) fn is_neighbor_valid(&self, node: Option<i32>, current_cost_malus: f32) -> bool {
         let Some(node) = node.and_then(|hash| self.node(hash)) else {
             return false;
         };
@@ -695,7 +703,7 @@ impl WalkNodeEvaluator {
         f64::from(self.settings.max_up_step()).max(1.125)
     }
 
-    fn get_node_and_update_cost_to_max(
+    pub(crate) fn get_node_and_update_cost_to_max(
         &mut self,
         x: i32,
         y: i32,
@@ -709,7 +717,7 @@ impl WalkNodeEvaluator {
         node.hash()
     }
 
-    fn get_blocked_node(&mut self, x: i32, y: i32, z: i32) -> i32 {
+    pub(crate) fn get_blocked_node(&mut self, x: i32, y: i32, z: i32) -> i32 {
         let node = self.nodes.get_node(x, y, z);
         node.path_type = PathType::Blocked;
         node.cost_malus = -1.0;

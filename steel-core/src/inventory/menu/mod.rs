@@ -143,11 +143,60 @@ impl Menu {
         accepted
     }
 
+    /// Forwards a container button click (enchant/loom/stonecutter/lectern selection).
+    ///
+    /// Mirrors vanilla `AbstractContainerMenu.clickMenuButton`. Returns `false`
+    /// when no kind accepted the button, so the caller can treat it as invalid.
+    pub fn click_menu_button(
+        &mut self,
+        button_id: i32,
+        player: &Player,
+        connection: &Arc<PlayerConnection>,
+    ) -> bool {
+        let accepted = {
+            let mut guard = self.behavior.lock_all_containers();
+            let Self { behavior, kind, .. } = self;
+            kind.on_button_clicked(behavior, &mut guard, button_id, player)
+        };
+        // Vanilla re-sends contents only for an accepted button.
+        if accepted {
+            self.behavior.broadcast_changes(connection);
+        }
+        accepted
+    }
+
+    /// Forwards a slot-state toggle (crafter slot disabling).
+    ///
+    /// Mirrors vanilla `AbstractContainerMenu.setSlotState` reached from
+    /// `ServerGamePacketListenerImpl.handleContainerSlotStateChanged`. Returns
+    /// `false` when no kind accepted it, matching vanilla's `instanceof`
+    /// rejection.
+    pub fn set_slot_state(
+        &mut self,
+        slot_id: i32,
+        new_state: bool,
+        player: &Player,
+        connection: &Arc<PlayerConnection>,
+    ) -> bool {
+        let accepted = {
+            let mut guard = self.behavior.lock_all_containers();
+            let Self { behavior, kind, .. } = self;
+            kind.on_slot_state_changed(behavior, &mut guard, slot_id, new_state, player)
+        };
+        if accepted {
+            self.behavior.broadcast_changes(connection);
+        }
+        accepted
+    }
+
     /// Called when the menu is closed. Hands the carried item and input sections
     /// back to the player, then runs the kind's cleanup. Items drop into the
     /// world if the player can't take them (see
     /// [`Player::returns_menu_items_to_inventory`]).
     pub fn removed(&mut self, player: &Player) {
+        // Vanilla `stopOpen` runs before the menu hands items back.
+        self.for_each_viewed_block_entity(player, |viewers, player| viewers.stop_open(player));
+
         let return_to_inventory = player.returns_menu_items_to_inventory();
 
         let carried = mem::take(self.behavior.carried_mut());
@@ -219,9 +268,41 @@ impl Menu {
     /// Runs the kind's `on_open` hook, after contents are built but before they
     /// are sent to the client.
     pub fn on_open(&mut self, player: &Player) {
-        let mut guard = self.behavior().lock_all_containers();
-        let Self { behavior, kind, .. } = self;
-        kind.on_open(behavior, &mut guard, player);
+        {
+            let mut guard = self.behavior().lock_all_containers();
+            let Self { behavior, kind, .. } = self;
+            kind.on_open(behavior, &mut guard, player);
+        }
+        // Vanilla `startOpen` runs once the menu is installed, for every
+        // container the menu exposes.
+        self.for_each_viewed_block_entity(player, |viewers, player| viewers.start_open(player));
+    }
+
+    /// Runs `action` for each distinct block entity backing this menu's slots.
+    ///
+    /// Vanilla's `AbstractContainerMenu` drives `Container.startOpen`/`stopOpen`
+    /// from the menu lifecycle rather than from each menu subclass, so this
+    /// covers every block-entity-backed container uniformly.
+    fn for_each_viewed_block_entity(
+        &self,
+        player: &Player,
+        mut action: impl FnMut(&dyn crate::block_entity::ContainerViewers, &Player),
+    ) {
+        let mut seen = Vec::new();
+        for container_ref in self.behavior.container_refs() {
+            let id = container_ref.container_id();
+            if seen.contains(&id) {
+                continue;
+            }
+            seen.push(id);
+            let Some(entity) = container_ref.owner_block_entity() else {
+                continue;
+            };
+            let Some(viewers) = entity.container_viewers() else {
+                continue;
+            };
+            action(viewers, player);
+        }
     }
 
     /// Runs the kind's `on_tick` hook. Called once per server tick while open.

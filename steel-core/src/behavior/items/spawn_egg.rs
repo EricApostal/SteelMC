@@ -11,12 +11,14 @@ use steel_registry::item_stack::ItemStack;
 use steel_registry::stat::vanilla_stat_types;
 use steel_registry::{vanilla_blocks, vanilla_game_events};
 use steel_utils::BlockPos;
+use steel_utils::Downcast as _;
 
 use crate::behavior::item_utils::get_player_pov_hit_result;
 use crate::behavior::{
     BLOCK_BEHAVIORS, BlockCollisionContext, BlockStateBehaviorExt as _, ITEM_BEHAVIORS,
     InteractionResult, InventoryAccess, ItemBehavior, UseItemContext, UseOnContext,
 };
+use crate::block_entity::entities::SpawnerBlockEntity;
 use crate::entity::{
     AgeableMob, EntitySpawnPlacement, EntitySpawnReason, EntitySpawnRequest, Mob, SharedEntity,
     add_spawned_entity, apply_implicit_item_stack_components, create_entity_instance, spawn_entity,
@@ -133,6 +135,59 @@ impl SpawnEggItem {
     }
 }
 
+impl SpawnEggItem {
+    /// Vanilla `SpawnEggItem.useOn`'s spawner branch: writes the egg's entity
+    /// (and, for game-master players, its full `entity_data`) into the mob
+    /// spawner instead of spawning a mob beside it.
+    fn set_spawner_entity(
+        context: &UseOnContext<'_>,
+        stack: &ItemStack,
+        pos: BlockPos,
+    ) -> InteractionResult {
+        // Vanilla `ServerLevel.isSpawnerBlockEnabled` (`spawnerBlocksWork`).
+        if !context
+            .world
+            .get_game_rule(&steel_registry::vanilla_game_rules::SPAWNER_BLOCKS_WORK)
+        {
+            context.player.send_message(
+                &steel_utils::translations::ADV_MODE_NOT_ENABLED_SPAWNER
+                    .msg()
+                    .component(),
+            );
+            return InteractionResult::Fail;
+        }
+
+        let Some(entity_type) = Self::entity_type(stack) else {
+            return InteractionResult::Fail;
+        };
+        let Some(block_entity) = context.world.get_block_entity(pos) else {
+            return InteractionResult::Fail;
+        };
+        let Some(spawner) = block_entity.downcast_ref::<SpawnerBlockEntity>() else {
+            return InteractionResult::Fail;
+        };
+
+        // Vanilla only honours `entity_data` for operators.
+        let entity_data = stack
+            .get(ENTITY_DATA)
+            .filter(|_| context.player.is_operator());
+        if let Some(entity_data) = entity_data {
+            spawner.set_next_spawn_data(entity_data.data().copy_tag(), Vec::new());
+        } else {
+            spawner.set_entity_id(&entity_type.key.to_string());
+        }
+
+        context.world.send_block_updated(pos);
+        context.world.game_event(
+            &vanilla_game_events::BLOCK_CHANGE,
+            pos,
+            &GameEventContext::new(Some(context.player.as_ref()), None),
+        );
+        context.inv.with_item(|item| item.shrink(1));
+        InteractionResult::Success
+    }
+}
+
 impl ItemBehavior for SpawnEggItem {
     fn as_spawn_egg(&self) -> Option<&SpawnEggItem> {
         Some(self)
@@ -147,10 +202,7 @@ impl ItemBehavior for SpawnEggItem {
         let clicked_pos = context.hit_result.block_pos;
         let clicked_state = context.world.get_block_state(clicked_pos);
         if clicked_state.get_block() == &vanilla_blocks::SPAWNER {
-            // TODO: Use spawn eggs on a spawner block and also check if the condition is correct
-            // Spawner block-entity mutation is a separate foundation; do not
-            // incorrectly create a mob beside a spawner in its place.
-            return InteractionResult::Fail;
+            return Self::set_spawner_entity(context, &stack, clicked_pos);
         }
 
         let clicked_face = context.hit_result.direction;

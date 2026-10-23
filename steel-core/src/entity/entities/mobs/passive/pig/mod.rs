@@ -234,6 +234,35 @@ impl Entity for PigEntity {
         &self.base
     }
 
+    /// Vanilla `Pig.thunderHit`: converts to a zombified piglin unless the
+    /// difficulty is peaceful, otherwise takes the default 5.0 lightning damage.
+    fn thunder_hit(&self, world: &Arc<World>, bolt: &SharedEntity) {
+        if world.difficulty() != steel_utils::types::Difficulty::Peaceful {
+            let converted = self.convert_to(
+                &steel_registry::vanilla_entities::ZOMBIFIED_PIGLIN,
+                crate::entity::ConversionParams::single(false, true),
+                Some(&move |mob| {
+                    mob.set_persistence_required();
+                }),
+            );
+            if converted.is_some() {
+                return;
+            }
+        }
+
+        // `Entity::thunder_hit` default body, inlined: a UFCS call here would
+        // resolve back to this override and recurse. `bolt` only identifies the
+        // strike for de-duplication; the default damages for 5.0.
+        let _ = bolt;
+        if Entity::is_alive(self) {
+            self.hurt(
+                world,
+                &DamageSource::environment(&steel_registry::vanilla_damage_types::LIGHTNING_BOLT),
+                5.0,
+            );
+        }
+    }
+
     fn entity_type(&self) -> EntityTypeRef {
         self.entity_type
     }

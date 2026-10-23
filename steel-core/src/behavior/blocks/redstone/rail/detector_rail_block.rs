@@ -68,7 +68,10 @@ impl DetectorRailBlock {
     }
 
     fn check_pressed(&self, world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
-        if !BaseRailBlock::can_survive(world.as_ref(), pos) {
+        // Vanilla also bails unless the state is still this rail block itself.
+        if !BaseRailBlock::can_survive(world.as_ref(), pos)
+            || world.get_block_state(pos).get_block() != self.base.block
+        {
             return;
         }
 
@@ -226,9 +229,10 @@ impl BlockBehavior for DetectorRailBlock {
         _pos: BlockPos,
         _direction: Direction,
     ) -> i32 {
-        // Command success counts and container fullness require concrete
-        // minecart capabilities. No currently implemented Steel minecart
-        // exposes either, for which vanilla's observable result is zero.
+        // Vanilla reads the command-block success count or the contents of the
+        // first container minecart above this rail. Steel implements neither a
+        // command-block minecart nor a container-backed chest minecart yet, so
+        // vanilla's observable analogue output is indistinguishable from zero.
         MIN_REDSTONE_SIGNAL
     }
 

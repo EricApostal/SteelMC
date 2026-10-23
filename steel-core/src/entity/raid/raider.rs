@@ -421,3 +421,38 @@ pub fn raider_allowed_item(item_stack: &ItemStack) -> bool {
 pub fn raider_uuid_of(entity: &SharedEntity) -> Uuid {
     entity.uuid()
 }
+
+/// Vanilla `Pillager.applyRaidBuffs` provider gate.
+///
+/// Vanilla compares the wave against `Raid.getNumGroups(NORMAL)` (5) and
+/// `Raid.getNumGroups(EASY)` (3); below both, vanilla leaves the crossbow unbuffed.
+#[must_use]
+pub fn pillager_raid_enchant_provider(
+    wave: i32,
+) -> Option<&'static steel_registry::enchantment::provider::EnchantmentProvider> {
+    let normal_groups = Raid::num_groups(steel_utils::types::Difficulty::Normal);
+    let easy_groups = Raid::num_groups(steel_utils::types::Difficulty::Easy);
+
+    if wave > normal_groups {
+        Some(steel_registry::enchantment::provider::raid_pillager_post_wave_5())
+    } else if wave > easy_groups {
+        Some(steel_registry::enchantment::provider::raid_pillager_post_wave_3())
+    } else {
+        None
+    }
+}
+
+/// Vanilla `Vindicator.applyRaidBuffs` provider gate.
+///
+/// Vanilla always enchants the iron axe: post-wave-5 past `Raid.getNumGroups(NORMAL)`,
+/// otherwise the base `RAID_VINDICATOR` provider.
+#[must_use]
+pub fn vindicator_raid_enchant_provider(
+    wave: i32,
+) -> &'static steel_registry::enchantment::provider::EnchantmentProvider {
+    if wave > Raid::num_groups(steel_utils::types::Difficulty::Normal) {
+        steel_registry::enchantment::provider::raid_vindicator_post_wave_5()
+    } else {
+        steel_registry::enchantment::provider::raid_vindicator()
+    }
+}

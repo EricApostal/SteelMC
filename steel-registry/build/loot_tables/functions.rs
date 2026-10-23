@@ -142,10 +142,13 @@ pub(crate) fn generate_function(function: &LootFunctionJson) -> TokenStream {
                 generate_number_provider,
             );
             let options = generate_enchantment_options(&function.options);
+            let include_additional_cost_component =
+                function.include_additional_cost_component.unwrap_or(false);
             quote! {
                 LootFunction::EnchantWithLevels {
                     levels: #levels,
                     options: #options,
+                    include_additional_cost_component: #include_additional_cost_component,
                 }
             }
         }

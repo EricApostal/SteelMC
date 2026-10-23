@@ -10,7 +10,8 @@ use steel_utils::{Identifier, value_providers::IntProvider};
 use crate::shared_structs::BlockStateData;
 use crate::structure_processor_data::{
     PosRuleTestData, ProcessorRuleData, RuleBlockEntityModifierData, StructureProcessorAxis,
-    StructureProcessorKind, StructureProcessorListData, StructureRuleTestData,
+    StructureProcessorBlockSet, StructureProcessorHeightmap, StructureProcessorKind,
+    StructureProcessorListData, StructureRuleTestData,
 };
 
 fn sorted_json_files(dir: &str) -> Vec<fs::DirEntry> {
@@ -170,6 +171,31 @@ fn generate_processor_axis(axis: StructureProcessorAxis) -> TokenStream {
     }
 }
 
+fn generate_heightmap(heightmap: StructureProcessorHeightmap) -> TokenStream {
+    // Fully qualified so generated files that embed processor lists do not need
+    // another import; `StructureProcessorAxis` is imported there already.
+    match heightmap {
+        StructureProcessorHeightmap::WorldSurfaceWg => {
+            quote! { crate::structure_processor::StructureProcessorHeightmap::WorldSurfaceWg }
+        }
+        StructureProcessorHeightmap::WorldSurface => {
+            quote! { crate::structure_processor::StructureProcessorHeightmap::WorldSurface }
+        }
+        StructureProcessorHeightmap::OceanFloorWg => {
+            quote! { crate::structure_processor::StructureProcessorHeightmap::OceanFloorWg }
+        }
+        StructureProcessorHeightmap::OceanFloor => {
+            quote! { crate::structure_processor::StructureProcessorHeightmap::OceanFloor }
+        }
+        StructureProcessorHeightmap::MotionBlocking => {
+            quote! { crate::structure_processor::StructureProcessorHeightmap::MotionBlocking }
+        }
+        StructureProcessorHeightmap::MotionBlockingNoLeaves => {
+            quote! { crate::structure_processor::StructureProcessorHeightmap::MotionBlockingNoLeaves }
+        }
+    }
+}
+
 fn generate_pos_rule_test(data: &PosRuleTestData) -> TokenStream {
     match data {
         PosRuleTestData::AlwaysTrue => quote! { PosRuleTestData::AlwaysTrue },
@@ -180,10 +206,33 @@ fn generate_pos_rule_test(data: &PosRuleTestData) -> TokenStream {
             min_dist,
             max_dist,
         } => {
+            assert!(
+                min_dist < max_dist,
+                "axis_aligned_linear_pos requires min_dist < max_dist, got {min_dist}..{max_dist}"
+            );
             let axis = generate_processor_axis(*axis);
             quote! {
                 PosRuleTestData::AxisAlignedLinearPos {
                     axis: #axis,
+                    min_chance: #min_chance,
+                    max_chance: #max_chance,
+                    min_dist: #min_dist,
+                    max_dist: #max_dist,
+                }
+            }
+        }
+        PosRuleTestData::LinearPos {
+            min_chance,
+            max_chance,
+            min_dist,
+            max_dist,
+        } => {
+            assert!(
+                min_dist < max_dist,
+                "linear_pos requires min_dist < max_dist, got {min_dist}..{max_dist}"
+            );
+            quote! {
+                PosRuleTestData::LinearPos {
                     min_chance: #min_chance,
                     max_chance: #max_chance,
                     min_dist: #min_dist,
@@ -259,9 +308,84 @@ fn generate_block_entity_modifier(data: &RuleBlockEntityModifierData) -> TokenSt
         RuleBlockEntityModifierData::Passthrough => {
             quote! { RuleBlockEntityModifierData::Passthrough }
         }
+        RuleBlockEntityModifierData::Clear => quote! { RuleBlockEntityModifierData::Clear },
+        RuleBlockEntityModifierData::AppendStatic { data } => {
+            let data = generate_nbt_compound(data);
+            quote! { RuleBlockEntityModifierData::AppendStatic { data: #data } }
+        }
         RuleBlockEntityModifierData::AppendLoot { loot_table } => {
             let loot_table = generate_identifier(loot_table);
             quote! { RuleBlockEntityModifierData::AppendLoot { loot_table: #loot_table } }
+        }
+    }
+}
+
+fn generate_nbt_tag(tag: &simdnbt::owned::NbtTag) -> TokenStream {
+    use simdnbt::owned::NbtTag;
+
+    match tag {
+        NbtTag::Byte(value) => quote! { simdnbt::owned::NbtTag::Byte(#value) },
+        NbtTag::Short(value) => quote! { simdnbt::owned::NbtTag::Short(#value) },
+        NbtTag::Int(value) => quote! { simdnbt::owned::NbtTag::Int(#value) },
+        NbtTag::Long(value) => quote! { simdnbt::owned::NbtTag::Long(#value) },
+        NbtTag::Float(value) => quote! { simdnbt::owned::NbtTag::Float(#value) },
+        NbtTag::Double(value) => quote! { simdnbt::owned::NbtTag::Double(#value) },
+        NbtTag::ByteArray(values) => {
+            let values = values.iter();
+            quote! { simdnbt::owned::NbtTag::ByteArray(vec![#(#values),*]) }
+        }
+        NbtTag::String(value) => {
+            let value = value.to_str();
+            quote! { simdnbt::owned::NbtTag::String(#value.into()) }
+        }
+        NbtTag::List(list) => {
+            let list = generate_nbt_list(list);
+            quote! { simdnbt::owned::NbtTag::List(#list) }
+        }
+        NbtTag::Compound(compound) => {
+            let compound = generate_nbt_compound(compound);
+            quote! { simdnbt::owned::NbtTag::Compound(#compound) }
+        }
+        NbtTag::IntArray(values) => {
+            let values = values.iter();
+            quote! { simdnbt::owned::NbtTag::IntArray(vec![#(#values),*]) }
+        }
+        NbtTag::LongArray(values) => {
+            let values = values.iter();
+            quote! { simdnbt::owned::NbtTag::LongArray(vec![#(#values),*]) }
+        }
+    }
+}
+
+fn generate_nbt_list(list: &simdnbt::owned::NbtList) -> TokenStream {
+    let tags = list.as_nbt_tags();
+    if tags.is_empty() {
+        return quote! { simdnbt::owned::NbtList::Empty };
+    }
+    let tags = tags.iter().map(generate_nbt_tag);
+    quote! { simdnbt::owned::NbtList::from(vec![#(#tags),*]) }
+}
+
+fn generate_nbt_compound(compound: &simdnbt::owned::NbtCompound) -> TokenStream {
+    let entries = compound.iter().map(|(key, tag)| {
+        let key = key.to_str();
+        let tag = generate_nbt_tag(tag);
+        quote! { (#key.into(), #tag) }
+    });
+    quote! { simdnbt::owned::NbtCompound::from_values(vec![#(#entries),*]) }
+}
+
+fn generate_block_set(set: &StructureProcessorBlockSet) -> TokenStream {
+    // Fully qualified so generated files that embed processor lists do not need
+    // another import.
+    match set {
+        StructureProcessorBlockSet::Tag(tag) => {
+            let tag = generate_identifier(tag);
+            quote! { crate::structure_processor::StructureProcessorBlockSet::Tag(#tag) }
+        }
+        StructureProcessorBlockSet::Entries(entries) => {
+            let entries = generate_vec(entries, generate_identifier);
+            quote! { crate::structure_processor::StructureProcessorBlockSet::Entries(#entries) }
         }
     }
 }
@@ -290,7 +414,7 @@ fn generate_processor_kind(data: &StructureProcessorKind) -> TokenStream {
             rottable_blocks,
             integrity,
         } => {
-            let rottable_blocks = generate_option(rottable_blocks, generate_identifier);
+            let rottable_blocks = generate_option(rottable_blocks, generate_block_set);
             quote! {
                 StructureProcessorKind::BlockRot {
                     rottable_blocks: #rottable_blocks,
@@ -299,7 +423,7 @@ fn generate_processor_kind(data: &StructureProcessorKind) -> TokenStream {
             }
         }
         StructureProcessorKind::ProtectedBlocks { cannot_replace } => {
-            let cannot_replace = generate_identifier(cannot_replace);
+            let cannot_replace = generate_block_set(cannot_replace);
             quote! { StructureProcessorKind::ProtectedBlocks { cannot_replace: #cannot_replace } }
         }
         StructureProcessorKind::Rule { rules } => {
@@ -319,6 +443,18 @@ fn generate_processor_kind(data: &StructureProcessorKind) -> TokenStream {
             let delegate = generate_box(delegate.as_ref(), generate_processor_kind);
             let limit = generate_int_provider(limit);
             quote! { StructureProcessorKind::Capped { delegate: #delegate, limit: #limit } }
+        }
+        StructureProcessorKind::BlockIgnore { blocks } => {
+            let blocks = generate_vec(blocks, generate_block_state_data);
+            quote! { StructureProcessorKind::BlockIgnore { blocks: #blocks } }
+        }
+        StructureProcessorKind::Gravity { heightmap, offset } => {
+            let heightmap = generate_heightmap(*heightmap);
+            quote! { StructureProcessorKind::Gravity { heightmap: #heightmap, offset: #offset } }
+        }
+        StructureProcessorKind::Nop => quote! { StructureProcessorKind::Nop },
+        StructureProcessorKind::JigsawReplacement => {
+            quote! { StructureProcessorKind::JigsawReplacement }
         }
     }
 }

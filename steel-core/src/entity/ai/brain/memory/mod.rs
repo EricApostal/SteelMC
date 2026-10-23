@@ -80,6 +80,8 @@ pub enum MemoryValue {
     BlockPos(BlockPos),
     Vec3(DVec3),
     Uuid(Uuid),
+    UuidList(Vec<Uuid>),
+    SpearStatus(crate::entity::ai::behavior::spear_attack::SpearStatus),
     Entity(SharedEntity),
     EntityList(Vec<SharedEntity>),
     DamageSource(DamageSource),
@@ -96,6 +98,7 @@ impl MemoryValue {
         match self {
             Self::GlobalPosList(values) => values.is_empty(),
             Self::EntityList(values) => values.is_empty(),
+            Self::UuidList(values) => values.is_empty(),
             _ => false,
         }
     }
@@ -171,6 +174,32 @@ impl MemoryValueType for Vec<SharedEntity> {
     fn from_memory_value(value: &MemoryValue) -> Option<Self> {
         match value {
             MemoryValue::EntityList(entities) => Some(entities.clone()),
+            _ => None,
+        }
+    }
+}
+
+impl MemoryValueType for Vec<Uuid> {
+    fn into_memory_value(self) -> MemoryValue {
+        MemoryValue::UuidList(self)
+    }
+
+    fn from_memory_value(value: &MemoryValue) -> Option<Self> {
+        match value {
+            MemoryValue::UuidList(ids) => Some(ids.clone()),
+            _ => None,
+        }
+    }
+}
+
+impl MemoryValueType for crate::entity::ai::behavior::spear_attack::SpearStatus {
+    fn into_memory_value(self) -> MemoryValue {
+        MemoryValue::SpearStatus(self)
+    }
+
+    fn from_memory_value(value: &MemoryValue) -> Option<Self> {
+        match value {
+            MemoryValue::SpearStatus(status) => Some(*status),
             _ => None,
         }
     }
@@ -317,6 +346,14 @@ impl MemoryStore {
         self.set_value(ty.key(), value.into_memory_value(), Some(time_to_live));
     }
 
+    /// Vanilla `Brain.setMemoryInternal`: empty collections clear the memory, a
+    /// missing slot is ignored, and the time-to-live is `NEVER_EXPIRE` unless one is
+    /// given.
+    ///
+    /// Deliberate difference: vanilla's `Brain` throws when a memory is set while it
+    /// is not registered (an active-activity requirement check); Steel ignores the
+    /// write so a provider that forgets a `requires()` entry degrades instead of
+    /// aborting the tick. Sensors always declare what they write.
     pub fn set_value(&mut self, key: &Identifier, value: MemoryValue, time_to_live: Option<i64>) {
         if value.is_empty_collection() {
             self.erase_key(key);

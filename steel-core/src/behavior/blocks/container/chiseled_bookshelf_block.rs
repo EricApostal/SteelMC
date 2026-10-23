@@ -624,6 +624,10 @@ mod tests {
 
         player.restore_game_modes(GameType::Creative, None);
         player
+            .abilities
+            .lock()
+            .update_for_game_mode(GameType::Creative);
+        player
             .inventory
             .lock()
             .set_selected_item(ItemStack::new(&vanilla_items::ENCHANTED_BOOK));

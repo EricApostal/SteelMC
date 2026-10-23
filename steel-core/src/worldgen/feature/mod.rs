@@ -21,6 +21,7 @@ mod weather;
 
 pub(crate) use features::no_nested_features;
 pub(crate) use runner::FeatureDecorationRunner;
+pub(crate) use sorter::StagedFeature;
 
 #[cfg(test)]
 mod tests;

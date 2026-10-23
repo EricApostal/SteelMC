@@ -185,9 +185,8 @@ impl MushroomCowEntity {
         self.stew_effects.lock().clone()
     }
 
-    /// Handles a lightning strike hitting the mooshroom.
-    pub fn thunder_hit(&self, lightning_uuid: Uuid) {
-        // TODO: Route server-side LightningBolt hits here once that shared entity and dispatch exist.
+    /// Vanilla `MushroomCow.thunderHit`: swaps the variant once per bolt.
+    pub fn lightning_conversion(&self, lightning_uuid: Uuid) {
         let mut last_uuid = self.last_lightning_bolt_uuid.lock();
         if last_uuid.as_ref() == Some(&lightning_uuid) {
             return;
@@ -413,6 +412,11 @@ impl MushroomCowEntity {
 impl Entity for MushroomCowEntity {
     fn base(&self) -> &EntityBase {
         &self.base
+    }
+
+    /// Vanilla `MushroomCow.thunderHit`: no lightning damage, variant swap only.
+    fn thunder_hit(&self, _world: &Arc<World>, bolt: &SharedEntity) {
+        self.lightning_conversion(bolt.uuid());
     }
 
     fn entity_type(&self) -> EntityTypeRef {

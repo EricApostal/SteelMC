@@ -26,8 +26,10 @@ pub fn use_item_on(
     let pos = hit_result.block_pos;
     let state = world.get_block_state(pos);
 
-    // Spectator mode: can only open menus
-    // TODO: Implement menu providers for blocks like chests
+    // Spectator mode: can only open menus.
+    // TODO: Open block menus in spectator once the menu-provider foundation
+    // exists (vanilla `ServerPlayerGameMode.useItemOn` calls `openMenu` on the
+    // block here; Steel block behaviors have no menu-provider hook yet).
     if player.game_mode() == GameType::Spectator {
         return InteractionResult::Pass;
     }
@@ -155,7 +157,7 @@ pub fn use_item(
     world: &Arc<World>,
     hand: InteractionHand,
 ) -> InteractionResult {
-    // Spectator mode: can only open menus
+    // Spectator mode cannot use items (vanilla `ServerPlayerGameMode.useItem`).
     if player.game_mode() == GameType::Spectator {
         return InteractionResult::Pass;
     }

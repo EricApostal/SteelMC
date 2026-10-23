@@ -1,14 +1,16 @@
 //! This module contains the `ChunkGenerator` trait, which is used to generate chunks.
 
 pub mod context;
+mod debug;
 mod empty;
 mod flat;
 mod generation_chunk;
 pub mod registry;
 pub(crate) mod vanilla;
 
+pub use debug::DebugChunkGenerator;
 pub use empty::EmptyChunkGenerator;
-pub use flat::FlatChunkGenerator;
+pub use flat::{FlatChunkGenerator, FlatGeneratorSettings};
 #[cfg(feature = "benchmark-support")]
 pub use generation_chunk::benchmark_support as generation_benchmark_support;
 pub use generation_chunk::{GenerationChunk, TerrainPhase};

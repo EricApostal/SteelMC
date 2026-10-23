@@ -16,11 +16,23 @@ pub type CustomSpawnerSaveFuture<'a> =
 /// Vanilla returns `Optional<SavedDataName>` so each spawner persists its own
 /// counters; Steel keeps the same contract with an explicit async save.
 pub trait CustomSpawner: Send + Sync {
-    /// Vanilla `CustomSpawner.tick(ServerLevel, boolean)`.
+    /// Vanilla `CustomSpawner.tick(ServerLevel, boolean)` without the flag.
     ///
-    /// The `spawnEnemies` flag is not modeled: the level tick does not currently
-    /// track it and the registered spawners ignore it.
+    /// The level always calls [`CustomSpawner::tick_with_settings`]; implement
+    /// this one when the spawner does not read `spawnEnemies` (vanilla
+    /// `WanderingTraderSpawner` ignores it).
     fn tick(&mut self, world: &Arc<World>);
+
+    /// Vanilla `CustomSpawner.tick(ServerLevel, boolean spawnEnemies)`.
+    ///
+    /// `spawn_enemies` is `ServerChunkCache.spawnEnemies`, i.e.
+    /// `ServerLevel.isSpawningMonsters()`. The default drops it and calls
+    /// [`CustomSpawner::tick`], which matches the vanilla spawners that ignore
+    /// the flag.
+    fn tick_with_settings(&mut self, world: &Arc<World>, spawn_enemies: bool) {
+        let _ = spawn_enemies;
+        self.tick(world);
+    }
 
     /// Saved-data name this spawner persists, if any.
     fn saved_data_name(&self) -> Option<SavedDataName> {

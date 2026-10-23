@@ -248,6 +248,41 @@ impl<T: TickKey> TickList<T> {
         old_len - pending_ticks.len()
     }
 
+    /// Returns the live entries that have already been anchored to game time.
+    ///
+    /// Iteration order is the heap's internal order, matching vanilla
+    /// `LevelChunkTicks.getAll`, which streams its priority queue unsorted.
+    pub(crate) fn live_entries(&self) -> impl Iterator<Item = ScheduledTick<T>> + '_ {
+        self.ticks.iter().map(|queued| queued.tick)
+    }
+
+    /// Removes live entries matching `predicate` while keeping deduplication in sync.
+    ///
+    /// Returns the number of removed ticks. Vanilla's
+    /// `LevelChunkTicks.removeIf` iterates its priority queue the same way;
+    /// this rebuilds the heap in linear time afterwards.
+    pub(crate) fn remove_live_matching(
+        &mut self,
+        mut predicate: impl FnMut(&ScheduledTick<T>) -> bool,
+    ) -> usize {
+        let Self {
+            ticks, scheduled, ..
+        } = self;
+        let heap = std::mem::take(ticks).into_vec();
+        let old_len = heap.len();
+        let mut retained = Vec::with_capacity(old_len);
+        for queued in heap {
+            if predicate(&queued.tick) {
+                scheduled.remove(&queued.tick.key());
+            } else {
+                retained.push(queued);
+            }
+        }
+        let removed = old_len - retained.len();
+        *ticks = retained.into();
+        removed
+    }
+
     /// Packs pending entries followed by live entries in Vanilla saved-list order.
     #[must_use]
     #[cfg(test)]

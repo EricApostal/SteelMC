@@ -66,15 +66,15 @@ struct EnchantmentEffectsJson {
     #[serde(rename = "minecraft:post_piercing_attack", default)]
     post_piercing_attack: Vec<ConditionalEntityEffectJson>,
     #[serde(rename = "minecraft:hit_block", default)]
-    hit_block: Vec<serde_json::Value>,
+    hit_block: Vec<ConditionalEntityEffectJson>,
     #[serde(rename = "minecraft:item_damage", default)]
     item_damage: Vec<ConditionalValueEffectJson>,
     #[serde(rename = "minecraft:equipment_drops", default)]
     equipment_drops: Vec<TargetedConditionalValueEffectJson>,
     #[serde(rename = "minecraft:location_changed", default)]
-    location_changed: Vec<serde_json::Value>,
+    location_changed: Vec<ConditionalEntityEffectJson>,
     #[serde(rename = "minecraft:tick", default)]
-    tick: Vec<serde_json::Value>,
+    tick: Vec<ConditionalEntityEffectJson>,
     #[serde(rename = "minecraft:ammo_use", default)]
     ammo_use: Vec<ConditionalValueEffectJson>,
     #[serde(rename = "minecraft:projectile_piercing", default)]
@@ -228,9 +228,22 @@ enum EntityEffectJson {
     },
     PlaySound {
         sounds: Vec<Identifier>,
-        volume: f32,
-        pitch: f32,
+        volume: FloatProviderJson,
+        pitch: FloatProviderJson,
     },
+    SummonEntity {
+        entity_types: EntityTypeSetJson,
+        join_team: bool,
+    },
+    SpawnParticles {
+        particle: Identifier,
+        horizontal_position: ParticlePositionSourceJson,
+        vertical_position: ParticlePositionSourceJson,
+        horizontal_velocity: ParticleVelocitySourceJson,
+        vertical_velocity: ParticleVelocitySourceJson,
+        speed: FloatProviderJson,
+    },
+    Attribute(AttributeEffectJson),
     DamageEntity {
         min_damage: LevelBasedValueJson,
         max_damage: LevelBasedValueJson,
@@ -259,6 +272,77 @@ impl<'de> Deserialize<'de> for EntityEffectJson {
         let value = serde_json::Value::deserialize(deserializer)?;
         parse_entity_effect_json(&value).map_err(de::Error::custom)
     }
+}
+
+/// Vanilla `FloatProvider` as used by enchantment effect data.
+///
+/// Vanilla declares `volume`/`pitch` of `play_sound` as
+/// `FloatProviders.codec(...)`, so the datapack uses both the inline constant
+/// form (`0.6`) and the typed object form
+/// (`{"type":"minecraft:uniform","min_inclusive":0.6,"max_exclusive":1.0}`).
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(untagged)]
+enum FloatProviderJson {
+    Constant(f32),
+    Typed(FloatProviderTypedJson),
+}
+
+/// Typed `FloatProvider` forms.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(tag = "type")]
+enum FloatProviderTypedJson {
+    #[serde(rename = "minecraft:constant")]
+    Constant { value: f32 },
+    #[serde(rename = "minecraft:uniform")]
+    Uniform {
+        min_inclusive: f32,
+        max_exclusive: f32,
+    },
+    #[serde(rename = "minecraft:trapezoid")]
+    Trapezoid {
+        min: f32,
+        max: f32,
+        #[serde(default)]
+        plateau: f32,
+    },
+    #[serde(rename = "minecraft:clamped_normal")]
+    ClampedNormal {
+        mean: f32,
+        deviation: f32,
+        min: f32,
+        max: f32,
+    },
+}
+
+/// Vanilla `HolderSet<EntityType>` used by `summon_entity`.
+#[derive(Debug)]
+enum EntityTypeSetJson {
+    Tag(Identifier),
+    Direct(Vec<Identifier>),
+}
+
+/// Vanilla `SpawnParticlesEffect.PositionSource`.
+#[derive(Debug, Deserialize)]
+struct ParticlePositionSourceJson {
+    #[serde(rename = "type")]
+    source_type: String,
+    #[serde(default)]
+    offset: f32,
+    #[serde(default = "default_particle_scale")]
+    scale: f32,
+}
+
+fn default_particle_scale() -> f32 {
+    1.0
+}
+
+/// Vanilla `SpawnParticlesEffect.VelocitySource`.
+#[derive(Debug, Default, Deserialize)]
+struct ParticleVelocitySourceJson {
+    #[serde(default)]
+    movement_scale: f32,
+    #[serde(default)]
+    base: Option<FloatProviderJson>,
 }
 
 #[derive(Debug)]
@@ -492,10 +576,13 @@ pub(crate) fn build() -> TokenStream {
             EnchantmentEntityEffect, EnchantmentEntityTarget, EnchantmentItemSet, EnchantmentTarget,
             EnchantmentValueEffect, EntityFlagsPredicate, EntityPredicate,
             EntityTypePredicate, EntityTypeSpecificPredicate, EntityVehiclePredicate,
-            LevelBasedValue, MobEffectSelection, PlayerPredicate,
+            EntityTypeSet, LevelBasedValue, MobEffectSelection, ParticlePositionSource,
+            ParticlePositionSourceType, ParticleVelocitySource, PlayerPredicate,
             TargetedConditionalEnchantmentEffect,
         };
+        use steel_utils::value_providers::FloatProvider;
         use crate::enchantment::{Enchantment, EnchantmentCost, EnchantmentRegistry};
+        use crate::{vanilla_entities, vanilla_particle_types};
         use crate::equipment::EquipmentSlotGroup;
         use crate::vanilla_attributes;
         use crate::vanilla_mob_effects;

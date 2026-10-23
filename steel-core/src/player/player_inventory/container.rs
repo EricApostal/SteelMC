@@ -90,6 +90,26 @@ static EMPTY_ITEM: LazyLock<ItemStack> = LazyLock::new(ItemStack::empty);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InvalidHotbarSlot;
 
+/// Merges `stack` into one compatible existing slot, bounded by the item's max size.
+fn merge_if_compatible(
+    existing: &mut ItemStack,
+    stack: &mut ItemStack,
+    max_size: i32,
+    changed: &mut bool,
+) {
+    if existing.is_empty() || !ItemStack::is_same_item_same_components(existing, stack) {
+        return;
+    }
+    let space = max_size - existing.count();
+    if space <= 0 {
+        return;
+    }
+    let to_add = stack.count().min(space);
+    existing.grow(to_add);
+    stack.shrink(to_add);
+    *changed = true;
+}
+
 impl Container for PlayerInventory {
     fn items(&self) -> &[ItemStack] {
         &self.items
@@ -107,7 +127,8 @@ impl Container for PlayerInventory {
     ///
     /// Overrides the default `Container::add()` to prevent items from being
     /// placed in armor or equipment slots. Matches vanilla's `Inventory.add()`
-    /// behavior which only adds to `this.items` (the 36 main slots).
+    /// behavior which only adds to `this.items` (the 36 main slots) and returns
+    /// true only when the whole stack was absorbed.
     fn add(&mut self, stack: &mut ItemStack) -> bool {
         if stack.is_empty() {
             return true;
@@ -116,66 +137,58 @@ impl Container for PlayerInventory {
         let max_size = self.get_max_stack_size_for_item(stack);
         let mut changed = false;
 
-        // Vanilla prioritizes the selected slot, then an existing compatible
-        // offhand stack, before scanning the remaining main inventory.
-        if stack.is_stackable() {
-            let selected = self.selected as usize;
-            for slot in [selected, Self::SLOT_OFFHAND] {
+        // Vanilla `getSlotWithRemainingSpace` order: the selected hotbar slot, then the
+        // offhand, then the first compatible main-inventory slot, filling each one before
+        // rescanning. This walk fills the same slots in the same priority order.
+        while !stack.is_empty() {
+            let before = stack.count();
+            if stack.is_stackable() {
+                let selected = self.selected as usize;
+                merge_if_compatible(&mut self.items[selected], stack, max_size, &mut changed);
                 if stack.is_empty() {
-                    if changed {
-                        self.set_changed();
-                    }
-                    return true;
+                    break;
                 }
-                let existing = &mut self.items[slot];
-                if !existing.is_empty() && ItemStack::is_same_item_same_components(existing, stack)
-                {
-                    let space = max_size - existing.count();
-                    if space > 0 {
-                        let to_add = stack.count().min(space);
-                        existing.grow(to_add);
-                        stack.shrink(to_add);
-                        changed = true;
-                    }
-                }
-            }
-
-            for slot in 0..Self::INVENTORY_SIZE {
+                merge_if_compatible(
+                    &mut self.items[Self::SLOT_OFFHAND],
+                    stack,
+                    max_size,
+                    &mut changed,
+                );
                 if stack.is_empty() {
-                    if changed {
-                        self.set_changed();
-                    }
-                    return true;
+                    break;
                 }
-                if slot == selected {
+                for slot in 0..Self::INVENTORY_SIZE {
+                    if slot == selected {
+                        continue;
+                    }
+                    merge_if_compatible(&mut self.items[slot], stack, max_size, &mut changed);
+                    if stack.is_empty() {
+                        break;
+                    }
+                }
+                if stack.is_empty() {
+                    break;
+                }
+                if stack.count() < before {
                     continue;
                 }
-                let existing = &mut self.items[slot];
-                if !existing.is_empty() && ItemStack::is_same_item_same_components(existing, stack)
-                {
-                    let space = max_size - existing.count();
-                    if space > 0 {
-                        let to_add = stack.count().min(space);
-                        existing.grow(to_add);
-                        stack.shrink(to_add);
-                        changed = true;
-                    }
-                }
             }
-        }
 
-        // Second pass: try empty slots in main inventory only
-        for slot in 0..Self::INVENTORY_SIZE {
-            if stack.is_empty() {
-                if changed {
-                    self.set_changed();
+            // Second pass: try empty slots in main inventory only
+            let mut placed = false;
+            for slot in 0..Self::INVENTORY_SIZE {
+                if stack.is_empty() {
+                    break;
                 }
-                return true;
+                if self.items[slot].is_empty() {
+                    let to_place = stack.count().min(max_size);
+                    self.items[slot] = stack.split(to_place);
+                    changed = true;
+                    placed = true;
+                }
             }
-            if self.items[slot].is_empty() {
-                let to_place = stack.count().min(max_size);
-                self.items[slot] = stack.split(to_place);
-                changed = true;
+            if !placed {
+                break;
             }
         }
 

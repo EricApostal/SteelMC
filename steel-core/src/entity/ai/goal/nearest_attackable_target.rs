@@ -119,6 +119,20 @@ impl NearestAttackableTargetGoal {
     pub(crate) fn set_target(&mut self, target: Option<SharedEntity>) {
         self.target = target;
     }
+
+    /// Vanilla `NearestAttackableTargetGoal.targetConditions` re-test, used by
+    /// `NonTameRandomTargetGoal.canContinueToUse`.
+    pub(crate) fn target_matches_conditions(
+        &self,
+        mob: &dyn PathfinderMob,
+        target: &dyn LivingEntity,
+    ) -> bool {
+        let Some(world) = mob.level() else {
+            return false;
+        };
+        let conditions = self.target_conditions.clone().range(follow_distance(mob));
+        conditions.test(world.as_ref(), Some(mob), target)
+    }
 }
 
 impl Goal for NearestAttackableTargetGoal {

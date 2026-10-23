@@ -223,6 +223,16 @@ pub(super) fn generate_configured_feature_kind(kind: &ConfiguredFeatureKind) -> 
                 })
             }
         }
+        ConfiguredFeatureKind::FillLayer(config) => {
+            let height = config.height;
+            let state = generate_block_state_data(&config.state);
+            quote! {
+                ConfiguredFeatureKind::FillLayer(FillLayerConfiguration {
+                    height: #height,
+                    state: #state,
+                })
+            }
+        }
         ConfiguredFeatureKind::Fossil(config) => {
             let fossil_structures = generate_vec(&config.fossil_structures, generate_identifier);
             let overlay_structures = generate_vec(&config.overlay_structures, generate_identifier);
@@ -482,6 +492,14 @@ pub(super) fn generate_configured_feature_kind(kind: &ConfiguredFeatureKind) -> 
                     features: #features,
                 })
             }
+        }
+        ConfiguredFeatureKind::ReplaceSingleBlock(targets) => {
+            let targets = generate_vec(targets, |target| {
+                let rule = crate::structure::processors::generate_rule_test(&target.target);
+                let state = generate_block_state_data(&target.state);
+                quote! { BlockReplacement { target: #rule, state: #state } }
+            });
+            quote! { ConfiguredFeatureKind::ReplaceSingleBlock(#targets) }
         }
         ConfiguredFeatureKind::RootSystem(config) => {
             let feature = generate_placed_feature_ref(&config.feature);

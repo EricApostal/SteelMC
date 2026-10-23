@@ -80,13 +80,35 @@ impl CommandCompletion {
     }
 }
 
-/// Projects Steel capabilities onto vanilla's shared gamemaster client affordance.
+/// Projects Steel capabilities and the vanilla operator level onto vanilla's
+/// client permission-level event (ids 24-28).
+///
 /// Packet handlers still authorize game-mode and difficulty requests independently.
 pub(crate) fn client_permission_event(player: &Player, world: &World) -> EntityStatus {
-    client_permission_event_for_capabilities(
+    let op_status = player
+        .server()
+        .client_permission_status(player.gameprofile.id());
+    let capability_status = client_permission_event_for_capabilities(
         builtins::gamemode::player_can_use_client_switcher(player, world),
         builtins::player_can_change_difficulty(player, world),
-    )
+    );
+    // Steel's key grants can exceed the vanilla op level, so report the higher one.
+    if status_rank(capability_status) > status_rank(op_status) {
+        capability_status
+    } else {
+        op_status
+    }
+}
+
+/// Ranks the client permission-level events so the stronger of two applies.
+const fn status_rank(status: EntityStatus) -> i8 {
+    match status {
+        EntityStatus::PermissionLevelOwners => 4,
+        EntityStatus::PermissionLevelAdmins => 3,
+        EntityStatus::PermissionLevelGamemasters => 2,
+        EntityStatus::PermissionLevelModerators => 1,
+        _ => 0,
+    }
 }
 
 const fn client_permission_event_for_capabilities(

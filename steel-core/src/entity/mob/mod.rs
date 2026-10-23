@@ -451,6 +451,11 @@ pub trait Mob: LivingEntity + Leashable {
         result
     }
 
+    /// Vanilla `Mob.chargeSpeedModifier`: mounted-charge speed multiplier.
+    fn charge_speed_modifier(&self) -> f32 {
+        1.0
+    }
+
     fn ambient_sound_interval(&self) -> i32 {
         if let Some(animal) = self.as_animal() {
             return animal.ambient_sound_interval_animal();

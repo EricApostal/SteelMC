@@ -80,6 +80,8 @@ impl DiodeBlock {
         input.max(wire_power)
     }
 
+    /// Vanilla reads `sideInputDiodesOnly()` off the subclass; the shared port takes it as a
+    /// parameter (repeater `true`, comparator `false`).
     pub(super) fn get_alternate_signal(
         level: &dyn LevelReader,
         pos: BlockPos,

@@ -6,7 +6,7 @@
 //! a different world.
 
 use steel_registry::{timeline::TimelineRef, world_clock::WorldClockRef};
-use steel_utils::{Identifier, translations};
+use steel_utils::{Identifier, java::float_to_string, translations};
 use text_components::TextComponent;
 
 use super::super::{
@@ -17,11 +17,13 @@ use super::super::{
     },
     registration::CommandRegistration,
 };
+use crate::{permission::PermissionLevel, world::clock::MoveResult};
 
 const CLOCK_ARGUMENT: &str = "clock";
 
 pub(super) fn registration() -> CommandRegistration<CommandSource> {
     CommandRegistration::new(Identifier::vanilla_static("time"), |_| command())
+        .at_level(PermissionLevel::Gamemasters)
 }
 
 fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
@@ -138,6 +140,12 @@ fn set_total_ticks(
 ) -> Result<i32, CommandSyntaxError> {
     let clock = selected_clock(context, selection)?;
     let total_ticks = context.time("time")?;
+    if clock_total_ticks(context, clock)? == i64::from(total_ticks) {
+        let message = translations::COMMANDS_TIME_SET_ALREADY_AT_TIME
+            .message([clock.key.to_string(), total_ticks.to_string()])
+            .component();
+        return Err(CommandSyntaxError::dynamic(message));
+    }
     context
         .source()
         .world()
@@ -179,8 +187,14 @@ fn set_time_marker(
         .world()
         .move_clock_to_time_marker(clock, marker)
     {
-        Some(true) => {}
-        Some(false) => {
+        Some(MoveResult::Moved) => {}
+        Some(MoveResult::NotMoved) => {
+            let message = translations::COMMANDS_TIME_SET_ALREADY_AT_TIME_MARKER
+                .message([clock.key.to_string(), marker.to_string()])
+                .component();
+            return Err(CommandSyntaxError::dynamic(message));
+        }
+        Some(MoveResult::NoTimeMarkerFound) => {
             let message = missing_time_marker_message(clock, marker);
             return Err(CommandSyntaxError::dynamic(message));
         }
@@ -200,6 +214,22 @@ fn set_paused(
     paused: bool,
 ) -> Result<i32, CommandSyntaxError> {
     let clock = selected_clock(context, selection)?;
+    if context
+        .source()
+        .world()
+        .clock_is_paused(clock)
+        .ok_or_else(|| missing_clock(clock))?
+        == paused
+    {
+        let translation = if paused {
+            &translations::COMMANDS_TIME_PAUSE_ALREADY_PAUSED
+        } else {
+            &translations::COMMANDS_TIME_PAUSE_ALREADY_RUNNING
+        };
+        return Err(CommandSyntaxError::dynamic(
+            translation.message([clock.key.to_string()]).component(),
+        ));
+    }
     context
         .source()
         .world()
@@ -221,13 +251,25 @@ fn set_rate(
 ) -> Result<i32, CommandSyntaxError> {
     let clock = selected_clock(context, selection)?;
     let rate = context.float("rate")?;
+    if context
+        .source()
+        .world()
+        .clock_rate(clock)
+        .ok_or_else(|| missing_clock(clock))?
+        == rate
+    {
+        let message = translations::COMMANDS_TIME_RATE_ALREADY_SAME
+            .message([clock.key.to_string(), float_to_string(rate)])
+            .component();
+        return Err(CommandSyntaxError::dynamic(message));
+    }
     context
         .source()
         .world()
         .set_clock_rate(clock, rate)
         .ok_or_else(|| missing_clock(clock))?;
     let message = translations::COMMANDS_TIME_RATE
-        .message([clock.key.to_string(), rate.to_string()])
+        .message([clock.key.to_string(), float_to_string(rate)])
         .component();
     context.source().send_success(&message, true);
     Ok(1)

@@ -19,7 +19,9 @@ use text_components::{Modifier, TextComponent};
 pub mod criterion;
 pub mod display;
 pub mod positioner;
+pub mod predicates;
 pub mod registry;
+pub mod triggers;
 
 #[derive(Default)]
 pub struct Advancement {

@@ -244,7 +244,12 @@ fn offers_lookup_uses_the_selection_hint() {
             .map(|offer| offer.result().item().key.clone()),
         Some(vanilla_items::DIAMOND.key.clone())
     );
-    assert!(offers.get_recipe_for(&emeralds(9), &empty, 0).is_none());
+    // No offer accepts a payment that is not one of its costs.
+    assert!(
+        offers
+            .get_recipe_for(&ItemStack::with_count(&vanilla_items::DIAMOND, 1), &empty, 0)
+            .is_none()
+    );
 
     offers
         .get_recipe_for_mut(&book, &empty, 1)
@@ -477,7 +482,7 @@ fn offer_nbt_round_trip_preserves_state() {
     assert_eq!(first.demand(), 3 + 2 - (12 - 2));
     assert_eq!(first.special_price_diff(), -2);
     assert_eq!(first.price_multiplier(), 0.05);
-    assert_eq!(first.cost_a().count(), 4);
+    assert_eq!(first.base_cost_a().count(), 4);
     assert_eq!(first.cost_b().count(), 1);
     assert_eq!(first.result().count(), 2);
     assert_eq!(first.result().item().key, vanilla_items::DIAMOND.key);

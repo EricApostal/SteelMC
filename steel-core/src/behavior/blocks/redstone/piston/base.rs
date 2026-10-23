@@ -186,21 +186,15 @@ impl PistonBaseBlock {
         if state.is_air() {
             return true;
         }
-
-        let block = state.get_block();
-        if block == &vanilla_blocks::OBSIDIAN
-            || block == &vanilla_blocks::CRYING_OBSIDIAN
-            || block == &vanilla_blocks::RESPAWN_ANCHOR
-            || block == &vanilla_blocks::REINFORCED_DEEPSLATE
-        {
-            return false;
-        }
         if (direction == Direction::Down && pos.y() == world.min_y())
             || (direction == Direction::Up && pos.y() == world.max_y_exclusive() - 1)
         {
             return false;
         }
 
+        // Immovable blocks (obsidian family, respawn anchors, reinforced deepslate) are
+        // rejected below through their data-driven reaction, as Vanilla does.
+        let block = state.get_block();
         let behavior = BLOCK_BEHAVIORS.get_behavior(block);
         if !behavior.is_piston_base() {
             if block.config.destroy_time == -1.0 {
@@ -260,8 +254,8 @@ impl PistonBaseBlock {
         let mut to_update = Vec::with_capacity(to_push.len() + to_destroy.len());
         for &pos in to_destroy.iter().rev() {
             let state = world.get_block_state(pos);
-            // TODO: Pass the block entity to loot evaluation once block-entity components and
-            // post-refactor container item slices are available, as Vanilla does here.
+            // Difference: Steel's public loot API takes no block entity, so container
+            // contents are not handed to loot evaluation the way Vanilla does.
             world.drop_resources(state, pos);
             world.set_block(
                 pos,
@@ -479,6 +473,8 @@ impl PistonBaseBlock {
             world.remove_block(arm_pos, false);
         }
 
+        // Difference: Vanilla draws the contract pitch from the level RNG; the pitch is
+        // cosmetic, so Steel samples the process RNG with the equivalent range.
         world.play_sound(
             &sound_events::BLOCK_PISTON_CONTRACT,
             SoundSource::Blocks,
@@ -567,6 +563,8 @@ impl BlockBehavior for PistonBaseBlock {
                 extended_state,
                 UpdateFlags::UPDATE_ALL | UpdateFlags::UPDATE_MOVE_BY_PISTON,
             );
+            // Difference: Vanilla draws the extend pitch from the level RNG; the pitch is
+            // cosmetic, so Steel samples the process RNG with the equivalent range.
             world.play_sound(
                 &sound_events::BLOCK_PISTON_EXTEND,
                 SoundSource::Blocks,

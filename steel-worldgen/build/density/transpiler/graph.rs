@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::density::{Axis, CubicSpline, DensityFunction, MarkerType, SplineValue};
+use crate::density::{Axis, CubicSpline, DensityFunction, Marker, MarkerType, SplineValue};
 
 use super::fingerprint::fingerprint;
 
@@ -188,94 +188,119 @@ pub(super) fn collect_spline_refs(spline: &CubicSpline, refs: &mut Vec<String>) 
     }
 }
 
-/// Collect the inner functions of all `Interpolated` markers in DFS order,
+/// Collect every `Interpolated` marker reachable from `df` in DFS order,
 /// resolving references through the registry.
 ///
 /// The DFS order must match `gen_expr` with `interpolated_param_mode` so that
 /// the indices align between `fill_cell_corner_densities` and `combine_interpolated`.
-pub(super) fn collect_interpolated_inners(
-    df: &DensityFunction,
-    registry: &BTreeMap<String, DensityFunction>,
-) -> Vec<DensityFunction> {
-    let mut inners = Vec::new();
-    collect_interpolated_walk(df, registry, &mut inners);
-    inners
+pub(super) fn collect_interpolated_markers<'a>(
+    df: &'a DensityFunction,
+    registry: &'a BTreeMap<String, DensityFunction>,
+) -> Vec<&'a Marker> {
+    let mut markers = Vec::new();
+    collect_interpolated_marker_walk(df, registry, &mut markers);
+    markers
 }
 
-pub(super) fn collect_interpolated_walk(
-    df: &DensityFunction,
-    registry: &BTreeMap<String, DensityFunction>,
-    inners: &mut Vec<DensityFunction>,
+fn collect_interpolated_marker_walk<'a>(
+    df: &'a DensityFunction,
+    registry: &'a BTreeMap<String, DensityFunction>,
+    markers: &mut Vec<&'a Marker>,
 ) {
     match df {
         DensityFunction::Marker(m) if m.kind == MarkerType::Interpolated => {
-            // Collect the inner function; do NOT recurse into it
-            inners.push((*m.wrapped).clone());
+            // Record the marker; do NOT recurse into its inner function
+            markers.push(m);
         }
-        DensityFunction::Marker(m) => collect_interpolated_walk(&m.wrapped, registry, inners),
+        DensityFunction::Marker(m) => {
+            collect_interpolated_marker_walk(&m.wrapped, registry, markers);
+        }
         DensityFunction::TwoArgumentSimple(t) => {
-            collect_interpolated_walk(&t.argument1, registry, inners);
-            collect_interpolated_walk(&t.argument2, registry, inners);
+            collect_interpolated_marker_walk(&t.argument1, registry, markers);
+            collect_interpolated_marker_walk(&t.argument2, registry, markers);
         }
         DensityFunction::Lerp(l) => {
-            collect_interpolated_walk(&l.alpha, registry, inners);
-            collect_interpolated_walk(&l.first, registry, inners);
-            collect_interpolated_walk(&l.second, registry, inners);
+            collect_interpolated_marker_walk(&l.alpha, registry, markers);
+            collect_interpolated_marker_walk(&l.first, registry, markers);
+            collect_interpolated_marker_walk(&l.second, registry, markers);
         }
-        DensityFunction::Mapped(m) => collect_interpolated_walk(&m.input, registry, inners),
-        DensityFunction::Clamp(c) => collect_interpolated_walk(&c.input, registry, inners),
+        DensityFunction::Mapped(m) => collect_interpolated_marker_walk(&m.input, registry, markers),
+        DensityFunction::Clamp(c) => collect_interpolated_marker_walk(&c.input, registry, markers),
         DensityFunction::RangeChoice(rc) => {
-            collect_interpolated_walk(&rc.input, registry, inners);
-            collect_interpolated_walk(&rc.when_in_range, registry, inners);
-            collect_interpolated_walk(&rc.when_out_of_range, registry, inners);
+            collect_interpolated_marker_walk(&rc.input, registry, markers);
+            collect_interpolated_marker_walk(&rc.when_in_range, registry, markers);
+            collect_interpolated_marker_walk(&rc.when_out_of_range, registry, markers);
         }
         DensityFunction::IntervalSelect(interval) => {
-            collect_interpolated_walk(&interval.input, registry, inners);
+            collect_interpolated_marker_walk(&interval.input, registry, markers);
             for function in &interval.functions {
-                collect_interpolated_walk(function, registry, inners);
+                collect_interpolated_marker_walk(function, registry, markers);
             }
         }
         DensityFunction::BlendDensity(bd) => {
-            collect_interpolated_walk(&bd.input, registry, inners);
+            collect_interpolated_marker_walk(&bd.input, registry, markers);
         }
         DensityFunction::WeirdScaledSampler(ws) => {
-            collect_interpolated_walk(&ws.input, registry, inners);
+            collect_interpolated_marker_walk(&ws.input, registry, markers);
         }
         DensityFunction::Slice(s) => {
-            collect_interpolated_walk(&s.input, registry, inners);
+            collect_interpolated_marker_walk(&s.input, registry, markers);
         }
         DensityFunction::Spline(s) => {
-            collect_interpolated_spline_walk(&s.spline, registry, inners);
+            collect_interpolated_spline_marker_walk(&s.spline, registry, markers);
         }
         DensityFunction::ShiftedNoise(sn) => {
-            collect_interpolated_walk(&sn.shift_x, registry, inners);
-            collect_interpolated_walk(&sn.shift_y, registry, inners);
-            collect_interpolated_walk(&sn.shift_z, registry, inners);
+            collect_interpolated_marker_walk(&sn.shift_x, registry, markers);
+            collect_interpolated_marker_walk(&sn.shift_y, registry, markers);
+            collect_interpolated_marker_walk(&sn.shift_z, registry, markers);
         }
         DensityFunction::FindTopSurface(fts) => {
-            collect_interpolated_walk(&fts.density, registry, inners);
-            collect_interpolated_walk(&fts.upper_bound, registry, inners);
+            collect_interpolated_marker_walk(&fts.density, registry, markers);
+            collect_interpolated_marker_walk(&fts.upper_bound, registry, markers);
         }
         DensityFunction::Reference(r) => {
             if let Some(ref_df) = registry.get(&r.id) {
-                collect_interpolated_walk(ref_df, registry, inners);
+                collect_interpolated_marker_walk(ref_df, registry, markers);
             }
         }
         _ => {}
     }
 }
 
-pub(super) fn collect_interpolated_spline_walk(
-    spline: &CubicSpline,
-    registry: &BTreeMap<String, DensityFunction>,
-    inners: &mut Vec<DensityFunction>,
+fn collect_interpolated_spline_marker_walk<'a>(
+    spline: &'a CubicSpline,
+    registry: &'a BTreeMap<String, DensityFunction>,
+    markers: &mut Vec<&'a Marker>,
 ) {
-    collect_interpolated_walk(&spline.coordinate, registry, inners);
+    collect_interpolated_marker_walk(&spline.coordinate, registry, markers);
     for point in &spline.points {
         if let SplineValue::Spline(nested) = &point.value {
-            collect_interpolated_spline_walk(nested, registry, inners);
+            collect_interpolated_spline_marker_walk(nested, registry, markers);
         }
     }
+}
+
+/// Collect the inner functions of all `Interpolated` markers in DFS order.
+pub(super) fn collect_interpolated_inners(
+    df: &DensityFunction,
+    registry: &BTreeMap<String, DensityFunction>,
+) -> Vec<DensityFunction> {
+    collect_interpolated_markers(df, registry)
+        .into_iter()
+        .map(|marker| (*marker.wrapped).clone())
+        .collect()
+}
+
+/// The distinct interpolation cell sizes declared by the `Interpolated` markers
+/// reachable from `df` (empty when the tree has no `Interpolated` marker).
+pub(super) fn interpolated_cell_sizes(
+    df: &DensityFunction,
+    registry: &BTreeMap<String, DensityFunction>,
+) -> BTreeSet<(i32, i32)> {
+    collect_interpolated_markers(df, registry)
+        .into_iter()
+        .map(|marker| (marker.cell_size_xz, marker.cell_size_y))
+        .collect()
 }
 
 /// Check if a density function tree transitively contains `BlendedNoise`.

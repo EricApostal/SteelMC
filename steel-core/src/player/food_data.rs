@@ -37,6 +37,9 @@ pub mod food_constants {
     /// Minimum food level required for slow natural regeneration
     pub const HEAL_LEVEL: i32 = 18;
 
+    /// Food level at which starvation damage starts
+    pub const STARVE_LEVEL: i32 = 0;
+
     /// Sprint threshold — player can sprint when food level is above this value
     pub const SPRINT_LEVEL: i32 = 6;
 
@@ -95,6 +98,7 @@ pub mod food_constants {
 use food_constants::{
     DEFAULT_FOOD_LEVEL, DEFAULT_SATURATION, EXHAUSTION_DROP, EXHAUSTION_HEAL, HEAL_LEVEL,
     HEALTH_TICK_COUNT, HEALTH_TICK_COUNT_SATURATED, MAX_EXHAUSTION, MAX_FOOD_LEVEL, SPRINT_LEVEL,
+    STARVE_LEVEL,
 };
 
 /// Computes the absolute saturation value from a nutrition count and a modifier.
@@ -229,7 +233,7 @@ impl FoodData {
             }
         }
         // Starving
-        else if food <= 0 {
+        else if food <= STARVE_LEVEL {
             self.tick_timer += 1;
 
             if self.tick_timer >= HEALTH_TICK_COUNT {
@@ -383,6 +387,28 @@ mod tests {
         food.exhaustion_level = 5.0;
         let _ = food.tick(Difficulty::Normal, false, 20.0, 20.0);
         assert_eq!(food.food_level, MAX_FOOD_LEVEL - 1);
+    }
+
+    /// Vanilla `FoodData.add` clamps the resulting saturation to the (already
+    /// updated) food level, so an oversized meal cannot push saturation above
+    /// the hunger bar.
+    #[test]
+    fn add_clamps_saturation_to_food_level() {
+        // A single meal can never leave saturation above the food level.
+        let mut food = FoodData::new();
+        food.food_level = 0;
+        food.saturation_level = 0.0;
+        food.add_food(10, 100.0);
+        assert_eq!(food.food_level, 10);
+        assert!((food.saturation_level - 10.0).abs() < f32::EPSILON);
+
+        // Eating while damaged keeps saturation bounded by the new food level.
+        let mut food = FoodData::new();
+        food.food_level = 19;
+        food.saturation_level = 0.0;
+        food.eat(1, 1.2);
+        assert_eq!(food.food_level, MAX_FOOD_LEVEL);
+        assert!((food.saturation_level - 2.4).abs() < f32::EPSILON);
     }
 
     /// `add_food` must apply saturation as-is (it is already the absolute

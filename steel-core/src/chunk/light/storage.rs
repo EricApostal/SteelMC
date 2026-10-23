@@ -3,8 +3,8 @@ use steel_utils::{BlockPos, SectionPos};
 use crate::chunk::section::Sections;
 
 use super::{
-    DATA_LAYER_EDGE, DATA_LAYER_SIZE, LightLayer, LightSectionRange, LightSectionRangeError,
-    MAX_LIGHT_LEVEL,
+    DATA_LAYER_EDGE, DATA_LAYER_SIZE, DataLayer, LightLayer, LightSectionRange,
+    LightSectionRangeError, MAX_LIGHT_LEVEL,
 };
 
 /// Error returned when a chunk light emptiness map has the wrong length.
@@ -94,6 +94,24 @@ impl LightSectionData {
         match self {
             Self::Homogeneous(value) => Box::new([Self::pack_filled(*value); DATA_LAYER_SIZE]),
             Self::Packed(data) => Box::new(**data),
+        }
+    }
+
+    /// Converts this section's data into a vanilla `DataLayer`.
+    #[must_use]
+    pub fn to_data_layer(&self) -> DataLayer {
+        match self {
+            Self::Homogeneous(value) => DataLayer::filled(*value),
+            Self::Packed(data) => DataLayer::from_packed_data(Box::new(**data)),
+        }
+    }
+
+    /// Creates section data from a vanilla `DataLayer`, keeping homogeneous layers compact.
+    #[must_use]
+    pub fn from_data_layer(layer: &DataLayer) -> Self {
+        match layer.homogeneous_value() {
+            Some(value) => Self::homogeneous(value),
+            None => Self::Packed(layer.to_bytes()),
         }
     }
 

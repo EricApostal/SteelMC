@@ -126,9 +126,29 @@ impl InteractionEntity {
         *self.attack.lock()
     }
 
+    /// Provides the UUID of the player who last attacked (left-clicked) this entity, if any.
+    ///
+    /// Mirrors the player half of vanilla `Interaction.getLastAttacker()`; player lookup
+    /// stays with the caller since Steel has no `World.getPlayerByUUID` API yet.
+    pub fn last_attacker_uuid(&self) -> Option<Uuid> {
+        self.attack.lock().as_ref().map(|action| action.player())
+    }
+
     /// Provides the latest interaction (right-click) on this entity, if it exists.
     pub fn last_interaction(&self) -> Option<PlayerAction> {
         *self.interaction.lock()
+    }
+
+    /// Provides the UUID of the player who last interacted (right-clicked) with this
+    /// entity, if any.
+    ///
+    /// Mirrors the player half of vanilla `Interaction.getTarget()`; player lookup
+    /// stays with the caller since Steel has no `World.getPlayerByUUID` API yet.
+    pub fn last_target_uuid(&self) -> Option<Uuid> {
+        self.interaction
+            .lock()
+            .as_ref()
+            .map(|action| action.player())
     }
 }
 
@@ -154,7 +174,11 @@ impl Entity for InteractionEntity {
                 player: player.uuid(),
                 timestamp: world.game_time(),
             });
-            // TODO: Trigger PLAYER_HURT_ENTITY advancement criterion trigger
+            // TODO: Trigger PLAYER_HURT_ENTITY advancement criterion trigger once the
+            // advancement criterion trigger wiring exists. Steel's advancement store only
+            // models criterion data so far: all generated advancements attach
+            // `ImpossibleInstance` (triggerable by commands only), and `award` only flows
+            // through the advancement command path, with no per-event trigger dispatch.
         }
         !self.entity_data.lock().response.get()
     }
@@ -368,7 +392,7 @@ impl InteractionEntityDataView<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::entity::entities::InteractionEntity;
+    use crate::entity::entities::objects::technical::InteractionEntity;
     use crate::entity::entities::objects::technical::interaction::{
         DEFAULT_HEIGHT, DEFAULT_WIDTH, PlayerAction, TAG_HEIGHT, TAG_WIDTH,
     };

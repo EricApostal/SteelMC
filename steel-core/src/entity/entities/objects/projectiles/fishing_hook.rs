@@ -1,13 +1,14 @@
 use crate::entity::entities::{ExperienceOrbEntity, ItemEntity};
 use crate::entity::projectile::triangle_random;
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntitySyncedData, LivingEntity, Projectile, ProjectileBase,
-    RemovalReason, SharedEntity, ThrowableProjectile, entity_loot_ref, next_entity_id,
+    Entity, EntityBase, EntityBaseLoad, EntityMovementEmission, EntitySyncedData,
+    LivingEntity as _, Projectile, ProjectileBase, RemovalReason, SharedEntity, entity_loot_ref,
+    next_entity_id,
 };
 use crate::fluid::get_height;
 use crate::physics::MoverType;
 use crate::player::Player;
-use crate::world::{LevelReader, World};
+use crate::world::{ClipHitResult, LevelReader, World};
 use glam::DVec3;
 use rand::{RngExt, rng};
 use std::cmp::PartialEq;
@@ -90,7 +91,8 @@ impl FishingHookState {
             time_until_lured: 0,
             time_until_hooked: 0,
             fish_angle: 0.0,
-            open_water: false,
+            // Vanilla initializes `openWater` to `true`.
+            open_water: true,
             bobber_state: BobberState::Flying,
             hooked_entity: None,
             luck: luck.max(0),
@@ -182,7 +184,11 @@ impl FishingHookEntity {
             entity_type,
             entity_data: SyncMutex::new(FishingBobberEntityData::new()),
             projectile_base: ProjectileBase::new(),
-            // FIXME: `lure_speed` and `luck` are taken from the existing rod, but auto generation fails when doing this, refer to: https://mcsrc.dev/2/26.2/net/minecraft/world/entity/projectile/FishingHook#L75
+            // Vanilla reads `luck`/`lureSpeed` from the rod only when the hook is
+            // thrown (`FishingHook(Player, Level, int, int)`); the entity
+            // constructor used when restoring a saved hook passes `(0, 0)` and
+            // `FishingHook` persists none of its own fields, so a reloaded hook
+            // always starts with both values cleared.
             hook_state: SyncMutex::new(FishingHookState::new(0, 0)),
             synchronized_random: SyncMutex::new(LegacyRandom::from_seed(0)),
         }
@@ -368,6 +374,19 @@ impl FishingHookEntity {
 
                 state.nibble = rng().random_range(ONE_SECOND..=TWO_SECONDS);
                 self.entity_data.lock().fishing_hook_mut().biting.set(true);
+
+                // Vanilla's `entityData.set(DATA_BITING, true)` synchronously
+                // runs `onSyncedDataUpdated`, which yanks the bobber down with
+                // `-0.4 * Mth.nextFloat(syncronizedRandom, 0.6, 1.0)`.
+                let mut synchronized_random = self.synchronized_random.lock();
+                let bite_velocity =
+                    -0.4 * (synchronized_random.next_f32() * (1.0_f32 - 0.6_f32) + 0.6_f32);
+                let velocity = self.base.velocity();
+                self.base.set_velocity(DVec3::new(
+                    velocity.x,
+                    f64::from(bite_velocity),
+                    velocity.z,
+                ));
             }
         } else if state.time_until_lured > 0 {
             state.time_until_lured -= fishing_speed;
@@ -552,27 +571,6 @@ impl FishingHookEntity {
 
                         self.spawn_loot_award_stat(items, &world, owner.as_ref());
 
-                        let orb_pos = DVec3::new(
-                            player.position().x,
-                            player.position().y + 0.5,
-                            player.position().z + 0.5,
-                        );
-
-                        let orb = ExperienceOrbEntity::new(
-                            &vanilla_entities::EXPERIENCE_ORB,
-                            next_entity_id(),
-                            orb_pos,
-                            Arc::downgrade(&world),
-                        );
-
-                        orb.set_value(rand::random_range(1..=6));
-
-                        let entity: SharedEntity = Arc::new(orb);
-
-                        if let Err(error) = world.try_add_entity(Arc::clone(&entity)) {
-                            log::error!("Failed to spawn experience orb: {error}");
-                        }
-
                         damage = DMG_CAUGHT;
                     }
                 }
@@ -589,6 +587,10 @@ impl FishingHookEntity {
 
     /// Modifies the hooked entities velocity in order to simulate a pulling motion.
     fn pull_entity(&self, entity: &Arc<dyn Entity>) {
+        // Vanilla `FishingHook.pullEntity` skips entities that don't simulate movement.
+        if !entity.can_simulate_movement() {
+            return;
+        }
         if let Some(owner) = self.get_owner() {
             let base = owner.base();
             let delta = DVec3::new(
@@ -625,30 +627,51 @@ impl FishingHookEntity {
     }
 
     // I added this fn because I thought it would be cleaner this way, it's not in the vanilla src, but how I use it ensures vanilla behavior
-    /// Loops through a `vec` of `ItemStack`s (the fishing loot), spawns them as `ItemEntity`s in the world and awards the stat `FISH_CAUGHT`
+    /// Mirrors the body of vanilla `FishingHook.retrieve`'s loot loop: spawns
+    /// each caught stack as an `ItemEntity` in the hook's world, spawns an
+    /// experience orb for it in the owner's world, and awards `FISH_CAUGHT`.
     fn spawn_loot_award_stat(&self, items: Vec<ItemStack>, world: &Arc<World>, owner: &dyn Entity) {
+        const SPEED: f64 = 0.1;
+        const INVERSE_CUBE: f64 = 0.08;
+
+        let Some(player) = owner.as_player() else {
+            return;
+        };
+        let Some(owner_world) = owner.level() else {
+            return;
+        };
+
         for item_stack in items {
-            const SPEED: f64 = 0.1;
-            const INVERSE_CUBE: f64 = 0.08;
+            let xa = player.position().x - self.position().x;
+            let ya = player.position().y - self.position().y;
+            let za = player.position().z - self.position().z;
 
-            if let Some(player) = owner.as_player() {
-                let xa = player.position().x - self.position().x;
-                let ya = player.position().y - self.position().y;
-                let za = player.position().z - self.position().z;
+            let vel = DVec3::new(
+                xa * SPEED,
+                ya * SPEED + (xa * xa + ya * ya + za * za).sqrt().sqrt() * INVERSE_CUBE,
+                za * SPEED,
+            );
 
-                let vel = DVec3::new(
-                    xa * SPEED,
-                    ya * SPEED + (xa * xa + ya * ya + za * za).sqrt().sqrt() * INVERSE_CUBE,
-                    za * SPEED,
-                );
+            World::spawn_item_with_velocity(world, self.position(), item_stack.clone(), vel);
 
-                World::spawn_item_with_velocity(world, self.position(), item_stack.clone(), vel);
+            let orb_pos = DVec3::new(
+                player.position().x,
+                player.position().y + 0.5,
+                player.position().z + 0.5,
+            );
+            let orb = ExperienceOrbEntity::new(
+                &vanilla_entities::EXPERIENCE_ORB,
+                next_entity_id(),
+                orb_pos,
+                Arc::downgrade(&owner_world),
+            );
+            orb.set_value(rand::random_range(1..=6));
+            if let Err(error) = owner_world.try_add_entity(Arc::new(orb)) {
+                log::error!("Failed to spawn experience orb: {error}");
+            }
 
-                if item_stack.item().has_tag(&ItemTag::FISHES) {
-                    player.award_custom_stat(&vanilla_custom_stats::FISH_CAUGHT);
-                }
-            } else {
-                return;
+            if item_stack.item().has_tag(&ItemTag::FISHES) {
+                player.award_custom_stat(&vanilla_custom_stats::FISH_CAUGHT);
             }
         }
     }
@@ -818,6 +841,14 @@ impl FishingHookEntity {
         state.bobber_state
     }
 
+    /// Returns whether the bobber is currently fishing in open water (vanilla
+    /// `FishingHook.isOpenWaterFishing`), which the fishing loot table's
+    /// `type_specific/fishing_hook` predicate reads.
+    #[must_use]
+    pub fn is_open_water_fishing(&self) -> bool {
+        self.hook_state.lock().open_water
+    }
+
     fn can_fish(&self, player: &Player) -> bool {
         let inventory = player.inventory.lock();
         let mainhand_item = inventory.get_item_in_hand(InteractionHand::MainHand);
@@ -884,8 +915,9 @@ impl Entity for FishingHookEntity {
                     }
 
                     if !fluid_state.is_water() && !self.base.on_ground() && !self.is_hooked_in() {
+                        let gravity = self.get_default_gravity();
                         self.base
-                            .set_velocity(self.base.velocity().add(DVec3::new(0.0, -0.03, 0.0)));
+                            .set_velocity(self.base.velocity().add(DVec3::new(0.0, -gravity, 0.0)));
                     }
 
                     Arc::clone(&self).move_entity(MoverType::SelfMovement, self.base.velocity());
@@ -921,6 +953,16 @@ impl Entity for FishingHookEntity {
     fn spawn_data(&self) -> i32 {
         self.get_owner().map_or(self.id(), |owner| owner.id())
     }
+
+    /// Vanilla `FishingHook.getDefaultGravity`.
+    fn get_default_gravity(&self) -> f64 {
+        0.03
+    }
+
+    /// Vanilla `FishingHook.getMovementEmission`.
+    fn movement_emission(&self) -> EntityMovementEmission {
+        EntityMovementEmission::None
+    }
 }
 
 impl Projectile for FishingHookEntity {
@@ -938,9 +980,22 @@ impl Projectile for FishingHookEntity {
     fn on_hit_entity(self: Arc<Self>, entity: &SharedEntity, _location: DVec3) {
         self.set_hooked_entity(Some(Arc::clone(entity)));
     }
-}
 
-impl ThrowableProjectile for FishingHookEntity {}
+    /// Vanilla `FishingHook.onHitBlock`: run the base block callback, then
+    /// scale the velocity by `hitResult.distanceTo(this)`. Vanilla's
+    /// `HitResult.distanceTo` returns a *squared* distance, so this mirrors
+    /// that (the hook's collision resolution clamps the resulting overshoot).
+    fn on_hit_block(self: Arc<Self>, hit: &ClipHitResult) {
+        self.projectile_on_hit_block(hit);
+        let distance_squared = hit.location.distance_squared(self.position());
+        self.set_velocity(self.velocity().normalize_or_zero() * distance_squared);
+    }
+
+    /// Vanilla `FishingHook.shouldBounceOnWorldBorder`.
+    fn should_bounce_on_world_border(&self) -> bool {
+        true
+    }
+}
 
 /// Collection of possible states the fishing bobber of the `FishingHookEntity` can take on.
 /// Equivalent to Java's `FishingHook.FishHookState` (we renamed for clarity)

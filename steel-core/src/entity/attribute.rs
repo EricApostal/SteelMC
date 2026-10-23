@@ -143,6 +143,15 @@ impl AttributeInstance {
         self.modifiers.iter().any(|modifier| modifier.id == *id)
     }
 
+    /// Returns the modifier with the given ID, if present.
+    ///
+    /// Vanilla `AttributeInstance.getModifier`; used by
+    /// `/attribute modifier value get`.
+    #[must_use]
+    pub fn modifier(&self, id: &Identifier) -> Option<&AttributeModifier> {
+        self.modifiers.iter().find(|modifier| modifier.id == *id)
+    }
+
     /// Adds or replaces a modifier. Returns `true` if the value actually changed.
     #[expect(
         clippy::float_cmp,
@@ -467,6 +476,17 @@ impl AttributeMap {
                 }
             }
         }
+    }
+
+    /// Returns the amount of the modifier with `modifier_id` on `attribute`.
+    ///
+    /// Vanilla `AttributeMap.getModifierValue`; used by
+    /// `/attribute modifier value get`.
+    #[must_use]
+    pub fn modifier_value(&self, attribute: AttributeRef, modifier_id: &Identifier) -> Option<f64> {
+        self.get_instance(attribute)?
+            .modifier(modifier_id)
+            .map(|modifier| modifier.amount)
     }
 
     /// Adds a modifier to an attribute. Returns `false` if the modifier ID already exists

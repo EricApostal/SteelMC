@@ -1,6 +1,27 @@
-//! Per-mob sensing caches.
+//! Per-mob sensing caches and the vanilla `net.minecraft.world.entity.ai.sensing`
+//! sensor classes.
+//!
+//! One submodule per vanilla sensor class, each owning its `SensorType` static:
+//! [`villager`] holds the shared sensors (nearest living/players/items, bed, hurt-by,
+//! villager hostiles/babies, secondary POIs, golem) and the top-level modules hold
+//! the brain-mob specific ones, in vanilla `SensorType` registration order. The
+//! brain builder of each mob owns the order the sensors run in.
 
+pub(crate) mod adult;
+pub(crate) mod adult_any_type;
+pub(crate) mod axolotl_attackables;
+pub(crate) mod breeze_attack_entity;
+pub(crate) mod dummy;
+pub(crate) mod frog_attackables;
+pub(crate) mod hoglin_specific;
+pub(crate) mod is_in_water;
+pub(crate) mod mob_sensor;
+pub(crate) mod nearest_visible_living;
+pub(crate) mod piglin_brute_specific;
+pub(crate) mod piglin_specific;
+pub(crate) mod tempting;
 pub(crate) mod villager;
+pub(crate) mod warden_entity;
 
 use rustc_hash::FxHashSet;
 

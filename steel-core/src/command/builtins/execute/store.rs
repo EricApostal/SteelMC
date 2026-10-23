@@ -30,8 +30,20 @@ type Builder = CommandNodeBuilder<CommandSource, SteelCommandRuntime>;
 const EXECUTE_ROOT: CommandRedirectTarget = CommandRedirectTarget::CommandRoot;
 
 pub(super) fn target(name: &'static str, store_result: bool) -> Builder {
-    // TODO: Add bossbar after Steel has a persistent custom-bossbar manager.
-    // TODO: Add entity after live entity NBT can reload every command-visible field.
+    // TODO: Add `bossbar` once Steel has a persistent custom-bossbar manager.
+    // Vanilla redirects `store <result|success> bossbar <id> (max|value)` into
+    // `BossBarCommands.getBossBar`/`storeValue`, i.e. the server-wide
+    // `ServerBossEvents` map. Steel has no boss-bar manager and no
+    // `ClientboundBossEventPacket`; `entity/raid` records the same gap for
+    // `ServerBossEvent`. Owner: `Bosses` lane (`entity/boss/custom.rs`).
+    // TODO: Add `entity` once a live entity can be reloaded from an owned compound.
+    // Vanilla `store <result|success> entity <target> <path> <type> <scale>` writes
+    // the NBT path on `Entity.saveWithoutId` output and then calls `Entity.load` so
+    // every command-visible field is refreshed. Steel exposes
+    // `Entity::save_additional`/`load_additional` for creation-time loading only and
+    // has no owned-compound reload bridge on a live entity (nor `setData` for
+    // `EntityDataAccessor` fields). Owner: entity lane
+    // (`entity/entity/mod.rs`, `entity/living_entity.rs`).
     literal(name)
         .then(
             literal("score").then(

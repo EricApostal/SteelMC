@@ -661,7 +661,13 @@ impl ChunkStorage {
         }
         let heightmaps = Self::heightmaps_to_persistent(&heightmaps, status);
 
-        let light = Self::light_to_persistent(&chunk.light.read());
+        // Vanilla `SerializableChunkData.copyOf` only writes light when the chunk
+        // reports it as light-correct, so stale light is dropped on save.
+        let light = if chunk.is_light_correct() {
+            Self::light_to_persistent(&chunk.light.read())
+        } else {
+            PersistentLightData::default()
+        };
 
         // Serialize structure data (works for both proto and full chunks)
         let structure_starts = Self::structure_starts_to_persistent(&chunk.structure_starts());

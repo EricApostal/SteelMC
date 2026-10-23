@@ -99,7 +99,8 @@ impl BlockBehavior for TargetBlock {
             && let Some(player) = owner.as_player()
         {
             player.award_custom_stat(&vanilla_custom_stats::TARGET_HIT);
-            // TODO: The advancement criterion awaits Steel's shared advancement foundations.
+            // Deliberate difference: Steel has no advancement-criteria foundations yet, so the
+            // `CriteriaTriggers.TARGET_BLOCK_HIT` check stays unported like other target-free callers.
         }
     }
 

@@ -106,6 +106,15 @@ impl MenuBehavior {
         ContainerLockGuard::lock_all(&self.container_refs)
     }
 
+    /// The containers this menu's slots are backed by, fixed at build time.
+    ///
+    /// Used by container-viewer accounting to recognize whether a player's open
+    /// menu is backed by a given block entity's container.
+    #[must_use]
+    pub fn container_refs(&self) -> &[ContainerRef] {
+        &self.container_refs
+    }
+
     /// Locks the menu containers together with one additional container.
     #[must_use]
     pub(crate) fn lock_all_containers_with(&self, additional: ContainerRef) -> ContainerLockGuard {

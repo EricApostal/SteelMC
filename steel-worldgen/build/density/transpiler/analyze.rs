@@ -234,16 +234,11 @@ impl TranspileContext {
             }
             DensityFunction::BlendDensity(bd) => self.walk_df(&bd.input, input),
             DensityFunction::Marker(m) => {
-                if m.kind == MarkerType::Interpolated {
-                    assert!(
-                        m.cell_size_xz == input.cell_width && m.cell_size_y == input.cell_height,
-                        "minecraft:interpolated with cell_size_xz {} cell_size_y {} is not yet supported (only the router's default {}/{} grid is wired up)",
-                        m.cell_size_xz,
-                        m.cell_size_y,
-                        input.cell_width,
-                        input.cell_height
-                    );
-                }
+                // An `Interpolated` marker declares its own cell size, which may
+                // differ from the grid the dimension's column cache uses (vanilla
+                // interpolates every function on its own grid). Markers that do not
+                // match are evaluated directly by codegen; see
+                // `codegen_functions::gen_all_interpolation_functions`.
                 self.walk_df(&m.wrapped, input);
             }
             DensityFunction::FindTopSurface(fts) => {

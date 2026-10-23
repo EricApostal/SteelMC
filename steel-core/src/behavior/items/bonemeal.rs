@@ -3,10 +3,17 @@ use std::sync::Arc;
 use rand::RngExt;
 use steel_macros::item_behavior;
 use steel_registry::{
-    blocks::{block_state_ext::BlockStateExt, shapes::is_offset_shape_full_block},
+    REGISTRY, TaggedRegistryExt as _,
+    blocks::{
+        BlockRef, block_state_ext::BlockStateExt, properties::BlockStateProperties,
+        shapes::is_offset_shape_full_block,
+    },
     data_components::vanilla_components::USE_EFFECTS,
     item_stack::ItemStack,
-    level_events, vanilla_blocks, vanilla_game_events,
+    level_events,
+    vanilla_biome_tags::BiomeTag,
+    vanilla_block_tags::BlockTag,
+    vanilla_blocks, vanilla_game_events,
 };
 use steel_utils::{BlockPos, Direction, types::UpdateFlags};
 
@@ -21,6 +28,22 @@ use crate::{
 pub struct BoneMealItem;
 
 impl BoneMealItem {
+    /// Vanilla `BuiltInRegistries.BLOCK.getRandomElementOf(tag, random)`.
+    ///
+    /// Returns `None` for an empty or unknown tag, which vanilla treats as
+    /// "keep the current state".
+    fn random_block_from_tag(
+        tag: &steel_utils::Identifier,
+        rng: &mut (impl RngExt + ?Sized),
+    ) -> Option<BlockRef> {
+        let blocks = REGISTRY.blocks.get_tag(tag)?;
+        if blocks.is_empty() {
+            return None;
+        }
+        let index = rng.random_range(0..blocks.len());
+        Some(blocks[index])
+    }
+
     fn cause_finish_use_vibration(context: &UseOnContext<'_>) {
         let interact_vibrations = context.inv.with_item(|item| {
             item.get(USE_EFFECTS)
@@ -53,7 +76,7 @@ impl BoneMealItem {
         false
     }
 
-    fn grow_water_plant(world: &Arc<World>, pos: BlockPos, _clicked_face: Direction) -> bool {
+    fn grow_water_plant(world: &Arc<World>, pos: BlockPos, clicked_face: Direction) -> bool {
         let state = world.get_block_state(pos);
         if state.get_block() != &vanilla_blocks::WATER || !state.get_fluid_state().is_full() {
             return false;
@@ -70,7 +93,7 @@ impl BoneMealItem {
 
         'outer: for i in 0..128 {
             let mut new_pos = pos;
-            let new_state = vanilla_blocks::SEAGRASS.default_state();
+            let mut new_state = vanilla_blocks::SEAGRASS.default_state();
 
             for _ in 0..(i / 16) {
                 new_pos = new_pos.offset(
@@ -88,7 +111,50 @@ impl BoneMealItem {
                 }
             }
 
-            // TODO: implement coral and underwater bonemeal tag selection.
+            // Vanilla `growWaterPlant`: coral biomes grow wall fans on the
+            // clicked horizontal face for the first position and underwater
+            // bonemeal blocks on one in four positions.
+            if world
+                .biome_at(new_pos)
+                .is_some_and(|biome| biome.has_tag(&BiomeTag::PRODUCES_CORALS_FROM_BONEMEAL))
+            {
+                if i == 0 && clicked_face.is_horizontal() {
+                    if let Some(coral) =
+                        Self::random_block_from_tag(&BlockTag::WALL_CORALS, &mut rng)
+                    {
+                        new_state = coral.default_state();
+                        if new_state
+                            .try_get_value(&BlockStateProperties::HORIZONTAL_FACING)
+                            .is_some()
+                        {
+                            new_state = new_state
+                                .set_value(&BlockStateProperties::HORIZONTAL_FACING, clicked_face);
+                        }
+                    }
+                } else if rng.random_range(0..4) == 0
+                    && let Some(coral) =
+                        Self::random_block_from_tag(&BlockTag::UNDERWATER_BONEMEALS, &mut rng)
+                {
+                    new_state = coral.default_state();
+                }
+            }
+
+            // Vanilla retries a wall coral's facing until it can survive.
+            if new_state
+                .try_get_value(&BlockStateProperties::HORIZONTAL_FACING)
+                .is_some()
+                && new_state.get_block().has_tag(&BlockTag::WALL_CORALS)
+            {
+                for _ in 0..4 {
+                    let behavior = BLOCK_BEHAVIORS.get_behavior(new_state.get_block());
+                    if behavior.can_survive(new_state, world, new_pos) {
+                        break;
+                    }
+                    let direction = Direction::HORIZONTAL[rng.random_range(0..4usize)];
+                    new_state =
+                        new_state.set_value(&BlockStateProperties::HORIZONTAL_FACING, direction);
+                }
+            }
 
             let Some(behavior) = BLOCK_BEHAVIORS.get_behavior_for_state(new_state) else {
                 return false;

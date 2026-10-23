@@ -7,6 +7,7 @@ use std::sync::Arc;
 use steel_macros::block_behavior;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
+use steel_registry::blocks::properties::BlockStateProperties;
 use steel_registry::level_events;
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_blocks;
@@ -61,7 +62,7 @@ impl FireBlock {
 
     /// Steel equivalent of vanilla's `BaseFireBlock.getState` for selecting
     /// between soul fire and regular fire.
-    pub(crate) fn get_state(world: &dyn LevelReader, pos: BlockPos) -> BlockStateId {
+    pub(crate) fn get_state<L: LevelReader + ?Sized>(world: &L, pos: BlockPos) -> BlockStateId {
         if SoulFireBlock::can_survive_at(world, pos) {
             vanilla_blocks::SOUL_FIRE.default_state()
         } else {
@@ -69,16 +70,14 @@ impl FireBlock {
         }
     }
 
-    fn selected_fire_can_survive_at(world: &dyn LevelReader, pos: BlockPos) -> bool {
+    fn selected_fire_can_survive_at<L: LevelReader + ?Sized>(world: &L, pos: BlockPos) -> bool {
         SoulFireBlock::can_survive_at(world, pos) || Self::can_survive_at(world, pos)
     }
 
     /// Matches vanilla's `FireBlock.canSurvive`: block below has a sturdy top face,
     /// or an adjacent block is flammable.
-    fn can_survive_at(world: &dyn LevelReader, pos: BlockPos) -> bool {
-        let below_pos = pos.below();
-        world.is_face_sturdy(world.get_block_state(below_pos), below_pos, Direction::Up)
-        // TODO: Include adjacent flammable blocks once the flammability system exists.
+    fn can_survive_at<L: LevelReader + ?Sized>(world: &L, pos: BlockPos) -> bool {
+        crate::world::World::fire_can_survive_at(world, pos)
     }
 
     /// Matches vanilla's `BaseFireBlock.isPortal`: checks if placing fire here could form a portal.
@@ -132,28 +131,38 @@ impl FireBlock {
 }
 
 impl BlockBehavior for FireBlock {
-    // TODO: Implement vanilla random tick behavior for fire spreading and aging
+    /// Vanilla `FireBlock.tick`: schedules the next tick, then ages/burns/spreads in
+    /// [`crate::world::World::tick_fire`].
+    fn tick(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
+        world.tick_fire(state, pos);
+    }
+
     /// Removes fire when its supporting block no longer allows it to survive
     fn update_shape(
         &self,
         state: BlockStateId,
         world: &dyn ScheduledTickAccess,
         pos: BlockPos,
-        direction: Direction,
+        _direction: Direction,
         _neighbor_pos: BlockPos,
         _neighbor_state: BlockStateId,
     ) -> BlockStateId {
-        if direction == Direction::Down && !self.can_survive(state, world, pos) {
+        if !self.can_survive(state, world, pos) {
             return vanilla_blocks::AIR.default_state();
         }
-        state
+
+        // Vanilla `FireBlock.updateShape` re-derives the state through `getStateWithAge`, which can
+        // swap regular fire for soul fire (and back) when the block below changes.
+        let age = state.get_value(&BlockStateProperties::AGE_15);
+        World::fire_state_with_age(world, pos, i32::from(age))
     }
+
+    /// Vanilla `FireBlock.getStateForPlacement`: connection properties from burnable neighbours.
     fn get_state_for_placement(&self, context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
-        if SoulFireBlock::can_survive_at(context.world.as_ref(), context.place_pos()) {
-            Some(vanilla_blocks::SOUL_FIRE.default_state())
-        } else {
-            Some(self.block.default_state())
-        }
+        Some(World::fire_placement_state(
+            context.world.as_ref(),
+            context.place_pos(),
+        ))
     }
 
     fn can_survive(&self, _state: BlockStateId, world: &dyn LevelReader, pos: BlockPos) -> bool {
@@ -180,6 +189,9 @@ impl BlockBehavior for FireBlock {
         old_state: BlockStateId,
         _moved_by_piston: bool,
     ) {
+        // Vanilla `FireBlock.onPlace` schedules the spread/age tick for every new fire.
+        world.schedule_fire_tick(pos);
+
         // Only attempt portal creation when fire is newly placed, not when replacing itself
         if old_state.get_block() == state.get_block() {
             return;
@@ -229,7 +241,7 @@ impl SoulFireBlock {
         Self { block }
     }
 
-    fn can_survive_at(world: &dyn LevelReader, pos: BlockPos) -> bool {
+    fn can_survive_at<L: LevelReader + ?Sized>(world: &L, pos: BlockPos) -> bool {
         let block_below = world.get_block_state(pos.below()).get_block();
         block_below.has_tag(&BlockTag::SOUL_FIRE_BASE_BLOCKS)
     }

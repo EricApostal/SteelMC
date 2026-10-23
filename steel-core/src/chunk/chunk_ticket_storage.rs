@@ -117,6 +117,16 @@ const fn portal_ticket() -> ChunkTicket {
     ChunkTicket::for_full_chunk_radius(&vanilla_ticket_types::PORTAL, PORTAL_TICKET_RADIUS)
 }
 
+/// Vanilla's force-load ticket: `TicketType.FORCED` at
+/// `ChunkLevel.byStatus(FullChunkStatus.ENTITY_TICKING)`.
+#[must_use]
+pub(crate) const fn forced_ticket() -> ChunkTicket {
+    ChunkTicket::new(
+        &vanilla_ticket_types::FORCED,
+        ChunkTicketLevel::ENTITY_TICKING_CHUNK,
+    )
+}
+
 #[must_use]
 const fn ender_pearl_ticket() -> ChunkTicket {
     ChunkTicket::for_full_chunk_radius(
@@ -307,6 +317,36 @@ impl ChunkTicketStorage {
             .collect();
         sources.sort_unstable_by_key(|update| (update.pos.0.x, update.pos.0.y));
         sources
+    }
+
+    /// Returns whether `pos` holds a ticket of `ticket_type`.
+    #[must_use]
+    pub(crate) fn has_ticket_type(&self, pos: ChunkPos, ticket_type: TicketTypeRef) -> bool {
+        self.tickets.get(&pos).is_some_and(|tickets| {
+            tickets
+                .iter()
+                .any(|stored| std::ptr::eq(stored.ticket.ticket_type(), ticket_type))
+        })
+    }
+
+    /// Returns the sorted positions currently holding a ticket of `ticket_type`.
+    ///
+    /// Mirrors vanilla `TicketStorage.getAllChunksWithTicketThat` for the
+    /// type-only predicates used by `/forceload query`.
+    #[must_use]
+    pub(crate) fn positions_with_ticket_type(&self, ticket_type: TicketTypeRef) -> Vec<ChunkPos> {
+        let mut positions: Vec<ChunkPos> = self
+            .tickets
+            .iter()
+            .filter(|(_, tickets)| {
+                tickets
+                    .iter()
+                    .any(|stored| std::ptr::eq(stored.ticket.ticket_type(), ticket_type))
+            })
+            .map(|(&pos, _)| pos)
+            .collect();
+        positions.sort_unstable_by_key(|pos| (pos.0.x, pos.0.y));
+        positions
     }
 
     /// Adds or refreshes Vanilla's post-portal ticket.

@@ -412,3 +412,253 @@ mod tests {
         assert_f32_close(control.last_stable_y_head_rot(), 0.0);
     }
 }
+
+/// Vanilla `FlyingMoveControl` input: the movement state the shared mover reads.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FlyingMoveControlInput {
+    /// Vanilla `MoveControl.Operation`.
+    pub operation: MoveControlOperation,
+    /// Vanilla `wantedX/Y/Z`.
+    pub wanted_position: DVec3,
+    /// Vanilla `mob.getX/Y/Z()`.
+    pub position: DVec3,
+    /// Vanilla `mob.getYRot()`.
+    pub y_rot: f32,
+    /// Vanilla `mob.getXRot()`.
+    pub x_rot: f32,
+    /// Vanilla `mob.onGround()`.
+    pub on_ground: bool,
+    /// Vanilla `speedModifier` (`MoveControl.speedModifier`).
+    pub speed_modifier: f64,
+    /// Vanilla `Attributes.MOVEMENT_SPEED`.
+    pub movement_speed: f64,
+    /// Vanilla `Attributes.FLYING_SPEED`.
+    pub flying_speed: f64,
+}
+
+/// Vanilla `FlyingMoveControl` output: the writes vanilla performs on the mob.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FlyingMoveControlOutput {
+    /// Vanilla `mob.setYRot`.
+    pub y_rot: f32,
+    /// Vanilla `mob.setXRot`.
+    pub x_rot: f32,
+    /// Vanilla `mob.setSpeed`.
+    pub speed: f32,
+    /// Vanilla `mob.setYya`.
+    pub yya: f32,
+    /// Vanilla `mob.setZza`.
+    pub zza: f32,
+    /// Vanilla `mob.setNoGravity`.
+    pub no_gravity: bool,
+}
+
+/// Vanilla `FlyingMoveControl<T extends Mob>`: turns toward the wanted point on the
+/// horizontal plane and pitches toward it within `max_turn` degrees per tick, using
+/// the flying-speed attribute while airborne.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FlyingMoveControl {
+    max_turn: i32,
+    hovers_in_place: bool,
+}
+
+impl FlyingMoveControl {
+    /// Vanilla `FlyingMoveControl(mob, maxTurn, hoversInPlace)`.
+    #[must_use]
+    pub const fn new(max_turn: i32, hovers_in_place: bool) -> Self {
+        Self {
+            max_turn,
+            hovers_in_place,
+        }
+    }
+
+    /// Vanilla `FlyingMoveControl.tick`.
+    #[must_use]
+    pub fn tick(&self, input: FlyingMoveControlInput) -> FlyingMoveControlOutput {
+        let mut output = FlyingMoveControlOutput {
+            y_rot: input.y_rot,
+            x_rot: input.x_rot,
+            speed: 0.0,
+            yya: 0.0,
+            zza: 0.0,
+            no_gravity: false,
+        };
+
+        if input.operation != MoveControlOperation::MoveTo {
+            // Vanilla: `if (!this.hoversInPlace) this.mob.setNoGravity(false);`
+            // i.e. a hovering mob keeps the gravity flag it set while flying.
+            output.no_gravity = self.hovers_in_place;
+            output.yya = 0.0;
+            output.zza = 0.0;
+            return output;
+        }
+
+        output.no_gravity = true;
+
+        let delta = input.wanted_position - input.position;
+        if delta.length_squared() < 2.500_000_3e-7 {
+            output.yya = 0.0;
+            output.zza = 0.0;
+            return output;
+        }
+
+        let y_rot_d = (delta.z.atan2(delta.x).to_degrees() as f32) - 90.0;
+        output.y_rot = rotate_towards(input.y_rot, y_rot_d, 90.0);
+
+        let attribute_speed = if input.on_ground {
+            input.movement_speed
+        } else {
+            input.flying_speed
+        };
+        let speed = (input.speed_modifier * attribute_speed) as f32;
+        output.speed = speed;
+
+        let horizontal = (delta.x * delta.x + delta.z * delta.z).sqrt();
+        if delta.y.abs() > 1.0e-5 || horizontal.abs() > 1.0e-5 {
+            let x_rot_d = -(delta.y.atan2(horizontal).to_degrees() as f32);
+            output.x_rot = rotate_towards(input.x_rot, x_rot_d, self.max_turn as f32);
+            output.yya = if delta.y > 0.0 { speed } else { -speed };
+        }
+
+        output
+    }
+}
+
+/// Vanilla `SmoothSwimmingMoveControl` input.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SmoothSwimmingMoveControlInput {
+    /// Vanilla `MoveControl.Operation`.
+    pub operation: MoveControlOperation,
+    /// Vanilla `mob.getNavigation().isDone()`.
+    pub navigation_done: bool,
+    /// Vanilla `wantedX/Y/Z`.
+    pub wanted_position: DVec3,
+    /// Vanilla `mob.getX/Y/Z()`.
+    pub position: DVec3,
+    /// Vanilla `mob.getYRot()`.
+    pub y_rot: f32,
+    /// Vanilla `mob.getXRot()`.
+    pub x_rot: f32,
+    /// Vanilla `mob.isInWater()`.
+    pub in_water: bool,
+    /// Vanilla `speedModifier`.
+    pub speed_modifier: f64,
+    /// Vanilla `Attributes.MOVEMENT_SPEED`.
+    pub movement_speed: f64,
+}
+
+/// Vanilla `SmoothSwimmingMoveControl` output.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SmoothSwimmingMoveControlOutput {
+    /// Vanilla `mob.setYRot`.
+    pub y_rot: f32,
+    /// Vanilla `mob.setXRot`.
+    pub x_rot: f32,
+    /// Vanilla `mob.setSpeed`.
+    pub speed: f32,
+    /// Vanilla `mob.xxa`.
+    pub xxa: f32,
+    /// Vanilla `mob.yya`.
+    pub yya: f32,
+    /// Vanilla `mob.zza`.
+    pub zza: f32,
+    /// Vanilla `mob.yBodyRot` / `mob.yHeadRot` when the body follows the yaw.
+    pub sync_body_and_head_rot: bool,
+    /// Vanilla `mob.setDeltaMovement(delta + (0, 0.005, 0))` when `applyGravity`.
+    pub apply_gravity_lift: bool,
+}
+
+/// Vanilla `SmoothSwimmingMoveControl<T extends Mob>`: turns the whole body toward
+/// the path and swims along the pitch angle, with separate in/out-of-water speeds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SmoothSwimmingMoveControl {
+    max_turn_x: i32,
+    max_turn_y: i32,
+    in_water_speed_modifier: f32,
+    outside_water_speed_modifier: f32,
+    apply_gravity: bool,
+}
+
+impl SmoothSwimmingMoveControl {
+    /// Vanilla `SmoothSwimmingMoveControl(mob, maxTurnX, maxTurnY,
+    /// inWaterSpeedModifier, outsideWaterSpeedModifier, applyGravity)`.
+    #[must_use]
+    pub const fn new(
+        max_turn_x: i32,
+        max_turn_y: i32,
+        in_water_speed_modifier: f32,
+        outside_water_speed_modifier: f32,
+        apply_gravity: bool,
+    ) -> Self {
+        Self {
+            max_turn_x,
+            max_turn_y,
+            in_water_speed_modifier,
+            outside_water_speed_modifier,
+            apply_gravity,
+        }
+    }
+
+    /// Vanilla `SmoothSwimmingMoveControl.getTurningSpeedFactor`.
+    fn turning_speed_factor(left_to_turn: f32) -> f32 {
+        1.0 - ((left_to_turn - 10.0) / 50.0).clamp(0.0, 1.0)
+    }
+
+    /// Vanilla `SmoothSwimmingMoveControl.tick`.
+    #[must_use]
+    pub fn tick(&self, input: SmoothSwimmingMoveControlInput) -> SmoothSwimmingMoveControlOutput {
+        let mut output = SmoothSwimmingMoveControlOutput {
+            y_rot: input.y_rot,
+            x_rot: input.x_rot,
+            speed: 0.0,
+            xxa: 0.0,
+            yya: 0.0,
+            zza: 0.0,
+            sync_body_and_head_rot: false,
+            apply_gravity_lift: self.apply_gravity && input.in_water,
+        };
+
+        if input.operation != MoveControlOperation::MoveTo || input.navigation_done {
+            output.speed = 0.0;
+            output.xxa = 0.0;
+            output.yya = 0.0;
+            output.zza = 0.0;
+            return output;
+        }
+
+        let delta = input.wanted_position - input.position;
+        if delta.length_squared() < 2.500_000_3e-7 {
+            output.zza = 0.0;
+            return output;
+        }
+
+        let y_rot_d = (delta.z.atan2(delta.x).to_degrees() as f32) - 90.0;
+        output.y_rot = rotate_towards(input.y_rot, y_rot_d, self.max_turn_y as f32);
+        output.sync_body_and_head_rot = true;
+
+        let speed = (input.speed_modifier * input.movement_speed) as f32;
+        if input.in_water {
+            output.speed = speed * self.in_water_speed_modifier;
+
+            let horizontal = (delta.x * delta.x + delta.z * delta.z).sqrt();
+            if delta.y.abs() > 1.0e-5 || horizontal.abs() > 1.0e-5 {
+                let mut x_rot_d = -(delta.y.atan2(horizontal).to_degrees() as f32);
+                x_rot_d =
+                    wrap_degrees(x_rot_d).clamp(-(self.max_turn_x as f32), self.max_turn_x as f32);
+                output.x_rot = rotate_towards(input.x_rot, x_rot_d, 5.0);
+            }
+
+            let cos = (output.x_rot * std::f32::consts::PI / 180.0).cos();
+            let sin = (output.x_rot * std::f32::consts::PI / 180.0).sin();
+            output.zza = cos * speed;
+            output.yya = -sin * speed;
+        } else {
+            let left_to_turn = wrap_degrees(input.y_rot - y_rot_d).abs();
+            output.speed = speed
+                * self.outside_water_speed_modifier
+                * Self::turning_speed_factor(left_to_turn);
+        }
+
+        output
+    }
+}

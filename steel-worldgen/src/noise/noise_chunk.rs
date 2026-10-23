@@ -17,7 +17,9 @@ use steel_worldgen::density::{ColumnCache, DimensionNoises, NoiseSettings};
 use crate::noise::Beardifier;
 
 /// Maximum number of interpolation channels supported.
-/// Overworld uses 8 (1 terrain + 4 noodle caves + 3 vein channels), nether/end use 1.
+///
+/// The overworld noise router marks 15 (terrain density, noodle caves and the
+/// ore-vein channels), the caves/floating-islands routers 11, and nether/end 1.
 const MAX_INTERP: usize = 16;
 
 /// Maximum slice length (`z_corners` * `corners_y`) across all dimensions.

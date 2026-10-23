@@ -629,6 +629,14 @@ mod tests {
         assert_eq!(brain.time_until_expiry(&module_type::LAST_SLEPT), 1);
         assert!(brain.has_memory_value(&module_type::LAST_SLEPT));
 
+        // Vanilla `MemorySlot.tick` clears only on the tick *after* the countdown
+        // reaches zero (`hasExpired()` is `timeToLive <= 0`, checked before the
+        // decrement), so a 3-tick expiry keeps the value through the third
+        // `forgetOutdatedMemories` call.
+        brain.forget_outdated_memories();
+        assert_eq!(brain.time_until_expiry(&module_type::LAST_SLEPT), 0);
+        assert!(brain.has_memory_value(&module_type::LAST_SLEPT));
+
         brain.forget_outdated_memories();
         assert!(!brain.has_memory_value(&module_type::LAST_SLEPT));
 
@@ -693,7 +701,11 @@ mod tests {
 
     #[test]
     fn activity_requirements_gate_switching() {
-        let mut brain = Brain::default();
+        // Vanilla `Brain.addActivity` registers only the memories the behaviors
+        // require; activity conditions must already be registered by the provider or
+        // a behavior, so the brain is built with `HURT_BY` registered like a real
+        // provider's memory list does.
+        let mut brain = Brain::new(&[erased(&module_type::HURT_BY)], &[], Vec::new());
         brain.add_activity(ActivityData::create_full(
             Activity::Panic,
             Vec::new(),

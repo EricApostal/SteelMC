@@ -129,6 +129,14 @@ pub enum NbtPathMutationError {
     NothingFound(String),
     /// The inserted value would exceed vanilla's maximum NBT depth.
     TooDeep,
+    /// A non-collection tag was targeted by list-only `insert`.
+    ///
+    /// Mirrors vanilla `commands.data.modify.expected_list`.
+    ExpectedList(String),
+    /// The `insert` index was out of bounds for its target collection.
+    ///
+    /// Mirrors vanilla `commands.data.modify.invalid_index`.
+    InvalidIndex(i32),
 }
 
 impl fmt::Display for NbtPathMutationError {
@@ -136,6 +144,8 @@ impl fmt::Display for NbtPathMutationError {
         match self {
             Self::NothingFound(path) => write!(f, "nothing found at NBT path '{path}'"),
             Self::TooDeep => write!(f, "NBT path mutation would exceed maximum depth"),
+            Self::ExpectedList(tag) => write!(f, "expected a list, got {tag}"),
+            Self::InvalidIndex(index) => write!(f, "invalid list index {index}"),
         }
     }
 }
@@ -250,6 +260,90 @@ impl NbtPath {
             found: deeper_found,
             modified,
         })
+    }
+}
+
+impl NbtPath {
+    /// Removes every tag selected by this path and returns the count removed.
+    ///
+    /// Mirrors vanilla `NbtPath#remove`: the parents are walked without
+    /// creating anything and the last node removes from each selected parent.
+    #[must_use]
+    pub fn remove(&self, tag: &mut NbtTag) -> usize {
+        if self.nodes.is_empty() {
+            return 0;
+        }
+        self.remove_at(0, tag)
+    }
+
+    fn remove_at(&self, node_index: usize, tag: &mut NbtTag) -> usize {
+        let entry = &self.nodes[node_index];
+        if node_index + 1 == self.nodes.len() {
+            return entry.node.remove_tag(tag);
+        }
+        entry
+            .node
+            .visit_selected_mut(tag, &mut |child| self.remove_at(node_index + 1, child))
+    }
+
+    /// Inserts `to_insert` at `index` into every collection selected by this path.
+    ///
+    /// Mirrors vanilla `NbtPath#insert`: collections are selected with vanilla's
+    /// preferred-parent creation rule, negative indices count from the end, and
+    /// each target receives its own copy of every value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NbtPathMutationError::TooDeep`] when a value would exceed
+    /// vanilla's maximum NBT depth, [`NbtPathMutationError::ExpectedList`] for
+    /// a non-collection target, or [`NbtPathMutationError::InvalidIndex`] for an
+    /// out-of-bounds insertion index.
+    pub fn insert(
+        &self,
+        index: i32,
+        target: &mut NbtTag,
+        to_insert: &[NbtTag],
+    ) -> Result<usize, NbtPathMutationError> {
+        for value in to_insert {
+            if is_too_deep(value, self.nodes.len()) {
+                return Err(NbtPathMutationError::TooDeep);
+            }
+        }
+        if self.nodes.is_empty() {
+            return Ok(0);
+        }
+        self.insert_at(0, target, index, to_insert)
+    }
+
+    fn insert_at(
+        &self,
+        node_index: usize,
+        tag: &mut NbtTag,
+        index: i32,
+        values: &[NbtTag],
+    ) -> Result<usize, NbtPathMutationError> {
+        let entry = &self.nodes[node_index];
+        // Vanilla resolves `insert` targets with `getOrCreate(target,
+        // ListTag::new)`: parents use each next node's preferred parent tag
+        // while the last node creates a list for a missing child.
+        let preferred = if node_index + 1 == self.nodes.len() {
+            NbtTag::List(NbtList::default())
+        } else {
+            self.nodes[node_index + 1]
+                .node
+                .create_preferred_parent_tag()
+        };
+        let mut changed_tags = Vec::new();
+        entry.node.get_or_create_tag(tag, &preferred, |selected| {
+            let changed = if node_index + 1 == self.nodes.len() {
+                insert_values_into_collection(selected, index, values)?
+            } else {
+                self.insert_at(node_index + 1, selected, index, values)?
+            };
+            changed_tags.push(changed);
+            Ok(true)
+        })?;
+        Ok(changed_tags.into_iter().sum())
     }
 }
 
@@ -407,6 +501,84 @@ impl NbtPathNode {
             Self::AllElements => set_all_collection_elements(parent, value),
             Self::IndexedElement(index) => set_indexed_collection_element(parent, *index, value),
             Self::MatchElement(pattern) => set_matching_list_elements(parent, pattern, value),
+        }
+    }
+
+    /// Calls `visitor` for each tag this node selects, summing its results.
+    ///
+    /// Unlike [`Self::get_or_create_tag`] this never creates tags, which is what
+    /// vanilla's `NbtPath#remove` needs for its parent walk.
+    fn visit_selected_mut(
+        &self,
+        parent: &mut NbtTag,
+        visitor: &mut impl FnMut(&mut NbtTag) -> usize,
+    ) -> usize {
+        match self {
+            Self::CompoundChild(name) => match parent {
+                NbtTag::Compound(compound) => {
+                    compound.get_mut(name).map_or(0, |child| visitor(child))
+                }
+                _ => 0,
+            },
+            Self::MatchObject { name, pattern } => match parent {
+                NbtTag::Compound(compound) => {
+                    let matches = compound
+                        .get(name)
+                        .is_some_and(|child| compound_pattern_matches(pattern, child));
+                    if !matches {
+                        return 0;
+                    }
+                    compound.get_mut(name).map_or(0, |child| visitor(child))
+                }
+                _ => 0,
+            },
+            Self::MatchRootObject(pattern) => {
+                if compound_pattern_matches(pattern, parent) {
+                    visitor(parent)
+                } else {
+                    0
+                }
+            }
+            Self::AllElements => visit_collection_elements_mut(parent, visitor),
+            Self::IndexedElement(index) => visit_indexed_element_mut(parent, *index, visitor),
+            Self::MatchElement(pattern) => {
+                visit_matching_collection_elements_mut(parent, pattern, visitor)
+            }
+        }
+    }
+
+    /// Removes the tags this node selects from `parent`, returning the count.
+    ///
+    /// Mirrors vanilla's `Node#removeTag` for the last node of a path.
+    fn remove_tag(&self, parent: &mut NbtTag) -> usize {
+        match self {
+            Self::CompoundChild(name) => match parent {
+                NbtTag::Compound(compound) => usize::from(compound.remove(name).is_some()),
+                _ => 0,
+            },
+            Self::MatchObject { name, pattern } => match parent {
+                NbtTag::Compound(compound) => {
+                    let matches = compound
+                        .get(name)
+                        .is_some_and(|child| compound_pattern_matches(pattern, child));
+                    if matches {
+                        usize::from(compound.remove(name).is_some())
+                    } else {
+                        0
+                    }
+                }
+                _ => 0,
+            },
+            Self::MatchRootObject(_) => 0,
+            Self::AllElements => {
+                let Some(len) = collection_len(parent) else {
+                    return 0;
+                };
+                clear_collection(parent);
+                len
+            }
+            Self::IndexedElement(index) => remove_indexed_element(parent, *index).unwrap_or(0),
+            Self::MatchElement(pattern) => remove_matching_list_elements(parent, pattern),
         }
     }
 }
@@ -676,6 +848,147 @@ fn collection_elements_for_mutation(tag: &NbtTag) -> Option<Vec<NbtTag>> {
         NbtTag::LongArray(values) => Some(values.iter().copied().map(NbtTag::Long).collect()),
         _ => None,
     }
+}
+
+/// Calls `visitor` for each element of a mutable collection and writes back.
+fn visit_collection_elements_mut(
+    parent: &mut NbtTag,
+    visitor: &mut impl FnMut(&mut NbtTag) -> usize,
+) -> usize {
+    let Some(mut elements) = collection_elements_for_mutation(parent) else {
+        return 0;
+    };
+    let mut changed = false;
+    let mut total = 0;
+    for element in &mut elements {
+        let before = element.clone();
+        total += visitor(element);
+        changed |= *element != before;
+    }
+    if changed {
+        replace_collection(parent, elements);
+    }
+    total
+}
+
+/// Calls `visitor` for the single element at `index` of a mutable collection.
+fn visit_indexed_element_mut(
+    parent: &mut NbtTag,
+    index: i32,
+    visitor: &mut impl FnMut(&mut NbtTag) -> usize,
+) -> usize {
+    let Some(mut elements) = collection_elements_for_mutation(parent) else {
+        return 0;
+    };
+    let Some(actual_index) = actual_collection_index(elements.len(), index) else {
+        return 0;
+    };
+    let before = elements[actual_index].clone();
+    let total = visitor(&mut elements[actual_index]);
+    if elements[actual_index] != before {
+        replace_collection(parent, elements);
+    }
+    total
+}
+
+/// Calls `visitor` for each list element matching `pattern`.
+fn visit_matching_collection_elements_mut(
+    parent: &mut NbtTag,
+    pattern: &NbtCompound,
+    visitor: &mut impl FnMut(&mut NbtTag) -> usize,
+) -> usize {
+    let NbtTag::List(list) = parent else {
+        return 0;
+    };
+    let mut elements = list_as_tags(list);
+    let mut changed = false;
+    let mut total = 0;
+    for element in elements
+        .iter_mut()
+        .filter(|element| compound_pattern_matches(pattern, element))
+    {
+        let before = element.clone();
+        total += visitor(element);
+        changed |= *element != before;
+    }
+    if changed {
+        *list = NbtList::from(elements);
+    }
+    total
+}
+
+/// Removes the element at `index`, returning the previous length on success.
+fn remove_indexed_element(parent: &mut NbtTag, index: i32) -> Option<usize> {
+    let mut elements = collection_elements_for_mutation(parent)?;
+    let actual_index = actual_collection_index(elements.len(), index)?;
+    elements.remove(actual_index);
+    let expected = elements.len();
+    replace_collection(parent, elements);
+    (collection_len(parent) == Some(expected)).then_some(expected + 1)
+}
+
+/// Removes every list element matching `pattern`, returning the count removed.
+fn remove_matching_list_elements(parent: &mut NbtTag, pattern: &NbtCompound) -> usize {
+    let NbtTag::List(list) = parent else {
+        return 0;
+    };
+    let mut elements = list_as_tags(list);
+    let before = elements.len();
+    elements.retain(|element| !compound_pattern_matches(pattern, element));
+    let removed = before - elements.len();
+    if removed > 0 {
+        *list = NbtList::from(elements);
+    }
+    removed
+}
+
+/// Inserts `value` at `index`, preserving vanilla's collection type rules.
+fn insert_collection_element(parent: &mut NbtTag, index: usize, value: NbtTag) -> bool {
+    let Some(mut elements) = collection_elements_for_mutation(parent) else {
+        return false;
+    };
+    if index > elements.len() {
+        return false;
+    }
+    elements.insert(index, value);
+    let expected = elements.len();
+    replace_collection(parent, elements);
+    collection_len(parent) == Some(expected)
+}
+
+/// Inserts every value of `values` into a selected collection.
+fn insert_values_into_collection(
+    parent: &mut NbtTag,
+    index: i32,
+    values: &[NbtTag],
+) -> Result<usize, NbtPathMutationError> {
+    if collection_len(parent).is_none() {
+        return Err(NbtPathMutationError::ExpectedList(format!("{parent:?}")));
+    }
+    // Vanilla's `index < 0 ? size + index + 1 : index`, evaluated per target.
+    let len = collection_len(parent).unwrap_or(0);
+    let mut actual = if index < 0 {
+        i64::try_from(len).unwrap_or(i64::MAX) + i64::from(index) + 1
+    } else {
+        i64::from(index)
+    };
+
+    let mut modified = false;
+    for value in values {
+        let Ok(offset) = usize::try_from(actual) else {
+            return Err(NbtPathMutationError::InvalidIndex(
+                i32::try_from(actual).unwrap_or(i32::MAX),
+            ));
+        };
+        if !insert_collection_element(parent, offset, value.clone()) {
+            return Err(NbtPathMutationError::InvalidIndex(
+                i32::try_from(actual).unwrap_or(i32::MAX),
+            ));
+        }
+        modified = true;
+        actual += 1;
+    }
+    Ok(usize::from(modified))
 }
 
 fn replace_collection(parent: &mut NbtTag, elements: Vec<NbtTag>) {
@@ -1455,5 +1768,102 @@ mod tests {
             path.set(&mut tag, NbtTag::Byte(1)),
             Err(NbtPathMutationError::NothingFound("items[0]".to_owned()))
         );
+    }
+
+    #[test]
+    fn remove_deletes_compound_children_and_counts_changes() {
+        let path = parse_nbt_path("foo.bar").expect("path parses");
+        let mut tag = compound([("foo", compound([("bar", NbtTag::Int(1))]))]);
+
+        assert_eq!(path.remove(&mut tag), 1);
+        assert!(path.get(&tag).is_empty());
+        assert_eq!(path.remove(&mut tag), 0);
+    }
+
+    #[test]
+    fn remove_clears_every_element_of_a_selected_collection() {
+        let path = parse_nbt_path("items[]").expect("path parses");
+        let mut tag = compound([(
+            "items",
+            list([NbtTag::Int(1), NbtTag::Int(2), NbtTag::Int(3)]),
+        )]);
+
+        assert_eq!(path.remove(&mut tag), 3);
+        assert_eq!(path.get(&tag), Vec::<NbtTag>::new());
+    }
+
+    #[test]
+    fn remove_matches_vanilla_predicate_and_index_semantics() {
+        let mut tag = compound([(
+            "items",
+            list([
+                compound([("id", NbtTag::String("a".into()))]),
+                compound([("id", NbtTag::String("b".into()))]),
+            ]),
+        )]);
+
+        assert_eq!(
+            parse_nbt_path("items[{id:\"a\"}]")
+                .expect("path parses")
+                .remove(&mut tag),
+            1
+        );
+        assert_eq!(
+            parse_nbt_path("items[-1]")
+                .expect("path parses")
+                .remove(&mut tag),
+            1
+        );
+        assert_eq!(
+            parse_nbt_path("items[]").expect("path parses").get(&tag),
+            vec![compound([("id", NbtTag::String("b".into()))])]
+        );
+    }
+
+    #[test]
+    fn insert_adds_values_at_vanilla_indices() {
+        let path = parse_nbt_path("items").expect("path parses");
+        let mut tag = compound([("items", list([NbtTag::Int(1), NbtTag::Int(2)]))]);
+
+        assert_eq!(
+            path.insert(1, &mut tag, &[NbtTag::Int(9), NbtTag::Int(10)]),
+            Ok(1)
+        );
+        assert_eq!(
+            parse_nbt_path("items").expect("path parses").get(&tag),
+            vec![list([
+                NbtTag::Int(1),
+                NbtTag::Int(9),
+                NbtTag::Int(10),
+                NbtTag::Int(2)
+            ])]
+        );
+    }
+
+    #[test]
+    fn insert_creates_missing_list_targets_and_rejects_bad_indices() {
+        let path = parse_nbt_path("items").expect("path parses");
+        let mut tag = compound([]);
+
+        assert_eq!(path.insert(0, &mut tag, &[NbtTag::Int(1)]), Ok(1));
+        assert_eq!(
+            parse_nbt_path("items").expect("path parses").get(&tag),
+            vec![list([NbtTag::Int(1)])]
+        );
+        assert_eq!(
+            path.insert(5, &mut tag, &[NbtTag::Int(2)]),
+            Err(NbtPathMutationError::InvalidIndex(5))
+        );
+    }
+
+    #[test]
+    fn insert_rejects_non_collection_targets() {
+        let path = parse_nbt_path("foo").expect("path parses");
+        let mut tag = compound([("foo", NbtTag::Int(1))]);
+
+        assert!(matches!(
+            path.insert(0, &mut tag, &[NbtTag::Int(2)]),
+            Err(NbtPathMutationError::ExpectedList(_))
+        ));
     }
 }

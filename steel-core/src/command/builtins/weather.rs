@@ -11,11 +11,13 @@ use super::super::{
     },
     registration::CommandRegistration,
 };
+use crate::permission::PermissionLevel;
 
 const DEFAULT_DURATION: i32 = -1;
 
 pub(super) fn registration() -> CommandRegistration<CommandSource> {
     CommandRegistration::new(Identifier::vanilla_static("weather"), |_| command())
+        .at_level(PermissionLevel::Gamemasters)
 }
 
 fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {

@@ -113,6 +113,8 @@ pub enum LootFunction {
     EnchantWithLevels {
         levels: NumberProvider,
         options: EnchantmentOptions,
+        /// Vanilla `EnchantWithLevelsFunction.includeAdditionalCostComponent`.
+        include_additional_cost_component: bool,
     },
     /// Copy components from the block entity to the item.
     CopyComponents {
@@ -427,19 +429,28 @@ impl LootFunction {
             }
             LootFunction::EnchantRandomly {
                 options,
-                only_compatible: _,
-                include_additional_cost_component: _,
+                only_compatible,
+                include_additional_cost_component,
             } => {
-                // TODO: Implement when enchantment system is ready (TradeRebalance
-                // support: `only_compatible: false` permits enchanting books with any
-                // compatible-table enchantment; `include_additional_cost_component`
-                // writes the additional cost used for double pricing)
-                item.enchant_randomly(options, ctx.rng);
+                item.enchant_randomly(
+                    options,
+                    *only_compatible,
+                    *include_additional_cost_component,
+                    ctx.rng,
+                );
             }
-            LootFunction::EnchantWithLevels { levels, options } => {
-                // TODO: Implement when enchantment system is ready
+            LootFunction::EnchantWithLevels {
+                levels,
+                options,
+                include_additional_cost_component,
+            } => {
                 let level = levels.get_int(ctx.rng);
-                item.enchant_with_levels(level, options, ctx.rng);
+                item.enchant_with_levels(
+                    level,
+                    options,
+                    *include_additional_cost_component,
+                    ctx.rng,
+                );
             }
             LootFunction::CopyComponents { source, include } => {
                 // TODO: Implement when block entity system is ready

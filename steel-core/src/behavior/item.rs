@@ -10,7 +10,7 @@ use steel_registry::data_components::vanilla_components::{
     BLOCKS_ATTACKS, CONSUMABLE, FOOD, KINETIC_WEAPON, USE_REMAINDER,
 };
 
-use steel_registry::data_components::vanilla_components::ITEM_NAME;
+use steel_registry::data_components::vanilla_components::{ITEM_NAME, SUSPICIOUS_STEW_EFFECTS};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::ItemRef;
 use steel_registry::stat::vanilla_stat_types;
@@ -21,6 +21,7 @@ use text_components::TextComponent;
 use crate::behavior::items::{DefaultItemBehavior, SpawnEggItem, block_transformer};
 use crate::behavior::{InteractionResult, InventoryTickContext, UseItemContext, UseOnContext};
 use crate::block_entity::entities::{SignBlockEntity, SignText};
+use crate::entity::MobEffectInstance;
 use crate::entity::consume_effect::apply_consume_effect;
 use crate::entity::damage::DamageSource;
 use crate::entity::{Entity, LivingEntity, LivingEntityRef, SharedEntity};
@@ -76,9 +77,11 @@ pub trait ItemBehavior: Send + Sync {
     }
 
     /// Called when this item is used (e.g. right click in air).
+    ///
+    /// Mirrors vanilla `Item.use`: `Consumable` first, then `Equippable`
+    /// swapping, then `BLOCKS_ATTACKS` blocking, then `KINETIC_WEAPON` spear
+    /// sound + use. Specialized behaviors inherit this base path.
     fn use_item(&self, context: &mut UseItemContext) -> InteractionResult {
-        // TODO: Mirror Item.use for BLOCKS_ATTACKS and KINETIC_WEAPON so
-        // specialized behaviors inherit the complete Vanilla base path.
         let (consume_ticks, can_eat) = context.inv.with_item(|item| {
             let can_eat = item
                 .get(FOOD)
@@ -105,11 +108,11 @@ pub trait ItemBehavior: Send + Sync {
         }
 
         let Some(equippable) = context.inv.with_item(|item| item.get_equippable().cloned()) else {
-            return InteractionResult::Pass;
+            return blocking_or_kinetic_use(context);
         };
 
         if !equippable.swappable || !equippable.can_be_equipped_by(context.player.entity_type()) {
-            return InteractionResult::Pass;
+            return blocking_or_kinetic_use(context);
         }
 
         let slot = equippable.slot;
@@ -274,6 +277,12 @@ pub trait ItemBehavior: Send + Sync {
         None
     }
 
+    /// Returns this behavior as a projectile item when it can be dispensed as a
+    /// projectile (vanilla `ProjectileItem`).
+    fn as_projectile_item(&self) -> Option<&dyn crate::behavior::items::ProjectileItem> {
+        None
+    }
+
     /// Returns the capability used by sign block interactions.
     fn as_sign_applicator(&self) -> Option<&dyn SignApplicator> {
         None
@@ -287,12 +296,55 @@ fn should_emit_consume_particles_and_sounds(consumable: &Consumable, ticks_remai
     ticks_used > wait_ticks && ticks_remaining % 4 == 0
 }
 
+/// Mirrors the blocking/kinetic tail of vanilla `Item.use`: an item with
+/// `BLOCKS_ATTACKS` enters the blocking use state; otherwise a present
+/// `KINETIC_WEAPON` plays its trigger sound and enters the spear use state;
+/// otherwise the use does nothing (`PASS`).
+pub(crate) fn blocking_or_kinetic_use(context: &mut UseItemContext) -> InteractionResult {
+    let (blocks_attacks, kinetic) = context
+        .inv
+        .with_item(|item| (item.has(BLOCKS_ATTACKS), item.get(KINETIC_WEAPON).is_some()));
+    if blocks_attacks {
+        context.player.start_using_item(context.hand);
+        return InteractionResult::Consume;
+    }
+    if kinetic {
+        let stack = context.inv.with_item(|item| item.clone());
+        context.player.start_using_item(context.hand);
+        play_kinetic_weapon_sound(&stack, context);
+        return InteractionResult::Consume;
+    }
+    InteractionResult::Pass
+}
+
+/// Mirrors vanilla `KineticWeapon.makeSound`: plays the weapon's trigger sound
+/// at the user's position when the component carries one.
+fn play_kinetic_weapon_sound(stack: &ItemStack, context: &UseItemContext) {
+    let Some(holder) = stack
+        .get(KINETIC_WEAPON)
+        .and_then(|kinetic| kinetic.sound())
+    else {
+        return;
+    };
+    let Some(sound) = holder.registry_ref() else {
+        return;
+    };
+    context.player.play_sound(sound, 1.0, 1.0);
+}
+
+/// Vanilla `Consumable.emitParticlesAndSounds`: the consume sound plus, on the
+/// client only, the item-crumb particles.
+///
+/// Vanilla's crumb step is `LivingEntity.spawnItemParticles` →
+/// `Level.addParticle`, which is a no-op on the server (`Level.java:487`) and is
+/// implemented only by `ClientLevel` (`ClientLevel.java:905`). SteelMC is a
+/// server, so only the sound belongs here; the client renders the crumbs from
+/// its own `ItemStack.onUseTick`.
 fn emit_consume_particles_and_sounds(
     consumable: &Consumable,
     user: &dyn LivingEntity,
     stack: &ItemStack,
 ) {
-    // TODO: spawn item-crumb particles when `has_consume_particles()` is set.
     let (volume, pitch) = if consumable.animation() == ItemUseAnimation::Drink {
         (0.5, 0.9 + rand::random::<f32>() * 0.1)
     } else {
@@ -302,6 +354,22 @@ fn emit_consume_particles_and_sounds(
     };
     if let Some(sound) = user.get_consume_sound(stack) {
         user.play_sound(sound, volume, pitch);
+    }
+}
+
+/// Mirrors `SuspiciousStewEffects.onConsume`: adds each stored effect to the
+/// consumer. Unlike the potion path this always goes through
+/// `LivingEntity.addEffect`, so instantaneous effects are not special-cased.
+fn apply_suspicious_stew_effects(stack: &ItemStack, user: &dyn LivingEntity) {
+    let Some(effects) = stack.get(SUSPICIOUS_STEW_EFFECTS) else {
+        return;
+    };
+    for effect in effects.effects() {
+        user.add_mob_effect(MobEffectInstance::with_duration(
+            effect.effect(),
+            effect.duration(),
+            0,
+        ));
     }
 }
 
@@ -348,6 +416,10 @@ pub(crate) fn finish_consuming_stack(
         }
     }
 
+    // Vanilla `Consumable.onConsume` runs every `ConsumableListener` component
+    // before `onConsumeEffects`; `SuspiciousStewEffects` is the only one.
+    apply_suspicious_stew_effects(stack, user);
+
     for effect in consumable.on_consume_effects() {
         apply_consume_effect(effect, world, user);
     }
@@ -361,7 +433,6 @@ pub(crate) fn finish_consuming_stack(
     if let Some(player) = user.as_player() {
         player.award_stat(&vanilla_stat_types::ITEM_USED, stack.item());
     }
-    // TODO: Spawn item-crumb particles when `has_consume_particles()` is set.
     // TODO: Trigger CriteriaTriggers.CONSUME_ITEM once the advancement-criteria
     // foundation exists.
 

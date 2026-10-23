@@ -19,6 +19,59 @@ macro_rules! simple_tag_builder {
     };
 }
 
+/// Like [`simple_tag_builder`], but names the generated tag struct after the
+/// vanilla tag holder instead of deriving it from the registry module.
+macro_rules! simple_tag_builder_named {
+    (
+        $function:ident,
+        $tag_subdir:literal,
+        $registry_module:literal,
+        $registry_type:literal,
+        $tag_struct:literal
+    ) => {
+        pub(crate) fn $function() -> TokenStream {
+            common::build_simple_tags_with_name(
+                $tag_subdir,
+                $registry_module,
+                $registry_type,
+                Some($tag_struct),
+            )
+        }
+    };
+}
+
+simple_tag_builder_named!(
+    game_event,
+    "game_event",
+    "game_events",
+    "GameEventRegistry",
+    "GameEventTag"
+);
+// Vanilla 26.3 renamed the configured-feature registry to `worldgen/feature`
+// (`Registries.FEATURE`); its tag directory follows the vanilla name while the
+// Steel registry module keeps the historical `feature` name.
+simple_tag_builder_named!(
+    feature,
+    "worldgen/feature",
+    "feature",
+    "ConfiguredFeatureRegistry",
+    "FeatureTag"
+);
+simple_tag_builder_named!(
+    flat_level_generator_preset,
+    "worldgen/flat_level_generator_preset",
+    "flat_level_generator_preset",
+    "FlatLevelGeneratorPresetRegistry",
+    "FlatLevelGeneratorPresetTag"
+);
+simple_tag_builder_named!(
+    world_preset,
+    "worldgen/world_preset",
+    "world_preset",
+    "WorldPresetRegistry",
+    "WorldPresetTag"
+);
+
 simple_tag_builder!(
     banner_pattern,
     "banner_pattern",

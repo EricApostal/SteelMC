@@ -5,6 +5,8 @@ use std::sync::{Arc, Weak};
 use glam::DVec3;
 use steel_macros::entity_behavior;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
+use steel_registry::equipment::EquipmentSlot;
+use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::PillagerEntityData;
 use steel_registry::{sound_events, vanilla_attributes, vanilla_items};
@@ -329,20 +331,33 @@ impl Raider for PillagerEntity {
 
     fn apply_raid_buffs(
         &self,
-        _world: &Arc<World>,
+        world: &Arc<World>,
         raid: &RaidSnapshot,
         wave: i32,
         _is_captain: bool,
     ) {
-        // Vanilla rolls `random.nextFloat() <= raid.getEnchantOdds()` and then enchants the
-        // crossbow through `EnchantmentHelper.enchantItemFromProvider` with
-        // `RAID_PILLAGER_POST_WAVE_3`/`RAID_PILLAGER_POST_WAVE_5`. Steel has no
-        // enchantment-provider registry (`IllagerDependency::EnchantmentProvider`), so the
-        // roll and the wave gate run but the provider step is skipped, not randomised.
+        // Vanilla `Pillager.applyRaidBuffs`: roll the raid enchant odds, then enchant a fresh
+        // crossbow from `RAID_PILLAGER_POST_WAVE_3`/`RAID_PILLAGER_POST_WAVE_5` and equip it.
+        // Below both wave gates vanilla leaves the crossbow alone.
         if rand::random::<f32>() > raid.enchant_odds {
             return;
         }
-        let _post_wave = super::raider_goals::raid_enchant_provider_wave(raid, wave);
+        let Some(provider) = crate::entity::raid::pillager_raid_enchant_provider(wave) else {
+            return;
+        };
+
+        let mut crossbow = ItemStack::new(&vanilla_items::CROSSBOW);
+        provider.enchant(
+            &mut crossbow,
+            world
+                .current_difficulty_at(self.block_position())
+                .special_multiplier(),
+            &mut steel_registry::enchantment::table::RandRngAdapter(&mut rand::rng()),
+        );
+        self.living_base()
+            .equipment()
+            .lock()
+            .set(EquipmentSlot::MainHand, crossbow);
     }
 
     fn celebrate_sound(&self) -> SoundEventRef {

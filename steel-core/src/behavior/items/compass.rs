@@ -4,7 +4,6 @@ use std::borrow::Cow;
 use steel_macros::item_behavior;
 use steel_protocol::packets::game::SoundSource;
 use steel_registry::{
-    RegistryEntry as _,
     blocks::block_state_ext::BlockStateExt,
     data_components::{
         components::{GlobalPos, LodestoneTracker},
@@ -99,15 +98,22 @@ impl ItemBehavior for CompassItem {
             return;
         }
 
+        // Vanilla `LodestoneTracker.tick`: keep the target while the position is
+        // inside world bounds and a lodestone POI exists there.
+        //
+        // Steel difference: vanilla `PoiManager.existsAtPosition` loads the POI
+        // section on demand, while `poi_storage` only holds loaded chunks
+        // (saved/restored with the chunk, see `chunk_saver/storage/chunk.rs`).
+        // Consulting it for an unloaded chunk would report "no lodestone" and
+        // clear a valid target, so unloaded chunks keep their target.
         let pos = target.pos();
         if world.is_in_world_bounds(pos) {
-            // TODO: validate unloaded targets once POI persistence exists.
             if !world.is_full_chunk_loaded_at(pos) {
                 return;
             }
-            let lodestone_exists = vanilla_poi_types::LODESTONE
-                .try_id()
-                .is_some_and(|id| world.poi_storage.lock().get_type(pos) == Some(id));
+            let lodestone_exists = world.poi_storage.lock().exists(pos, &|poi_type| {
+                poi_type.key == vanilla_poi_types::LODESTONE.key
+            });
             if lodestone_exists {
                 return;
             }

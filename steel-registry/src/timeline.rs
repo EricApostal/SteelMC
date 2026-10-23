@@ -44,6 +44,16 @@ pub struct TimeMarker {
 }
 
 impl TimeMarker {
+    /// Returns whether this marker currently occupies the clock, mirroring
+    /// vanilla `ClockTimeMarker.occursAt`.
+    #[must_use]
+    pub fn occurs_at(&self, total_ticks: i64, period_ticks: Option<i32>) -> bool {
+        let Some(period_ticks) = period_ticks else {
+            return i64::from(self.ticks) == total_ticks;
+        };
+        i64::from(self.ticks) == total_ticks % i64::from(period_ticks)
+    }
+
     /// Resolves the next occurrence using vanilla's strictly-forward periodic behavior.
     #[must_use]
     pub fn resolve_time_to_move_to(&self, total_ticks: i64, period_ticks: Option<i32>) -> i64 {

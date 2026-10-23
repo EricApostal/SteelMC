@@ -168,12 +168,35 @@ fn cooldown_and_status_transitions_follow_vanilla_rules() {
     assert!(victory.is_victory());
     assert!(victory.is_over());
     assert!(
-        !victory.has_more_waves(),
-        "final wave with no bonus wave left"
-    );
-    assert!(
         victory.has_bonus_wave(),
         "omen level 2 unlocks the bonus wave"
+    );
+    assert!(
+        victory.has_more_waves(),
+        "vanilla `hasMoreWaves` keeps the raid open while the bonus wave is unspawned"
+    );
+
+    let bonus_spawned = Raid::from_saved(
+        true,
+        true,
+        100,
+        2,
+        4,
+        0,
+        0,
+        0.0,
+        3,
+        RaidStatus::Victory,
+        BlockPos::new(0, 64, 0),
+        BTreeSet::new(),
+    );
+    assert!(
+        bonus_spawned.has_spawned_bonus_wave(),
+        "groups spawned beyond the normal waves are the bonus wave"
+    );
+    assert!(
+        !bonus_spawned.has_more_waves(),
+        "a spawned bonus wave is the last wave"
     );
 
     let loss = Raid::from_saved(

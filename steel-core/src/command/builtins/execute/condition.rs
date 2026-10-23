@@ -27,10 +27,23 @@ const EXECUTE_ROOT: CommandRedirectTarget = CommandRedirectTarget::CommandRoot;
 const MAX_BLOCKS_REGION: i64 = 32_768;
 
 pub(super) fn conditionals(name: &'static str, expected: bool) -> Builder {
-    // TODO: Add items after every vanilla command-slot provider and container inventory is
-    // modeled, including deferred loot-table unpacking.
-    // TODO: Add predicate and function after their runtime registries are ported.
-    // TODO: Restore Steel stopwatch conditions with the stopwatch command system.
+    // TODO: Add `items` once Steel has a slot-source argument plus item accessors.
+    // Vanilla `execute if items <slots> <item_predicate>` needs `SlotSourceArgument`
+    // (`execute/argument.rs`, owner: `Commands`) and the `ItemAccessor` providers that
+    // read a player inventory/container (`command/execution`, owner: `Commands`, with
+    // the container inventories from the `Menus` lane). Steel has
+    // `SteelArgumentType::item_predicate()` and `ItemPredicate::matches`, but no slot
+    // source and no item accessor, so the branch cannot parse or count items yet.
+    // TODO: Add `predicate` and `function` once their runtime registries are ported.
+    // `predicate` needs the loot-predicate registry behind vanilla's
+    // `ResourceOrIdArgument.lootPredicate` (owner: loot/advancement lane);
+    // `function` needs a command-function registry plus the `InCommandFunction`
+    // source modifier (`FunctionArgument`/`/function` do not exist yet, owner:
+    // `Commands` function-command lane).
+    // TODO: Add `stopwatch` once Steel has the stopwatch system (`ServerStopwatches`
+    // and the `/stopwatch` command, owner: `Commands`). Vanilla checks
+    // `Stopwatches.get(id).elapsedSeconds()` against a float range; there is no
+    // stopwatch state to read today.
     literal(name)
         .then(biome_condition(expected))
         .then(block_condition(expected))
