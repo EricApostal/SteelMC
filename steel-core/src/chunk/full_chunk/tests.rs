@@ -13,7 +13,9 @@ use steel_utils::{ChunkPos, Downcast as _, DowncastType, DowncastTypeKey, locks:
 use super::*;
 use crate::behavior::init_behaviors;
 use crate::block_entity::entities::ComparatorBlockEntity;
-use crate::block_entity::{BlockEntityBase, SharedBlockEntity, entities::UnimplementedBlockEntity};
+use crate::block_entity::{
+    BlockEntityBase, SharedBlockEntity, entities::UnimplementedBlockEntity, init_block_entities,
+};
 use crate::chunk::{
     Chunk,
     chunk_ticket_manager::ChunkTicketLevel,
@@ -593,6 +595,9 @@ fn insertion_below_world_does_not_alias_the_bottom_section() {
 fn stale_no_entity_promotion_cannot_consume_a_replacement_marker() {
     init_vanilla_registry();
     init_behaviors();
+    // The block entity registry is process-global; initialize it explicitly so the
+    // replacement chest is created deterministically.
+    init_block_entities();
     let chunk_owner = test_chunk();
     let chunk = FullChunkRef::from_full_context(&chunk_owner);
     let pos = BlockPos::new(2, 3, 4);
@@ -609,10 +614,13 @@ fn stale_no_entity_promotion_cannot_consume_a_replacement_marker() {
         chunk.set_block_state(pos, chest, UpdateFlags::UPDATE_NONE),
         Some(moving_piston)
     );
+    // Replacing the block resolves the old marker; the chunk now owns whatever the
+    // replacement itself produced (a concrete entity, since a chest factory is registered).
     let pending_after_replacement = chunk.pending_block_entity_positions();
-    assert!(pending_after_replacement.contains(&pos));
+    let replacement = chunk.get_block_entity(pos);
+    assert!(replacement.is_some(), "the replacement chest should exist");
 
-    // The stale `NoEntity` commit must retry rather than consume the replacement's marker.
+    // The stale `NoEntity` commit must retry instead of consuming the replacement.
     assert!(matches!(
         chunk.commit_pending_creation(pos, moving_piston, BlockEntityCreation::NoEntity),
         PendingPromotionCommit::Retry
@@ -620,6 +628,10 @@ fn stale_no_entity_promotion_cannot_consume_a_replacement_marker() {
     assert_eq!(
         chunk.pending_block_entity_positions(),
         pending_after_replacement
+    );
+    assert_eq!(
+        chunk.get_block_entity(pos).map(|entity| entity.get_block_pos()),
+        replacement.map(|entity| entity.get_block_pos())
     );
 }
 

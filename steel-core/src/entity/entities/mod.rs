@@ -8,6 +8,7 @@ pub use mobs::bosses::{
     EnderDragonEntity, EnderDragonPartEntity, EnderDragonPartKind, EnderDragonPhase,
     EnderDragonPhaseManager,
 };
+pub use mobs::golem::IronGolemEntity;
 pub use mobs::hostile::{
     BlazeEntity, CaveSpiderEntity, CreakingEntity, CreeperEntity, ElderGuardianEntity,
     EndermanEntity, EndermiteEntity, GhastEntity, GuardianEntity, HoglinEntity, MagmaCubeEntity,
@@ -15,7 +16,6 @@ pub use mobs::hostile::{
     WitchEntity, WitherBossEntity, ZoglinEntity, ZombifiedPiglinEntity, breeze::BreezeEntity,
     shulker::ShulkerEntity,
 };
-pub use mobs::golem::IronGolemEntity;
 pub use mobs::illager::{
     EvokerEntity, IllagerArmPose, IllagerSpell, IllusionerEntity, PillagerEntity, RaiderKeys,
     RavagerEntity, VindicatorEntity,

@@ -1028,10 +1028,8 @@ impl LivingEntityBase {
 
                 attributes.remove_modifier(attribute, &id);
                 if attributes.add_modifier(attribute, modifier, false) {
-                    installed_modifiers[slot_index].push(EquipmentAttributeModifierKey {
-                        attribute,
-                        id,
-                    });
+                    installed_modifiers[slot_index]
+                        .push(EquipmentAttributeModifierKey { attribute, id });
                 }
             },
         );

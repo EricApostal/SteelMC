@@ -75,7 +75,13 @@ pub fn calculate_jump_vector_for_angle(
                 let zi = ri * sinxz_ang;
                 let sample_pos = DVec3::new(mob_pos.x + xi, mob_pos.y + yi, mob_pos.z + zi);
                 if let Some(previous_pos) = previous_pos
-                    && !is_clear_transition(body, width as f32, height as f32, previous_pos, sample_pos)
+                    && !is_clear_transition(
+                        body,
+                        width as f32,
+                        height as f32,
+                        previous_pos,
+                        sample_pos,
+                    )
                 {
                     return None;
                 }

@@ -24,8 +24,8 @@ use steel_registry::RegistryExt as _;
 use steel_registry::level_events::{ANIMATION_DRAGON_SUMMON_ROAR, ANIMATION_END_GATEWAY_SPAWN};
 use steel_registry::vanilla_blocks;
 use steel_registry::vanilla_entities;
-use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::random::Random as _;
+use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::{BlockPos, BlockStateId, WorldAabb};
 use text_components::TextComponent;
 use uuid::Uuid;
@@ -36,11 +36,11 @@ use super::event::ServerBossEvent;
 use crate::chunk::heightmap::HeightmapType;
 use crate::entity::entities::EndCrystalEntity;
 use crate::entity::{Entity, RemovalReason, SharedEntity};
+use crate::world::World;
 use crate::world::explosion::ExplosionInteraction;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
-use steel_utils::types::UpdateFlags;
-use crate::world::World;
 use steel_utils::Downcast as _;
+use steel_utils::types::UpdateFlags;
 
 /// Vanilla `EnderDragonFight.MAX_TICKS_BEFORE_DRAGON_RESPAWN`.
 pub const MAX_TICKS_BEFORE_DRAGON_RESPAWN: i32 = 1200;

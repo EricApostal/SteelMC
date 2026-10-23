@@ -146,7 +146,9 @@ impl ChunkGenerator for DebugChunkGenerator {
     /// block-state grid and runs no feature decoration.
     fn apply_biome_decorations(&self, region: &mut WorldGenRegion<'_>) {
         let center = region.center();
-        let barrier = REGISTRY.blocks.get_default_state_id(&vanilla_blocks::BARRIER);
+        let barrier = REGISTRY
+            .blocks
+            .get_default_state_id(&vanilla_blocks::BARRIER);
 
         for local_x in 0..16 {
             for local_z in 0..16 {

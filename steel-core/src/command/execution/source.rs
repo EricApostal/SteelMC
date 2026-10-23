@@ -969,12 +969,11 @@ mod tests {
     #[test]
     fn authorization_context_captures_initial_world_scope() {
         let world = Identifier::new("lobby", "spawn");
-        let authorization =
-            CommandAuthorizationContext::for_player(
-                world.clone(),
-                PermissionSet::new(),
-                PermissionLevel::All,
-            );
+        let authorization = CommandAuthorizationContext::for_player(
+            world.clone(),
+            PermissionSet::new(),
+            PermissionLevel::All,
+        );
 
         assert_eq!(
             authorization.permission_context(),

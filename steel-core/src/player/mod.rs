@@ -1,7 +1,6 @@
 //! This module contains all things player-related.
 mod abilities;
 pub mod advancement;
-pub mod recipe_book;
 pub mod chat;
 pub mod chunk_sender;
 /// This module contains the `PlayerConnection` trait that abstracts network connections.
@@ -23,6 +22,7 @@ pub mod player_data;
 pub mod player_data_storage;
 pub mod player_inventory;
 mod profile;
+pub mod recipe_book;
 mod session;
 mod sleep;
 mod sleep_state;

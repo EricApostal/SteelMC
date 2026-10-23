@@ -3,8 +3,8 @@
 //! Mirrors vanilla `MapDecoration`, `MapBanner` and `MapFrame`.
 
 use serde::{Deserialize, Serialize};
-use steel_registry::map_decoration_type::MapDecorationTypeRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+use steel_registry::map_decoration_type::MapDecorationTypeRef;
 use steel_registry::{DyeColor, REGISTRY, RegistryExt as _, vanilla_map_decoration_types};
 use steel_utils::{BlockPos, Identifier};
 use text_components::TextComponent;
@@ -242,7 +242,10 @@ mod dye_color_serde {
 
     use super::DyeColor;
 
-    pub(super) fn serialize<S: Serializer>(color: &DyeColor, serializer: S) -> Result<S::Ok, S::Error> {
+    pub(super) fn serialize<S: Serializer>(
+        color: &DyeColor,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(color.serialized_name())
     }
 

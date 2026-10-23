@@ -78,4 +78,8 @@ crate::impl_registry!(
     flat_level_generator_presets_by_key,
     flat_level_generator_presets
 );
-crate::impl_tagged_registry!(FlatLevelGeneratorPresetRegistry, flat_level_generator_presets_by_key, "preset");
+crate::impl_tagged_registry!(
+    FlatLevelGeneratorPresetRegistry,
+    flat_level_generator_presets_by_key,
+    "preset"
+);

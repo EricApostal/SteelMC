@@ -358,7 +358,14 @@ mod tests {
 
         let husk = HuskEntity::new(&vanilla_entities::HUSK, 1, DVec3::ZERO, Weak::new());
         assert_eq!(husk.entity_type(), &vanilla_entities::HUSK);
-        assert!(!husk.zombie().converts_to_when_drowning().key.path.is_empty());
+        assert!(
+            !husk
+                .zombie()
+                .converts_to_when_drowning()
+                .key
+                .path
+                .is_empty()
+        );
         assert_eq!(
             husk.zombie().converts_to_when_drowning().key,
             vanilla_entities::ZOMBIE.key,

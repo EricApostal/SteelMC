@@ -3,7 +3,6 @@
 use std::sync::{Arc, Weak};
 
 use steel_macros::block_behavior;
-use steel_registry::{vanilla_blocks};
 use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
@@ -12,6 +11,7 @@ use steel_registry::blocks::properties::{
 };
 use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_block_entity_types;
+use steel_registry::vanilla_blocks;
 use steel_utils::{BlockPos, BlockStateId, Downcast as _};
 
 use crate::behavior::{

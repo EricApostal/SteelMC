@@ -2,13 +2,13 @@ use super::{
     AttributeEffectJson, ConditionalDamageImmunityEffectJson, ConditionalEntityEffectJson,
     ConditionalValueEffectJson, CrossbowChargingSoundsJson, DamageSourcePredicateJson,
     EnchantmentTargetJson, EntityEffectJson, EntityFlagsPredicateJson, EntityPredicateJson,
-    EntityTargetJson, EntityTypePredicateJson, EntityTypeSpecificPredicateJson,
-    EntityTypeSetJson, EntityVehiclePredicateJson, FloatProviderJson, FloatProviderTypedJson,
-    GameType, Ident, Identifier, ItemHolderSetJson, LevelBasedValueJson, LevelBasedValueTypedJson,
+    EntityTargetJson, EntityTypePredicateJson, EntityTypeSetJson, EntityTypeSpecificPredicateJson,
+    EntityVehiclePredicateJson, FloatProviderJson, FloatProviderTypedJson, GameType, Ident,
+    Identifier, ItemHolderSetJson, LevelBasedValueJson, LevelBasedValueTypedJson,
     MobEffectSelectionJson, ParticlePositionSourceJson, ParticleVelocitySourceJson,
-    RequirementsJson, Span, TargetedConditionalEntityEffectJson, TargetedConditionalValueEffectJson,
-    ToShoutySnakeCase, TokenStream, ValueEffectJson, damage_type_ref_token,
-    generate_sound_event_ref, identifier_token, quote,
+    RequirementsJson, Span, TargetedConditionalEntityEffectJson,
+    TargetedConditionalValueEffectJson, ToShoutySnakeCase, TokenStream, ValueEffectJson,
+    damage_type_ref_token, generate_sound_event_ref, identifier_token, quote,
 };
 
 pub(super) fn attribute_ref_token(attribute: &Identifier) -> TokenStream {
@@ -403,7 +403,8 @@ pub(super) fn generate_entity_effect(
                 Span::call_site(),
             );
             *counter += 1;
-            let amount = generate_level_based_value_ref(prefix, &attribute.amount, statics, counter);
+            let amount =
+                generate_level_based_value_ref(prefix, &attribute.amount, statics, counter);
             let attribute_ref = attribute_ref_token(&attribute.attribute);
             let id = identifier_token(&attribute.id);
             let operation = attribute_modifier_operation_token(&attribute.operation);

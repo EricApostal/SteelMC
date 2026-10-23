@@ -14,10 +14,10 @@ use steel_utils::Identifier;
 use steel_utils::types::InteractionHand;
 
 use crate::behavior::init_behaviors;
+use crate::entity::entities::LightningBoltEntity;
 use crate::entity::living_base::MobEffectInstance;
 use crate::entity::{Entity, LivingEntity, Mob, next_entity_id};
 use crate::test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk};
-use crate::entity::entities::LightningBoltEntity;
 use steel_utils::WorldAabb;
 
 use super::*;

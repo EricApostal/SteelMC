@@ -6,4 +6,4 @@
 // TODO(integrator): entity modules are declared by their owner once the entity files exist.
 
 pub mod zombified_piglin;
-pub use zombified_piglin::{ZombifiedPiglinEntity};
+pub use zombified_piglin::ZombifiedPiglinEntity;

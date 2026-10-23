@@ -247,7 +247,11 @@ fn offers_lookup_uses_the_selection_hint() {
     // No offer accepts a payment that is not one of its costs.
     assert!(
         offers
-            .get_recipe_for(&ItemStack::with_count(&vanilla_items::DIAMOND, 1), &empty, 0)
+            .get_recipe_for(
+                &ItemStack::with_count(&vanilla_items::DIAMOND, 1),
+                &empty,
+                0
+            )
             .is_none()
     );
 

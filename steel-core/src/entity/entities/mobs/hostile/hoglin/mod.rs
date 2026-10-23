@@ -5,6 +5,6 @@
 
 pub mod brain;
 pub mod hoglin;
-pub use hoglin::{HoglinEntity};
+pub use hoglin::HoglinEntity;
 pub mod zoglin;
-pub use zoglin::{ZoglinEntity};
+pub use zoglin::ZoglinEntity;

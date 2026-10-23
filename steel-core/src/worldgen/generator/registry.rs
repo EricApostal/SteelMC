@@ -967,21 +967,32 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unimplemented_flat_decoration_options() {
-        let features_config = toml::Value::Table(Map::from_iter([(
-            "features".to_owned(),
-            toml::Value::Boolean(true),
-        )]));
-        let features_error = validate_flat_config(&features_config)
-            .expect_err("features=true should not use non-vanilla decoration");
-        assert!(features_error.contains("features=true"));
+    fn flat_decoration_options_resolve_and_unknown_structure_sets_are_rejected() {
+        for key in ["features", "lakes"] {
+            let config = toml::Value::Table(Map::from_iter([(
+                key.to_owned(),
+                toml::Value::Boolean(true),
+            )]));
+            let WorldGeneratorConfigData::Flat(resolved) = validate_flat_config(&config)
+                .unwrap_or_else(|error| panic!("{key}=true should validate: {error}"))
+            else {
+                panic!("{key}=true should resolve a flat generator");
+            };
+            match key {
+                "features" => assert!(resolved.features),
+                _ => assert!(resolved.lakes),
+            }
+        }
 
-        let lakes_config = toml::Value::Table(Map::from_iter([(
-            "lakes".to_owned(),
-            toml::Value::Boolean(true),
+        // A structure set that vanilla does not define is still rejected.
+        let unknown_config = toml::Value::Table(Map::from_iter([(
+            "structure_overrides".to_owned(),
+            toml::Value::Array(vec![toml::Value::String(
+                "minecraft:not_a_structure_set".to_owned(),
+            )]),
         )]));
-        let lakes_error = validate_flat_config(&lakes_config)
-            .expect_err("lakes=true should not use non-vanilla decoration");
-        assert!(lakes_error.contains("lakes=true"));
+        let error = validate_flat_config(&unknown_config)
+            .expect_err("an unknown structure set should be rejected");
+        assert!(error.contains("unknown structure set"), "{error}");
     }
 }

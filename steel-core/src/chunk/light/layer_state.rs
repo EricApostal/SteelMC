@@ -660,10 +660,7 @@ mod tests {
     #[test]
     fn empty_state_after_data_removal_is_empty_again() {
         let state = SectionState::default().with_has_data();
-        assert_eq!(
-            state.without_has_data().section_type(),
-            SectionType::Empty
-        );
+        assert_eq!(state.without_has_data().section_type(), SectionType::Empty);
         assert_eq!(
             SectionState::from_raw(state.raw() & !HAS_DATA_BIT & !NEIGHBOR_COUNT_BITS)
                 .section_type(),

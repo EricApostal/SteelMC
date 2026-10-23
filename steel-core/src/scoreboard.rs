@@ -1654,7 +1654,13 @@ mod tests {
         assert_eq!(scoreboard.team("red").expect("team").color(), None);
 
         let formatted = scoreboard.formatted_holder_name(&holder);
-        assert_eq!(formatted.children.len(), 0);
+        // Vanilla `PlayerTeam.decorateName` always wraps the member as prefix + name +
+        // suffix; the detached handle above left the registered team at its defaults.
+        assert_eq!(formatted.children.len(), 3);
+        assert_eq!(
+            formatted.children[1],
+            TextComponent::plain("Steve".to_owned())
+        );
         let _ = team;
     }
 

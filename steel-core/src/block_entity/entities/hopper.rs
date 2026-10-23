@@ -450,8 +450,9 @@ pub fn add_item(
         if item_stack.is_empty() {
             break;
         }
-        let from_ref: Option<&mut dyn Container> =
-            from.as_mut().map(|container| &mut **container as &mut dyn Container);
+        let from_ref: Option<&mut dyn Container> = from
+            .as_mut()
+            .map(|container| &mut **container as &mut dyn Container);
         item_stack = try_move_in_item(from_ref, &mut *container, item_stack, slot, direction);
     }
 

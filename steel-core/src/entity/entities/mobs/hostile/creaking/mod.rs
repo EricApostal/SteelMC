@@ -5,4 +5,4 @@
 
 pub mod brain;
 pub mod creaking;
-pub use creaking::{CreakingEntity};
+pub use creaking::CreakingEntity;

@@ -1544,10 +1544,6 @@ fn creative_drop_throttle_survives_respawn_replacement() {
         insert_ready_full_chunk(world, ChunkPos::new(0, 0));
         let player = test_player(Arc::clone(world));
         *player.game_modes.lock() = PlayerGameModeState::new(GameType::Creative);
-    player
-        .abilities
-        .lock()
-        .update_for_game_mode(GameType::Creative);
         player
             .abilities
             .lock()
@@ -1720,6 +1716,10 @@ fn throttle_player_dropping_items_from_creative_menu() {
     };
 
     *player.game_modes.lock() = PlayerGameModeState::new(GameType::Creative);
+    player
+        .abilities
+        .lock()
+        .update_for_game_mode(GameType::Creative);
 
     // Ensure no remainder for easier logic in the test
     assert_eq!(
