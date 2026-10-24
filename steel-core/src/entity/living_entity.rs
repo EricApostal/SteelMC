@@ -703,6 +703,10 @@ pub trait LivingEntity: Entity {
         if damage < 0.0 {
             damage = 0.0;
         }
+        // Vanilla `LivingEntity.hurtServer` snapshots the dealt amount (`damageTaken`)
+        // before item blocking, freezing, and helmet reductions; the event carries it
+        // as `original` and the post-cooldown amount as `actual`.
+        let original = damage;
 
         // TODO: apply item blocking before actually_hurt once shield/use-item hooks exist.
         if source.is(&vanilla_damage_type_tags::DamageTypeTag::IS_FREEZING)
@@ -736,6 +740,33 @@ pub trait LivingEntity: Entity {
                 self.broadcast_hurt_animation(world);
             }
             self.apply_damage_knockback(source);
+
+            // Vanilla `LivingEntity.hurtServer` raises the hurt triggers once the
+            // victim took full damage: `ENTITY_HURT_PLAYER` when the victim is a
+            // player, `PLAYER_HURT_ENTITY` when the damage entity is a player.
+            // Steel has no item blocking yet, so `blocked` is always false.
+            if let Some(player) = self.as_player() {
+                crate::player::advancement::triggers::raise_entity_hurt_player(
+                    player,
+                    source,
+                    original,
+                    effective_amount,
+                    false,
+                );
+            }
+            if let Some(player) = source
+                .causing_entity()
+                .and_then(|entity| entity.as_player())
+            {
+                crate::player::advancement::triggers::raise_player_hurt_entity(
+                    player,
+                    self.as_entity_event_source(),
+                    source,
+                    original,
+                    effective_amount,
+                    false,
+                );
+            }
         }
 
         if self.is_dead_or_dying() {
@@ -1029,7 +1060,9 @@ pub trait LivingEntity: Entity {
 
         if let Some(player) = self.as_player() {
             player.award_stat(&vanilla_stat_types::ITEM_USED, protection_item.item());
-            // TODO: trigger the `used_totem` advancement criterion once advancements exist.
+            // Vanilla `LivingEntity.checkTotemDeathProtection` raises `USED_TOTEM`
+            // with a copy of the consumed totem after the `used` stat.
+            crate::player::advancement::triggers::raise_used_totem(player, &protection_item);
             if protection_item
                 .get(USE_EFFECTS)
                 .is_some_and(|effects| effects.interact_vibrations)

@@ -2,7 +2,7 @@ use std::path::Path;
 use std::{cell::Cell, iter, marker::PhantomData, sync::Arc};
 
 use glam::{DVec3, IVec3};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use steel_math::lerp2;
 use steel_registry::biome::BiomeRef;
@@ -34,6 +34,7 @@ use crate::worldgen::generator::{
 use crate::worldgen::region::WorldGenRegion;
 use crate::worldgen::structure::{StructureGenerator, StructureStart, create_structures};
 use crate::worldgen::surface::SurfaceSystem;
+use steel_registry::structure::{DimensionPadding, JigsawConfig, LiquidSettingsData, StartHeight};
 use steel_worldgen::biomes::BiomeSourceKind;
 use steel_worldgen::biomes::obfuscate_biome_seed;
 use steel_worldgen::noise::Beardifier;
@@ -41,6 +42,10 @@ use steel_worldgen::noise::NoiseChunk;
 use steel_worldgen::noise::OreVeinifier;
 use steel_worldgen::noise::{Aquifer, AquiferResult, LazyAquifer, preliminary_surface_level};
 use steel_worldgen::structure::GenerationContext;
+use steel_worldgen::structure::jigsaw::{JigsawPieceData, assemble as assemble_jigsaw};
+use steel_worldgen::structure::{
+    StructureGenerationContext as _, StructurePiece, StructurePiecePayload,
+};
 
 const CARVER_SOURCE_CHUNK_COUNT: usize = 17 * 17;
 
@@ -375,6 +380,74 @@ impl<N: VanillaPostNoiseStateType> ChunkGenerator for VanillaGenerator<N> {
         self.with_structure_context(chunk_pos.0.x, chunk_pos.0.y, |ctx| {
             self.structure_generator
                 .generate_start_for_structure(structure, ctx)
+        })
+    }
+
+    fn generate_jigsaw_pieces(
+        &self,
+        pool: &Identifier,
+        target: &Identifier,
+        max_depth: i32,
+        pos: BlockPos,
+    ) -> Option<Vec<StructurePiece>> {
+        // Vanilla `JigsawPlacement.generateJigsaw`: `addPieces` from the command
+        // position with no expansion hack, no heightmap projection, an empty pool
+        // alias lookup, a 128-block center distance, and vanilla's defaults for
+        // dimension padding and liquid settings. The start height is the command
+        // position's Y, which `StartHeight::Constant` reproduces exactly.
+        self.with_structure_context(pos.x() >> 4, pos.z() >> 4, |ctx| {
+            let config = JigsawConfig {
+                start_pool: pool.clone(),
+                max_depth,
+                use_expansion_hack: false,
+                project_start_to_heightmap: None,
+                start_height: StartHeight::Constant(pos.y()),
+                max_distance_from_center: 128,
+                start_jigsaw_name: Some(target.clone()),
+                dimension_padding: DimensionPadding { bottom: 0, top: 0 },
+                pool_aliases: Vec::new(),
+                liquid_settings: LiquidSettingsData::IgnoreWaterlogging,
+            };
+            // Vanilla's `Structure.GenerationContext` random: a legacy random
+            // seeded per chunk with the large-feature seed.
+            let mut rng = LegacyRandom::from_seed(0);
+            rng.set_large_feature_seed(self.seed, ctx.chunk_x(), ctx.chunk_z());
+            let alias_map = FxHashMap::default();
+            let mut get_height = |x: i32, z: i32| ctx.terrain_surface_height(x, z, false);
+            let assembly = assemble_jigsaw(
+                &config,
+                &mut rng,
+                pos.x(),
+                pos.z(),
+                ctx.template_pools(),
+                ctx.templates(),
+                &alias_map,
+                &mut get_height,
+                ctx.min_y(),
+                ctx.max_y(),
+            )?;
+
+            Some(
+                assembly
+                    .pieces
+                    .into_iter()
+                    .map(|piece| StructurePiece {
+                        piece_type: Identifier::new_static("minecraft", "jigsaw"),
+                        bounding_box: piece.assembly_bb,
+                        gen_depth: 0,
+                        orientation: None,
+                        payload: StructurePiecePayload::Jigsaw(JigsawPieceData {
+                            pool_element: piece.element,
+                            position: piece.position,
+                            rotation: piece.rotation,
+                            liquid_settings: config.liquid_settings,
+                        }),
+                        ground_level_delta: piece.ground_level_delta,
+                        junctions: piece.junctions,
+                        projection: Some(piece.projection),
+                    })
+                    .collect(),
+            )
         })
     }
 

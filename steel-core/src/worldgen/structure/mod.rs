@@ -2,13 +2,19 @@
 
 pub(crate) mod piece_placer;
 
-use steel_registry::{Registry, RegistryExt as _};
+use std::sync::Arc;
+
+use steel_registry::{REGISTRY, Registry, RegistryExt as _};
 use steel_utils::random::worldgen_random::WorldgenRandom;
 use steel_utils::{BlockPos, BoundingBox, ChunkPos, Identifier};
+use steel_worldgen::biomes::obfuscate_biome_seed;
 use steel_worldgen::structure::StructureGenerationContext;
 
 use crate::chunk::Chunk;
-use crate::worldgen::template::TemplateLevelAccess;
+use crate::world::World;
+use crate::world::spawn::natural::runtime_random;
+use crate::worldgen::generator::ChunkGenerator as _;
+use crate::worldgen::template::{LiveLevel, TemplateLevelAccess};
 
 pub use steel_worldgen::structure::{
     FixedStructureBiomeProvider, StructureGenerator, StructureLocateCandidate, StructureLocatePlan,
@@ -111,9 +117,61 @@ pub(crate) fn place_structure_start<L: TemplateLevelAccess>(
     placed_any
 }
 
+/// Assembles the named pool at `pos` and places the pieces into live chunks.
+///
+/// This is vanilla `PlaceCommand.placeJigsaw`: `JigsawPlacement.generateJigsaw`
+/// assembles the start from the command position (no expansion hack, no
+/// heightmap projection, `PoolAliasLookup.EMPTY`, a 128-block center distance,
+/// vanilla's default padding and liquid settings), then every pool piece is
+/// placed with an infinite clip box — the command writes the whole jigsaw
+/// instead of a per-chunk slice.
+///
+/// Returns whether any piece placed a block. Generators without a jigsaw
+/// assembly (flat, empty, debug) report `false`.
+pub(crate) fn place_jigsaw_pieces(
+    world: &Arc<World>,
+    pool: &Identifier,
+    target: &Identifier,
+    max_depth: i32,
+    pos: BlockPos,
+) -> bool {
+    let Some(pieces) = world
+        .chunk_map
+        .world_gen_context
+        .generator
+        .generate_jigsaw_pieces(pool, target, max_depth, pos)
+    else {
+        return false;
+    };
+    if pieces.is_empty() {
+        return false;
+    }
+
+    let mut level = LiveLevel::new(world);
+    let mut random = WorldgenRandom::from_source(runtime_random());
+    let biome_zoom_seed = obfuscate_biome_seed(world.seed());
+    let mut placed_any = false;
+    for piece in pieces {
+        let mut piece = piece;
+        placed_any |= StructurePiecePlacer::place_piece(
+            &mut level,
+            &REGISTRY,
+            &mut piece,
+            pos,
+            INFINITE_JIGSAW_BOX,
+            &mut random,
+            biome_zoom_seed,
+        );
+    }
+    placed_any
+}
+
+/// Vanilla `BoundingBox.infinite()`, used by `/place jigsaw`'s per-piece writes.
+const INFINITE_JIGSAW_BOX: BoundingBox =
+    BoundingBox::new(glam::IVec3::splat(i32::MIN), glam::IVec3::splat(i32::MAX));
+
 /// Vanilla `ChunkGenerator.getWritableArea`: the chunk column clipped to the
 /// level's build height.
-///
 /// `LevelHeightAccessor.getMaxY()` is inclusive (`min_y + height - 1`), so the
 /// writable Y range is `min_y + 1 ..= max_y_exclusive - 1`. This matches
 /// `FeatureDecorationRunner::chunk_writable_box`, which is the worldgen-side

@@ -45,6 +45,13 @@ pub(crate) fn read_saved_data_file(path: &Path) -> io::Result<Option<NbtCompound
             format!("{} has no `data` compound", path.display()),
         ));
     };
+    // The `DataVersion` tag lives next to `data` on the wrapper root, so the gate reads the
+    // root, not the inner payload.
+    crate::datafixer::ensure_current(
+        crate::datafixer::version_of(&root),
+        crate::datafixer::DataFixType::SavedData,
+        &format!("saved data `{}`", path.display()),
+    )?;
     Ok(Some(data.clone()))
 }
 

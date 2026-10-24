@@ -133,3 +133,84 @@ impl BlockBehavior for PistonHeadBlock {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use steel_registry::init_vanilla_registry;
+    use steel_utils::{ChunkPos, types::UpdateFlags};
+
+    use super::*;
+    use crate::behavior::init_behaviors;
+    use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
+
+    /// Extended `PISTON` base facing east plus the matching normal piston head.
+    fn head_and_base_states() -> (BlockStateId, BlockStateId) {
+        (
+            vanilla_blocks::PISTON_HEAD
+                .default_state()
+                .set_value(FACING, Direction::East)
+                .set_value(PISTON_TYPE, PistonType::Normal),
+            vanilla_blocks::PISTON
+                .default_state()
+                .set_value(FACING, Direction::East)
+                .set_value(EXTENDED, true),
+        )
+    }
+
+    #[test]
+    fn head_survives_only_on_a_fitting_base() {
+        init_vanilla_registry();
+        init_behaviors();
+        let world_fixture = fresh_test_world("piston_head_survival");
+        let world = &world_fixture.world;
+        let head_pos = BlockPos::new(8, 64, 8);
+        let base_pos = head_pos.west();
+        let _holder = insert_ready_full_chunk(world, ChunkPos::from_block_pos(head_pos));
+        let (head_state, base_state) = head_and_base_states();
+        let behavior = PistonHeadBlock::new(&vanilla_blocks::PISTON_HEAD);
+        let air = vanilla_blocks::AIR.default_state();
+
+        assert!(world.set_block(head_pos, head_state, UpdateFlags::UPDATE_NONE));
+        assert!(world.set_block(base_pos, base_state, UpdateFlags::UPDATE_NONE));
+        assert!(behavior.can_survive(head_state, world.as_ref(), head_pos));
+        assert_eq!(
+            behavior.update_shape(
+                head_state,
+                world,
+                head_pos,
+                Direction::West,
+                base_pos,
+                base_state,
+            ),
+            head_state
+        );
+
+        // Losing the base drops the head through `updateShape`.
+        assert!(world.set_block(base_pos, air, UpdateFlags::UPDATE_NONE));
+        assert!(!behavior.can_survive(head_state, world.as_ref(), head_pos));
+        assert_eq!(
+            behavior.update_shape(head_state, world, head_pos, Direction::West, base_pos, air),
+            air
+        );
+    }
+
+    #[test]
+    fn removing_the_head_destroys_its_fitting_base() {
+        init_vanilla_registry();
+        init_behaviors();
+        let world_fixture = fresh_test_world("piston_head_removal");
+        let world = &world_fixture.world;
+        let head_pos = BlockPos::new(8, 64, 8);
+        let base_pos = head_pos.west();
+        let _holder = insert_ready_full_chunk(world, ChunkPos::from_block_pos(head_pos));
+        let (head_state, base_state) = head_and_base_states();
+
+        assert!(world.set_block(head_pos, head_state, UpdateFlags::UPDATE_NONE));
+        assert!(world.set_block(base_pos, base_state, UpdateFlags::UPDATE_NONE));
+
+        assert!(world.remove_block(head_pos, false));
+
+        assert!(world.get_block_state(head_pos).is_air());
+        assert!(world.get_block_state(base_pos).is_air());
+    }
+}

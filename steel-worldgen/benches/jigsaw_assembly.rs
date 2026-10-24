@@ -105,8 +105,8 @@ fn run_assembly(
     let result = assemble(
         config,
         &mut rng,
-        case.chunk_x,
-        case.chunk_z,
+        case.chunk_x << 4,
+        case.chunk_z << 4,
         pools,
         templates,
         &alias_map,

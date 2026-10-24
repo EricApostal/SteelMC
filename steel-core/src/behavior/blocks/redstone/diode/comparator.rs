@@ -391,14 +391,18 @@ impl BlockBehavior for ComparatorBlock {
 #[cfg(test)]
 mod tests {
     use glam::DVec3;
+    use steel_registry::blocks::properties::IntProperty;
     use steel_registry::entity_type::EntityTypeRef;
     use steel_registry::init_vanilla_registry;
     use steel_registry::{vanilla_blocks, vanilla_entities};
     use steel_utils::ChunkPos;
 
     use super::*;
+    use crate::behavior::init_behaviors;
     use crate::entity::{EntityBase, SharedEntity};
-    use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
+    use crate::test_support::{TestWorld, fresh_test_world, insert_ready_full_chunk};
+
+    const POWER: &IntProperty = &BlockStateProperties::POWER;
 
     struct TestItemFrame {
         base: EntityBase,
@@ -507,6 +511,107 @@ mod tests {
         assert_eq!(
             ComparatorBlock::item_frame_signal(world.as_ref(), Direction::North, pos),
             Some(6)
+        );
+    }
+
+    fn north_facing_comparator() -> BlockStateId {
+        vanilla_blocks::COMPARATOR
+            .default_state()
+            .set_value(HORIZONTAL_FACING, Direction::North)
+    }
+
+    /// Vanilla placement flags that suppress the placement callbacks.
+    ///
+    /// Redstone wire recomputes `POWER` from real sources in `onPlace`, so a fixture
+    /// that wants a specific analog level must place the pre-powered state without
+    /// running the wire's placement evaluation (the same technique the rail tests
+    /// use for pre-shaped rails).
+    fn raw_flags() -> UpdateFlags {
+        UpdateFlags::UPDATE_NONE | UpdateFlags::UPDATE_SKIP_ON_PLACE
+    }
+
+    fn comparator_world(key: &'static str, side_power: u8) -> (TestWorld, BlockPos) {
+        init_vanilla_registry();
+        init_behaviors();
+        let world_fixture = fresh_test_world(key);
+        let world = &world_fixture.world;
+        let pos = BlockPos::new(8, 64, 8);
+        insert_ready_full_chunk(world, ChunkPos::from_block_pos(pos));
+
+        // Vanilla's diodes and wire require a sturdy block below them and are dropped
+        // by the first neighbor update otherwise, so stand the circuit on stone.
+        for support_pos in [pos.below(), pos.north().below(), pos.east().below()] {
+            assert!(world.set_block(
+                support_pos,
+                vanilla_blocks::STONE.default_state(),
+                UpdateFlags::UPDATE_NONE,
+            ));
+        }
+
+        let wire = vanilla_blocks::REDSTONE_WIRE
+            .default_state()
+            .set_value(POWER, 7);
+        let side_wire = vanilla_blocks::REDSTONE_WIRE
+            .default_state()
+            .set_value(POWER, side_power);
+        assert!(world.set_block(pos, north_facing_comparator(), raw_flags()));
+        assert!(world.set_block(pos.north(), wire, raw_flags()));
+        assert!(world.set_block(pos.east(), side_wire, raw_flags()));
+        (world_fixture, pos)
+    }
+
+    #[test]
+    fn analog_pipeline_combines_wire_input_side_input_and_mode() {
+        let (world_fixture, pos) = comparator_world("comparator_analog_pipeline", 4);
+        let world = &world_fixture.world;
+        let base = north_facing_comparator();
+        let subtract = base.set_value(MODE_COMPARATOR, ComparatorMode::Subtract);
+
+        assert_eq!(ComparatorBlock::calculate_output(world, pos, base), 7);
+        assert!(ComparatorBlock::should_turn_on(world, pos, base));
+        assert_eq!(ComparatorBlock::calculate_output(world, pos, subtract), 3);
+        assert!(ComparatorBlock::should_turn_on(world, pos, subtract));
+
+        // At input == side (7 == 7) subtract cancels entirely and stays off; compare
+        // outputs and powers, matching vanilla's mode rules.
+        let side_wire = vanilla_blocks::REDSTONE_WIRE
+            .default_state()
+            .set_value(POWER, 7);
+        assert!(world.set_block(pos.east(), side_wire, raw_flags()));
+        assert_eq!(ComparatorBlock::calculate_output(world, pos, subtract), 0);
+        assert!(!ComparatorBlock::should_turn_on(world, pos, subtract));
+        assert_eq!(ComparatorBlock::calculate_output(world, pos, base), 7);
+        assert!(ComparatorBlock::should_turn_on(world, pos, base));
+    }
+
+    #[test]
+    fn neighbor_change_schedules_the_vanilla_two_gt_refresh() {
+        let (world_fixture, pos) = comparator_world("comparator_neighbor_schedule", 4);
+        let world = &world_fixture.world;
+        let behavior = ComparatorBlock::new(&vanilla_blocks::COMPARATOR);
+
+        // The block entity still caches 0 while the input is 7, so vanilla schedules a
+        // 2 gt tick to run `refreshOutputState`.
+        behavior.check_tick_on_neighbor(world, pos, north_facing_comparator());
+        assert!(world.has_scheduled_block_tick(pos, &vanilla_blocks::COMPARATOR));
+    }
+
+    #[test]
+    fn neighbor_change_skips_the_refresh_when_output_and_power_already_match() {
+        let (world_fixture, pos) = comparator_world("comparator_neighbor_skip", 4);
+        let world = &world_fixture.world;
+        let behavior = ComparatorBlock::new(&vanilla_blocks::COMPARATOR);
+        let state = north_facing_comparator();
+
+        behavior.refresh_output_state(world, pos, state);
+        let refreshed = world.get_block_state(pos);
+        assert!(refreshed.get_value(POWERED));
+        assert_eq!(ComparatorBlock::output_signal(world.as_ref(), pos), 7);
+
+        behavior.check_tick_on_neighbor(world, pos, refreshed);
+        assert!(
+            !world.has_scheduled_block_tick(pos, &vanilla_blocks::COMPARATOR),
+            "vanilla schedules nothing when the stored output and POWERED already match"
         );
     }
 }

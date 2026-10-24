@@ -1,10 +1,10 @@
-//! Client presentation updates for scoreboard mutations.
+//! Client presentation packets for scoreboard mutations.
 //!
 //! Vanilla's `ServerScoreboard` overrides `Scoreboard`'s mutation callbacks and
-//! broadcasts one packet per change. Steel records the same changes as a small
-//! queue on [`super::Scoreboard`] and converts them into client packets when the
-//! server flushes the queue, so the authoritative state is always read at flush
-//! time (`/scoreboard` and `/team` mutate in bursts within one tick).
+//! broadcasts the equivalent `Clientbound*Scoreboard*` packets from inside each
+//! mutation. Steel queues the same packets on [`super::Scoreboard`] and hands them
+//! to the domain's players once per tick, so `/scoreboard` and `/team` bursts reach
+//! clients in the order the commands produced them.
 
 use steel_protocol::packets::game::{
     CResetScore, CSetDisplayObjective, CSetObjective, CSetPlayerTeam, CSetScore,
@@ -15,174 +15,9 @@ use steel_protocol::packets::game::{
 use crate::player::Player;
 
 use super::{
-    DisplaySlot as CoreDisplaySlot, NumberFormat as CoreNumberFormat, ObjectiveState,
-    PersistentScoreboard, PlayerTeam, RenderType as CoreRenderType, ScoreState, TeamColor,
-    TeamVisibility,
+    DisplaySlot as CoreDisplaySlot, NumberFormat as CoreNumberFormat, PlayerTeam,
+    RenderType as CoreRenderType, ScoreState, TeamColor, TeamVisibility,
 };
-
-/// A scoreboard change queued for client presentation.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ScoreboardUpdate {
-    /// An objective was created.
-    ObjectiveAdded {
-        /// Objective name.
-        name: String,
-    },
-    /// An objective's display settings changed.
-    ObjectiveChanged {
-        /// Objective name.
-        name: String,
-    },
-    /// An objective was removed.
-    ObjectiveRemoved {
-        /// Objective name.
-        name: String,
-    },
-    /// A holder's score changed in an objective.
-    ScoreChanged {
-        /// Score holder name.
-        owner: String,
-        /// Objective name.
-        objective: String,
-    },
-    /// A holder's score was reset, optionally for a single objective.
-    ScoreRemoved {
-        /// Score holder name.
-        owner: String,
-        /// Objective name, or `None` to reset every objective.
-        objective: Option<String>,
-    },
-    /// A display slot changed.
-    DisplaySlotChanged {
-        /// Slot that changed.
-        slot: CoreDisplaySlot,
-    },
-    /// A team was created.
-    TeamAdded {
-        /// Team name.
-        name: String,
-    },
-    /// A team's display options changed.
-    TeamChanged {
-        /// Team name.
-        name: String,
-    },
-    /// A team was removed.
-    TeamRemoved {
-        /// Team name.
-        name: String,
-    },
-    /// Team membership changed.
-    TeamPlayersChanged {
-        /// Team name.
-        name: String,
-        /// Holders added to the team.
-        joined: Vec<String>,
-        /// Holders removed from the team.
-        left: Vec<String>,
-    },
-}
-
-impl ScoreboardUpdate {
-    /// Converts this update into the client packets vanilla would broadcast.
-    #[must_use]
-    pub fn packets(&self, state: &PersistentScoreboard) -> Vec<ScoreboardPacket> {
-        match self {
-            Self::ObjectiveAdded { name } => {
-                let Some(objective) = state.objectives.get(name) else {
-                    return Vec::new();
-                };
-                vec![ScoreboardPacket::objective_add(
-                    name,
-                    super::objective_snapshot(name, objective),
-                )]
-            }
-            Self::ObjectiveChanged { name } => {
-                let Some(objective) = state.objectives.get(name) else {
-                    return Vec::new();
-                };
-                vec![ScoreboardPacket::Objective(CSetObjective::change(
-                    name.clone(),
-                    objective.display_name.clone(),
-                    wire_render_type(objective.render_type),
-                    wire_number_format(objective.number_format.as_ref()),
-                ))]
-            }
-            Self::ObjectiveRemoved { name } => {
-                vec![ScoreboardPacket::Objective(CSetObjective::remove(
-                    name.clone(),
-                ))]
-            }
-            Self::ScoreChanged { owner, objective } => {
-                let Some(score) = state
-                    .scores
-                    .get(owner)
-                    .and_then(|scores| scores.get(objective))
-                else {
-                    return Vec::new();
-                };
-                vec![ScoreboardPacket::Score(score_packet(
-                    owner, objective, score, state,
-                ))]
-            }
-            Self::ScoreRemoved { owner, objective } => match objective {
-                Some(objective) => vec![ScoreboardPacket::ResetScore(CResetScore::one(
-                    owner.clone(),
-                    objective.clone(),
-                ))],
-                None => vec![ScoreboardPacket::ResetScore(CResetScore::all(
-                    owner.clone(),
-                ))],
-            },
-            Self::DisplaySlotChanged { slot } => vec![ScoreboardPacket::DisplayObjective(
-                match state.display_slots.get(slot) {
-                    Some(objective) => {
-                        CSetDisplayObjective::show(wire_display_slot(*slot), objective.clone())
-                    }
-                    None => CSetDisplayObjective::clear(wire_display_slot(*slot)),
-                },
-            )],
-            Self::TeamAdded { name } => {
-                let Some(team) = state.teams.get(name) else {
-                    return Vec::new();
-                };
-                vec![ScoreboardPacket::Team(CSetPlayerTeam::add(
-                    name.clone(),
-                    team_parameters(team),
-                    team.players().iter().cloned().collect(),
-                ))]
-            }
-            Self::TeamChanged { name } => {
-                let Some(team) = state.teams.get(name) else {
-                    return Vec::new();
-                };
-                vec![ScoreboardPacket::Team(CSetPlayerTeam::change(
-                    name.clone(),
-                    team_parameters(team),
-                ))]
-            }
-            Self::TeamRemoved { name } => {
-                vec![ScoreboardPacket::Team(CSetPlayerTeam::remove(name.clone()))]
-            }
-            Self::TeamPlayersChanged { name, joined, left } => {
-                let mut packets = Vec::new();
-                if !left.is_empty() {
-                    packets.push(ScoreboardPacket::Team(CSetPlayerTeam::leave(
-                        name.clone(),
-                        left.clone(),
-                    )));
-                }
-                if !joined.is_empty() {
-                    packets.push(ScoreboardPacket::Team(CSetPlayerTeam::join(
-                        name.clone(),
-                        joined.clone(),
-                    )));
-                }
-                packets
-            }
-        }
-    }
-}
 
 /// A scoreboard client packet.
 #[derive(Clone, Debug)]
@@ -200,7 +35,8 @@ pub enum ScoreboardPacket {
 }
 
 impl ScoreboardPacket {
-    /// Builds the objective-add packet for a full-state sync.
+    /// Vanilla `ServerScoreboard.getStartTrackingPackets` / `onObjectiveAdded`:
+    /// `ClientboundSetObjectivePacket(objective, 0)`.
     #[must_use]
     pub(crate) fn objective_add(name: &str, objective: super::ScoreboardObjective) -> Self {
         Self::Objective(CSetObjective::add(
@@ -211,29 +47,51 @@ impl ScoreboardPacket {
         ))
     }
 
-    /// Builds the score packet for a full-state sync.
+    /// Vanilla `ServerScoreboard.onObjectiveChanged`:
+    /// `ClientboundSetObjectivePacket(objective, 2)`.
     #[must_use]
-    pub(crate) fn score_changed(
-        owner: &str,
-        objective: &str,
-        score: &ScoreState,
-        objective_state: Option<&ObjectiveState>,
-    ) -> Self {
-        Self::Score(CSetScore::new(
-            owner.to_owned(),
-            objective.to_owned(),
-            score.value,
-            score.display.clone(),
-            wire_number_format(
-                score
-                    .number_format
-                    .as_ref()
-                    .or(objective_state.and_then(|state| state.number_format.as_ref())),
-            ),
+    pub(crate) fn objective_change(name: &str, objective: super::ScoreboardObjective) -> Self {
+        Self::Objective(CSetObjective::change(
+            name.to_owned(),
+            objective.display_name().clone(),
+            wire_render_type(objective.render_type()),
+            wire_number_format(objective.number_format()),
         ))
     }
 
-    /// Builds the display-slot packet for a full-state sync.
+    /// Vanilla `ServerScoreboard.getStopTrackingPackets` / `stopTrackingObjective`:
+    /// `ClientboundSetObjectivePacket(objective, 1)`.
+    #[must_use]
+    pub(crate) fn objective_remove(name: &str) -> Self {
+        Self::Objective(CSetObjective::remove(name.to_owned()))
+    }
+
+    /// Vanilla `ServerScoreboard.onScoreChanged` and `getStartTrackingPackets`:
+    /// `ClientboundSetScorePacket`.
+    ///
+    /// Both send `Optional.ofNullable(score.numberFormat())`: only the per-score override,
+    /// never the objective's format, which travels in `ClientboundSetObjectivePacket`.
+    #[must_use]
+    pub(crate) fn score_changed(owner: &str, objective: &str, score: &ScoreState) -> Self {
+        Self::Score(score_packet(owner, objective, score))
+    }
+
+    /// Vanilla `ServerScoreboard.onPlayerScoreRemoved`:
+    /// `ClientboundResetScorePacket(owner, objective)`.
+    #[must_use]
+    pub(crate) fn score_reset(owner: &str, objective: &str) -> Self {
+        Self::ResetScore(CResetScore::one(owner.to_owned(), objective.to_owned()))
+    }
+
+    /// Vanilla `ServerScoreboard.onPlayerRemoved`:
+    /// `ClientboundResetScorePacket(owner, null)`.
+    #[must_use]
+    pub(crate) fn all_scores_reset(owner: &str) -> Self {
+        Self::ResetScore(CResetScore::all(owner.to_owned()))
+    }
+
+    /// Vanilla `ClientboundSetDisplayObjectivePacket`, including the
+    /// `objective == null` form `ServerScoreboard.setDisplayObjective` sends.
     #[must_use]
     pub(crate) fn display_objective(slot: CoreDisplaySlot, objective: Option<&str>) -> Self {
         Self::DisplayObjective(match objective {
@@ -244,13 +102,51 @@ impl ScoreboardPacket {
         })
     }
 
-    /// Builds the team-add packet for a full-state sync.
+    /// Vanilla `ServerScoreboard.onTeamAdded`:
+    /// `ClientboundSetPlayerTeamPacket.createAddOrModifyPacket(team, true)`.
     #[must_use]
     pub(crate) fn team_add(name: &str, team: &PlayerTeam) -> Self {
         Self::Team(CSetPlayerTeam::add(
             name.to_owned(),
             team_parameters(team),
             team.players().iter().cloned().collect(),
+        ))
+    }
+
+    /// Vanilla `ServerScoreboard.onTeamChanged`:
+    /// `ClientboundSetPlayerTeamPacket.createAddOrModifyPacket(team, false)`.
+    #[must_use]
+    pub(crate) fn team_change(name: &str, team: &PlayerTeam) -> Self {
+        Self::Team(CSetPlayerTeam::change(
+            name.to_owned(),
+            team_parameters(team),
+        ))
+    }
+
+    /// Vanilla `ServerScoreboard.onTeamRemoved`:
+    /// `ClientboundSetPlayerTeamPacket.createRemovePacket(team)`.
+    #[must_use]
+    pub(crate) fn team_remove(name: &str) -> Self {
+        Self::Team(CSetPlayerTeam::remove(name.to_owned()))
+    }
+
+    /// Vanilla `ServerScoreboard.addPlayerToTeam`:
+    /// `createPlayerPacket(team, player, Action.ADD)`.
+    #[must_use]
+    pub(crate) fn team_player_add(name: &str, player: &str) -> Self {
+        Self::Team(CSetPlayerTeam::join(
+            name.to_owned(),
+            vec![player.to_owned()],
+        ))
+    }
+
+    /// Vanilla `ServerScoreboard.removePlayerFromTeam`:
+    /// `createPlayerPacket(team, player, Action.REMOVE)`.
+    #[must_use]
+    pub(crate) fn team_player_remove(name: &str, player: &str) -> Self {
+        Self::Team(CSetPlayerTeam::leave(
+            name.to_owned(),
+            vec![player.to_owned()],
         ))
     }
 
@@ -266,24 +162,13 @@ impl ScoreboardPacket {
     }
 }
 
-fn score_packet(
-    owner: &str,
-    objective: &str,
-    score: &ScoreState,
-    state: &PersistentScoreboard,
-) -> CSetScore {
-    let number_format = score.number_format.as_ref().or_else(|| {
-        state
-            .objectives
-            .get(objective)
-            .and_then(|objective| objective.number_format.as_ref())
-    });
+fn score_packet(owner: &str, objective: &str, score: &ScoreState) -> CSetScore {
     CSetScore::new(
         owner.to_owned(),
         objective.to_owned(),
         score.value,
         score.display.clone(),
-        wire_number_format(number_format),
+        wire_number_format(score.number_format.as_ref()),
     )
 }
 

@@ -54,3 +54,55 @@ impl ReadFrom for SCookieResponse {
         Ok(Self { key, payload })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use steel_utils::serial::{ReadFrom as _, WriteTo as _};
+
+    use super::*;
+
+    #[test]
+    fn cookie_response_reads_present_payload() {
+        let mut bytes = Vec::new();
+        Identifier::vanilla_static("brand")
+            .write(&mut bytes)
+            .expect("key should encode");
+        bytes.push(1);
+        bytes.push(3);
+        bytes.extend_from_slice(b"abc");
+
+        let packet = SCookieResponse::read(&mut Cursor::new(&bytes[..])).expect("should decode");
+
+        assert_eq!(packet.key, Identifier::vanilla_static("brand"));
+        assert_eq!(packet.payload.as_deref(), Some(&b"abc"[..]));
+    }
+
+    #[test]
+    fn cookie_response_reads_absent_payload() {
+        let mut bytes = Vec::new();
+        Identifier::vanilla_static("brand")
+            .write(&mut bytes)
+            .expect("key should encode");
+        bytes.push(0);
+
+        let packet = SCookieResponse::read(&mut Cursor::new(&bytes[..])).expect("should decode");
+
+        assert!(packet.payload.is_none());
+    }
+
+    #[test]
+    fn cookie_response_rejects_payload_over_the_vanilla_limit() {
+        let mut bytes = Vec::new();
+        Identifier::vanilla_static("brand")
+            .write(&mut bytes)
+            .expect("key should encode");
+        bytes.push(1);
+        VarInt((MAX_COOKIE_PAYLOAD_SIZE + 1) as i32)
+            .write(&mut bytes)
+            .expect("length should encode");
+
+        assert!(SCookieResponse::read(&mut Cursor::new(&bytes[..])).is_err());
+    }
+}

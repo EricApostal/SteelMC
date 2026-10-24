@@ -261,6 +261,9 @@ impl Server {
             // Vanilla `ServerBossEvent` broadcasts from inside `/bossbar`; Steel delivers the
             // queued operations once per tick, after commands and joins.
             crate::entity::boss::custom::tick_custom_boss_events(&self);
+            // Vanilla `ServerScoreboard` buffers per-domain score/team updates during the
+            // tick and flushes them here, next to the boss-bar operations.
+            crate::scoreboard::tick_scoreboards(&self);
 
             {
                 let server = Arc::clone(&self);
@@ -326,19 +329,6 @@ impl Server {
             .then(|| TabListTickStats::capture(&tick_manager))
     }
 
-    async fn autosave_command_data(&self) {
-        tracing::debug!("Command data autosave started");
-        let results = self.save_command_data().await;
-        match results.scoreboards {
-            Ok(saved) => tracing::debug!(saved, "Domain scoreboard autosave completed"),
-            Err(error) => tracing::error!(%error, "Domain scoreboard autosave failed"),
-        }
-        match results.storage {
-            Ok(saved) => tracing::debug!(saved, "Domain command-storage autosave completed"),
-            Err(error) => tracing::error!(%error, "Domain command-storage autosave failed"),
-        }
-    }
-
     fn tick_command_data_autosave(
         self: &Arc<Self>,
         next_autosave: &mut Instant,
@@ -346,19 +336,22 @@ impl Server {
     ) {
         while let Some(result) = saves.try_join_next() {
             if let Err(error) = result {
-                log::error!("Command data autosave task failed: {error}");
+                log::error!("Autosave task failed: {error}");
             }
         }
         if Instant::now() < *next_autosave {
             return;
         }
         if saves.is_empty() {
+            // Vanilla `MinecraftServer.autoSave`: `saveEverything(true, false, false)`.
+            // `Server::autosave` runs the save on the blocking pool because
+            // `World::cleanup` is not `Send`.
             let server = Arc::clone(self);
             saves.spawn(async move {
-                server.autosave_command_data().await;
+                server.autosave().await;
             });
         } else {
-            tracing::warn!("Skipping command data autosave while the previous save runs");
+            tracing::warn!("Skipping autosave while the previous save runs");
         }
         *next_autosave = Instant::now() + COMMAND_DATA_AUTOSAVE_INTERVAL;
     }

@@ -3,10 +3,10 @@
 //!
 //! Scope: the entity shell (synced dancing/duplication flags, single-slot
 //! `InventoryCarrier`, duplication cooldown, item give/take interaction,
-//! inventory pickup, sounds), the vanilla AI-step upkeep and the `AllayAi`
-//! brain provider in [`brain`]. The noteblock/jukebox vibration listeners and
-//! the flying navigation are **not** implemented here; they are listed as gaps
-//! in the wave report.
+//! inventory pickup, sounds), the vanilla `FlyingPathNavigation` (installed as
+//! `NavigationKind::Fly`), the vanilla AI-step upkeep and the `AllayAi` brain
+//! provider in [`brain`]. The noteblock/jukebox vibration listeners are **not**
+//! implemented here; they are listed as gaps in the wave report.
 
 pub(crate) mod brain;
 
@@ -37,6 +37,7 @@ use uuid::Uuid;
 use crate::behavior::InteractionResult;
 use crate::entity::ai::brain::Brain;
 use crate::entity::ai::brain::memory::module_type as mem;
+use crate::entity::ai::navigation::NavigationKind;
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::objects::items::ItemEntity;
 use crate::entity::npc::inventory_carrier::InventoryCarrier;
@@ -56,6 +57,10 @@ const ITEM_PICKUP_REACH: DVec3 = DVec3::new(1.0, 1.0, 1.0);
 const DEFAULT_DUPLICATION_COOLDOWN: i64 = 0;
 /// Vanilla `Allay.DUPLICATION_COOLDOWN_TICKS`.
 const DUPLICATION_COOLDOWN_TICKS: i64 = 6000;
+
+/// Vanilla `Allay.createNavigation` installs a 48-block required path length.
+const ALLAY_REQUIRED_PATH_LENGTH: f32 = 48.0;
+
 /// Vanilla `Allay.MAX_NOTEBLOCK_DISTANCE`.
 const MAX_NOTEBLOCK_DISTANCE: f64 = 1024.0;
 /// Vanilla `Allay.createAttributes` movement-speed attribute default (`0.1`).
@@ -113,9 +118,20 @@ impl AllayEntity {
     fn new_with_base(base: EntityBase, entity_type: EntityTypeRef) -> Self {
         let living_base = LivingEntityBase::new(entity_type);
         let mob_base = MobBase::new();
-        // Vanilla `Allay.createNavigation` -> `FlyingPathNavigation`
+        // Vanilla `Allay.createNavigation` -> `FlyingPathNavigation` with door
+        // opening disabled, floating enabled and a 48-block required path length
         // (`Allay.java:136`).
-        mob_base.navigation().lock().set_flying(true);
+        {
+            let mut navigation = mob_base.navigation().lock();
+            navigation.set_kind(NavigationKind::Fly);
+            navigation.set_can_open_doors(false);
+            navigation.set_can_float(true);
+            let follow_range = living_base
+                .attributes()
+                .lock()
+                .required_value(vanilla_attributes::FOLLOW_RANGE);
+            navigation.set_required_path_length(ALLAY_REQUIRED_PATH_LENGTH, follow_range);
+        }
         let mut entity_data = AllayEntityData::new();
         living_base.initialize_synced_data(&mut entity_data);
 

@@ -231,7 +231,12 @@ impl Player {
         self.sync_entity_data();
         self.award_custom_stat(slept_in_stat);
 
-        // TODO: trigger CriteriaTriggers.SLEPT_IN_BED once the foundation for advancements exist.
+        // Vanilla `ServerPlayer.startSleepInBed` raises `SLEPT_IN_BED` when the bed
+        // rule allows setting the spawn point (`canSetSpawn`), right after the
+        // slept-in stat.
+        if can_set_spawn {
+            crate::player::advancement::triggers::raise_slept_in_bed(self);
+        }
         if !world.can_sleep_through_nights() {
             self.send_overlay_message(
                 &TranslatedMessage {

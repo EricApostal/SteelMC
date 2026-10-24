@@ -7,13 +7,14 @@ mod bossbar;
 mod chase;
 mod clear;
 mod clone;
+mod compute;
 mod damage;
 mod data;
 mod datapack;
 mod debug;
 mod defaultgamemode;
-mod difficulty;
 mod dialog;
+mod difficulty;
 mod domain;
 mod effect;
 mod enchant;
@@ -29,6 +30,7 @@ mod gamerule;
 mod give;
 mod help;
 mod invsee;
+mod item;
 mod jfr;
 mod kick;
 mod kill;
@@ -41,7 +43,9 @@ mod operator;
 mod particle;
 mod perf;
 mod perms;
+mod place;
 mod playsound;
+mod posteffect;
 mod raid;
 mod random;
 mod recipe;
@@ -86,7 +90,7 @@ use super::{
     CommandRegistry,
     execution::CommandSource,
     registration::{
-        CommandDispatcherBuilder, CommandRegistrationError,
+        CommandDispatcherBuilder, CommandRegistration, CommandRegistrationError,
         ENTITY_SELECTOR_ADVANCED_PERMISSION_KEY, ENTITY_SELECTOR_PERMISSION_KEY,
         RegisteredCommandDispatcher,
     },
@@ -100,6 +104,107 @@ pub(crate) fn create_dispatcher()
     create_registered_dispatcher(CommandRegistry::new()).map(|registered| registered.dispatcher)
 }
 
+/// Every built-in command declaration, in graph order.
+///
+/// This is the single source of truth for which built-ins exist: [`create_registered_dispatcher`]
+/// builds the graph from it, and the graph-shape test derives its expected roots from it, so a
+/// declaration cannot silently disagree with the dispatcher.
+fn builtin_registrations()
+-> Result<Vec<CommandRegistration<CommandSource>>, CommandRegistrationError> {
+    Ok(vec![
+        advancement::registration(),
+        attribute::registration(),
+        ban::registration(),
+        ban::ban_ip_registration(),
+        ban::ban_list_registration(),
+        ban::pardon_registration(),
+        ban::pardon_ip_registration(),
+        bossbar::registration(),
+        chase::registration(),
+        clear::registration(),
+        clone::registration(),
+        compute::registration(),
+        damage::registration(),
+        data::registration(),
+        datapack::registration(),
+        debug::registration(),
+        defaultgamemode::registration(),
+        difficulty::registration(),
+        dialog::registration(),
+        domain::registration(),
+        effect::registration(),
+        enchant::registration(),
+        execute::registration(),
+        experience::registration(),
+        fill::registration(),
+        fillbiome::registration(),
+        fly::registration(),
+        forceload::registration(),
+        function::registration(),
+        gamemode::registration()?,
+        gamerule::registration(),
+        give::registration(),
+        help::registration(),
+        invsee::registration()?,
+        item::registration(),
+        jfr::registration(),
+        kick::registration(),
+        kill::registration(),
+        list::registration(),
+        locate::registration(),
+        loot::registration(),
+        me::registration(),
+        msg::registration(),
+        operator::deop_registration(),
+        operator::op_registration(),
+        particle::registration(),
+        perf::registration(),
+        perms::registration(),
+        place::registration(),
+        playsound::registration(),
+        posteffect::registration(),
+        raid::registration(),
+        random::registration(),
+        recipe::registration(),
+        reload::registration(),
+        return_command::registration(),
+        ride::registration(),
+        rotate::registration(),
+        save::registration(),
+        save::save_off_registration(),
+        save::save_on_registration(),
+        say::registration(),
+        schedule::registration(),
+        scoreboard::registration(),
+        seed::registration(),
+        setblock::registration(),
+        setidletimeout::registration(),
+        setworldspawn::registration(),
+        spawnpoint::registration(),
+        spectate::registration(),
+        spreadplayers::registration(),
+        stop::registration(),
+        stopsound::registration(),
+        stopwatch::registration(),
+        summon::registration(),
+        swing::registration(),
+        tag::registration(),
+        team::registration(),
+        teammsg::registration(),
+        teleport::registration(),
+        tellraw::registration(),
+        tick::registration(),
+        time::registration(),
+        title::registration(),
+        transfer::registration(),
+        trigger::registration(),
+        version::registration(),
+        weather::registration(),
+        whitelist::registration(),
+        worldborder::registration(),
+    ])
+}
+
 pub(crate) fn create_registered_dispatcher(
     extension_commands: CommandRegistry,
 ) -> Result<RegisteredCommandDispatcher<CommandSource>, CommandRegistrationError> {
@@ -109,97 +214,16 @@ pub(crate) fn create_registered_dispatcher(
     builder.declare_permission(perms::MANAGE_ALL_PERMISSION)?;
     builder.declare_permission(perms::GROUP_ALL_PERMISSION)?;
     builder.declare_permission(perms::METADATA_PERMISSION)?;
-    builder.register(advancement::registration())?;
-    builder.register(attribute::registration())?;
-    builder.register(ban::registration())?;
-    builder.register(ban::ban_ip_registration())?;
-    builder.register(ban::ban_list_registration())?;
-    builder.register(ban::pardon_registration())?;
-    builder.register(ban::pardon_ip_registration())?;
-    builder.register(bossbar::registration())?;
-    builder.register(chase::registration())?;
-    builder.register(clear::registration())?;
-    builder.register(clone::registration())?;
-    builder.register(damage::registration())?;
-    builder.register(data::registration())?;
-    builder.register(datapack::registration())?;
-    builder.register(debug::registration())?;
-    builder.register(defaultgamemode::registration())?;
-    builder.register(difficulty::registration())?;
-    builder.register(dialog::registration())?;
-    builder.register(domain::registration())?;
-    builder.register(effect::registration())?;
-    builder.register(enchant::registration())?;
-    builder.register(execute::registration())?;
-    builder.register(experience::registration())?;
-    builder.register(fill::registration())?;
-    builder.register(fillbiome::registration())?;
-    builder.register(fly::registration())?;
-    builder.register(forceload::registration())?;
-    builder.register(function::registration())?;
-    builder.register(gamemode::registration()?)?;
-    builder.register(gamerule::registration())?;
-    builder.register(give::registration())?;
-    builder.register(help::registration())?;
-    builder.register(invsee::registration()?)?;
-    builder.register(jfr::registration())?;
-    builder.register(kick::registration())?;
-    builder.register(kill::registration())?;
-    builder.register(list::registration())?;
-    builder.register(locate::registration())?;
-    builder.register(loot::registration())?;
-    builder.register(me::registration())?;
-    builder.register(msg::registration())?;
-    builder.register(operator::deop_registration())?;
-    builder.register(operator::op_registration())?;
-    builder.register(particle::registration())?;
-    builder.register(perf::registration())?;
-    builder.register(perms::registration())?;
-    builder.register(playsound::registration())?;
-    builder.register(raid::registration())?;
-    builder.register(random::registration())?;
-    builder.register(recipe::registration())?;
-    builder.register(reload::registration())?;
-    builder.register(return_command::registration())?;
-    builder.register(ride::registration())?;
-    builder.register(rotate::registration())?;
-    builder.register(save::registration())?;
-    builder.register(say::registration())?;
-    builder.register(schedule::registration())?;
-    builder.register(scoreboard::registration())?;
-    builder.register(seed::registration())?;
-    builder.register(setblock::registration())?;
-    builder.register(setidletimeout::registration())?;
-    builder.register(setworldspawn::registration())?;
-    builder.register(spawnpoint::registration())?;
-    builder.register(spectate::registration())?;
-    builder.register(spreadplayers::registration())?;
-    builder.register(stop::registration())?;
-    builder.register(stopsound::registration())?;
-    builder.register(stopwatch::registration())?;
-    builder.register(summon::registration())?;
-    builder.register(swing::registration())?;
-    builder.register(tag::registration())?;
-    builder.register(team::registration())?;
-    builder.register(teammsg::registration())?;
-    builder.register(teleport::registration())?;
-    builder.register(tellraw::registration())?;
-    builder.register(tick::registration())?;
-    builder.register(time::registration())?;
-    builder.register(title::registration())?;
-    builder.register(transfer::registration())?;
-    builder.register(trigger::registration())?;
-    builder.register(version::registration())?;
-    builder.register(weather::registration())?;
-    builder.register(whitelist::registration())?;
-    builder.register(worldborder::registration())?;
+    for registration in builtin_registrations()? {
+        builder.register(registration)?;
+    }
     builder.extend(extension_commands.into_inner())?;
     builder.build_with_permissions()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{create_dispatcher, create_registered_dispatcher};
+    use super::{builtin_registrations, create_dispatcher, create_registered_dispatcher};
     use crate::command::brigadier::ArgumentType;
     use crate::command::execution::SteelArgumentType;
     use crate::command::{
@@ -210,16 +234,26 @@ mod tests {
     use steel_registry::init_vanilla_registry;
     use steel_utils::Identifier;
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one cohesive test keeps the expected command graph shape auditable"
-    )]
     #[test]
     fn first_builtin_slice_has_the_expected_graph_shape() {
         init_vanilla_registry();
-        let Ok(dispatcher) = create_dispatcher() else {
+        let Ok(registered) = create_registered_dispatcher(CommandRegistry::new()) else {
             panic!("built-in commands should register");
         };
+        // The declared registrations are the source of truth for the roots, so adding or
+        // removing a built-in updates the expectation with it instead of leaving a
+        // hand-maintained copy behind to drift (`item` had already gone missing from one).
+        let declared = builtin_registrations()
+            .expect("built-in commands should declare")
+            .iter()
+            .flat_map(|registration| registration.root_names().map(ToOwned::to_owned))
+            .collect::<Vec<_>>();
+        assert!(
+            declared.iter().all(|name| !name.is_empty()),
+            "every declared command owns at least one root"
+        );
+
+        let dispatcher = registered.dispatcher;
         let Some(roots) = dispatcher.children(dispatcher.root()) else {
             panic!("dispatcher root should exist");
         };
@@ -234,98 +268,16 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(
-            names,
-            [
-                "advancement",
-                "attribute",
-                "ban",
-                "ban-ip",
-                "banlist",
-                "pardon",
-                "pardon-ip",
-                "bossbar",
-                "chase",
-                "clear",
-                "clone",
-                "damage",
-                "data",
-                "datapack",
-                "debug",
-                "defaultgamemode",
-                "difficulty",
-                "dialog",
-                "domain",
-                "effect",
-                "enchant",
-                "execute",
-                "experience",
-                "xp",
-                "fill",
-                "fillbiome",
-                "fly",
-                "forceload",
-                "function",
-                "gamemode",
-                "gamerule",
-                "give",
-                "help",
-                "invsee",
-                "jfr",
-                "kick",
-                "kill",
-                "list",
-                "locate",
-                "loot",
-                "me",
-                "msg",
-                "tell",
-                "w",
-                "deop",
-                "op",
-                "particle",
-                "perf",
-                "perms",
-                "playsound",
-                "raid",
-                "random",
-                "recipe",
-                "reload",
-                "return",
-                "ride",
-                "rotate",
-                "save-all",
-                "say",
-                "schedule",
-                "scoreboard",
-                "seed",
-                "setblock",
-                "setidletimeout",
-                "setworldspawn",
-                "spawnpoint",
-                "spectate",
-                "spreadplayers",
-                "stop",
-                "stopsound",
-                "stopwatch",
-                "summon",
-                "swing",
-                "tag",
-                "team",
-                "teammsg",
-                "tm",
-                "teleport",
-                "tp",
-                "tellraw",
-                "tick",
-                "time",
-                "title",
-                "transfer",
-                "trigger",
-                "version",
-                "weather",
-                "whitelist",
-                "worldborder",
-            ]
+            names, declared,
+            "the dispatcher must expose exactly the declared roots, in declaration order"
+        );
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            names.len(),
+            "no two registrations may claim the same root: {names:?}"
         );
 
         let Some(list) = roots.iter().copied().find(|root| {

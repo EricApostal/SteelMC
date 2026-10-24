@@ -418,6 +418,13 @@ impl Server {
             online_mode: self.config.online_mode,
             enforces_secure_chat: self.enforces_secure_chat(),
         });
+
+        // Vanilla `PlayerList.placeNewPlayer`: the synchronized recipe property sets and
+        // stonecutter options are sent with the first play packets, before the player's
+        // own recipe-book contents arrive.
+        if let Some(recipes) = crate::player::recipe_book::update_recipes_packet() {
+            player.send_packet(recipes.clone());
+        }
     }
 
     /// Gets all the players on the server

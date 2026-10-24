@@ -2,7 +2,9 @@
 //!
 //! Mirrors `ReloadCommand`: re-reads every enabled data pack and re-runs the
 //! reload listeners, then reports `commands.reload.success`; a listener failure
-//! reports `commands.reload.failure` and leaves the previous state installed.
+//! reports `commands.reload.failure` and leaves the previous state installed. On
+//! success it also pushes the reloaded state to every client
+//! ([`datapack::resend_clients`]), matching `PlayerList.reloadResources`.
 //!
 //! Vanilla runs the reload on the server thread through
 //! `MinecraftServer.reloadResources`, so a heavy pack can hitch one tick. Steel
@@ -41,12 +43,14 @@ fn reload(context: &SteelCommandContext<CommandSource>) -> Result<i32, CommandSy
         Ok(summary) => {
             tracing::info!(
                 packs = summary.packs_loaded,
+                pack_ids = ?summary.pack_ids,
                 new_packs = ?summary.new_packs,
                 functions = summary.functions_loaded,
                 tags = summary.tags_loaded,
                 elapsed = ?summary.elapsed,
                 "Reloaded data packs"
             );
+            datapack::resend_clients(source.server());
             // Vanilla returns 0: the reload itself is asynchronous feedback.
             Ok(0)
         }

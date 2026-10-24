@@ -94,7 +94,7 @@ impl WritableBookContent {
 
     /// Vanilla `WritableBookContent.withReplacedPages`.
     #[must_use]
-    pub fn with_replaced_pages(&self, pages: Vec<Filterable<String>>) -> Self {
+    pub const fn with_replaced_pages(&self, pages: Vec<Filterable<String>>) -> Self {
         Self { pages }
     }
 

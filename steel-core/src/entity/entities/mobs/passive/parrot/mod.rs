@@ -40,6 +40,7 @@ use crate::entity::ai::goal::{
     FloatGoal, FollowMobGoal, FollowOwnerGoal, Goal, GoalControls, LookAtPlayerGoal, PanicGoal,
     ShoulderRiding, SitWhenOrderedToGoal, Tameable,
 };
+use crate::entity::ai::navigation::NavigationKind;
 use crate::entity::ai::path::PathType;
 use crate::entity::damage::DamageSource;
 use crate::entity::leash::Leashable as _;
@@ -480,9 +481,14 @@ impl ParrotEntity {
     fn new_with_base(base: EntityBase, entity_type: EntityTypeRef) -> Self {
         let living_base = LivingEntityBase::new(entity_type);
         let mob_base = MobBase::new();
-        // Vanilla `Parrot.createNavigation` -> `FlyingPathNavigation`
-        // (`Parrot.java:183`).
-        mob_base.navigation().lock().set_flying(true);
+        // Vanilla `Parrot.createNavigation` -> `FlyingPathNavigation` with door
+        // opening disabled and floating enabled (`Parrot.java:183`).
+        {
+            let mut navigation = mob_base.navigation().lock();
+            navigation.set_kind(NavigationKind::Fly);
+            navigation.set_can_open_doors(false);
+            navigation.set_can_float(true);
+        }
         let ageable_base = AgeableMobBase::new();
         let animal_base = AnimalBase::new();
         AnimalBase::initialize_pathfinding_malus(&mob_base);
@@ -673,11 +679,11 @@ impl ParrotEntity {
 
     /// Vanilla `TamableAnimal.tame`.
     ///
-    /// GAP: `CriteriaTriggers.TAME_ANIMAL` is not fired; Steel has no tame-animal
-    /// advancement trigger yet.
+    /// Raises `TAME_ANIMAL` for the taming player, matching vanilla.
     pub fn tame(&self, player: &Player) {
         self.set_tame(true);
         self.set_owner_uuid(Some(player.uuid()));
+        crate::player::advancement::triggers::raise_tame_animal(player, self);
     }
 
     /// Vanilla `Parrot.isFlying`.

@@ -29,8 +29,9 @@ use crate::behavior::blocks::LightningRodBlock;
 use crate::behavior::blocks::WeatherState;
 use crate::behavior::waxables::get_normal_from_waxed_variant;
 use crate::behavior::weathering::{get_weather_state, previous_copper_stage};
+use crate::entity::entities::mobs::passive::equine::SkeletonHorseEntity;
 use crate::entity::entities::objects::technical::LightningBoltEntity;
-use crate::entity::{ENTITIES, SharedEntity, next_entity_id};
+use crate::entity::{AgeableMob as _, ENTITIES, SharedEntity, next_entity_id};
 use crate::poi::OccupationStatus;
 use crate::world::game_event::GameEventContext;
 use crate::world::{HeightmapType, LevelReader, World};
@@ -64,15 +65,39 @@ impl World {
         }
 
         let is_trap = self.get_game_rule(&SPAWN_MOBS)
-            && rand::random::<f64>() < f64::from(self.effective_difficulty()) * 0.01
+            && rand::random::<f64>()
+                < f64::from(self.current_difficulty_at(pos).effective_difficulty()) * 0.01
             && !self
                 .get_block_state(pos.below())
                 .get_block()
                 .has_tag(&BlockTag::LIGHTNING_RODS);
 
-        // Vanilla also spawns a trap skeleton horse here. Steel has no skeleton-horse entity
-        // factory yet, so only the visual-only bolt is spawned for a trap strike.
+        if is_trap {
+            self.spawn_lightning_trap_horse(pos);
+        }
+
         let _ = self.spawn_lightning_bolt(pos, is_trap);
+    }
+
+    /// Vanilla `ServerLevel.tickThunder`'s `SKELETON_HORSE` creation (`EntitySpawnReason.EVENT`).
+    ///
+    /// The trap horse sits at the integer block coordinates, not the block centre, matching
+    /// `setPos(pos.getX(), pos.getY(), pos.getZ())`.
+    fn spawn_lightning_trap_horse(self: &Arc<Self>, pos: BlockPos) {
+        let Some(entity) = ENTITIES.create(
+            &vanilla_entities::SKELETON_HORSE,
+            next_entity_id(),
+            DVec3::new(f64::from(pos.x()), f64::from(pos.y()), f64::from(pos.z())),
+            Arc::downgrade(self),
+        ) else {
+            return;
+        };
+        let Some(horse) = entity.as_ref().downcast_ref::<SkeletonHorseEntity>() else {
+            return;
+        };
+        horse.set_trap(true);
+        horse.set_age(0);
+        let _ = self.try_add_entity(entity);
     }
 
     /// Vanilla `ServerLevel.findLightningTargetAround`.
@@ -84,26 +109,37 @@ impl World {
             return rod;
         }
 
-        let search = WorldAabb::new(
-            f64::from(center.x()) - 3.0,
-            f64::from(center.y()),
-            f64::from(center.z()) - 3.0,
-            f64::from(center.x()) + 4.0,
-            f64::from(self.max_y_exclusive()) + 1.0,
-            f64::from(center.z()) + 4.0,
-        );
+        let search = Self::lightning_target_area(center, self.max_y_exclusive());
         let candidates = self.get_entities_in_aabb_matching(&search, |entity| {
-            entity.is_alive() && self.can_see_sky(entity.block_position())
+            entity.is_alive()
+                && entity.is_living_entity()
+                && self.can_see_sky(entity.block_position())
         });
         if !candidates.is_empty() {
             let index = rand::random_range(0..candidates.len());
             return candidates[index].block_position();
         }
 
-        if center.y() == self.min_y() {
+        if center.y() == self.min_y() - 1 {
             return center.above().above();
         }
         center
+    }
+
+    /// Vanilla `AABB.encapsulatingFullBlocks(center, center.atY(maxY + 1)).inflate(3.0)`.
+    ///
+    /// `max_y_exclusive` is vanilla's `getMaxY() + 1`, so the inflated box reaches
+    /// four blocks past the exclusive build height.
+    #[must_use]
+    fn lightning_target_area(center: BlockPos, max_y_exclusive: i32) -> WorldAabb {
+        WorldAabb::new(
+            f64::from(center.x()) - 3.0,
+            f64::from(center.y()) - 3.0,
+            f64::from(center.z()) - 3.0,
+            f64::from(center.x()) + 4.0,
+            f64::from(max_y_exclusive) + 4.0,
+            f64::from(center.z()) + 4.0,
+        )
     }
 
     /// Vanilla `ServerLevel.findLightningRod`: the nearest lightning rod whose top is exposed.
@@ -270,6 +306,11 @@ impl World {
     }
 
     /// Vanilla `LightningBolt.randomStepCleaningCopper`: one random cube probe.
+    ///
+    /// Vanilla only matches `instanceof WeatheringCopper`, and waxed copper blocks are
+    /// plain `Block`s that do not implement that interface, so a waxed block is never
+    /// cleaned by the walk (only the directly struck block's waxed/unwaxed state gates
+    /// whether the walk runs at all).
     fn random_step_cleaning_copper(self: &Arc<Self>, pos: BlockPos) -> Option<BlockPos> {
         for _ in 0..10 {
             let candidate = pos.offset(
@@ -278,19 +319,18 @@ impl World {
                 rand::random_range(-1..2),
             );
             let block = self.get_block_state(candidate).get_block();
-            let cleaned =
-                previous_copper_stage(block).or_else(|| get_normal_from_waxed_variant(block));
-            if let Some(cleaned) = cleaned {
-                self.set_block(candidate, cleaned.default_state(), UpdateFlags::UPDATE_ALL);
-                // Vanilla emits level event 3002 (`PARTICLES_ELECTRIC_SPARK`) for cleaned copper.
-                self.level_event(
-                    steel_registry::level_events::PARTICLES_ELECTRIC_SPARK,
-                    candidate,
-                    -1,
-                    None,
-                );
-                return Some(candidate);
-            }
+            let Some(cleaned) = previous_copper_stage(block) else {
+                continue;
+            };
+            self.set_block(candidate, cleaned.default_state(), UpdateFlags::UPDATE_ALL);
+            // Vanilla emits level event 3002 (`PARTICLES_ELECTRIC_SPARK`) for cleaned copper.
+            self.level_event(
+                steel_registry::level_events::PARTICLES_ELECTRIC_SPARK,
+                candidate,
+                -1,
+                None,
+            );
+            return Some(candidate);
         }
         None
     }
@@ -307,22 +347,151 @@ impl World {
             (chunk_pos.0.y << 4) + (val >> 8 & 15),
         )
     }
+}
 
-    /// Vanilla `DifficultyInstance.getEffectiveDifficulty` with Steel's available inputs.
-    ///
-    /// Deliberate divergence: chunk inhabited time is not tracked for this calculation and the
-    /// moon-phase attribute is not extracted yet, so `localGameTime` and `moonBrightness` use
-    /// vanilla's neutral values.
-    fn effective_difficulty(&self) -> f32 {
-        let base = self.difficulty();
-        if base == steel_utils::types::Difficulty::Peaceful {
-            return 0.0;
+#[cfg(test)]
+mod tests {
+    use glam::DVec3;
+
+    use steel_registry::init_vanilla_registry;
+
+    use super::*;
+    use crate::behavior::init_behaviors;
+    use crate::entity::entities::PigEntity;
+    use crate::test_support::{TestEntity, fresh_test_world, insert_ready_full_chunk};
+
+    /// Vanilla `ServerLevel.findLightningTargetAround` searches
+    /// `AABB.encapsulatingFullBlocks(center, center.atY(getMaxY() + 1)).inflate(3.0)`.
+    #[test]
+    fn lightning_target_area_matches_vanilla_inflated_full_block_box() {
+        let area = World::lightning_target_area(BlockPos::new(8, 64, 8), 320);
+        assert_eq!(area.min_x(), 5.0);
+        assert_eq!(area.min_y(), 61.0);
+        assert_eq!(area.min_z(), 5.0);
+        assert_eq!(area.max_x(), 12.0);
+        assert_eq!(area.max_y(), 324.0);
+        assert_eq!(area.max_z(), 12.0);
+    }
+
+    /// Vanilla only strikes `LivingEntity`s, so a non-living entity inside the search box
+    /// must not become the target.
+    #[test]
+    fn lightning_target_ignores_non_living_entities() {
+        init_vanilla_registry();
+        init_behaviors();
+        let fixture = fresh_test_world("lightning_target_non_living");
+        let world = &fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+
+        // A lone stone block puts MOTION_BLOCKING at y = 64 for the queried column.
+        world.set_block(
+            BlockPos::new(8, 63, 8),
+            vanilla_blocks::STONE.default_state(),
+            UpdateFlags::UPDATE_ALL,
+        );
+
+        let boat = TestEntity::shared(
+            1,
+            DVec3::new(10.5, 64.0, 10.5),
+            Arc::downgrade(world),
+            &vanilla_entities::MINECART,
+        );
+        world.try_add_entity(boat).expect("boat must be added");
+
+        assert_eq!(
+            world.find_lightning_target_around(BlockPos::new(8, 64, 8)),
+            BlockPos::new(8, 64, 8),
+        );
+    }
+
+    /// Vanilla's search box reaches three blocks below the heightmap position, so a
+    /// living entity there is a valid target.
+    #[test]
+    fn lightning_target_includes_living_entities_below_the_heightmap_position() {
+        init_vanilla_registry();
+        init_behaviors();
+        let fixture = fresh_test_world("lightning_target_below_heightmap");
+        let world = &fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+
+        world.set_block(
+            BlockPos::new(8, 63, 8),
+            vanilla_blocks::STONE.default_state(),
+            UpdateFlags::UPDATE_ALL,
+        );
+
+        let pig: SharedEntity = Arc::new(PigEntity::new(
+            &vanilla_entities::PIG,
+            2,
+            DVec3::new(8.5, 62.0, 8.5),
+            Arc::downgrade(world),
+        ));
+        world.try_add_entity(pig).expect("pig must be added");
+
+        assert_eq!(
+            world.find_lightning_target_around(BlockPos::new(8, 64, 8)),
+            BlockPos::new(8, 62, 8),
+        );
+    }
+
+    /// Vanilla `randomStepCleaningCopper` only matches `WeatheringCopper`; waxed copper is
+    /// a plain `Block` there and must be left untouched by the walk.
+    #[test]
+    fn copper_walk_does_not_unwax_waxed_blocks() {
+        init_vanilla_registry();
+        init_behaviors();
+        let fixture = fresh_test_world("lightning_copper_walk_waxed");
+        let world = &fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+
+        let center = BlockPos::new(8, 64, 8);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    world.set_block(
+                        center.offset(dx, dy, dz),
+                        vanilla_blocks::WAXED_COPPER_BLOCK.default_state(),
+                        UpdateFlags::UPDATE_ALL,
+                    );
+                }
+            }
         }
 
-        let total_game_time = self.game_time() as f32;
-        let mut scale = 0.75_f32;
-        let global_scale = ((total_game_time - 72_000.0) / 1_440_000.0).clamp(0.0, 1.0) * 0.25;
-        scale += global_scale;
-        scale * (base as u8) as f32
+        assert_eq!(world.random_step_cleaning_copper(center), None);
+        assert_eq!(
+            world.get_block_state(center).get_block(),
+            &vanilla_blocks::WAXED_COPPER_BLOCK,
+        );
+    }
+
+    /// The walk still de-oxidises ordinary weathering copper one stage.
+    #[test]
+    fn copper_walk_deoxidises_weathering_copper() {
+        init_vanilla_registry();
+        init_behaviors();
+        let fixture = fresh_test_world("lightning_copper_walk_weathering");
+        let world = &fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+
+        let center = BlockPos::new(8, 64, 8);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    world.set_block(
+                        center.offset(dx, dy, dz),
+                        vanilla_blocks::EXPOSED_COPPER.default_state(),
+                        UpdateFlags::UPDATE_ALL,
+                    );
+                }
+            }
+        }
+
+        let cleaned = world
+            .random_step_cleaning_copper(center)
+            .expect("exposed copper must be cleaned");
+        assert_eq!(
+            world.get_block_state(cleaned).get_block(),
+            &vanilla_blocks::COPPER_BLOCK,
+        );
     }
 }

@@ -427,15 +427,11 @@ impl PlayerDataFile {
     }
 
     fn into_persistent(self) -> io::Result<PersistentPlayerData> {
-        if self.data_version != PLAYER_DATA_VERSION {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "unsupported player data payload version {}",
-                    self.data_version
-                ),
-            ));
-        }
+        crate::datafixer::ensure_steel_current(
+            i64::from(self.data_version).max(0) as u64,
+            u64::from(PLAYER_DATA_VERSION),
+            "player data payload",
+        )?;
 
         let mut inventory = Vec::with_capacity(self.inventory.len());
         for slot in self.inventory {
@@ -709,11 +705,10 @@ fn decode_file(
         ));
     }
     let version = u16::from_le_bytes([bytes[4], bytes[5]]);
-    if version != expected_version {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("unsupported player data storage version {version}"),
-        ));
-    }
+    crate::datafixer::ensure_steel_current(
+        u64::from(version),
+        u64::from(expected_version),
+        "player data file",
+    )?;
     zstd::decode_all(&bytes[6..])
 }

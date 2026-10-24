@@ -119,7 +119,7 @@ impl Enchantment {
 
     /// Vanilla `Enchantment.getMaxLevel`.
     #[must_use]
-    pub fn get_max_level(&self) -> i32 {
+    pub const fn get_max_level(&self) -> i32 {
         self.max_level as i32
     }
 

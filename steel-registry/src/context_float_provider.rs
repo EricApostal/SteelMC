@@ -126,17 +126,19 @@ pub enum ContextFloatProvider {
         /// Operand.
         input: &'static ContextFloatProvider,
     },
-    /// `minecraft:sqrt`: the square root of the input.
+    /// `minecraft:sqrt`: the square root of the input (`Mth.sqrt`).
     SquareRoot {
         /// Operand.
         input: &'static ContextFloatProvider,
     },
-    /// `minecraft:sin`: the sine of the input, in radians.
+    /// `minecraft:sin`: the sine of the input, in radians (`Mth.sin`, the
+    /// 65536-entry lookup table rather than the FPU sine).
     Sine {
         /// Operand.
         input: &'static ContextFloatProvider,
     },
-    /// `minecraft:cos`: the cosine of the input, in radians.
+    /// `minecraft:cos`: the cosine of the input, in radians (`Mth.cos`, the
+    /// same lookup table phase-shifted by a quarter turn).
     Cosine {
         /// Operand.
         input: &'static ContextFloatProvider,
@@ -262,7 +264,7 @@ impl ContextFloatProvider {
                     let value = input.get_float_unsafe(ctx);
                     sum_of_squares += value * value;
                 }
-                sum_of_squares.sqrt()
+                mth_sqrt(sum_of_squares)
             }
             Self::Difference { left, right } => {
                 left.get_float_unsafe(ctx) - right.get_float_unsafe(ctx)
@@ -284,7 +286,8 @@ impl ContextFloatProvider {
                 if base == 0.0 && exponent == 0.0 {
                     f32::NAN
                 } else {
-                    base.powf(exponent)
+                    // Vanilla `Math.pow(double, double)` then `d2f`.
+                    f64::from(base).powf(f64::from(exponent)) as f32
                 }
             }
             Self::Negate { input } => -input.get_float_unsafe(ctx),
@@ -300,9 +303,9 @@ impl ContextFloatProvider {
                     value.ceil()
                 }
             }
-            Self::SquareRoot { input } => input.get_float_unsafe(ctx).sqrt(),
-            Self::Sine { input } => input.get_float_unsafe(ctx).sin(),
-            Self::Cosine { input } => input.get_float_unsafe(ctx).cos(),
+            Self::SquareRoot { input } => mth_sqrt(input.get_float_unsafe(ctx)),
+            Self::Sine { input } => steel_math::trig::sin(f64::from(input.get_float_unsafe(ctx))),
+            Self::Cosine { input } => steel_math::trig::cos(f64::from(input.get_float_unsafe(ctx))),
             Self::FromInt { input } => input.get_int_unsafe(ctx).map_or(0.0, |value| value as f32),
             Self::Conditional {
                 condition,
@@ -325,7 +328,7 @@ impl ContextFloatProvider {
                 }
                 selected.get_float_unsafe(ctx)
             }
-            Self::WeightedList(distribution) => match weighted_pick(*distribution, &mut *ctx.rng) {
+            Self::WeightedList(distribution) => match weighted_pick(distribution, &mut *ctx.rng) {
                 Some(provider) => provider.get_float_unsafe(ctx),
                 None => 0.0,
             },
@@ -411,6 +414,14 @@ fn mth_next_float(rng: &mut impl rand::Rng, min: f32, max: f32) -> f32 {
     } else {
         rng.random::<f32>() * (max - min) + min
     }
+}
+
+/// Vanilla `Mth.sqrt(float)`: `(float) Math.sqrt((double) value)`.
+///
+/// The double-precision intermediate matters: a direct `f32::sqrt` can differ
+/// from vanilla in the last bit through double rounding.
+fn mth_sqrt(value: f32) -> f32 {
+    f64::from(value).sqrt() as f32
 }
 
 /// Vanilla `Mth.ceil(float)`: the `(int)` cast then a bump when the value is

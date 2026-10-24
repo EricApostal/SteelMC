@@ -50,10 +50,10 @@ impl SculkCatalystBlock {
 
     /// Vanilla `CatalystListener.bloom`: pulse the catalyst for [`SCULK_CATALYST_PULSE_TICKS`],
     /// then play `SCULK_CATALYST_BLOOM` at `2.0` volume with the vanilla pitch jitter.
+    ///
+    /// Vanilla has no `PULSE` guard: every qualifying death re-runs the whole pulse (state write,
+    /// re-scheduled tick, particles, sound).
     pub fn bloom(block: BlockRef, world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
-        if state.get_value(BLOOM) {
-            return;
-        }
         world.set_block(pos, state.set_value(BLOOM, true), UpdateFlags::UPDATE_ALL);
         world.schedule_block_tick_default(pos, block, SCULK_CATALYST_PULSE_TICKS);
         // Vanilla `SculkCatalystBlockEntity.CatalystListener.bloom`.
@@ -127,5 +127,58 @@ impl BlockBehavior for SculkCatalystBlock {
             // Vanilla `SculkCatalystBlock`: `ConstantInt.of(5)`.
             try_drop_experience(world, pos, tool, &IntProvider::Constant(5));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use steel_registry::{init_vanilla_registry, vanilla_blocks};
+    use steel_utils::ChunkPos;
+    use steel_utils::types::UpdateFlags;
+
+    use super::*;
+    use crate::behavior::init_behaviors;
+    use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
+
+    #[test]
+    fn a_second_death_refreshes_the_bloom_pulse_like_vanilla() {
+        init_vanilla_registry();
+        init_behaviors();
+        let world_fixture = fresh_test_world("sculk_catalyst_bloom");
+        let world = &world_fixture.world;
+        let pos = BlockPos::new(8, 64, 8);
+        insert_ready_full_chunk(world, ChunkPos::from_block_pos(pos));
+        let state = vanilla_blocks::SCULK_CATALYST.default_state();
+        world.set_block(pos, state, UpdateFlags::UPDATE_ALL);
+
+        SculkCatalystBlock::bloom(&vanilla_blocks::SCULK_CATALYST, world, pos, state);
+        assert!(SculkCatalystBlock::is_blooming(world.get_block_state(pos)));
+        assert!(world.has_scheduled_block_tick(pos, &vanilla_blocks::SCULK_CATALYST));
+
+        // Vanilla has no bloom guard, so a second death re-runs the pulse.
+        SculkCatalystBlock::bloom(
+            &vanilla_blocks::SCULK_CATALYST,
+            world,
+            pos,
+            world.get_block_state(pos),
+        );
+        assert!(SculkCatalystBlock::is_blooming(world.get_block_state(pos)));
+    }
+
+    #[test]
+    fn bloom_tick_clears_the_pulse() {
+        init_vanilla_registry();
+        init_behaviors();
+        let world_fixture = fresh_test_world("sculk_catalyst_bloom_tick");
+        let world = &world_fixture.world;
+        let pos = BlockPos::new(8, 64, 8);
+        insert_ready_full_chunk(world, ChunkPos::from_block_pos(pos));
+        let blooming = vanilla_blocks::SCULK_CATALYST
+            .default_state()
+            .set_value(BLOOM, true);
+        world.set_block(pos, blooming, UpdateFlags::UPDATE_ALL);
+
+        SculkCatalystBlock::new(&vanilla_blocks::SCULK_CATALYST).tick(blooming, world, pos);
+        assert!(!SculkCatalystBlock::is_blooming(world.get_block_state(pos)));
     }
 }

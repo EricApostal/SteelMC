@@ -31,7 +31,7 @@ use steel_utils::{BlockPos, BlockStateId, Direction, WorldAabb};
 use text_components::TextComponent;
 use uuid::Uuid;
 
-use steel_protocol::packets::game::{BossBarColor, BossBarOverlay, CBossEvent};
+use steel_protocol::packets::game::{BossBarColor, BossBarOverlay};
 
 use super::event::ServerBossEvent;
 use crate::chunk::heightmap::HeightmapType;
@@ -272,11 +272,6 @@ impl EnderDragonFight {
         self.alive_crystals
     }
 
-    /// Drains queued boss-bar wire packets.
-    pub fn drain_boss_bar_packets(&mut self) -> Vec<CBossEvent> {
-        self.dragon_event.drain_packets()
-    }
-
     /// Vanilla `EnderDragonFight.updateDragon`: feed the live dragon's
     /// health/name into the boss bar.
     pub fn update_dragon(
@@ -297,7 +292,17 @@ impl EnderDragonFight {
     }
 
     /// Vanilla `EnderDragonFight.tick`.
+    ///
+    /// Vanilla `ServerBossEvent` sends from inside its setters; Steel records the same
+    /// operations and delivers them at the end of the level tick, so the bar's visible
+    /// player transitions and progress updates reach clients on the tick that produced
+    /// them, including on the early returns below.
     pub fn tick(&mut self, world: &Arc<World>) {
+        self.tick_fight(world);
+        self.dragon_event.broadcast_pending();
+    }
+
+    fn tick_fight(&mut self, world: &Arc<World>) {
         self.dragon_event.set_visible(!self.dragon_killed);
 
         self.ticks_since_last_player_scan += 1;
@@ -1310,6 +1315,52 @@ mod tests {
         assert_eq!(
             EnderDragonFight::gateway_position(BlockPos::ZERO, 19),
             BlockPos::new(91, GATEWAY_Y, -30)
+        );
+    }
+    /// Vanilla `EnderDragonFight.tick`: the dragon bar tracks the players inside the
+    /// listen radius, and the fight delivers the queued boss-bar operations to them on
+    /// the same tick — including on the early return, because Steel records vanilla's
+    /// in-setter broadcasts and hands them over at the end of [`EnderDragonFight::tick`].
+    #[test]
+    fn dragon_fight_bar_is_delivered_to_listening_players_each_tick() {
+        use std::sync::Arc;
+
+        use crate::entity::boss::event::tests::recording_player;
+
+        let fixture = end_world_with_island("end_dragon_bar_delivery");
+        let world = &fixture.world;
+        let (player, connection) = recording_player(world, "EndViewer");
+        // Building the test player writes packets of its own; measure only the bar's.
+        connection.reset();
+
+        let mut fight = EnderDragonFight::new(BlockPos::ZERO);
+        // Vanilla queues the constructor's own style operations with nobody tracked, and
+        // Steel resolves a broadcast against the players tracked *when the drain runs*, so
+        // drop them before the viewer exists and keep the counts about the viewer's add.
+        assert_eq!(fight.dragon_event_mut().drain_packets().len(), 2);
+        assert!(world.players.insert(Arc::clone(&player)));
+        // Registering the player with the world writes packets of its own.
+        connection.reset();
+        fight.tick(world);
+        assert_eq!(
+            fight.dragon_event().player_count(),
+            1,
+            "the player inside the listen radius tracks the dragon bar"
+        );
+        assert!(
+            !fight.dragon_event().has_pending_packets(),
+            "the level tick delivers the queued add"
+        );
+        assert_eq!(connection.sent(), 1, "the add reached the viewer");
+
+        // A progress update queued by the dragon entity is delivered by the next tick, too.
+        fight.update_dragon(50.0, 100.0, None);
+        assert!(fight.dragon_event().has_pending_packets());
+        fight.tick(world);
+        assert!(!fight.dragon_event().has_pending_packets());
+        assert!(
+            connection.sent() >= 2,
+            "the progress update reached the viewer"
         );
     }
 }

@@ -915,6 +915,88 @@ impl Server {
         }
     }
 
+    /// Vanilla `MinecraftServer.setAutoSave`: toggles every world's `noSave` flag.
+    ///
+    /// Returns whether any world changed, matching vanilla's
+    /// `ERROR_ALREADY_OFF`/`ERROR_ALREADY_ON` command checks.
+    pub fn set_auto_save(&self, enable: bool) -> bool {
+        let mut changed = false;
+        for world in self.worlds.values() {
+            if world.no_save() == enable {
+                world.set_no_save(!enable);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Vanilla `MinecraftServer.isAutoSave`: true while no world has `noSave` set.
+    #[must_use]
+    pub fn is_auto_save(&self) -> bool {
+        self.worlds.values().all(|world| !world.no_save())
+    }
+
+    /// Vanilla `MinecraftServer.saveEverything`: players, command data, then worlds.
+    ///
+    /// `forced` mirrors vanilla's `saveEverything(..., forced)` third argument:
+    /// `/save-all` forces every world, while the periodic autosave (`forced =
+    /// false`) skips worlds whose `noSave` flag is set by `/save-off`.
+    pub async fn save_everything(&self, forced: bool) -> bool {
+        for player in self.get_players() {
+            if let Err(error) = self.player_data_storage.save(&player).await {
+                log::error!(
+                    "Failed to save player {} during save: {error}",
+                    player.gameprofile.id()
+                );
+            }
+        }
+
+        let command_data = self.save_command_data().await;
+        match command_data.scoreboards {
+            Ok(saved) => tracing::debug!(saved, "save stored domain scoreboards"),
+            Err(error) => log::error!("save failed to store domain scoreboards: {error}"),
+        }
+        match command_data.storage {
+            Ok(saved) => tracing::debug!(saved, "save stored domain command storage"),
+            Err(error) => log::error!("save failed to store domain command storage: {error}"),
+        }
+
+        let mut chunks_saved = 0usize;
+        let mut levels_saved = 0usize;
+        for world in self.worlds.values() {
+            if !forced && world.no_save() {
+                continue;
+            }
+            world.cleanup(&mut chunks_saved).await;
+            levels_saved += 1;
+        }
+        tracing::debug!(chunks_saved, levels_saved, forced, "save finished");
+        levels_saved > 0
+    }
+
+    /// Vanilla `MinecraftServer.autoSave`: `saveEverything(true, false, false)`.
+    ///
+    /// Runs on the blocking pool with its own current-thread runtime because
+    /// `World::cleanup` holds `parking_lot` guards across awaits and is not
+    /// `Send`; this mirrors `/save-all` and keeps the server tick thread free.
+    pub async fn autosave(self: Arc<Self>) {
+        let handle =
+            tokio::task::spawn_blocking(
+                move || match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => {
+                        runtime.block_on(self.save_everything(false));
+                    }
+                    Err(error) => log::error!("autosave could not start its save runtime: {error}"),
+                },
+            );
+        if let Err(error) = handle.await {
+            log::error!("Autosave task failed: {error}");
+        }
+    }
+
     /// Read access to the live command dispatcher, used by `/help`.
     pub(crate) fn command_dispatcher(&self) -> parking_lot::RwLockReadGuard<'_, CommandDispatcher> {
         self.command_dispatcher.read()

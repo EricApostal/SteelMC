@@ -1,7 +1,8 @@
 //! Vanilla `Phantom` (`net.minecraft.world.entity.monster.Phantom`).
 //!
-//! Vanilla flies with `Phantom.PhantomMoveControl`/`PhantomLookControl` and a flying path
-//! navigation; Steel has neither, so the phantom drives its own velocity toward the vanilla
+//! Vanilla keeps the default ground navigation (`Mob.createNavigation`, inert while
+//! airborne) and flies with `Phantom.PhantomMoveControl`/`PhantomLookControl`; Steel has
+//! neither control, so the phantom drives its own velocity toward the vanilla
 //! `moveTargetPoint` (documented deviation: no obstacle avoidance while swooping).
 
 use std::f32::consts::PI;

@@ -805,9 +805,9 @@ mod tests {
     use steel_utils::{BlockPos, ChunkPos};
 
     use super::World;
-    use crate::entity::init_entities;
     use crate::entity::ai::node::Node;
     use crate::entity::ai::path::Path;
+    use crate::entity::init_entities;
     use crate::entity::{PathfinderMob as _, add_spawned_entity, create_entity_instance};
     use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
 

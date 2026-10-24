@@ -55,7 +55,6 @@ static WARNED_BELOW_ZERO: AtomicBool = AtomicBool::new(false);
 static WARNED_STRUCTURE_STARTS: AtomicBool = AtomicBool::new(false);
 static WARNED_INTERNAL_LIGHT: AtomicBool = AtomicBool::new(false);
 static WARNED_Y_POS: AtomicBool = AtomicBool::new(false);
-static WARNED_DATA_VERSION: AtomicBool = AtomicBool::new(false);
 
 /// Returns the vanilla `Status` string for a Steel chunk status.
 #[must_use]
@@ -265,12 +264,11 @@ pub(crate) fn nbt_to_chunk(
         .string("Status")
         .and_then(|name| status_from_name(name.to_str().as_ref()))
         .unwrap_or(ChunkStatus::Empty);
-    if nbt.int("DataVersion").unwrap_or(DATA_VERSION) != DATA_VERSION {
-        warn_once(
-            &WARNED_DATA_VERSION,
-            "Anvil chunk DataVersion differs from this build; Steel does not run vanilla datafixers",
-        );
-    }
+    crate::datafixer::ensure_current(
+        crate::datafixer::version_of_borrowed(nbt),
+        crate::datafixer::DataFixType::Chunk,
+        &format!("chunk {pos:?}"),
+    )?;
     if let Some(y_pos) = nbt.int("yPos")
         && y_pos != min_y.div_euclid(16)
     {
@@ -608,38 +606,39 @@ fn read_vanilla_palette(
     builder: &mut PaletteBuilder,
     block_states: bool,
 ) -> io::Result<Vec<u16>> {
-    let entries = compound
-        .list("palette")
-        .map_or_else(Vec::new, compound_list);
+    let Some(palette) = compound.list("palette") else {
+        return Ok(Vec::new());
+    };
     let mut indices = Vec::new();
-    for entry in entries {
-        let index = if block_states {
+    if block_states {
+        // Vanilla's block-state container codec reads `BlockState.CODEC`, a compound per
+        // palette entry.
+        for entry in compound_list(palette) {
             let state = read_block_state(&entry).unwrap_or_else(|| {
                 tracing::warn!(
                     "Vanilla block-state palette entry could not be resolved; using air"
                 );
                 vanilla_blocks::AIR.default_state()
             });
-            builder.block_index(state)
-        } else {
-            let key = entry
-                .string("Name")
-                .or_else(|| entry.string("name"))
-                .and_then(|name| Identifier::from_str(name.to_str().as_ref()).ok());
-            let biome_id = match key.and_then(|key| REGISTRY.biomes.id_from_key(&key)) {
-                Some(biome) => biome,
-                None => {
-                    tracing::warn!(
-                        "Vanilla biome palette entry could not be resolved; using plains"
-                    );
-                    vanilla_biomes::PLAINS.id()
-                }
-            };
-            builder.biome_index(u16::try_from(biome_id).map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "biome id does not fit in u16")
-            })?)?
+            indices.push(builder.block_index(state));
+        }
+        return Ok(indices);
+    }
+
+    // Vanilla's biome container codec reads `Registry.holderByNameCodec`, so every biome
+    // palette entry is the biome's id as a string.
+    for name in palette.strings().unwrap_or_default() {
+        let key = Identifier::from_str(name.to_str().as_ref()).ok();
+        let biome_id = match key.and_then(|key| REGISTRY.biomes.id_from_key(&key)) {
+            Some(biome) => biome,
+            None => {
+                tracing::warn!("Vanilla biome palette entry could not be resolved; using plains");
+                vanilla_biomes::PLAINS.id()
+            }
         };
-        indices.push(index);
+        indices.push(builder.biome_index(u16::try_from(biome_id).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "biome id does not fit in u16")
+        })?)?);
     }
     Ok(indices)
 }

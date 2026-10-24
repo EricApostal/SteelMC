@@ -1,8 +1,10 @@
 //! TNT minecart entity (`net.minecraft.world.entity.vehicle.minecart.MinecartTNT`).
 //!
 //! Detonates on impact, fire, explosion damage, a powered activator rail, or a
-//! fall of three blocks or more. The fuse and ignition bookkeeping are complete;
-//! only the blast dispatch is missing (see [`TntMinecartEntity::explode`]).
+//! fall of three blocks or more. The fuse, ignition bookkeeping and the blast itself
+//! (vanilla power `explosionPowerBase + explosionSpeedFactor * random * 1.5 * speed`,
+//! `Level.ExplosionInteraction.TNT`, with the primed-rail exemption) are complete and
+//! end with the cart discarded.
 //!
 //! Deliberate difference: vanilla switches to the experimental
 //! `NewMinecartBehavior` when `minecart_improvements` is enabled; Steel always
@@ -15,6 +17,7 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_registry::entity_type::EntityTypeRef;
+use steel_registry::fluid::FluidState;
 use steel_registry::items::ItemRef;
 use steel_registry::particle_type::ParticleData;
 use steel_registry::vanilla_damage_type_tags::DamageTypeTag;
@@ -32,6 +35,9 @@ use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 use crate::entity::damage::DamageSource;
 use crate::entity::{Entity, EntityBase, EntityBaseLoad, EntitySyncedData, RemovalReason};
 use crate::world::World;
+use crate::world::explosion::{
+    ExplosionDamageCalculator, ExplosionInfo, ExplosionInteraction, base_block_explosion_resistance,
+};
 
 use super::minecart_base::{self, Minecart, MinecartState};
 
@@ -89,6 +95,50 @@ impl TntState {
 // SAFETY: This key is owned by Steel and uniquely identifies `TntMinecartEntity`.
 unsafe impl DowncastType for TntMinecartEntity {
     const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:entity/tnt_minecart");
+}
+
+/// Vanilla `MinecartTNT`'s `getBlockExplosionResistance`/`shouldBlockExplode` overrides as a
+/// `World::explode_full` calculator: while the cart is primed, rails and the blocks directly
+/// below them (the blocks whose upper neighbour is a rail) are exempt from its own blast.
+struct TntMinecartExplosionDamageCalculator {
+    /// Whether the exploding cart's fuse had started, vanilla `isPrimed()`.
+    primed: bool,
+}
+
+impl TntMinecartExplosionDamageCalculator {
+    /// Vanilla `!isPrimed() || !block.is(BlockTags.RAILS) && !level.getBlockState(pos.above()).is(BlockTags.RAILS)`.
+    fn rail_exempt(&self, world: &World, pos: BlockPos, state: BlockStateId) -> bool {
+        self.primed
+            && (minecart_base::is_rail_state(state)
+                || minecart_base::is_rail_state(world.get_block_state(pos.above())))
+    }
+}
+
+impl ExplosionDamageCalculator for TntMinecartExplosionDamageCalculator {
+    fn block_explosion_resistance(
+        &self,
+        _explosion: &ExplosionInfo<'_>,
+        world: &World,
+        pos: BlockPos,
+        state: BlockStateId,
+        fluid: FluidState,
+    ) -> Option<f32> {
+        if self.rail_exempt(world, pos, state) {
+            return Some(0.0);
+        }
+        base_block_explosion_resistance(state, fluid)
+    }
+
+    fn should_block_explode(
+        &self,
+        _explosion: &ExplosionInfo<'_>,
+        world: &World,
+        pos: BlockPos,
+        state: BlockStateId,
+        _power: f32,
+    ) -> bool {
+        !self.rail_exempt(world, pos, state)
+    }
 }
 
 impl TntMinecartEntity {
@@ -172,24 +222,17 @@ impl TntMinecartEntity {
         }
 
         self.broadcast_entity_event(EntityStatus::TntPrime);
-        self.play_sound(&sound_events::ENTITY_TNT_PRIMED, 1.0, 1.0);
+        // Vanilla `MinecartTNT.primeFuse` skips the primed sound for silent carts.
+        if !self.is_silent() {
+            self.play_sound(&sound_events::ENTITY_TNT_PRIMED, 1.0, 1.0);
+        }
     }
 
     /// Vanilla `MinecartTNT.explode`.
     ///
-    /// Steel has no explosion foundation yet: `World::explode` does not exist, so the
-    /// blast (block destruction, entity damage, knockback) cannot be dispatched here.
-    /// The `TNT_EXPLODES` game-rule gate and the cart removal are evaluated so the
-    /// remaining work is exactly the missing API call:
-    ///
-    /// ```text
-    /// level.explode(this, damageSource, null, x, y, z,
-    ///     explosionPowerBase + explosionSpeedFactor * random.nextDouble() * 1.5 * speed,
-    ///     false, Level.ExplosionInteraction.TNT)
-    /// ```
-    ///
-    /// See `entities/objects/explosives/primed_tnt.rs` and
-    /// `behavior/blocks/special/tnt_block.rs`, blocked on the same API.
+    /// The blast is dispatched through `World::explode_full` with `MinecartTNT`'s own
+    /// `ExplosionDamageCalculator`: while the cart is primed, rails and the blocks directly
+    /// below them neither detonate nor contribute their blast resistance.
     fn explode(&self, source: Option<&DamageSource>, speed_sqr: f64) {
         let Some(world) = self.level() else {
             return;
@@ -202,17 +245,30 @@ impl TntMinecartEntity {
             return;
         }
 
-        // Vanilla computes the power from these values before calling `level.explode`.
+        // Vanilla computes the power in double and casts the whole expression to float.
         let speed = speed_sqr.sqrt().min(MAX_EXPLOSION_SPEED);
-        let _power = self.explosion_power_base()
-            + self.explosion_speed_factor() * (rand::random::<f64>() * 1.5) as f32 * speed as f32;
-        let _ = source;
-
-        // MISSING API: `World::explode` is the only call this method still needs.
+        let power = (f64::from(self.explosion_power_base())
+            + f64::from(self.explosion_speed_factor()) * rand::random::<f64>() * 1.5 * speed)
+            as f32;
+        let calculator = TntMinecartExplosionDamageCalculator {
+            primed: self.is_primed(),
+        };
+        let position = self.position();
+        world.explode_full(
+            world.get_entity_by_id(self.id()),
+            source.cloned(),
+            Some(&calculator),
+            position.x,
+            position.y,
+            position.z,
+            power,
+            false,
+            ExplosionInteraction::Tnt,
+        );
         self.set_removed(RemovalReason::Discarded);
     }
 
-/// Vanilla `MinecartTNT.damageSourceIgnitesTnt`.
+    /// Vanilla `MinecartTNT.damageSourceIgnitesTnt`.
     ///
     /// Vanilla tests `instanceof Projectile`, which covers more than abstract
     /// arrows (for example a burning snowball or fireball still ignites TNT).
@@ -372,6 +428,11 @@ impl Entity for TntMinecartEntity {
         false
     }
 
+    fn push_entity(&self, entity: &dyn Entity) {
+        // Vanilla `AbstractMinecart.push`.
+        self.minecart_push(entity);
+    }
+
     fn is_pickable(&self) -> bool {
         !self.is_removed()
     }
@@ -435,12 +496,18 @@ impl Entity for TntMinecartEntity {
 mod tests {
     use std::sync::Weak;
 
-    use steel_registry::vanilla_entities;
+    use steel_registry::vanilla_game_rules;
+    use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_entities};
+    use steel_utils::types::UpdateFlags;
+    use steel_utils::{BlockPos, ChunkPos};
 
     use crate::entity::entities::objects::SnowballEntity;
-    use crate::entity::{Entity, SharedEntity};
+    use crate::entity::{Entity, SharedEntity, next_entity_id};
+    use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
+    use crate::world::LevelReader as _;
 
     use super::*;
+    use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 
     fn direct_source(entity: SharedEntity) -> DamageSource {
         DamageSource::direct(&vanilla_damage_types::GENERIC, entity)
@@ -458,9 +525,9 @@ mod tests {
         ));
         snowball.ignite_for_ticks(100);
         assert!(snowball.is_on_fire());
-        assert!(TntMinecartEntity::damage_source_ignites_tnt(&direct_source(
-            snowball
-        )));
+        assert!(TntMinecartEntity::damage_source_ignites_tnt(
+            &direct_source(snowball)
+        ));
     }
 
     #[test]
@@ -473,8 +540,143 @@ mod tests {
         ));
         // GENERIC carries neither the `is_fire` nor the `is_explosion` tag, so a
         // cold snowball must not ignite the cart.
-        assert!(!TntMinecartEntity::damage_source_ignites_tnt(&direct_source(
-            snowball
-        )));
+        assert!(!TntMinecartEntity::damage_source_ignites_tnt(
+            &direct_source(snowball)
+        ));
+    }
+
+    #[test]
+    fn powered_activator_rail_primes_an_eighty_tick_fuse_once() {
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world("tnt_minecart_activator_prime");
+        let world = &world_fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::from_entity_pos(DVec3::ZERO));
+        let cart = TntMinecartEntity::new(
+            &vanilla_entities::TNT_MINECART,
+            next_entity_id(),
+            DVec3::ZERO,
+            Arc::downgrade(world),
+        );
+        let pos = BlockPos::new(0, 0, 0);
+
+        // Vanilla `activateMinecart`: an unpowered rail does nothing.
+        cart.activate_minecart(world, pos, false);
+        assert!(!cart.is_primed());
+
+        cart.activate_minecart(world, pos, true);
+        assert_eq!(cart.fuse(), DEFAULT_FUSE);
+        assert!(cart.is_primed());
+
+        // Vanilla `activateMinecart` only primes while `fuse < 0`.
+        cart.set_fuse(10);
+        cart.activate_minecart(world, pos, true);
+        assert_eq!(cart.fuse(), 10);
+    }
+
+    #[test]
+    fn priming_respects_the_tnt_explodes_rule() {
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world("tnt_minecart_rule_gate");
+        let world = &world_fixture.world;
+        world.set_game_rule(&vanilla_game_rules::TNT_EXPLODES, false);
+
+        let cart = TntMinecartEntity::new(
+            &vanilla_entities::TNT_MINECART,
+            next_entity_id(),
+            DVec3::ZERO,
+            Arc::downgrade(world),
+        );
+        cart.prime_fuse(world, None);
+        assert!(!cart.is_primed());
+    }
+
+    #[test]
+    fn primed_explosion_keeps_rails_and_their_support_blocks() {
+        // Vanilla `MinecartTNT`'s explosion calculator exempts a block when it is a rail or
+        // when the block above it is a rail — i.e. rails and the blocks they stand on — and
+        // it also zeroes their blast resistance. `speedSqr = 0` pins the power to exactly
+        // 4.0, and the exempt blocks sit next to the centre, so the outcome is stable.
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world("tnt_minecart_rail_exemption");
+        let world = &world_fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+
+        let rail_pos = BlockPos::new(0, 64, 0);
+        let support_pos = rail_pos.below();
+        let above_pos = rail_pos.above();
+        // Vanilla rails need a sturdy block below them (`BaseRailBlock.canSurvive`) and are
+        // dropped by the next neighbor change otherwise.
+        assert!(world.set_block(
+            support_pos,
+            vanilla_blocks::STONE.default_state(),
+            UpdateFlags::UPDATE_ALL
+        ));
+        assert!(world.set_block(
+            rail_pos,
+            vanilla_blocks::RAIL.default_state(),
+            UpdateFlags::UPDATE_ALL
+        ));
+        // The block above the rail is *not* exempt: vanilla only looks upwards from each
+        // candidate position, so this stone is a control that the blast reaches the area.
+        assert!(world.set_block(
+            above_pos,
+            vanilla_blocks::STONE.default_state(),
+            UpdateFlags::UPDATE_ALL
+        ));
+
+        let cart = TntMinecartEntity::new(
+            &vanilla_entities::TNT_MINECART,
+            next_entity_id(),
+            DVec3::new(0.5, 64.0625, 0.5),
+            Arc::downgrade(world),
+        );
+        cart.set_fuse(DEFAULT_FUSE);
+        cart.explode(None, 0.0);
+
+        assert!(
+            cart.is_removed(),
+            "vanilla discards the cart after the blast"
+        );
+        assert_eq!(
+            world.get_block_state(rail_pos).get_block(),
+            &vanilla_blocks::RAIL,
+            "a primed cart's blast does not destroy rails"
+        );
+        assert_eq!(
+            world.get_block_state(support_pos).get_block(),
+            &vanilla_blocks::STONE,
+            "blocks whose upper neighbour is a rail are exempt too"
+        );
+        assert_eq!(
+            world.get_block_state(above_pos).get_block(),
+            &vanilla_blocks::AIR,
+            "the exemption must not cover blocks above a rail"
+        );
+    }
+
+    #[test]
+    fn fuse_end_discards_a_primed_cart_when_explosions_are_off() {
+        // Vanilla `explode`: with `tnt_explodes` disabled and the cart primed, the blast is
+        // skipped and the cart is discarded.
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world("tnt_minecart_fuse_end");
+        let world = &world_fixture.world;
+        world.set_game_rule(&vanilla_game_rules::TNT_EXPLODES, false);
+        insert_ready_full_chunk(world, ChunkPos::from_entity_pos(DVec3::ZERO));
+
+        let cart = Arc::new(TntMinecartEntity::new(
+            &vanilla_entities::TNT_MINECART,
+            next_entity_id(),
+            DVec3::ZERO,
+            Arc::downgrade(world),
+        ));
+        world
+            .try_add_entity(Arc::clone(&cart) as SharedEntity)
+            .expect("cart should attach to the loaded chunk");
+        cart.set_fuse(1);
+        Arc::clone(&cart).tick();
+        assert_eq!(cart.fuse(), 0);
+        Arc::clone(&cart).tick();
+        assert!(cart.is_removed());
     }
 }

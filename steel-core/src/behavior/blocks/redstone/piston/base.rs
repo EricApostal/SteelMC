@@ -57,15 +57,10 @@ impl PistonBaseBlock {
         }
     }
 
+    /// Vanilla `Direction.from3DDataValue(id & 7)` used when packing the
+    /// facing into a piston block-event parameter.
     const fn direction_from_legacy_id(id: i32) -> Direction {
-        match id & 7 {
-            1 => Direction::Up,
-            2 => Direction::North,
-            3 => Direction::South,
-            4 => Direction::West,
-            5 => Direction::East,
-            _ => Direction::Down,
-        }
+        Direction::from_3d_data_value(id & 7)
     }
 
     const fn direction_legacy_id(direction: Direction) -> i32 {
@@ -870,5 +865,46 @@ mod tests {
                 .get_block_state(piston_pos.relative_n(Direction::East, 2))
                 .is_air()
         );
+    }
+
+    #[test]
+    fn block_event_facing_param_round_trips_like_vanilla() {
+        // Vanilla packs `Direction.get3DDataValue()` into the block-event parameter and
+        // unpacks it with `Direction.from3DDataValue(b1 & 7)`, whose `Mth.abs(data % 6)`
+        // wraps 6 and 7 back onto DOWN and UP.
+        for direction in Direction::ALL {
+            let packed = PistonBaseBlock::direction_legacy_id(direction);
+            assert_eq!(PistonBaseBlock::direction_from_legacy_id(packed), direction);
+        }
+        assert_eq!(
+            PistonBaseBlock::direction_from_legacy_id(6),
+            Direction::Down
+        );
+        assert_eq!(PistonBaseBlock::direction_from_legacy_id(7), Direction::Up);
+        assert_eq!(PistonBaseBlock::direction_from_legacy_id(-1), Direction::Up);
+    }
+
+    #[test]
+    fn retraction_block_event_restores_vanilla_wrapped_facing() {
+        let (world_fixture, _holder, piston_pos, power_pos) =
+            powered_piston_world("piston_event_facing", &vanilla_blocks::PISTON);
+        let world = &world_fixture.world;
+        tick_block_entities(world, 3);
+
+        // Unpower the piston without neighbour notifications so only the hand-queued
+        // event below can start the retraction.
+        assert!(world.set_block(
+            power_pos,
+            vanilla_blocks::AIR.default_state(),
+            UpdateFlags::UPDATE_NONE,
+        ));
+        world.block_event(piston_pos, &vanilla_blocks::PISTON, 1, 7);
+        world.run_block_events();
+        tick_block_entities(world, 3);
+
+        let base = world.get_block_state(piston_pos);
+        assert_eq!(base.get_block(), &vanilla_blocks::PISTON);
+        assert_eq!(base.get_value(FACING), Direction::Up);
+        assert!(!base.get_value(EXTENDED));
     }
 }

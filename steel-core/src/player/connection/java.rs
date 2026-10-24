@@ -7,8 +7,9 @@ use steel_protocol::packet_reader::TCPNetworkDecoder;
 use steel_protocol::packet_traits::{ClientPacket, CompressionInfo, EncodedPacket, ServerPacket};
 use steel_protocol::packet_writer::TCPNetworkEncoder;
 use steel_protocol::packets::common::{
-    CDisconnect, CKeepAlive, CPongResponse, SClientInformation, SCustomPayload, SKeepAlive,
-    SPingRequest,
+    CDisconnect, CKeepAlive, CPongResponse, ResourcePackAction, SClientInformation,
+    SCookieResponse, SCustomClickAction, SCustomPayload, SKeepAlive, SPingRequest, SPong,
+    SResourcePack,
 };
 use steel_protocol::packets::game::{
     CBundleDelimiter, CCommandSuggestions, ClientCommandAction, PlayerAction, PlayerCommandAction,
@@ -150,6 +151,14 @@ enum ImmediatePlayPacket {
     KeepAlive(SKeepAlive),
     PingRequest(SPingRequest),
     ChunkBatchReceived(SChunkBatchReceived),
+    /// Vanilla `ServerCommonPacketListenerImpl.handlePong`: an empty handler.
+    Pong(SPong),
+    /// Vanilla `ServerCommonPacketListenerImpl.handleCookieResponse`: always unsolicited.
+    CookieResponse(SCookieResponse),
+    /// Vanilla `ServerCommonPacketListenerImpl.handleResourcePackResponse`.
+    ResourcePack(SResourcePack),
+    /// Vanilla `MinecraftServer.handleCustomClickAction`.
+    CustomClickAction(SCustomClickAction),
     Unknown(i32),
 }
 
@@ -655,6 +664,51 @@ impl JavaConnection {
         }
     }
 
+    /// Handles a pong packet.
+    ///
+    /// Vanilla's `ServerCommonPacketListenerImpl.handlePong` is an empty handler: the
+    /// play-state pong only matters to the client's own ping bookkeeping, so the server
+    /// records nothing. The packet still has to be decoded here so it is not logged as
+    /// an unknown play packet.
+    const fn handle_pong(_packet: SPong) {}
+
+    /// Handles a cookie response packet.
+    ///
+    /// Steel never sends a cookie request on a play connection, so every response is
+    /// unsolicited. Vanilla's `ServerCommonPacketListenerImpl.handleCookieResponse`
+    /// disconnects with `multiplayer.disconnect.unexpected_query_response`.
+    fn handle_cookie_response(&self, _packet: SCookieResponse) {
+        self.disconnect(translations::MULTIPLAYER_DISCONNECT_UNEXPECTED_QUERY_RESPONSE.msg());
+    }
+
+    /// Handles a resource pack response packet.
+    ///
+    /// Vanilla's `ServerCommonPacketListenerImpl.handleResourcePackResponse` only acts on
+    /// `Declined` responses, and only while the server has a required resource pack.
+    /// Steel pushes no resource pack and has no required-pack setting, so the vanilla
+    /// disconnect branch is unreachable and the response is recorded at debug level.
+    fn handle_resource_pack(&self, packet: SResourcePack) {
+        log::debug!(
+            "Ignoring resource pack response from client {}: pack {} reported {:?}",
+            self.id,
+            packet.id,
+            packet.action
+        );
+    }
+
+    /// Handles a custom click action packet.
+    ///
+    /// Vanilla's `MinecraftServer.handleCustomClickAction` only logs the action id and
+    /// payload, and Steel has no server-side consumer for the payload yet.
+    fn handle_custom_click_action(&self, packet: SCustomClickAction) {
+        log::debug!(
+            "Received custom click action {} with payload {:?} from client {}",
+            packet.id,
+            packet.payload,
+            self.id
+        );
+    }
+
     /// Returns the current latency in milliseconds.
     /// This is a smoothed average calculated from keep-alive round-trip times.
     #[must_use]
@@ -750,6 +804,11 @@ impl JavaConnection {
                 | play::S_CHAT_ACK
                 | play::S_CLIENT_TICK_END
                 | play::S_PLAYER_LOADED
+                // Common-listener packets carry no world state and are accepted at any time.
+                | play::S_PONG
+                | play::S_COOKIE_RESPONSE
+                | play::S_RESOURCE_PACK
+                | play::S_CUSTOM_CLICK_ACTION
         )
     }
 
@@ -791,7 +850,17 @@ impl JavaConnection {
         packet: RawPacket,
         player: &Player,
     ) -> Result<Option<DecodedPlayPacket>, PacketError> {
-        let maintenance_packet = matches!(packet.id, play::S_KEEP_ALIVE | play::S_PING_REQUEST);
+        // Connection-scoped common packets carry no world state, so they bypass the
+        // domain-switch gate like the maintenance packets.
+        let maintenance_packet = matches!(
+            packet.id,
+            play::S_KEEP_ALIVE
+                | play::S_PING_REQUEST
+                | play::S_PONG
+                | play::S_COOKIE_RESPONSE
+                | play::S_RESOURCE_PACK
+                | play::S_CUSTOM_CLICK_ACTION
+        );
         let handshake_packet = Self::can_process_during_domain_handshake(packet.id);
         if packet.id == play::S_CLIENT_COMMAND {
             let decoded = Self::decode_play_packet(packet)?;
@@ -835,6 +904,18 @@ impl JavaConnection {
             play::S_CUSTOM_PAYLOAD => scheduled(ScheduledPlayPacketKind::CustomPayload(
                 SCustomPayload::read_packet(data)?,
             )),
+            play::S_PONG => {
+                DecodedPlayPacket::Immediate(ImmediatePlayPacket::Pong(SPong::read_packet(data)?))
+            }
+            play::S_COOKIE_RESPONSE => DecodedPlayPacket::Immediate(
+                ImmediatePlayPacket::CookieResponse(SCookieResponse::read_packet(data)?),
+            ),
+            play::S_RESOURCE_PACK => DecodedPlayPacket::Immediate(
+                ImmediatePlayPacket::ResourcePack(SResourcePack::read_packet(data)?),
+            ),
+            play::S_CUSTOM_CLICK_ACTION => DecodedPlayPacket::Immediate(
+                ImmediatePlayPacket::CustomClickAction(SCustomClickAction::read_packet(data)?),
+            ),
             play::S_CHAT => scheduled(ScheduledPlayPacketKind::Chat(Box::new(SChat::read_packet(
                 data,
             )?))),
@@ -1053,6 +1134,12 @@ impl JavaConnection {
                     .lock()
                     .on_chunk_batch_received_by_client(packet.desired_chunks_per_tick);
             }
+            ImmediatePlayPacket::Pong(packet) => Self::handle_pong(packet),
+            ImmediatePlayPacket::CookieResponse(packet) => self.handle_cookie_response(packet),
+            ImmediatePlayPacket::ResourcePack(packet) => self.handle_resource_pack(packet),
+            ImmediatePlayPacket::CustomClickAction(packet) => {
+                self.handle_custom_click_action(packet);
+            }
             ImmediatePlayPacket::Unknown(id) => log::info!("play packet id {id} is not known"),
         }
     }
@@ -1229,6 +1316,131 @@ mod tests {
             panic!("test play packet should decode");
         };
         decoded
+    }
+
+    /// Encodes an `Identifier` the way `Identifier::STREAM_CODEC` does.
+    fn identifier_bytes(id: &'static str) -> Vec<u8> {
+        use steel_utils::serial::WriteTo as _;
+
+        let mut bytes = Vec::new();
+        steel_utils::Identifier::vanilla_static(id)
+            .write(&mut bytes)
+            .expect("identifier should encode");
+        bytes
+    }
+
+    #[test]
+    fn common_play_packets_use_the_immediate_connection_path() {
+        let pong = decode(RawPacket::new(play::S_PONG, 7_i32.to_be_bytes().to_vec()));
+        assert!(matches!(
+            pong,
+            DecodedPlayPacket::Immediate(ImmediatePlayPacket::Pong(SPong { id: 7 }))
+        ));
+
+        let mut cookie = identifier_bytes("brand");
+        cookie.push(0);
+        let cookie = decode(RawPacket::new(play::S_COOKIE_RESPONSE, cookie));
+        assert!(matches!(
+            cookie,
+            DecodedPlayPacket::Immediate(ImmediatePlayPacket::CookieResponse(SCookieResponse {
+                payload: None,
+                ..
+            }))
+        ));
+
+        let pack_id = Uuid::from_u128(0x0011_2233_4455_6677_8899_aabb_ccdd_eeff);
+        let mut resource_pack = pack_id.as_bytes().to_vec();
+        resource_pack.push(ResourcePackAction::Declined as u8);
+        let resource_pack = decode(RawPacket::new(play::S_RESOURCE_PACK, resource_pack));
+        assert!(matches!(
+            resource_pack,
+            DecodedPlayPacket::Immediate(ImmediatePlayPacket::ResourcePack(SResourcePack {
+                id,
+                action: ResourcePackAction::Declined,
+            })) if id == pack_id
+        ));
+
+        let mut click = identifier_bytes("dialog/test");
+        click.push(1);
+        click.push(0);
+        let click = decode(RawPacket::new(play::S_CUSTOM_CLICK_ACTION, click));
+        assert!(matches!(
+            click,
+            DecodedPlayPacket::Immediate(ImmediatePlayPacket::CustomClickAction(
+                SCustomClickAction { payload: None, .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn common_play_packets_are_accepted_before_join() {
+        for id in [
+            play::S_PONG,
+            play::S_COOKIE_RESPONSE,
+            play::S_RESOURCE_PACK,
+            play::S_CUSTOM_CLICK_ACTION,
+        ] {
+            assert!(JavaConnection::can_process_before_join(id));
+        }
+    }
+
+    /// Builds a connection with an in-memory transport and the queue's receiving end.
+    fn test_connection() -> (JavaConnection, UnboundedReceiver<OutboundPacket>) {
+        let (server_end, _client_end) = duplex(64);
+        let transport: JavaTransportWrite = Box::new(server_end);
+        let network_writer: JavaNetworkWriter = Arc::new(AsyncMutex::new(Some(
+            TCPNetworkEncoder::new(BufWriter::new(transport)),
+        )));
+        let (outgoing_packets, outgoing_receiver) = mpsc::unbounded_channel();
+        let connection = JavaConnection::new(
+            outgoing_packets,
+            CancellationToken::new(),
+            None,
+            network_writer,
+            1,
+            Arc::new(PlayerSession::new(10, 10)),
+        );
+        (connection, outgoing_receiver)
+    }
+
+    #[test]
+    fn cookie_response_disconnects_with_the_vanilla_reason() {
+        let (connection, mut outgoing) = test_connection();
+
+        connection.handle_immediate_packet(ImmediatePlayPacket::CookieResponse(SCookieResponse {
+            key: steel_utils::Identifier::vanilla_static("brand"),
+            payload: None,
+        }));
+
+        let Ok(OutboundPacket::Disconnect(packet)) = outgoing.try_recv() else {
+            panic!("an unsolicited cookie response must queue a disconnect");
+        };
+        let reason = String::from_utf8_lossy(&packet.encoded_data);
+        assert!(reason.contains("multiplayer.disconnect.unexpected_query_response"));
+        assert!(connection.closed());
+    }
+
+    #[test]
+    fn pong_resource_pack_and_custom_click_keep_the_connection_open() {
+        let (connection, mut outgoing) = test_connection();
+
+        connection.handle_immediate_packet(ImmediatePlayPacket::Pong(SPong { id: 3 }));
+        connection.handle_immediate_packet(ImmediatePlayPacket::ResourcePack(SResourcePack {
+            id: Uuid::from_u128(1),
+            action: ResourcePackAction::Declined,
+        }));
+        connection.handle_immediate_packet(ImmediatePlayPacket::CustomClickAction(
+            SCustomClickAction {
+                id: steel_utils::Identifier::vanilla_static("dialog/test"),
+                payload: None,
+            },
+        ));
+
+        assert!(matches!(
+            outgoing.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(!connection.closed());
     }
 
     fn execution(kind: ScheduledPlayPacketKind) -> ScheduledPacketExecution {

@@ -2,13 +2,14 @@
 
 use super::*;
 use crate::command::execution::argument::{
-    Angle, AngleValue, ColumnPosValue, MessageValue, Operation,
+    Angle, AngleValue, ColumnPosValue, FloatNumberProviderArg, FloatNumberProviderValue,
+    IntNumberProviderArg, IntNumberProviderValue, MessageValue, Operation,
 };
 use steel_registry::{
-    data_components::vanilla_components::SwingAnimationType, vanilla_attributes,
-    vanilla_mob_effects,
+    data_components::vanilla_components::SwingAnimationType, loot_table::LootContext,
+    vanilla_attributes, vanilla_mob_effects,
 };
-use steel_utils::rotation::Rotation;
+use steel_utils::{Identifier, rotation::Rotation};
 use steel_worldgen::structure::StructureMirror;
 
 fn parsed_value<T: DowncastType>(
@@ -549,4 +550,79 @@ fn new_arguments_serialize_with_vanilla_protocol_ids() {
     let repeated = SteelArgumentType::angle();
     let other = SteelArgumentType::angle();
     assert_eq!(repeated, other);
+}
+
+#[test]
+fn int_number_provider_argument_parses_constants_and_registry_entries() {
+    init_vanilla_registry();
+    let dispatcher = resource_dispatcher(SteelArgumentType::int_number_provider());
+
+    let chain = parse_value(&dispatcher, "resource 7");
+    let Ok(value) = parsed_value::<IntNumberProviderValue>(&chain) else {
+        panic!("bare integer should parse as a constant int provider");
+    };
+    assert!(matches!(value.0, IntNumberProviderArg::Constant(7)));
+
+    // `/compute integer default 7` parses as `minecraft:constant` (Steel keeps only
+    // the value, since a bare number cannot name an entry).
+    assert!(value.0.identifier().is_none());
+
+    let chain = parse_value(&dispatcher, "resource minecraft:brewing/uses_default");
+    let Ok(value) = parsed_value::<IntNumberProviderValue>(&chain) else {
+        panic!("registered id should parse as a named int provider");
+    };
+    let IntNumberProviderArg::Named(entry) = &value.0 else {
+        panic!("registered id should parse as a named int provider");
+    };
+    assert_eq!(
+        entry.key,
+        Identifier::vanilla_static("brewing/uses_default")
+    );
+
+    // The named provider evaluates against a bare context like vanilla's
+    // `ContextIntProvider` holder.
+    let mut rng = rand::rng();
+    let mut context = LootContext::new(&mut rng);
+    assert_eq!(value.0.get_int_unsafe(&mut context), Some(20));
+
+    let parse = dispatcher.parse("resource minecraft:not_a_real_provider", TestSource::new());
+    assert!(
+        dispatcher.context_chain(parse).is_err(),
+        "an unknown provider id should be an invalid-argument error"
+    );
+}
+
+#[test]
+fn float_number_provider_argument_parses_constants_and_registry_entries() {
+    init_vanilla_registry();
+    let dispatcher = resource_dispatcher(SteelArgumentType::float_number_provider());
+
+    let chain = parse_value(&dispatcher, "resource 1.5");
+    let Ok(value) = parsed_value::<FloatNumberProviderValue>(&chain) else {
+        panic!("bare float should parse as a constant float provider");
+    };
+    assert!(matches!(value.0, FloatNumberProviderArg::Constant(1.5)));
+    assert!(value.0.identifier().is_none());
+
+    let chain = parse_value(&dispatcher, "resource minecraft:brewing/speed_default");
+    let Ok(value) = parsed_value::<FloatNumberProviderValue>(&chain) else {
+        panic!("registered id should parse as a named float provider");
+    };
+    let FloatNumberProviderArg::Named(entry) = &value.0 else {
+        panic!("registered id should parse as a named float provider");
+    };
+    assert_eq!(
+        entry.key,
+        Identifier::vanilla_static("brewing/speed_default")
+    );
+
+    let mut rng = rand::rng();
+    let mut context = LootContext::new(&mut rng);
+    assert_eq!(value.0.get_float_unsafe(&mut context), 1.0);
+
+    let parse = dispatcher.parse("resource minecraft:not_a_real_provider", TestSource::new());
+    assert!(
+        dispatcher.context_chain(parse).is_err(),
+        "an unknown provider id should be an invalid-argument error"
+    );
 }

@@ -173,6 +173,17 @@ impl World {
             .store(runs_normally, Ordering::Relaxed);
     }
 
+    /// Vanilla `ServerLevel.noSave`: whether the periodic autosave skips this world.
+    #[must_use]
+    pub fn no_save(&self) -> bool {
+        self.no_save.load(Ordering::Relaxed)
+    }
+
+    /// Sets vanilla `ServerLevel.noSave` (see [`Self::no_save`]).
+    pub fn set_no_save(&self, no_save: bool) {
+        self.no_save.store(no_save, Ordering::Relaxed);
+    }
+
     /// Mirrors `ServerLevel.isHandlingTick` for piston early-retraction rules.
     #[must_use]
     pub(crate) fn is_handling_tick(&self) -> bool {

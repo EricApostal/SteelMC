@@ -70,6 +70,7 @@ use crate::chunk::heightmap::HeightmapType;
 use crate::entity::ai::brain::Brain;
 use crate::entity::ai::control::{FlyingMoveControl, FlyingMoveControlInput, MoveControlOperation};
 use crate::entity::ai::goal::{FloatGoal, Goal, GoalControls};
+use crate::entity::ai::navigation::NavigationKind;
 use crate::entity::ai::targeting::TargetingConditions;
 use crate::entity::damage::DamageSource;
 use crate::entity::leash::Leashable;
@@ -265,10 +266,12 @@ impl HappyGhastEntity {
         {
             let mut navigation = self.mob_base.navigation().lock();
             // Vanilla `BabyFlyingPathNavigation`: a flying navigation that cannot
-            // open doors, floats, and requires a 48-block path.
-            navigation.set_flying(true);
+            // open doors, floats, requires a 48-block path, and whose direct-line
+            // clip ignores fluids.
+            navigation.set_kind(NavigationKind::Fly);
             navigation.set_can_open_doors(false);
             navigation.set_can_float(true);
+            navigation.set_fly_can_move_directly_ignores_fluids(true);
             let follow_range = self
                 .attributes()
                 .lock()
@@ -284,8 +287,10 @@ impl HappyGhastEntity {
         {
             let mut navigation = self.mob_base.navigation().lock();
             // Vanilla reinstalls `Mob.createNavigation` -> `GroundPathNavigation`.
-            navigation.set_flying(false);
+            navigation.set_kind(NavigationKind::Ground);
             navigation.set_can_open_doors(false);
+            navigation.set_fly_can_move_directly_ignores_fluids(false);
+            navigation.set_can_float(false);
             let follow_range = self
                 .attributes()
                 .lock()

@@ -16,3 +16,22 @@ pub struct SPong {
     /// The id received in the clientbound ping.
     pub id: i32,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use steel_utils::serial::ReadFrom as _;
+
+    use super::*;
+
+    #[test]
+    fn pong_round_trips_the_ping_id() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x0102_0304_i32.to_be_bytes());
+
+        let packet = SPong::read(&mut Cursor::new(&bytes[..])).expect("should decode");
+
+        assert_eq!(packet.id, 0x0102_0304);
+    }
+}

@@ -17,7 +17,7 @@ impl VillagerType {
     /// spawns, defaulting to `plains` for biomes outside the map.
     #[must_use]
     pub fn by_biome(biome: BiomeRef) -> VillagerTypeRef {
-        let villager_type = match biome.key.path.as_ref() {
+        match biome.key.path.as_ref() {
             "badlands" | "desert" | "eroded_badlands" | "wooded_badlands" => {
                 &vanilla_villager_types::DESERT
             }
@@ -34,8 +34,7 @@ impl VillagerType {
             | "taiga"
             | "windswept_forest" => &vanilla_villager_types::TAIGA,
             _ => &vanilla_villager_types::PLAINS,
-        };
-        villager_type
+        }
     }
 }
 

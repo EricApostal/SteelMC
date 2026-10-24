@@ -747,8 +747,8 @@ fn start_assembly(
     config: &JigsawConfig,
     start_y: i32,
     rng: &mut LegacyRandom,
-    chunk_x: i32,
-    chunk_z: i32,
+    start_x: i32,
+    start_z: i32,
     pools: &FxHashMap<Identifier, TemplatePoolData>,
     templates: &FxHashMap<Identifier, TemplateData>,
     alias_map: &FxHashMap<Identifier, Identifier>,
@@ -756,8 +756,6 @@ fn start_assembly(
     min_y: i32,
     max_y: i32,
 ) -> Option<StartedAssembly> {
-    let start_x = chunk_x * 16;
-    let start_z = chunk_z * 16;
     let center_rotation = Rotation::get_random(rng);
 
     // Vanilla falls back to the unaliased start pool when the alias target is absent.
@@ -955,8 +953,8 @@ fn finish_assembly<'a>(
 pub fn assemble(
     config: &JigsawConfig,
     rng: &mut LegacyRandom,
-    chunk_x: i32,
-    chunk_z: i32,
+    start_x: i32,
+    start_z: i32,
     pools: &FxHashMap<Identifier, TemplatePoolData>,
     templates: &FxHashMap<Identifier, TemplateData>,
     alias_map: &FxHashMap<Identifier, Identifier>,
@@ -964,9 +962,13 @@ pub fn assemble(
     min_y: i32,
     max_y: i32,
 ) -> Option<AssemblyResult> {
+    // Vanilla `JigsawPlacement.addPieces` anchors the start piece at the passed
+    // `startPos`: structure generation passes the chunk's minimum X/Z
+    // (`JigsawStructure.findGenerationPoint`), `/place jigsaw` passes the
+    // command position.
     let start_y = sample_start_height(config, rng);
     let started = start_assembly(
-        config, start_y, rng, chunk_x, chunk_z, pools, templates, alias_map, get_height, min_y,
+        config, start_y, rng, start_x, start_z, pools, templates, alias_map, get_height, min_y,
         max_y,
     )?;
     Some(finish_assembly(
@@ -1003,8 +1005,8 @@ impl Structure for JigsawStructure {
                 config,
                 start_y,
                 rng,
-                ctx.chunk_x(),
-                ctx.chunk_z(),
+                ctx.chunk_min_x(),
+                ctx.chunk_min_z(),
                 ctx.template_pools(),
                 ctx.templates(),
                 &alias_map,

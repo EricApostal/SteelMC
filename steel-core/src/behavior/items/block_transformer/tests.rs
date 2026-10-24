@@ -5,13 +5,11 @@ use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{BlockStateProperties, ChestType, DoubleBlockHalf};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::ItemRef;
-use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_items};
+use steel_registry::{vanilla_blocks, vanilla_items};
 use steel_utils::types::{InteractionHand, UpdateFlags};
 use steel_utils::{BlockPos, BlockStateId, ChunkPos, Direction, Downcast as _};
 
-use crate::behavior::{
-    BlockHitResult, ITEM_BEHAVIORS, InteractionResult, UseOnContext, init_behaviors,
-};
+use crate::behavior::{BlockHitResult, ITEM_BEHAVIORS, InteractionResult, UseOnContext};
 use crate::entity::{Entity as _, entities::ItemEntity};
 use crate::inventory::container::Container as _;
 use crate::player::Player;
@@ -27,8 +25,7 @@ struct Interaction {
 
 impl Interaction {
     fn new(name: &'static str) -> Self {
-        init_vanilla_registry();
-        init_behaviors();
+        crate::bootstrap::init_globals();
         let world_fixture = fresh_test_world(name);
         let world = &world_fixture.world;
         insert_ready_full_chunk(world, ChunkPos::new(0, 0));

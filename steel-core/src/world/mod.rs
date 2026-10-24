@@ -139,6 +139,7 @@ mod sleep;
 mod sleep_status;
 pub(crate) mod spawn;
 pub mod tick_scheduler;
+pub mod vibration;
 pub mod village;
 mod weather;
 mod world_entities;
@@ -290,6 +291,10 @@ pub struct World {
     tick_runs_normally: AtomicBool,
     /// Whether vanilla's scheduled/chunk/block-event tick phase is active.
     handling_tick: AtomicBool,
+    /// Vanilla `ServerLevel.noSave`: when true, the periodic autosave skips this
+    /// world. Toggled by `/save-off` and `/save-on`; `/save-all` forces a save
+    /// regardless, exactly like vanilla's `saveEverything(..., forced=true)`.
+    no_save: AtomicBool,
     /// Ordered, duplicate-suppressing server block events awaiting execution.
     block_events: SyncMutex<BlockEventQueue>,
     /// Vanilla collecting neighbor updater shared by all live block mutations.
@@ -488,6 +493,7 @@ impl World {
                 default_gamemode: AtomicI8::new(default_gamemode.into()),
                 tick_runs_normally: AtomicBool::new(true),
                 handling_tick: AtomicBool::new(false),
+                no_save: AtomicBool::new(false),
                 block_events: SyncMutex::new(BlockEventQueue::default()),
                 neighbor_updater: CollectingNeighborUpdater::new(max_chained_neighbor_updates),
                 entity_manager: WorldEntityManager::new(),
@@ -839,6 +845,10 @@ impl LevelReader for World {
         Self::get_block_entity(self, pos)
     }
 
+    fn entities_in_aabb(&self, aabb: &WorldAabb) -> Vec<SharedEntity> {
+        self.get_entities_in_aabb(aabb)
+    }
+
     fn is_face_sturdy_for(
         &self,
         state: BlockStateId,
@@ -898,6 +908,10 @@ impl LevelReader for Arc<World> {
 
     fn get_block_entity(&self, pos: BlockPos) -> Option<SharedBlockEntity> {
         self.as_ref().get_block_entity(pos)
+    }
+
+    fn entities_in_aabb(&self, aabb: &WorldAabb) -> Vec<SharedEntity> {
+        self.as_ref().get_entities_in_aabb(aabb)
     }
 
     fn is_face_sturdy_for(

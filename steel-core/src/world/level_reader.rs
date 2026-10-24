@@ -11,11 +11,12 @@ use steel_registry::blocks::shapes::SupportType;
 use steel_registry::fluid::FluidRef;
 use steel_registry::game_events::GameEventRef;
 use steel_registry::sound_event::SoundEventRef;
-use steel_utils::{BlockPos, BlockStateId, types::UpdateFlags};
+use steel_utils::{BlockPos, BlockStateId, WorldAabb, types::UpdateFlags};
 
 use crate::block_entity::SharedBlockEntity;
 use crate::chunk::heightmap::HeightmapType;
 use crate::chunk::light::MAX_LIGHT_LEVEL;
+use crate::entity::SharedEntity;
 use crate::world::game_event::GameEventContext;
 
 use super::World;
@@ -32,6 +33,19 @@ pub trait LevelReader {
     )]
     fn get_block_entity(&self, pos: BlockPos) -> Option<SharedBlockEntity> {
         None
+    }
+
+    /// Returns the entities whose bounding boxes intersect `aabb`.
+    ///
+    /// Mirrors the entity query surface of vanilla `Level.getEntities(Entity,
+    /// AABB, Predicate)` reached through a `LevelReader`. Lightweight and
+    /// world-generation surfaces have no entities and default to an empty list.
+    #[expect(
+        unused_variables,
+        reason = "worldgen and most test level surfaces have no entities"
+    )]
+    fn entities_in_aabb(&self, aabb: &WorldAabb) -> Vec<SharedEntity> {
+        Vec::new()
     }
 
     /// Mirrors vanilla `BlockState.isFaceSturdy` with full-face support.

@@ -177,8 +177,8 @@ pub fn resonance_event_by_frequency(vibration_frequency: i32) -> Option<GameEven
 /// Vanilla `VibrationSystem.getRedstoneStrengthForDistance`.
 #[must_use]
 pub fn redstone_strength_for_distance(distance: f32, listener_radius: i32) -> i32 {
-    let power_scale = 15.0 / listener_radius as f32;
-    (15 - (power_scale * distance).floor() as i32).max(1)
+    let power_scale = 15.0 / f64::from(listener_radius);
+    (15 - (power_scale * f64::from(distance)).floor() as i32).max(1)
 }
 
 /// Returns whether `event` is in Vanilla's `#ignore_vibrations_sneaking` game-event tag.
@@ -189,6 +189,7 @@ pub fn ignores_vibrations_when_sneaking(event: GameEventRef) -> bool {
         || key == &vanilla_game_events::PROJECTILE_SHOOT.key
         || key == &vanilla_game_events::STEP.key
         || key == &vanilla_game_events::SWIM.key
+        || key == &vanilla_game_events::ITEM_INTERACT_START.key
         || key == &vanilla_game_events::ITEM_INTERACT_FINISH.key
 }
 
@@ -218,6 +219,23 @@ impl VibrationInfo {
             uuid: None,
             projectile_owner_uuid: None,
         }
+    }
+
+    /// Vanilla `VibrationInfo(entity)`: the source UUID plus the owner UUID when the source is a
+    /// projectile.
+    #[must_use]
+    pub fn new_for_source(
+        event: GameEventRef,
+        distance: f32,
+        pos: DVec3,
+        source: Option<&dyn crate::entity::Entity>,
+    ) -> Self {
+        let mut info = Self::new(event, distance, pos);
+        if let Some(source) = source {
+            info.uuid = Some(source.uuid());
+            info.projectile_owner_uuid = projectile_owner_uuid(source);
+        }
+        info
     }
 
     /// Vanilla `VibrationSystem.User.calculateTravelTimeInTicks`.
@@ -281,6 +299,23 @@ impl VibrationSelector {
         (selected.tick < time).then(|| selected.event.clone())
     }
 
+    /// Game tick the current candidate was buffered on, as persisted by
+    /// `VibrationSelector.CODEC`'s `tick` field (Vanilla writes `-1` for an empty selector).
+    #[must_use]
+    pub fn selected_tick(&self) -> Option<i64> {
+        self.current_vibration
+            .as_ref()
+            .map(|selected| selected.tick)
+    }
+
+    /// Vanilla `VibrationSelector(VibrationInfo, long)`: restores a persisted candidate.
+    pub fn restore(&mut self, vibration: VibrationInfo, tick: i64) {
+        self.current_vibration = Some(SelectedVibration {
+            event: vibration,
+            tick,
+        });
+    }
+
     /// Vanilla `VibrationSelector.startOver`.
     pub fn start_over(&mut self) {
         self.current_vibration = None;
@@ -339,6 +374,12 @@ impl VibrationListenerState {
     pub fn selector_mut(&mut self) -> &mut VibrationSelector {
         &mut self.selector
     }
+
+    /// Read access to the candidate selector for persistence.
+    #[must_use]
+    pub const fn selector(&self) -> &VibrationSelector {
+        &self.selector
+    }
 }
 
 /// Per-listener hooks supplied by the owning block entity.
@@ -365,22 +406,51 @@ pub trait VibrationCallback: Send + Sync {
         vibration_frequency_for_event(event) != NO_VIBRATION_FREQUENCY
     }
 
-    /// Vanilla `VibrationSystem.User.isValidVibration`, minus the block-tag damping check that
-    /// Steel cannot evaluate yet.
-    fn is_valid_vibration(&self, event: GameEventRef, context: &GameEventContext<'_>) -> bool {
+    /// Vanilla `VibrationSystem.User.canTriggerAvoidVibration`.
+    ///
+    /// Only the sculk sensors return `true`; it gates the `avoid_vibration` criterion raise.
+    fn can_trigger_avoid_vibration(&self) -> bool {
+        false
+    }
+
+    /// Vanilla `VibrationSystem.User.requiresAdjacentChunksToBeTicking`.
+    ///
+    /// Both sculk sensor variants and the shrieker return `true`, which makes the ticker retain
+    /// an arrived vibration until the listener's 3x3 chunk neighbourhood is ticking.
+    fn requires_adjacent_chunks_to_be_ticking(&self) -> bool {
+        false
+    }
+
+    /// Vanilla `VibrationSystem.User.isValidVibration`.
+    fn is_valid_vibration(
+        &self,
+        world: &Arc<World>,
+        event: GameEventRef,
+        context: &GameEventContext<'_>,
+    ) -> bool {
+        use crate::world::vibration::damping;
         if !self.is_listenable_event(event) {
             return false;
         }
-        let Some(source) = context.source_entity() else {
-            return true;
-        };
-        if source.is_spectator() {
-            return false;
+        if let Some(source) = context.source_entity() {
+            if source.is_spectator() {
+                return false;
+            }
+            if source.is_stepping_carefully() && ignores_vibrations_when_sneaking(event) {
+                if self.can_trigger_avoid_vibration()
+                    && let Some(player) = source.as_player()
+                {
+                    crate::world::vibration::notify_avoid_vibration(player, world);
+                }
+                return false;
+            }
+            if damping::entity_dampens_vibrations(world, source) {
+                return false;
+            }
         }
-        if source.is_stepping_carefully() && ignores_vibrations_when_sneaking(event) {
-            return false;
-        }
-        true
+        !context
+            .affected_state()
+            .is_some_and(damping::state_dampens_vibrations)
     }
 
     /// Vanilla `VibrationSystem.User.canReceiveVibration`.
@@ -404,16 +474,20 @@ pub trait VibrationCallback: Send + Sync {
     /// into `event` and `distance` because Steel's event context already resolved the source).
     fn on_signal_received(&self, world: &Arc<World>, event: GameEventRef, distance: f32);
 
-    /// Vanilla `VibrationSystem.User.onReceiveVibration` with the persisted source UUID, which
+    /// Vanilla `VibrationSystem.User.onReceiveVibration` with the persisted source UUIDs, which
     /// listeners that need the causing player (sculk shrieker) resolve through the world.
+    ///
+    /// Vanilla forwards the source entity and, separately, its projectile owner; the shrieker
+    /// prefers the projectile owner. `projectile_owner_uuid` is `None` for non-projectiles.
     fn on_signal_received_from(
         &self,
         world: &Arc<World>,
         event: GameEventRef,
         distance: f32,
         source_uuid: Option<uuid::Uuid>,
+        projectile_owner_uuid: Option<uuid::Uuid>,
     ) {
-        let _ = source_uuid;
+        let _ = (source_uuid, projectile_owner_uuid);
         self.on_signal_received(world, event, distance);
     }
 }
@@ -513,10 +587,24 @@ impl VibrationSystemListener {
 
         let origin = BlockPos::from(vibration.pos);
         let distance = distance_between_in_blocks(origin, self.listener_pos);
+        // Vanilla `receiveVibration`: with `requiresAdjacentChunksToBeTicking` the arrived
+        // vibration is retained (not delivered and not cleared) until the listener's 3x3 chunk
+        // neighbourhood ticks, so the next tick retries with zero travel time left.
+        if self.callback.requires_adjacent_chunks_to_be_ticking()
+            && !crate::world::vibration::are_adjacent_chunks_ticking(world, self.listener_pos)
+        {
+            drop(state);
+            return;
+        }
         state.set_current_vibration(None);
         drop(state);
-        self.callback
-            .on_signal_received_from(world, vibration.event, distance, vibration.uuid);
+        self.callback.on_signal_received_from(
+            world,
+            vibration.event,
+            distance,
+            vibration.uuid,
+            vibration.projectile_owner_uuid,
+        );
         self.callback.on_data_changed(world);
     }
 
@@ -529,10 +617,12 @@ impl VibrationSystemListener {
         origin: DVec3,
     ) {
         let destination = position_of(self.listener_pos);
-        let mut vibration = VibrationInfo::new(event, origin.distance(destination) as f32, origin);
-        if let Some(source) = context.source_entity() {
-            vibration.uuid = Some(source.uuid());
-        }
+        let vibration = VibrationInfo::new_for_source(
+            event,
+            origin.distance(destination) as f32,
+            origin,
+            context.source_entity(),
+        );
         self.state
             .lock()
             .selector_mut()
@@ -567,7 +657,7 @@ impl GameEventListener for VibrationSystemListener {
             }
         }
 
-        if !self.callback.is_valid_vibration(event, context) {
+        if !self.callback.is_valid_vibration(world, event, context) {
             return false;
         }
 
@@ -579,22 +669,34 @@ impl GameEventListener for VibrationSystemListener {
             return false;
         }
 
-        // TODO(Protocol): Vanilla `VibrationSystem.Listener.isOccluded` raycasts in all six
-        // directions against `BlockTags.OCCLUDES_VIBRATION_SIGNALS`. Steel has no verified
-        // `Level::isBlockInLine` equivalent yet, so occluded vibrations are currently let through.
-
         let destination = position_of(self.listener_pos);
-        let mut vibration =
-            VibrationInfo::new(event, source_pos.distance(destination) as f32, source_pos);
-        if let Some(source) = context.source_entity() {
-            vibration.uuid = Some(source.uuid());
+        // Vanilla `VibrationSystem.Listener.isOccluded`.
+        if crate::world::vibration::is_occluded(world, source_pos, destination) {
+            return false;
         }
+
+        let vibration = VibrationInfo::new_for_source(
+            event,
+            source_pos.distance(destination) as f32,
+            source_pos,
+            context.source_entity(),
+        );
         self.state
             .lock()
             .selector_mut()
             .add_candidate(vibration, world.game_time());
         true
     }
+}
+
+/// Vanilla `VibrationInfo.getProjectileOwner`: the UUID of the entity that fired `source`,
+/// when `source` is a projectile with an owner.
+#[must_use]
+pub fn projectile_owner_uuid(source: &dyn crate::entity::Entity) -> Option<uuid::Uuid> {
+    source
+        .as_projectile()
+        .and_then(|projectile| projectile.get_owner())
+        .map(|owner| owner.uuid())
 }
 
 /// Vanilla `VibrationSystem.Listener.distanceBetweenInBlocks`.
@@ -614,4 +716,113 @@ pub fn position_of(pos: BlockPos) -> DVec3 {
         f64::from(pos.y()) + 0.5,
         f64::from(pos.z()) + 0.5,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use steel_registry::{init_vanilla_registry, vanilla_game_events};
+
+    use super::*;
+
+    #[test]
+    fn redstone_strength_matches_the_vanilla_distance_curve() {
+        init_vanilla_registry();
+        assert_eq!(redstone_strength_for_distance(0.0, 8), 15);
+        assert_eq!(redstone_strength_for_distance(2.0, 8), 12);
+        assert_eq!(redstone_strength_for_distance(8.0, 8), 1);
+        assert_eq!(redstone_strength_for_distance(64.0, 8), 1);
+        assert_eq!(redstone_strength_for_distance(1.0, 16), 15);
+        assert_eq!(redstone_strength_for_distance(16.0, 16), 1);
+    }
+
+    #[test]
+    fn frequency_table_matches_the_vibrations_tag() {
+        init_vanilla_registry();
+        assert_eq!(vibration_frequency_for_event(&vanilla_game_events::STEP), 1);
+        assert_eq!(vibration_frequency_for_event(&vanilla_game_events::FLAP), 1);
+        assert_eq!(
+            vibration_frequency_for_event(&vanilla_game_events::BLOCK_CHANGE),
+            11
+        );
+        assert_eq!(
+            vibration_frequency_for_event(&vanilla_game_events::NOTE_BLOCK_PLAY),
+            10
+        );
+        assert_eq!(
+            vibration_frequency_for_event(&vanilla_game_events::ENTITY_DIE),
+            15
+        );
+        assert_eq!(
+            vibration_frequency_for_event(&vanilla_game_events::RESONATE_7),
+            7
+        );
+        assert_eq!(
+            vibration_frequency_for_event(&vanilla_game_events::SHRIEK),
+            NO_VIBRATION_FREQUENCY
+        );
+    }
+
+    #[test]
+    fn resonance_events_round_trip_by_frequency() {
+        init_vanilla_registry();
+        for frequency in 1..=15 {
+            let event = resonance_event_by_frequency(frequency).expect("resonance event");
+            assert_eq!(vibration_frequency_for_event(event), frequency);
+        }
+        assert!(resonance_event_by_frequency(0).is_none());
+        assert!(resonance_event_by_frequency(16).is_none());
+    }
+
+    #[test]
+    fn selector_prefers_the_closest_then_the_highest_frequency() {
+        init_vanilla_registry();
+        let mut selector = VibrationSelector::default();
+        selector.add_candidate(
+            VibrationInfo::new(&vanilla_game_events::BLOCK_CHANGE, 6.0, DVec3::ZERO),
+            10,
+        );
+        selector.add_candidate(
+            VibrationInfo::new(&vanilla_game_events::BLOCK_DESTROY, 2.0, DVec3::ZERO),
+            10,
+        );
+        assert_eq!(selector.current().map(|info| info.distance), Some(2.0));
+
+        // A candidate buffered on an earlier tick never replaces the current one.
+        selector.add_candidate(
+            VibrationInfo::new(&vanilla_game_events::STEP, 1.0, DVec3::ZERO),
+            9,
+        );
+        assert_eq!(selector.current().map(|info| info.distance), Some(2.0));
+
+        // Equal distance keeps the higher frequency.
+        selector.add_candidate(
+            VibrationInfo::new(&vanilla_game_events::ENTITY_DIE, 2.0, DVec3::ZERO),
+            10,
+        );
+        assert_eq!(
+            selector
+                .current()
+                .map(|info| vibration_frequency_for_event(info.event)),
+            Some(15)
+        );
+
+        assert!(selector.chosen_candidate(10).is_none());
+        assert!(selector.chosen_candidate(11).is_some());
+        assert_eq!(selector.selected_tick(), Some(10));
+        selector.start_over();
+        assert!(selector.current().is_none());
+        assert_eq!(selector.selected_tick(), None);
+    }
+
+    #[test]
+    fn sneaking_ignore_tag_matches_vanilla() {
+        init_vanilla_registry();
+        assert!(ignores_vibrations_when_sneaking(
+            &vanilla_game_events::ITEM_INTERACT_START
+        ));
+        assert!(ignores_vibrations_when_sneaking(&vanilla_game_events::STEP));
+        assert!(!ignores_vibrations_when_sneaking(
+            &vanilla_game_events::ENTITY_DIE
+        ));
+    }
 }

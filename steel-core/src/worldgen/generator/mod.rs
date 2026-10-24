@@ -30,6 +30,7 @@ use crate::chunk::Chunk;
 use crate::worldgen::region::WorldGenRegion;
 use crate::worldgen::structure::{StructureGenerator, StructureStart};
 use steel_worldgen::noise::Beardifier;
+use steel_worldgen::structure::StructurePiece;
 
 /// A trait for generating chunks.
 #[enum_dispatch]
@@ -73,6 +74,22 @@ pub trait ChunkGenerator: Send + Sync {
         _chunk_pos: ChunkPos,
         _structure: &Identifier,
     ) -> Option<StructureStart> {
+        None
+    }
+
+    /// Assembles one jigsaw structure start for `/place jigsaw`.
+    ///
+    /// Mirrors vanilla `JigsawPlacement.generateJigsaw`: the named pool is
+    /// assembled from `pos` with the command's depth, no expansion hack, no
+    /// heightmap projection, `PoolAliasLookup.EMPTY`, and vanilla's 128-block
+    /// center distance. Generators without a structure engine return `None`.
+    fn generate_jigsaw_pieces(
+        &self,
+        _pool: &Identifier,
+        _target: &Identifier,
+        _max_depth: i32,
+        _pos: BlockPos,
+    ) -> Option<Vec<StructurePiece>> {
         None
     }
 

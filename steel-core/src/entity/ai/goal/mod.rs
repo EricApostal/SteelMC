@@ -134,6 +134,7 @@ pub(crate) use target::{
 pub(crate) use tempt_goal::TemptGoal;
 pub(crate) use try_find_water::TryFindWaterGoal;
 pub(crate) use use_item_goal::UseItemGoal;
+pub(crate) use water_avoiding_random_flying::WaterAvoidingRandomFlyingGoal;
 pub(crate) use water_avoiding_random_stroll::WaterAvoidingRandomStrollGoal;
 pub(crate) use witch_targets::{
     NearestAttackableWitchTargetGoal, NearestHealableRaiderTargetGoal, WitchTargetState,

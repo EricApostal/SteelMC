@@ -266,8 +266,10 @@ fn zero_drop_chance_equipment_is_never_dropped() {
     );
 }
 
+/// Vanilla `Mob.dropCustomDeathLoot`: a *preserved* slot (`DropChances.isPreserved`, i.e.
+/// `setGuaranteedDrop`) skips the wear step and drops the stack exactly as worn.
 #[test]
-fn guaranteed_equipment_drops_on_a_player_kill_with_vanilla_wear() {
+fn guaranteed_equipment_drops_unworn_on_a_player_kill() {
     let world_fixture = death_loot_world("death_loot_guaranteed_equipment");
     let world = &world_fixture.world;
     let player = player_holding(world, ItemStack::empty());
@@ -294,11 +296,52 @@ fn guaranteed_equipment_drops_on_a_player_kill_with_vanilla_wear() {
         .find(|drop| drop.is(&vanilla_items::DIAMOND_HELMET))
         .expect("a guaranteed drop is dropped");
 
-    // Vanilla wears the stack: `maxDamage - rand(0..=rand(0..max(maxDamage - 3, 1)))`.
+    assert_eq!(
+        helmet.get_damage_value(),
+        0,
+        "`!isPreserved` gates vanilla's wear, so a guaranteed drop keeps its damage"
+    );
+}
+
+/// Vanilla `Mob.dropCustomDeathLoot`: a non-preserved slot that passes its drop roll is
+/// worn by `maxDamage - rand(0..=rand(0..max(maxDamage - 3, 1)))`.
+#[test]
+fn worn_equipment_drops_with_vanilla_wear() {
+    let world_fixture = death_loot_world("death_loot_worn_equipment");
+    let world = &world_fixture.world;
+    let player = player_holding(world, ItemStack::empty());
+
+    let pig = Arc::new(PigEntity::new(
+        &vanilla_entities::PIG,
+        next_entity_id(),
+        PIG_POSITION,
+        Arc::downgrade(world),
+    ));
+    // A base chance of 1.0 is not preserved, so the wear step runs.
+    pig.set_equipment_drop_chance(EquipmentSlot::Head, 1.0);
+    pig.living_base().equipment().lock().set(
+        EquipmentSlot::Head,
+        ItemStack::new(&vanilla_items::DIAMOND_HELMET),
+    );
+    pig.set_last_hurt_by_player(player.uuid(), 100);
+    world
+        .try_add_entity(Arc::clone(&pig) as SharedEntity)
+        .expect("pig should attach to the loaded chunk");
+    pig.die(&player_kill_source(&player));
+
+    let helmet = dropped_item_stacks(world)
+        .into_iter()
+        .find(|drop| drop.is(&vanilla_items::DIAMOND_HELMET))
+        .expect("a chance-1.0 drop is dropped");
+
+    // `lost` is at most `maxDamage - 4` (the inner bound minus one), so the dropped
+    // helmet is at least four points damaged and never more than fully worn.
     let max_damage = helmet.get_max_damage();
+    let least_wear = max_damage - (max_damage - 3).max(1) + 1;
     assert!(
-        (max_damage - (max_damage - 3).max(1)) <= helmet.get_damage_value(),
-        "the dropped helmet keeps at most vanilla's wear"
+        least_wear <= helmet.get_damage_value(),
+        "vanilla wears the dropped stack: at least {least_wear} damage, got {}",
+        helmet.get_damage_value()
     );
     assert!(helmet.get_damage_value() <= max_damage);
 }

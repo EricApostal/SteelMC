@@ -69,3 +69,59 @@ fn read_length_prefixed_optional_tag(
     simdnbt::owned::read_optional_tag(&mut Cursor::new(document.as_slice()))
         .map_err(|error| Error::new(ErrorKind::InvalidData, format!("{error:?}")))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use steel_utils::serial::{ReadFrom as _, WriteTo as _};
+
+    use super::*;
+
+    fn encoded(id: &'static str, document: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        Identifier::vanilla_static(id)
+            .write(&mut bytes)
+            .expect("action id should encode");
+        VarInt(document.len() as i32)
+            .write(&mut bytes)
+            .expect("document length should encode");
+        bytes.extend_from_slice(document);
+        bytes
+    }
+
+    #[test]
+    fn custom_click_action_reads_an_absent_tag() {
+        // A single END tag id means the document carries no payload.
+        let bytes = encoded("dialog/test", &[0]);
+
+        let packet = SCustomClickAction::read(&mut Cursor::new(&bytes[..])).expect("should decode");
+
+        assert_eq!(packet.id, Identifier::vanilla_static("dialog/test"));
+        assert!(packet.payload.is_none());
+    }
+
+    #[test]
+    fn custom_click_action_reads_a_compound_tag() {
+        // TAG_Compound, empty name, no entries, then TAG_End.
+        let bytes = encoded("dialog/test", &[10, 0, 0, 0]);
+
+        let packet = SCustomClickAction::read(&mut Cursor::new(&bytes[..])).expect("should decode");
+
+        assert_eq!(packet.id, Identifier::vanilla_static("dialog/test"));
+        assert!(packet.payload.is_some());
+    }
+
+    #[test]
+    fn custom_click_action_rejects_a_document_over_the_vanilla_limit() {
+        let mut bytes = Vec::new();
+        Identifier::vanilla_static("dialog/test")
+            .write(&mut bytes)
+            .expect("action id should encode");
+        VarInt((MAX_PAYLOAD_SIZE + 1) as i32)
+            .write(&mut bytes)
+            .expect("document length should encode");
+
+        assert!(SCustomClickAction::read(&mut Cursor::new(&bytes[..])).is_err());
+    }
+}

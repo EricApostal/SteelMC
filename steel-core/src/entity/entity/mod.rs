@@ -14,6 +14,7 @@ use crate::entity::npc::Npc;
 use crate::entity::npc::gossip::ReputationEventHandler;
 use crate::entity::npc::trading::Merchant;
 use crate::entity::raid::Raider;
+use crate::inventory::lock::ContainerRef;
 use steel_math::DEGREE_90;
 
 /// Vanilla `Entity.refreshDimensions` small-entity limit: only entities at most
@@ -3940,13 +3941,49 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
     }
 
     /// Runs when this entity kills another entity.
-    fn award_kill_score(&self, _victim: &dyn Entity, _killing_blow: &DamageSource) {
-        // TODO: Trigger advancement criterion ENTITY_KILLED_PLAYER if the victim is a player.
+    fn award_kill_score(&self, victim: &dyn Entity, killing_blow: &DamageSource) {
+        // Vanilla `Entity.awardKillScore` raises `ENTITY_KILLED_PLAYER` when the
+        // killed entity is a player, with the killer as the event entity.
+        if let Some(player) = victim.as_player() {
+            crate::player::advancement::triggers::raise_entity_killed_player(
+                player,
+                self.as_entity_event_source(),
+                killing_blow,
+            );
+        }
     }
 }
 
 fn compute_modified_friction(friction: f64, modifier: f64) -> f64 {
     (1.0 - (1.0 - friction) * modifier).clamp(0.0, 1.0)
+}
+
+/// Returns the item container an entity exposes as a vanilla `ContainerEntity`.
+///
+/// Vanilla reaches this through the `ContainerEntity` interface:
+/// `AbstractMinecartContainer` (chest and hopper minecarts) and
+/// `AbstractChestBoat` (chest boats and chest rafts). Steel keeps each storage
+/// behind a concrete entity type, so this dispatches on the surviving erased
+/// type. Returns `None` for entities without a container.
+#[must_use]
+pub fn container_of_entity(entity: &dyn Entity) -> Option<ContainerRef> {
+    use crate::entity::entities::objects::{
+        ChestBoatEntity, ChestMinecartEntity, ChestRaftEntity, HopperMinecartEntity,
+    };
+
+    if let Some(cart) = entity.downcast_ref::<ChestMinecartEntity>() {
+        return Some(cart.container_ref());
+    }
+    if let Some(cart) = entity.downcast_ref::<HopperMinecartEntity>() {
+        return Some(cart.container_ref());
+    }
+    if let Some(boat) = entity.downcast_ref::<ChestBoatEntity>() {
+        return Some(boat.container_ref());
+    }
+    if let Some(raft) = entity.downcast_ref::<ChestRaftEntity>() {
+        return Some(raft.container_ref());
+    }
+    None
 }
 
 /// Repositions a direct passenger from the vehicle's attachment point.

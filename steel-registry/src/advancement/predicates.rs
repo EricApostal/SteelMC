@@ -109,6 +109,10 @@ impl BlockPredicate {
 /// Vanilla's exact predicate holds an arbitrary component value; Steel models
 /// the components that appear in vanilla advancement data.
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "variants mirror vanilla DataComponentExactPredicate payloads and are built once per criterion, not moved in hot paths"
+)]
 pub enum ExactComponent {
     /// `minecraft:damage` must equal this value.
     Damage(i32),
@@ -364,6 +368,7 @@ impl LocationPredicate {
 }
 
 impl HolderSet {
+    #[must_use]
     pub fn contains_biome(&self, biome: &Identifier) -> bool {
         match self {
             Self::Tag(tag) => REGISTRY
@@ -375,6 +380,7 @@ impl HolderSet {
     }
 
     /// Tests an entity-type key against this set.
+    #[must_use]
     pub fn contains_entity_type(&self, key: &Identifier) -> bool {
         match self {
             Self::Tag(tag) => REGISTRY
@@ -385,6 +391,7 @@ impl HolderSet {
         }
     }
 
+    #[must_use]
     pub fn contains_structure(&self, key: &Identifier) -> bool {
         match self {
             Self::Tag(tag) => REGISTRY
@@ -395,6 +402,7 @@ impl HolderSet {
         }
     }
 
+    #[must_use]
     pub fn contains_item(&self, item: &Identifier) -> bool {
         match self {
             Self::Tag(tag) => REGISTRY
@@ -407,6 +415,7 @@ impl HolderSet {
         }
     }
 
+    #[must_use]
     pub fn contains_effect(&self, effect: &Identifier) -> bool {
         match self {
             Self::Tag(tag) => REGISTRY
@@ -420,6 +429,7 @@ impl HolderSet {
     }
 
     /// Tests an enchantment key against this set.
+    #[must_use]
     pub fn contains_enchantment(&self, enchantment: &Identifier) -> bool {
         match self {
             Self::Tag(tag) => REGISTRY
@@ -432,6 +442,7 @@ impl HolderSet {
         }
     }
 
+    #[must_use]
     pub fn contains_loot_table(&self, key: &Identifier) -> bool {
         match self {
             // Vanilla has no loot-table tags; `LootTable.LIST_CODEC` only carries ids.
@@ -440,6 +451,7 @@ impl HolderSet {
         }
     }
 
+    #[must_use]
     pub fn contains_block(&self, key: &Identifier) -> bool {
         match self {
             Self::Tag(tag) => REGISTRY
@@ -450,6 +462,7 @@ impl HolderSet {
         }
     }
 
+    #[must_use]
     pub fn contains_recipe(&self, key: &Identifier) -> bool {
         match self {
             // Vanilla has no recipe tags; `RecipeHolder` sets only carry ids.
@@ -782,7 +795,7 @@ pub struct EntityView<'a> {
     pub held_item: Option<&'a ItemStack>,
 }
 
-impl<'a> EntityView<'a> {
+impl EntityView<'_> {
     /// Whether the entity's held item satisfies an item predicate.
     #[must_use]
     pub fn held_item_matches(&self, predicate: &ItemPredicate) -> bool {
@@ -1182,6 +1195,10 @@ impl<'a> AdvancementContext<'a> {
 
 /// The vanilla `LootItemCondition` subset usable in advancement criteria.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "variants mirror vanilla LootItemCondition payloads and are built once per criterion, not moved in hot paths"
+)]
 pub enum Condition {
     /// `minecraft:entity_properties`.
     EntityProperties {

@@ -514,6 +514,11 @@ pub(crate) fn decode_persistent_chunk(
     if let Some(entities) = entity_bytes {
         let borrowed = parse_root(entities, "entity")?;
         let view = simdnbt::borrow::NbtCompound::from(&borrowed);
+        crate::datafixer::ensure_current(
+            crate::datafixer::version_of_borrowed(&view),
+            crate::datafixer::DataFixType::Entity,
+            &format!("entity record for chunk {pos:?}"),
+        )?;
         for entity in view.list("Entities").map_or_else(Vec::new, compound_list) {
             match entity_from_nbt(&entity) {
                 Ok(entity) => persistent.entities.push(entity),
@@ -527,6 +532,11 @@ pub(crate) fn decode_persistent_chunk(
     if let Some(poi) = poi_bytes {
         let borrowed = parse_root(poi, "POI")?;
         let view = simdnbt::borrow::NbtCompound::from(&borrowed);
+        crate::datafixer::ensure_current(
+            crate::datafixer::version_of_borrowed(&view),
+            crate::datafixer::DataFixType::Poi,
+            &format!("POI record for chunk {pos:?}"),
+        )?;
         for record in poi_from_nbt(&view)? {
             let x = record.pos[0] - pos.0.x * 16;
             let z = record.pos[2] - pos.0.y * 16;

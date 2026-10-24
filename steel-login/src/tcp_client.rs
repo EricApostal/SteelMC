@@ -26,7 +26,10 @@ use steel_protocol::{
     packet_traits::{ClientPacket, CompressionInfo, EncodedPacket, ServerPacket},
     packet_writer::TCPNetworkEncoder,
     packets::{
-        common::{CDisconnect, SClientInformation, SCustomPayload, SPingRequest},
+        common::{
+            CDisconnect, SClientInformation, SCookieResponse, SCustomClickAction, SCustomPayload,
+            SKeepAlive, SPingRequest, SPong, SResourcePack,
+        },
         config::SSelectKnownPacks,
         handshake::{ClientIntent, SClientIntention},
         login::{CLoginDisconnect, SHello, SKey},
@@ -811,6 +814,56 @@ impl JavaTcpClient {
                     return Ok(self.reject_unexpected_packet(error).await);
                 }
                 Ok(self.finish_configuration().await)
+            }
+            config::S_KEEP_ALIVE => {
+                // Steel never sends a keep-alive while the connection is still configuring, so
+                // vanilla's `keepAlivePending` check cannot match and
+                // `ServerCommonPacketListenerImpl.handleKeepAlive` disconnects with
+                // `disconnect.timeout`.
+                let _ = SKeepAlive::read_packet(data)?;
+                self.kick(TextComponent::translated(
+                    translations::DISCONNECT_TIMEOUT.msg(),
+                ))
+                .await;
+                Ok(ConnectionAction::none())
+            }
+            config::S_PONG => {
+                // Vanilla `ServerCommonPacketListenerImpl.handlePong` is an empty handler; the
+                // packet is decoded so it is not rejected as an unexpected packet id.
+                let _ = SPong::read_packet(data)?;
+                Ok(ConnectionAction::none())
+            }
+            config::S_RESOURCE_PACK => {
+                // Vanilla only acts on a declined pack while the pack is required
+                // (`ServerCommonPacketListenerImpl.handleResourcePackResponse`); Steel pushes no
+                // resource pack during configuration and has no required-pack setting, so the
+                // disconnect branch is unreachable.
+                log::debug!(
+                    "Ignoring resource pack response during configuration: {:?}",
+                    SResourcePack::read_packet(data)?
+                );
+                Ok(ConnectionAction::none())
+            }
+            config::S_COOKIE_RESPONSE => {
+                // Steel sends no cookie request during configuration, so every response is
+                // unsolicited: vanilla disconnects with
+                // `multiplayer.disconnect.unexpected_query_response`.
+                let _ = SCookieResponse::read_packet(data)?;
+                self.kick(TextComponent::translated(
+                    translations::MULTIPLAYER_DISCONNECT_UNEXPECTED_QUERY_RESPONSE.msg(),
+                ))
+                .await;
+                Ok(ConnectionAction::none())
+            }
+            config::S_CUSTOM_CLICK_ACTION => {
+                // Vanilla `MinecraftServer.handleCustomClickAction` only logs the action.
+                let packet = SCustomClickAction::read_packet(data)?;
+                log::debug!(
+                    "Received custom click action {} with payload {:?}",
+                    packet.id,
+                    packet.payload
+                );
+                Ok(ConnectionAction::none())
             }
             _ => Err(PacketError::InvalidProtocol("Config".to_string())),
         }

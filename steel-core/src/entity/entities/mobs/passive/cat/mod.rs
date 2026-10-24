@@ -462,7 +462,8 @@ impl CatEntity {
     pub fn tame(&self, player: &Player) {
         self.set_tame(true);
         self.set_owner_uuid(Some(player.uuid()));
-        // GAP: `CriteriaTriggers.TAME_ANIMAL` needs the advancement trigger layer.
+        // Vanilla `TamableAnimal.tame` raises `TAME_ANIMAL` for the taming player.
+        crate::player::advancement::triggers::raise_tame_animal(player, self);
     }
 
     /// Vanilla `Cat.tryToTame`: one chance in three, otherwise the smoke event.

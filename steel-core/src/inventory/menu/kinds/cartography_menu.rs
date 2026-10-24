@@ -35,6 +35,7 @@ use crate::{
         prelude::*,
         slots::ResultHandler,
     },
+    map::MAX_SCALE,
     player::player_inventory::{PlayerInventory, Prediction},
     world::World,
 };
@@ -150,6 +151,24 @@ impl ResultHandler for CartographyResultHandler {
     fn is_result_valid(&self, _guard: &ContainerLockGuard, _player: &Player) -> bool {
         true
     }
+
+    /// Vanilla `MapItem.onCraftedPostProcess`: consumes `map_post_processing`
+    /// and rewrites the taken stack through `lockMap`/`scaleMap`, which store a
+    /// copy of the source map's saved data under a fresh map id.
+    fn on_result_crafted(&self, stack: &mut ItemStack) {
+        let Some(post_processing) = stack.get(MAP_POST_PROCESSING).copied() else {
+            return;
+        };
+        stack.remove(MAP_POST_PROCESSING);
+        match post_processing {
+            MapPostProcessing::Lock => {
+                crate::behavior::items::MapItem::lock_map(stack, &self.world);
+            }
+            MapPostProcessing::Scale => {
+                crate::behavior::items::MapItem::scale_map(stack, &self.world);
+            }
+        }
+    }
 }
 
 /// Per-menu cartography table state.
@@ -172,8 +191,9 @@ unsafe impl steel_utils::DowncastType for CartographyKind {
 }
 
 impl CartographyKind {
-    /// Mirrors vanilla `CartographyTableMenu.setupResultSlot` without the map
-    /// saved-data scale/locked checks.
+    /// Mirrors vanilla `CartographyTableMenu.setupResultSlot`: the map's saved
+    /// data decides whether it can still be extended or locked, and a stack
+    /// without saved data produces no result.
     fn setup_result_slot(
         &self,
         guard: &mut ContainerLockGuard,
@@ -185,15 +205,26 @@ impl CartographyKind {
             return;
         };
 
+        // Vanilla `MapItem.getSavedData(mapStack, level)`; a missing map id or
+        // unknown id leaves the previous result untouched.
+        let Some(data) = map_stack
+            .get(MAP_ID)
+            .and_then(|map_id| self.world.get_map_data(map_id.id()))
+        else {
+            return;
+        };
+
         let mut result;
         if additional_stack.is(&vanilla_items::PAPER)
             && REGISTRY
                 .items
                 .is_in_tag(map_stack.item(), &ItemTag::EXTENDABLE_MAPS)
+            && !data.locked
+            && data.scale < MAX_SCALE
         {
             result = map_stack.copy_with_count(1);
             result.set(MAP_POST_PROCESSING, MapPostProcessing::Scale);
-        } else if additional_stack.is(&vanilla_items::GLASS_PANE) {
+        } else if additional_stack.is(&vanilla_items::GLASS_PANE) && !data.locked {
             result = map_stack.copy_with_count(1);
             result.set(MAP_POST_PROCESSING, MapPostProcessing::Lock);
         } else if additional_stack.is(&vanilla_items::MAP) {
@@ -306,5 +337,141 @@ impl MenuKind for CartographyKind {
             player.add_item_or_drop_with_guard(guard, remainder, Prediction::Predicted);
         }
         Some(clicked)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicI64;
+
+    use steel_registry::data_components::components::MapId;
+    use steel_registry::data_components::vanilla_components::{MAP_ID, MAP_POST_PROCESSING};
+    use steel_registry::item_stack::ItemStack;
+    use steel_registry::{init_vanilla_registry, vanilla_items};
+    use steel_utils::BlockPos;
+    use steel_utils::Downcast as _;
+
+    use super::{CartographyKind, CartographyResultHandler, cartography};
+    use crate::inventory::container::Container as _;
+    use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
+    use crate::inventory::slots::ResultHandler;
+    use crate::map::MapItemSavedData;
+    use crate::test_support::{TestPlayerBuilder, fresh_test_world};
+
+    struct Fixture {
+        world: Arc<crate::world::World>,
+        menu: crate::inventory::menu::Menu,
+        pos: BlockPos,
+    }
+
+    fn fixture(key: &'static str) -> Fixture {
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world(key);
+        let world = Arc::clone(&world_fixture.world);
+        let player = TestPlayerBuilder::new(Arc::clone(&world), "CartoTester", 1).build();
+        let pos = BlockPos::new(0, 64, 0);
+        let menu = cartography(Arc::clone(&player.inventory), 1, pos, &world);
+        Fixture { world, menu, pos }
+    }
+
+    fn map_stack(world: &crate::world::World, locked: bool, scale: u8) -> ItemStack {
+        let map_id = world.get_free_map_id();
+        world.set_map_data(
+            map_id,
+            MapItemSavedData::create_fresh(0.0, 0.0, scale, true, false, world.key.clone()),
+        );
+        if locked {
+            let data = world
+                .maps()
+                .with_map_mut(map_id, |map| map.locked_copy())
+                .expect("map exists");
+            world.set_map_data(map_id, data);
+        }
+        let mut stack = ItemStack::new(&vanilla_items::FILLED_MAP);
+        stack.set(MAP_ID, MapId::new(map_id));
+        stack
+    }
+
+    fn result_after(fixture: &Fixture, map: &ItemStack, addition: &ItemStack) -> Option<ItemStack> {
+        let Some(kind) = fixture.menu.kind().downcast_ref::<CartographyKind>() else {
+            panic!("cartography builder should create a cartography menu");
+        };
+        let input_ref = ContainerRef::from(Arc::clone(&kind.input_container));
+        let result_ref = ContainerRef::from(Arc::clone(&kind.result_container));
+        {
+            let mut input = kind.input_container.lock();
+            input.set_item(0, map.clone());
+            input.set_item(1, addition.clone());
+        }
+        let mut guard = ContainerLockGuard::lock_all(&[&input_ref, &result_ref]);
+        kind.setup_result_slot(&mut guard, map, addition);
+        drop(guard);
+        let result = kind.result_container.lock().get_item(0).clone();
+        (!result.is_empty()).then_some(result)
+    }
+
+    /// Vanilla refuses to extend a locked map or one already at
+    /// `MAX_SCALE`, and refuses to lock an already-locked map.
+    #[test]
+    fn locked_and_max_scale_maps_have_no_result() {
+        let fixture = fixture("cartography_locked_guards");
+        let paper = ItemStack::new(&vanilla_items::PAPER);
+        let pane = ItemStack::new(&vanilla_items::GLASS_PANE);
+
+        let unlocked = map_stack(&fixture.world, false, 0);
+        let extended = result_after(&fixture, &unlocked, &paper).expect("paper extends");
+        assert_eq!(
+            extended.get(MAP_POST_PROCESSING),
+            Some(&super::MapPostProcessing::Scale)
+        );
+
+        let locked = map_stack(&fixture.world, true, 0);
+        assert!(result_after(&fixture, &locked, &paper).is_none());
+        assert!(result_after(&fixture, &locked, &pane).is_none());
+
+        let maxed = map_stack(&fixture.world, false, super::MAX_SCALE);
+        assert!(result_after(&fixture, &maxed, &paper).is_none());
+    }
+
+    /// Vanilla `MapItem.onCraftedPostProcess` consumes `map_post_processing` and
+    /// stores a locked copy under a fresh map id when the result is taken.
+    #[test]
+    fn taking_a_lock_result_consumes_post_processing() {
+        let fixture = fixture("cartography_lock_on_take");
+        let map = map_stack(&fixture.world, false, 0);
+        let source_id = map.get(MAP_ID).expect("map id").id();
+        let Some(kind) = fixture.menu.kind().downcast_ref::<CartographyKind>() else {
+            panic!("cartography builder should create a cartography menu");
+        };
+        let handler = CartographyResultHandler {
+            input_container: Arc::clone(&kind.input_container),
+            result_container: Arc::clone(&kind.result_container),
+            block_pos: fixture.pos,
+            world: Arc::clone(&fixture.world),
+            last_sound_time: Arc::new(AtomicI64::new(-1)),
+        };
+
+        let mut taken = map.clone();
+        taken.set(MAP_POST_PROCESSING, super::MapPostProcessing::Lock);
+        handler.on_result_crafted(&mut taken);
+
+        assert!(!taken.has(MAP_POST_PROCESSING));
+        let new_id = taken.get(MAP_ID).expect("fresh map id").id();
+        assert_ne!(new_id, source_id);
+        assert!(
+            fixture
+                .world
+                .get_map_data(new_id)
+                .expect("copy stored")
+                .locked
+        );
+        assert!(
+            !fixture
+                .world
+                .get_map_data(source_id)
+                .expect("source stored")
+                .locked
+        );
     }
 }

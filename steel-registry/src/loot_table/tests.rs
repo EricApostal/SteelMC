@@ -889,6 +889,16 @@ impl EnvironmentAttributeLookup for FakeEnvironmentAttributes {
 /// The `repair_cost`-only filter of the `minecraft:copy_components` test.
 static REPAIR_COST_ONLY: [Identifier; 1] = [Identifier::vanilla_static("repair_cost")];
 
+/// The `damage`-only filter of the `minecraft:copy_components` test.
+static DAMAGE_ONLY: [Identifier; 1] = [Identifier::vanilla_static("damage")];
+
+/// The `include` list of the `exclude`-wins-over-`include` `copy_components`
+/// test.
+static REPAIR_COST_AND_DAMAGE: [Identifier; 2] = [
+    Identifier::vanilla_static("repair_cost"),
+    Identifier::vanilla_static("damage"),
+];
+
 /// The `kills` objective range (`5..=10`) of the `minecraft:entity_scores`
 /// tests; a `static` is required because [`NumberProvider`] is not `Copy`.
 static KILLS_RANGE: [(&str, NumberProviderRange); 1] = [(
@@ -923,6 +933,8 @@ fn copy_source_hooks() -> FakeItemSourceHooks {
     entity.set(DAMAGE, Some(5));
     let mut block_entity = DataComponentMap::new();
     block_entity.set(REPAIR_COST, Some(7));
+    // A second component so the `exclude` filter has something to keep.
+    block_entity.set(DAMAGE, Some(4));
     FakeItemSourceHooks {
         entity,
         block_entity,
@@ -936,13 +948,18 @@ fn copy_components_function_copies_only_the_listed_components() {
     let hooks = copy_source_hooks();
     let mut ctx = LootContext::new(&mut rng).with_item_source(&hooks);
     let mut stack = ItemStack::new(&vanilla_items::STONE);
-    assert!(stack.get(DAMAGE).is_none() && stack.get(REPAIR_COST).is_none());
+    // `minecraft:stone` carries vanilla's `COMMON_ITEM_COMPONENTS` default
+    // (`repair_cost: 0`) but no `damage`, so the untouched stack reports the
+    // default repair cost rather than `None`.
+    assert_eq!(stack.get(REPAIR_COST), Some(&0));
+    assert!(stack.get(DAMAGE).is_none());
 
     // `include` restricts the copy to the named components (vanilla
     // `CopyComponentsFunction.bakedPredicate`).
     LootFunction::CopyComponents {
         source: CopySource::BlockEntity,
         include: &REPAIR_COST_ONLY,
+        exclude: &[],
     }
     .apply(&mut stack, &mut ctx);
     assert_eq!(stack.get(REPAIR_COST), Some(&7));
@@ -952,6 +969,7 @@ fn copy_components_function_copies_only_the_listed_components() {
     LootFunction::CopyComponents {
         source: CopySource::Attacker,
         include: &[],
+        exclude: &[],
     }
     .apply(&mut stack, &mut ctx);
     assert_eq!(stack.get(DAMAGE), Some(&5));
@@ -970,10 +988,48 @@ fn copy_components_function_without_a_source_hook_leaves_the_stack_untouched() {
     LootFunction::CopyComponents {
         source: CopySource::BlockEntity,
         include: &[],
+        exclude: &[],
     }
     .apply(&mut stack, &mut ctx);
 
-    assert!(stack.get(REPAIR_COST).is_none() && stack.get(DAMAGE).is_none());
+    // The stack keeps its prototype defaults (`repair_cost: 0`) and gains no
+    // `damage` when the referenced `DataComponentGetter` is absent.
+    assert_eq!(stack.get(REPAIR_COST), Some(&0));
+    assert!(stack.get(DAMAGE).is_none());
+}
+
+#[test]
+fn copy_components_function_honours_the_exclude_list() {
+    init_test_registries();
+    let mut rng = test_rng();
+    let hooks = copy_source_hooks();
+    let mut ctx = LootContext::new(&mut rng).with_item_source(&hooks);
+    let mut stack = ItemStack::new(&vanilla_items::STONE);
+
+    // Vanilla `CopyComponentsFunction.exclude` drops the listed components
+    // even when an empty `include` copies everything else.
+    LootFunction::CopyComponents {
+        source: CopySource::BlockEntity,
+        include: &[],
+        exclude: &REPAIR_COST_ONLY,
+    }
+    .apply(&mut stack, &mut ctx);
+    assert_eq!(stack.get(DAMAGE), Some(&4));
+    // `repair_cost` is excluded from the copy, so the stack still reports its
+    // prototype default (0) rather than the source's 7.
+    assert_eq!(stack.get(REPAIR_COST), Some(&0));
+
+    // ... and an excluded name wins over an explicit `include` of the same
+    // name (`CopyComponentsFunction.bakedPredicate` requires both).
+    let mut stack = ItemStack::new(&vanilla_items::STONE);
+    LootFunction::CopyComponents {
+        source: CopySource::BlockEntity,
+        include: &REPAIR_COST_AND_DAMAGE,
+        exclude: &DAMAGE_ONLY,
+    }
+    .apply(&mut stack, &mut ctx);
+    assert_eq!(stack.get(REPAIR_COST), Some(&7));
+    assert!(stack.get(DAMAGE).is_none());
 }
 
 #[test]

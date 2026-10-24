@@ -455,7 +455,16 @@ impl LootCondition {
                 // installed the value is unavailable, so the check fails.
                 ctx.environment_attributes
                     .and_then(|attributes| attributes.get_attribute(attribute, ctx.origin))
-                    .is_some_and(|actual| actual == *value)
+                    .is_some_and(|actual| {
+                        // Vanilla compares the converted attribute value for
+                        // exact equality, not within a tolerance.
+                        #[expect(
+                            clippy::float_cmp,
+                            reason = "matches vanilla EnvironmentAttributeCheck exact comparison"
+                        )]
+                        let equal = actual == *value;
+                        equal
+                    })
             }
             LootCondition::Reference(_name) => {
                 // Steel inlines `minecraft:<path>` condition references at build

@@ -84,7 +84,7 @@ pub(crate) fn poi_from_nbt(tag: &BorrowedNbtCompound<'_, '_>) -> io::Result<Vec<
         };
         let records = section.list("Records").map_or_else(Vec::new, compound_list);
         for record in records {
-            let Some(pos) = record.list("pos").and_then(|list| list.ints()) else {
+            let Some(pos) = record_pos(&record) else {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "vanilla POI record has no integer `pos`",
@@ -109,6 +109,17 @@ pub(crate) fn poi_from_nbt(tag: &BorrowedNbtCompound<'_, '_>) -> io::Result<Vec<
     }
 
     Ok(entries)
+}
+
+/// Reads a record's `pos`, matching vanilla's `BlockPos.CODEC`.
+///
+/// Vanilla serializes `BlockPos` with `Codec.INT_STREAM`, which `NbtOps` writes as an
+/// `IntArrayTag`; `DynamicOps.getIntStream` also accepts a plain integer list, so both forms
+/// load.
+fn record_pos(record: &BorrowedNbtCompound<'_, '_>) -> Option<Vec<i32>> {
+    record
+        .int_array("pos")
+        .or_else(|| record.list("pos").and_then(|list| list.ints()))
 }
 
 fn section_record(entry: &VanillaPoi) -> NbtCompound {

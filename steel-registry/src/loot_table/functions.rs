@@ -120,6 +120,8 @@ pub enum LootFunction {
     CopyComponents {
         source: CopySource,
         include: &'static [Identifier],
+        /// Vanilla `CopyComponentsFunction.exclude`: component types never copied.
+        exclude: &'static [Identifier],
     },
     /// Copy block state properties to the item.
     CopyState {
@@ -560,8 +562,12 @@ impl LootFunction {
                     ctx.rng,
                 );
             }
-            LootFunction::CopyComponents { source, include } => {
-                item.copy_components(*source, include, ctx);
+            LootFunction::CopyComponents {
+                source,
+                include,
+                exclude,
+            } => {
+                item.copy_components(*source, include, exclude, ctx);
             }
             LootFunction::CopyState { block, properties } => {
                 item.copy_block_state(block, properties, ctx);

@@ -170,10 +170,20 @@ pub(crate) fn generate_function(function: &LootFunctionJson) -> TokenStream {
                     .collect()
             });
 
+            let exclude: Vec<TokenStream> = function.exclude.as_ref().map_or_default(|exc| {
+                exc.iter()
+                    .map(|s| {
+                        let s = s.strip_prefix("minecraft:").unwrap_or(s);
+                        quote! { Identifier::vanilla_static(#s) }
+                    })
+                    .collect()
+            });
+
             quote! {
                 LootFunction::CopyComponents {
                     source: #source,
                     include: &[#(#include),*],
+                    exclude: &[#(#exclude),*],
                 }
             }
         }

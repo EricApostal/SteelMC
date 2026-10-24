@@ -298,15 +298,24 @@ pub trait Animal: AgeableMob {
         &self,
         world: &Arc<World>,
         partner: &dyn Animal,
-        _offspring: Option<&dyn Animal>,
+        offspring: Option<&dyn Animal>,
     ) {
         // Vanilla `Animal.finalizeSpawnChildFromBreeding` awards `animals_bred` to the love
-        // cause, falling back to the partner's love cause. The `bred_animals` advancement
-        // trigger is a separate gap.
+        // cause, falling back to the partner's love cause, then raises `BRED_ANIMALS`.
         if let Some(love_cause) = self.love_cause_uuid().or_else(|| partner.love_cause_uuid())
             && let Some(player) = world.players.get_by_uuid(&love_cause)
         {
             player.award_custom_stat(&vanilla_custom_stats::ANIMALS_BRED);
+            // Vanilla `Animal.finalizeSpawnChildFromBreeding` raises `BRED_ANIMALS`
+            // for the love cause with both parents and the offspring.
+            crate::player::advancement::triggers::raise_bred_animals(
+                &player,
+                self.as_entity_event_source(),
+                partner.as_entity_event_source(),
+                offspring
+                    .as_ref()
+                    .map(|child| child.as_entity_event_source()),
+            );
         }
 
         self.set_age(PARENT_AGE_AFTER_BREEDING);

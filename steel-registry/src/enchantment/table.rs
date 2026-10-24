@@ -312,7 +312,7 @@ pub fn filter_compatible_enchantments(
 pub fn is_enchantment_compatible(existing: &[EnchantmentRef], target: EnchantmentRef) -> bool {
     existing
         .iter()
-        .all(|enchantment| Enchantment::are_compatible(*enchantment, target))
+        .all(|enchantment| Enchantment::are_compatible(enchantment, target))
 }
 
 /// Vanilla `EnchantmentHelper.enchantItem`: applies `selectEnchantment` to the

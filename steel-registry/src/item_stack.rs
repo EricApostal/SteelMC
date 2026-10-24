@@ -789,11 +789,13 @@ impl ItemStack {
     /// Copies components from a source (block entity, attacker, etc.) to this item.
     ///
     /// Vanilla `CopyComponentsFunction.run`: an empty `include` list copies every
-    /// component of the source, otherwise only the listed keys are copied.
+    /// component of the source, otherwise only the listed keys are copied; the
+    /// `exclude` list is skipped in either case.
     pub fn copy_components<R: rand::Rng>(
         &mut self,
         source: crate::loot_table::CopySource,
         include: &[Identifier],
+        exclude: &[Identifier],
         ctx: &crate::loot_table::LootContext<'_, R>,
     ) {
         use crate::loot_table::LootContextEntity;
@@ -821,6 +823,11 @@ impl ItemStack {
             include.to_vec()
         };
         for key in keys {
+            // Vanilla `CopyComponentsFunction.bakedPredicate` rejects excluded
+            // component types before reading them from the source getter.
+            if exclude.contains(&key) {
+                continue;
+            }
             if let Some(data) = components.get_raw(&key) {
                 self.patch.set_component_data(key, data.clone());
             }
@@ -1326,8 +1333,7 @@ impl ItemStack {
 
         let mut target = self
             .get(CUSTOM_DATA)
-            .map(CustomData::copy_tag)
-            .unwrap_or_default();
+            .map_or_else(Default::default, CustomData::copy_tag);
         let mut tag = NbtTag::Compound(target.clone());
         for operation in operations {
             let (Ok(source_path), Ok(target_path)) = (
@@ -1425,7 +1431,7 @@ impl ItemStack {
         let current = self
             .get(FIREWORKS)
             .cloned()
-            .unwrap_or_else(|| crate::data_components::vanilla_components::Fireworks::empty());
+            .unwrap_or_else(crate::data_components::vanilla_components::Fireworks::empty);
         let flight_duration = flight_duration.unwrap_or_else(|| current.flight_duration());
         let explosions = match explosions {
             Some(explosions) => explosions
@@ -1723,7 +1729,7 @@ fn parse_text_component(text: &str) -> TextComponent {
 }
 
 /// Resolves a loot context entity target, mirroring `LootContext::get_entity`.
-fn entity_ref<'a, R: rand::Rng>(
+const fn entity_ref<'a, R: rand::Rng>(
     ctx: &crate::loot_table::LootContext<'a, R>,
     target: crate::loot_table::LootContextEntity,
 ) -> Option<crate::loot_table::EntityRef<'a>> {
@@ -1735,6 +1741,7 @@ fn entity_ref<'a, R: rand::Rng>(
         LootContextEntity::DirectKiller => ctx.direct_killer_entity,
         LootContextEntity::KillerPlayer => ctx.last_damage_player,
         LootContextEntity::Interacting => ctx.interacting_entity,
+        LootContextEntity::Target => ctx.target_entity,
     }
 }
 
@@ -2804,7 +2811,13 @@ mod component_setter_tests {
         assert_eq!(layers[1].color(), crate::DyeColor::Red);
 
         stack.set_banner_pattern(&[], false);
-        assert!(stack.get(BANNER_PATTERNS).expect("patterns").layers().is_empty());
+        assert!(
+            stack
+                .get(BANNER_PATTERNS)
+                .expect("patterns")
+                .layers()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -2908,7 +2921,13 @@ mod component_setter_tests {
         }));
 
         stack.set_attributes(&[], true, &mut rng);
-        assert!(stack.get(ATTRIBUTE_MODIFIERS).expect("modifiers present").modifiers.is_empty());
+        assert!(
+            stack
+                .get(ATTRIBUTE_MODIFIERS)
+                .expect("modifiers present")
+                .modifiers
+                .is_empty()
+        );
     }
 
     #[test]
@@ -3004,6 +3023,7 @@ mod component_setter_tests {
         stack.copy_components(
             CopySource::BlockEntity,
             &[Identifier::vanilla_static("custom_name")],
+            &[],
             &ctx,
         );
         assert_eq!(

@@ -587,6 +587,7 @@ mod tests {
 
     use simdnbt::borrow::read_compound as read_borrowed_compound;
     use steel_registry::data_components::{DataComponentPatch, PotionContents};
+    use steel_registry::potion::Potion;
     use steel_registry::{
         init_vanilla_registry, registry_reference::RegistryReference, vanilla_blocks,
         vanilla_items, vanilla_potions,
@@ -594,19 +595,24 @@ mod tests {
 
     use super::*;
 
-    /// Plain water bottle with a `potion_contents` patch, as dropped items carry.
-    fn water_bottle() -> ItemStack {
+    /// Plain potion with a `potion_contents` patch, as dropped items carry.
+    fn potion_bottle(potion: RegistryReference<Potion>) -> ItemStack {
         let mut patch = DataComponentPatch::new();
         patch.set(
             vanilla_components::POTION_CONTENTS,
-            PotionContents::new(
-                Some(RegistryReference::new(&vanilla_potions::WATER)),
-                None,
-                Vec::new(),
-                None,
-            ),
+            PotionContents::new(Some(potion), None, Vec::new(), None),
         );
         ItemStack::with_count_and_patch(&vanilla_items::POTION, 1, patch)
+    }
+
+    /// A plain water bottle.
+    fn water_bottle() -> ItemStack {
+        potion_bottle(RegistryReference::new(&vanilla_potions::WATER))
+    }
+
+    /// A plain awkward potion.
+    fn awkward_bottle() -> ItemStack {
+        potion_bottle(RegistryReference::new(&vanilla_potions::AWKWARD))
     }
 
     fn test_stand() -> BrewingStandBlockEntity {
@@ -675,6 +681,100 @@ mod tests {
             Some(RegistryReference::new(&vanilla_potions::AWKWARD))
         );
         assert_eq!(state.fuel, 19);
+    }
+
+    #[test]
+    fn awkward_to_healing_uses_the_registered_output() {
+        init_vanilla_registry();
+        let stand = test_stand();
+        {
+            let mut state = stand.container.lock();
+            state.set_item(0, awkward_bottle());
+            state.set_item(
+                SLOT_INGREDIENT,
+                ItemStack::new(&vanilla_items::GLISTERING_MELON_SLICE),
+            );
+            state.fuel = 20;
+        }
+
+        for _ in 0..=DEFAULT_BREW_TIME {
+            let _ = stand.container.lock().tick();
+        }
+
+        let state = stand.container.lock();
+        assert!(
+            state.items[SLOT_INGREDIENT].is_empty(),
+            "the reagent is consumed"
+        );
+        assert_eq!(state.fuel, 19, "exactly one fuel use is consumed");
+        assert!(
+            state.items[0].is(&vanilla_items::POTION),
+            "the bottle stays a potion"
+        );
+        assert_eq!(
+            state.items[0]
+                .get(vanilla_components::POTION_CONTENTS)
+                .and_then(PotionContents::potion),
+            Some(RegistryReference::new(&vanilla_potions::HEALING)),
+            "the potion comes from the brewing recipe's output"
+        );
+    }
+
+    #[test]
+    fn unmatched_reagent_does_not_start_a_batch() {
+        init_vanilla_registry();
+        let stand = test_stand();
+        {
+            let mut state = stand.container.lock();
+            // Phantom membrane only extends awkward potions, so it cannot brew
+            // a water bottle.
+            state.set_item(0, water_bottle());
+            state.set_item(
+                SLOT_INGREDIENT,
+                ItemStack::new(&vanilla_items::PHANTOM_MEMBRANE),
+            );
+            state.fuel = 20;
+        }
+
+        for _ in 0..=DEFAULT_BREW_TIME {
+            let _ = stand.container.lock().tick();
+        }
+
+        // Vanilla `serverTick` never starts the batch: the bottle, the membrane
+        // and the fuel are all untouched, and no brew is scheduled.
+        let state = stand.container.lock();
+        assert_eq!(state.fuel, 20, "an invalid combination consumes no fuel");
+        assert_eq!(state.brew_time, 0, "an invalid combination starts no batch");
+        assert!(
+            state.items[0]
+                .get(vanilla_components::POTION_CONTENTS)
+                .is_some_and(|contents| contents.potion()
+                    == Some(RegistryReference::new(&vanilla_potions::WATER)))
+        );
+        assert!(state.items[SLOT_INGREDIENT].is(&vanilla_items::PHANTOM_MEMBRANE));
+    }
+
+    #[test]
+    fn non_brewable_bottle_input_does_not_start_a_batch() {
+        init_vanilla_registry();
+        let stand = test_stand();
+        {
+            let mut state = stand.container.lock();
+            // Glass bottles are potion inputs, but no brewing recipe takes one.
+            state.set_item(0, ItemStack::new(&vanilla_items::GLASS_BOTTLE));
+            state.set_item(SLOT_INGREDIENT, ItemStack::new(&vanilla_items::NETHER_WART));
+            state.fuel = 20;
+        }
+
+        for _ in 0..=DEFAULT_BREW_TIME {
+            let _ = stand.container.lock().tick();
+        }
+
+        let state = stand.container.lock();
+        assert_eq!(state.fuel, 20, "an invalid combination consumes no fuel");
+        assert_eq!(state.brew_time, 0, "an invalid combination starts no batch");
+        assert!(state.items[0].is(&vanilla_items::GLASS_BOTTLE));
+        assert!(state.items[SLOT_INGREDIENT].is(&vanilla_items::NETHER_WART));
     }
 
     #[test]

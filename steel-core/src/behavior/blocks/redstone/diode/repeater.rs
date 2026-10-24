@@ -227,10 +227,11 @@ impl BlockBehavior for RepeaterBlock {
 #[cfg(test)]
 mod tests {
     use steel_registry::init_vanilla_registry;
+    use steel_utils::ChunkPos;
 
     use super::*;
     use crate::behavior::init_behaviors;
-    use crate::test_support::TestLevel;
+    use crate::test_support::{TestLevel, fresh_test_world, insert_ready_full_chunk};
     use crate::world::tick_scheduler::TickPriority;
 
     const POWER: &IntProperty = &BlockStateProperties::POWER;
@@ -344,5 +345,108 @@ mod tests {
             DiodeBlock::tick_priority(&prioritized_level, pos, off, false),
             TickPriority::ExtremelyHigh
         );
+    }
+
+    #[test]
+    fn update_shape_recomputes_locked_only_across_the_diode_axis() {
+        let repeater = repeater();
+        let pos = BlockPos::new(0, 64, 0);
+        let state = repeater_state(Direction::North, false);
+        let side_repeater = repeater_state(Direction::East, true);
+        let level = TestLevel::default().with_block(pos.east(), side_repeater);
+
+        // Vanilla: `directionToNeighbour.getAxis() != FACING.getAxis()` re-reads LOCKED.
+        let locked = repeater.update_shape(
+            state,
+            &level,
+            pos,
+            Direction::East,
+            pos.east(),
+            side_repeater,
+        );
+        assert!(locked.get_value(LOCKED));
+
+        // A change along the diode axis falls through to `DiodeBlock.updateShape`, which
+        // returns the state untouched.
+        let unchanged = repeater.update_shape(
+            state,
+            &level,
+            pos,
+            Direction::North,
+            pos.north(),
+            vanilla_blocks::AIR.default_state(),
+        );
+        assert_eq!(unchanged, state);
+    }
+
+    /// Vanilla placement flags that suppress the placement callbacks.
+    ///
+    /// Redstone wire recomputes `POWER` from real sources in `onPlace`, so a fixture
+    /// that wants a specific analog level must place the pre-powered state without
+    /// running the wire's placement evaluation.
+    fn raw_flags() -> UpdateFlags {
+        UpdateFlags::UPDATE_NONE | UpdateFlags::UPDATE_SKIP_ON_PLACE
+    }
+
+    #[test]
+    fn locked_repeater_ignores_scheduled_pulses_and_unlocks_after_input_removal() {
+        init_vanilla_registry();
+        init_behaviors();
+        let world_fixture = fresh_test_world("repeater_locked_pulse");
+        let world = &world_fixture.world;
+        let pos = BlockPos::new(8, 64, 8);
+        insert_ready_full_chunk(world, ChunkPos::from_block_pos(pos));
+
+        // Vanilla repeaters and wire require a sturdy block below them and are
+        // dropped by the first neighbor update otherwise, so stand the circuit on
+        // stone.
+        for support_pos in [pos.below(), pos.north().below(), pos.east().below()] {
+            assert!(world.set_block(
+                support_pos,
+                vanilla_blocks::STONE.default_state(),
+                UpdateFlags::UPDATE_NONE,
+            ));
+        }
+
+        let behavior = RepeaterBlock::new(&vanilla_blocks::REPEATER);
+        let powered_input = vanilla_blocks::REDSTONE_WIRE
+            .default_state()
+            .set_value(POWER, 7);
+        assert!(world.set_block(pos.north(), powered_input, raw_flags()));
+        // A powered repeater pointing into our side is what vanilla `isLocked` reads.
+        let side_repeater = repeater_state(Direction::East, true);
+        assert!(world.set_block(pos.east(), side_repeater, raw_flags()));
+
+        let state = repeater_state(Direction::North, false);
+        assert!(world.set_block(pos, state, raw_flags()));
+        behavior.tick(state, world, pos);
+        assert_eq!(
+            world.get_block_state(pos),
+            state,
+            "vanilla `DiodeBlock.tick` returns early while the repeater is locked"
+        );
+
+        // Unlocking lets the same tick turn the repeater on from its wire input.
+        assert!(world.set_block(
+            pos.east(),
+            vanilla_blocks::AIR.default_state(),
+            UpdateFlags::UPDATE_NONE,
+        ));
+        behavior.tick(state, world, pos);
+        let turned_on = world.get_block_state(pos);
+        assert!(turned_on.get_value(POWERED));
+        assert!(
+            !world.has_scheduled_block_tick(pos, &vanilla_blocks::REPEATER),
+            "turning on from a live input does not schedule another tick"
+        );
+
+        // With the input gone the next scheduled tick turns it back off.
+        assert!(world.set_block(
+            pos.north(),
+            vanilla_blocks::AIR.default_state(),
+            UpdateFlags::UPDATE_NONE,
+        ));
+        behavior.tick(turned_on, world, pos);
+        assert!(!world.get_block_state(pos).get_value(POWERED));
     }
 }

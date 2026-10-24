@@ -11,8 +11,9 @@ use steel_macros::block_behavior;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::{BlockStateProperties, BoolProperty, Direction};
+use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
-use steel_registry::vanilla_game_events;
+use steel_registry::{vanilla_entities, vanilla_game_events, vanilla_game_rules};
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId};
 
@@ -23,6 +24,7 @@ use crate::behavior::blocks::redstone::{MAX_REDSTONE_SIGNAL, MIN_REDSTONE_SIGNAL
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
 use crate::entity::{Entity, InsideBlockEffectCollector, SharedEntity};
 use crate::player::Player;
+use crate::world::explosion::{BlockInteraction, ExplosionInfo, default_on_explosion_hit};
 use crate::world::{
     LevelReader, ScheduledTickAccess, SignalQueryContext, World, game_event::GameEventContext,
 };
@@ -101,6 +103,17 @@ impl ButtonBlock {
             pos,
             &GameEventContext::new(player.map(|player| player as &dyn Entity), None),
         );
+    }
+
+    /// Vanilla `ServerExplosion.canTriggerBlocks`.
+    ///
+    /// `ServerExplosion::can_trigger_blocks` is private to `world::explosion`,
+    /// so its wind-charge `mob_griefing` refinement is mirrored here.
+    fn can_trigger_blocks(world: &World, explosion: &ExplosionInfo<'_>) -> bool {
+        explosion.block_interaction == BlockInteraction::TriggerBlock
+            && (!explosion.source.is_some_and(|source| {
+                source.entity_type() == &vanilla_entities::BREEZE_WIND_CHARGE
+            }) || world.get_game_rule(&vanilla_game_rules::MOB_GRIEFING))
     }
 
     fn first_arrow(
@@ -275,8 +288,21 @@ impl BlockBehavior for ButtonBlock {
         }
     }
 
-    // Server-side explosion press awaits a Steel explosion-block pipeline
-    // (vanilla `onExplosionHit`); client-local particles are omitted.
+    /// Vanilla `ButtonBlock.onExplosionHit`: an explosion that can trigger blocks
+    /// presses an unpressed button before the default explosion handling runs.
+    fn on_explosion_hit(
+        &self,
+        state: BlockStateId,
+        world: &Arc<World>,
+        pos: BlockPos,
+        explosion: &ExplosionInfo<'_>,
+        on_drop: &mut dyn FnMut(ItemStack, BlockPos),
+    ) {
+        if Self::can_trigger_blocks(world, explosion) && !state.get_value(POWERED) {
+            self.press(state, world, pos, None);
+        }
+        default_on_explosion_hit(state, world, pos, explosion, on_drop);
+    }
 }
 
 #[cfg(test)]
@@ -285,11 +311,12 @@ mod tests {
 
     use glam::DVec3;
     use steel_registry::init_vanilla_registry;
-    use steel_registry::{vanilla_blocks, vanilla_entities};
+    use steel_registry::{vanilla_blocks, vanilla_damage_types, vanilla_entities};
     use steel_utils::ChunkPos;
 
     use super::*;
     use crate::behavior::{BLOCK_BEHAVIORS, init_behaviors};
+    use crate::entity::damage::DamageSource;
     use crate::entity::{InsideBlockEffectCollector, SharedEntity};
     use crate::test_support::{TestEntity, fresh_test_world, insert_ready_full_chunk};
 
@@ -331,5 +358,75 @@ mod tests {
 
         assert!(world.get_block_state(pos).get_value(POWERED));
         assert!(world.has_scheduled_block_tick(pos, &vanilla_blocks::OAK_BUTTON));
+    }
+
+    fn trigger_explosion<'a>(
+        source: &'a SharedEntity,
+        damage_source: &'a DamageSource,
+    ) -> ExplosionInfo<'a> {
+        ExplosionInfo {
+            center: DVec3::new(8.5, 64.5, 8.5),
+            radius: 4.0,
+            block_interaction: BlockInteraction::TriggerBlock,
+            fire: false,
+            source: Some(source),
+            indirect_source: None,
+            damage_source,
+        }
+    }
+
+    #[test]
+    fn trigger_block_explosion_presses_button_like_vanilla() {
+        init_vanilla_registry();
+        init_behaviors();
+        let world_fixture = fresh_test_world("button_explosion_press");
+        let world = &world_fixture.world;
+        let pos = BlockPos::new(8, 64, 8);
+        insert_ready_full_chunk(world, ChunkPos::from_block_pos(pos));
+        let state = vanilla_blocks::OAK_BUTTON.default_state();
+        assert!(world.set_block(pos, state, UpdateFlags::UPDATE_NONE));
+
+        let source: SharedEntity = TestEntity::shared(
+            9_001,
+            DVec3::new(8.5, 64.0, 8.5),
+            Arc::downgrade(world),
+            &vanilla_entities::TNT,
+        );
+        let damage_source = DamageSource::environment(&vanilla_damage_types::EXPLOSION);
+        let explosion = trigger_explosion(&source, &damage_source);
+
+        let behavior = BLOCK_BEHAVIORS.get_behavior(&vanilla_blocks::OAK_BUTTON);
+        let mut drops = Vec::new();
+        behavior.on_explosion_hit(state, world, pos, &explosion, &mut |item, drop_pos| {
+            drops.push((item, drop_pos));
+        });
+
+        // Vanilla `ButtonBlock.press` schedules the wooden unpress delay and keeps
+        // the block alive (trigger-block explosions never destroy blocks).
+        let pressed = world.get_block_state(pos);
+        assert_eq!(pressed.get_block(), state.get_block());
+        assert!(pressed.get_value(POWERED));
+        assert!(world.has_scheduled_block_tick(pos, &vanilla_blocks::OAK_BUTTON));
+        assert!(drops.is_empty(), "trigger-block explosions keep the block");
+    }
+
+    #[test]
+    fn breeze_wind_charge_follows_mob_griefing_like_vanilla_can_trigger_blocks() {
+        init_vanilla_registry();
+        init_behaviors();
+        let world_fixture = fresh_test_world("button_explosion_wind_charge");
+        let world = &world_fixture.world;
+        let source: SharedEntity = TestEntity::shared(
+            9_002,
+            DVec3::new(8.5, 64.0, 8.5),
+            Arc::downgrade(world),
+            &vanilla_entities::BREEZE_WIND_CHARGE,
+        );
+        let damage_source = DamageSource::environment(&vanilla_damage_types::EXPLOSION);
+        let explosion = trigger_explosion(&source, &damage_source);
+
+        assert!(ButtonBlock::can_trigger_blocks(world, &explosion));
+        assert!(world.set_game_rule(&vanilla_game_rules::MOB_GRIEFING, false));
+        assert!(!ButtonBlock::can_trigger_blocks(world, &explosion));
     }
 }

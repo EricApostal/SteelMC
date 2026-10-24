@@ -959,10 +959,40 @@ mod tests {
             &vanilla_items::GOLD_INGOT
         )));
         assert!(piglin.wants_to_pick_up(&ItemStack::new(&vanilla_items::GOLD_INGOT)));
+        // Golden armour is `PIGLIN_LOVED`, so vanilla's loved-item branch wants it while
+        // the off hand holds nothing loved and the piglin's inventory has room.
+        assert!(piglin.wants_to_pick_up(&ItemStack::new(&vanilla_items::GOLDEN_HELMET)));
+
+        // A full inventory blocks the loved-item branch (`canAddToInventory`) but not the
+        // barter currency, whose vanilla branch only looks at the off hand.
+        for _ in 0..8 {
+            assert!(
+                piglin
+                    .add_to_inventory(ItemStack::with_count(&vanilla_items::DIRT, 64))
+                    .is_empty(),
+                "the piglin inventory has eight free slots"
+            );
+        }
+        assert!(!piglin.can_add_to_inventory(&ItemStack::new(&vanilla_items::GOLDEN_HELMET)));
         assert!(!piglin.wants_to_pick_up(&ItemStack::new(&vanilla_items::GOLDEN_HELMET)));
-        // Adults carry loved items; the off hand is empty, so gold is accepted.
+        assert!(piglin.wants_to_pick_up(&ItemStack::new(&vanilla_items::GOLD_INGOT)));
+
+        // `isNotHoldingLovedItemInOffHand`: a loved item in the off hand refuses the barter
+        // currency, while any item that is not loved leaves the branch open.
+        let other = PiglinEntity::new(&vanilla_entities::PIGLIN, 2, DVec3::ZERO, Weak::new());
+        let other_body = other.as_entity_event_source();
         assert!(ai::wants_to_pickup(
-            body,
+            other_body,
+            &ItemStack::new(&vanilla_items::GOLD_INGOT)
+        ));
+        other.hold_in_off_hand(ItemStack::new(&vanilla_items::GOLD_INGOT));
+        assert!(!ai::wants_to_pickup(
+            other_body,
+            &ItemStack::new(&vanilla_items::GOLD_INGOT)
+        ));
+        other.hold_in_off_hand(ItemStack::new(&vanilla_items::DIRT));
+        assert!(ai::wants_to_pickup(
+            other_body,
             &ItemStack::new(&vanilla_items::GOLD_INGOT)
         ));
     }

@@ -293,14 +293,17 @@ fn gossip_transfer_respects_the_cooldown() {
     let second = test_villager_with_offers(world, 2);
     let traded = Uuid::from_u128(9);
 
-    first
+    // Vanilla `Villager.gossip(level, target, time)` moves the *target's* gossip into the
+    // caller (`this.gossips.transferFrom(target.gossips, …)`); `TradeWithVillager` calls it
+    // on the ticking villager with its conversation partner, so the caller is the learner.
+    second
         .gossips
         .lock()
         .add(traded, GossipType::MinorNegative, 25);
 
     first.gossip(world, &second, 5_000);
     assert_eq!(
-        second.player_reputation(traded),
+        first.player_reputation(traded),
         -5,
         "the transfer subtracts the type's per-transfer decay (25 - 20)"
     );
@@ -310,20 +313,20 @@ fn gossip_transfer_respects_the_cooldown() {
     // Inside the cooldown neither side gossips again. Only one entry is left in the
     // source so the transfer's random draw cannot miss it.
     let other = Uuid::from_u128(10);
-    first.gossips.lock().clear();
-    first
+    second.gossips.lock().clear();
+    second
         .gossips
         .lock()
         .add(other, GossipType::MinorNegative, 25);
     first.gossip(world, &second, 5_000 + GOSSIP_COOLDOWN - 1);
     assert_eq!(
-        second.player_reputation(other),
+        first.player_reputation(other),
         0,
         "an exchange inside the cooldown is refused"
     );
 
     first.gossip(world, &second, 5_000 + GOSSIP_COOLDOWN);
-    assert_eq!(second.player_reputation(other), -5);
+    assert_eq!(first.player_reputation(other), -5);
     assert_eq!(*first.last_gossip_time.lock(), 5_000 + GOSSIP_COOLDOWN);
 }
 
@@ -546,6 +549,7 @@ fn villager_takes_a_job_site_placed_in_the_live_world() {
     use crate::entity::{EntitySpawnReason, SharedEntity, add_spawned_entity};
     use crate::player::ResetReason;
     use crate::test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk};
+    use steel_registry::vanilla_game_rules::{SPAWN_MOBS, SPAWN_MONSTERS};
 
     init_vanilla_registry();
     crate::entity::init_entities();
@@ -599,21 +603,42 @@ fn villager_takes_a_job_site_placed_in_the_live_world() {
         "placing a job-site block must record a POI"
     );
 
-    // Vanilla's job search is a jittered retry; two in-game minutes is ample. The server
-    // advances the domain clock before dispatching each world tick, so mirror that here —
-    // `AcquirePoi` gates its scan on `game_time`.
-    for tick in 0..2_400_u64 {
+    // Vanilla's natural-spawn pass would fill this unlit platform with monsters, which has
+    // nothing to do with the job-site path under test and depends on the process-wide RNG
+    // (and on how much other test work shares the run), so it is switched off here.
+    world.set_game_rule(&SPAWN_MOBS, false);
+    world.set_game_rule(&SPAWN_MONSTERS, false);
+
+    // Vanilla's job search is a jittered retry. The server advances the domain clock before
+    // dispatching each world tick, so mirror that here — `AcquirePoi` gates its scan on
+    // `game_time` — and tick until the villager claims the composter, because a single
+    // fixed tick budget makes the outcome depend on the jitter draw.
+    let mut ticks = 0_u64;
+    while entity.profession().key != vanilla_villager_professions::FARMER.key && ticks < 6_000 {
         world.game_time.advance();
-        world.tick_game(tick, true);
+        world.tick_game(ticks, true);
+        ticks += 1;
     }
 
     assert_eq!(
         entity.profession().key,
         vanilla_villager_professions::FARMER.key,
-        "the villager should have claimed the composter and become a farmer"
+        "the villager should have claimed the composter and become a farmer (ticked {ticks})"
     );
+    // Vanilla `AbstractVillager.getOffers` builds the offer list on first access; a villager
+    // that became employed in-world must therefore have trades available.
     assert!(
-        !entity.merchant.offers().is_empty(),
+        !entity.offers().is_empty(),
         "an employed villager must offer trades (a player clicking it must not get a head shake)"
+    );
+
+    // And the path a player actually uses: clicking it must open trading rather than take the
+    // empty-offer branch, which is the head shake the user reported.
+    assert!(
+        matches!(
+            Mob::mob_interact(entity, player.as_ref(), InteractionHand::MainHand),
+            InteractionResult::Success
+        ),
+        "clicking an employed villager must open trading, not shake its head"
     );
 }

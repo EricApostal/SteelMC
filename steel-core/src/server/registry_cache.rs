@@ -108,7 +108,13 @@ impl RegistryCache {
         packets
     }
 
-    fn build_tags_packet(registry: &Registry) -> CUpdateTags {
+    /// Builds the `minecraft:update_tags` payload for the current registries.
+    ///
+    /// Public within the crate so a resource reload can re-broadcast the tags in
+    /// the play phase: the cached [`Self::tags_packet`] is encoded for the
+    /// configuration phase, whose packet id differs from the play-phase id
+    /// vanilla's `PlayerList.reloadResources` broadcasts.
+    pub(crate) fn build_tags_packet(registry: &Registry) -> CUpdateTags {
         let mut tags_by_registry: TagCollection = Vec::with_capacity(10);
         macro_rules! add_tags {
             ($reg_key:expr, $field:ident) => {

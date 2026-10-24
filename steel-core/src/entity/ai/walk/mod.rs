@@ -10,7 +10,7 @@ pub mod swim_node_evaluator;
 
 pub use amphibious_node_evaluator::AmphibiousNodeEvaluator;
 pub use collision::WalkNodeCollision;
-pub use fly_node_evaluator::FlyNodeEvaluator;
+pub use fly_node_evaluator::{FlightContext, FlyNodeEvaluator};
 pub use node_evaluator::{WalkNeighbors, WalkNodeEvaluator};
 pub use path_evaluator::WalkPathEvaluator;
 pub use settings::MobPathSettings;

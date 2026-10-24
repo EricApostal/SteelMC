@@ -123,17 +123,17 @@ impl RegionManager {
         }
 
         let version = u16::from_le_bytes([header_bytes[4], header_bytes[5]]);
-        if version != FORMAT_VERSION {
-            // Version mismatch — backup the old file and create a fresh region.
-            drop(file);
-            let backup_path = path.with_extension(format!("srg.v{version}.bak"));
-            tracing::warn!(
-                "Region file {} has version {version} (expected {FORMAT_VERSION}), backing up to {} and recreating",
-                path.display(),
-                backup_path.display()
-            );
-            fs::rename(&path, &backup_path).await?;
-            return self.create_region(pos).await;
+        if u64::from(version) != u64::from(FORMAT_VERSION) {
+            // An unreadable container is never regenerated in place: that would replace the
+            // world's chunks with an empty file. Report and keep the original untouched.
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "region file {} uses Steel format version {version} (expected {FORMAT_VERSION}); \
+                     load it with the build that wrote it, or restore a backup, instead of losing its chunks",
+                    path.display()
+                ),
+            ));
         }
 
         // Read chunk table

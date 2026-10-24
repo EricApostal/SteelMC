@@ -1,6 +1,5 @@
 use super::selector::{Goal, GoalControls};
 use crate::entity::PathfinderMob;
-use crate::entity::ai::navigation::NavigationKind;
 use crate::inventory::equipment::EquipmentSlot;
 
 pub struct RestrictSunGoal;
@@ -15,12 +14,9 @@ impl RestrictSunGoal {
 /// Vanilla `GoalUtils.hasGroundPathNavigation`: `navigation.canNavigateGround()`, true for
 /// `GroundPathNavigation` (and `WallClimberNavigation`) and `AmphibiousPathNavigation`.
 fn has_ground_path_navigation(mob: &dyn PathfinderMob) -> bool {
-    let navigation = mob.mob_base().navigation().lock();
-    !navigation.is_flying()
-        && matches!(
-            navigation.kind(),
-            NavigationKind::Ground | NavigationKind::Amphibious | NavigationKind::WallClimber
-        )
+    // Vanilla `GoalUtils.hasGroundPathNavigation`: `navigation.canNavigateGround()`,
+    // true only for the ground-following navigations.
+    mob.mob_base().navigation().lock().can_navigate_ground()
 }
 
 impl Goal for RestrictSunGoal {

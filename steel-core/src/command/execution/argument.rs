@@ -30,6 +30,7 @@ use crate::command::brigadier::{
 use crate::command::incorrectly_typed_argument;
 use crate::command::protocol::protocol_argument_type;
 use crate::entity::{ENTITIES, EntityAnchor};
+use crate::loot::slot::range::SlotRange;
 use crate::scoreboard::{DisplaySlot, ObjectiveCriteria, TeamColor};
 use glam::DVec3;
 use simdnbt::owned::NbtTag;
@@ -41,15 +42,15 @@ use steel_protocol::packets::game::{
 use steel_registry::advancement::registry::AdvancementRef;
 use steel_registry::attribute::AttributeRef;
 use steel_registry::damage_type::DamageTypeRef;
-use steel_registry::dialog::DialogRef;
 use steel_registry::data_components::vanilla_components::SwingAnimationType;
+use steel_registry::dialog::DialogRef;
 use steel_registry::mob_effect::MobEffectRef;
 use steel_registry::particle_type::ParticleTypeRef;
 use steel_registry::{
-    DAMAGE_TYPE_REGISTRY, DIALOG_REGISTRY, ENCHANTMENT_REGISTRY, ENTITY_TYPE_REGISTRY,
-    MOB_EFFECT_REGISTRY,
-    REGISTRY, RegistryExt as _, TIMELINE_REGISTRY, WORLD_CLOCK_REGISTRY,
-    enchantment::EnchantmentRef, entity_type::EntityTypeRef, item_stack::ItemStack,
+    CONTEXT_FLOAT_PROVIDER_REGISTRY, CONTEXT_INT_PROVIDER_REGISTRY, DAMAGE_TYPE_REGISTRY,
+    DIALOG_REGISTRY, ENCHANTMENT_REGISTRY, ENTITY_TYPE_REGISTRY, MOB_EFFECT_REGISTRY, REGISTRY,
+    RegistryExt as _, TIMELINE_REGISTRY, WORLD_CLOCK_REGISTRY, enchantment::EnchantmentRef,
+    entity_type::EntityTypeRef, item_stack::ItemStack, loot_table::LootContext,
     timeline::TimelineRef, world_clock::WorldClockRef,
 };
 use steel_utils::translations::ADVANCEMENT_ADVANCEMENT_NOT_FOUND;
@@ -475,6 +476,26 @@ impl SteelArgumentType {
         Self::new(IdentifierParser)
     }
 
+    /// Vanilla `ResourceOrIdArgument.intProvider`.
+    pub(crate) fn int_number_provider() -> Self {
+        Self::new(IntNumberProviderParser)
+    }
+
+    /// Vanilla `ResourceOrIdArgument.floatProvider`.
+    pub(crate) fn float_number_provider() -> Self {
+        Self::new(FloatNumberProviderParser)
+    }
+
+    /// Vanilla `SlotSourceArgument`: a slot range name or a registered `slot_source`.
+    pub(crate) fn slot_source() -> Self {
+        Self::new(SlotSourceParser)
+    }
+
+    /// Vanilla `ResourceOrIdArgument.lootModifier`: a registered `item_modifier`.
+    pub(crate) fn item_modifier() -> Self {
+        Self::new(ItemModifierParser)
+    }
+
     /// Vanilla `SlotsArgument`: a named range of vanilla container slots.
     pub(crate) fn slots() -> Self {
         Self::new(SlotsParser)
@@ -729,6 +750,14 @@ impl fmt::Debug for StyleValue {
 impl_downcast_type!(StyleValue, "steel:command/value/style");
 argument_value_wrapper!(SlotsValue(SlotRange), "steel:command/value/slots");
 argument_value_wrapper!(
+    SlotSourceValue(SlotSourceArg),
+    "steel:command/value/slot_source"
+);
+argument_value_wrapper!(
+    ItemModifierValue(ItemModifierRef),
+    "steel:command/value/item_modifier"
+);
+argument_value_wrapper!(
     TemplateMirrorValue(StructureMirror),
     "steel:command/value/template_mirror"
 );
@@ -739,6 +768,14 @@ argument_value_wrapper!(
 argument_value_wrapper!(
     IdentifierValue(Identifier),
     "steel:command/value/identifier"
+);
+argument_value_wrapper!(
+    IntNumberProviderValue(IntNumberProviderArg),
+    "steel:command/value/int_number_provider"
+);
+argument_value_wrapper!(
+    FloatNumberProviderValue(FloatNumberProviderArg),
+    "steel:command/value/float_number_provider"
 );
 argument_value_wrapper!(
     WorldClockValue(WorldClockRef),
@@ -929,30 +966,118 @@ impl FloatRange {
     }
 }
 
-/// Vanilla `world.inventory.SlotRange`: a named range of vanilla slot ids.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SlotRange {
-    name: Box<str>,
-    slots: Box<[i32]>,
+/// A parsed vanilla `SlotSourceArgument.Result`.
+///
+/// Vanilla distinguishes `LiteralResult` (a named `SlotRanges` entry) from
+/// `HolderResult` (a `slot_source` registry entry or inline definition). Steel
+/// keeps the same split: a literal resolves to the shared [`SlotRange`], a
+/// registry id to a registered `slot_source` entry (inline definitions are
+/// rejected like every other inline resource).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SlotSourceArg {
+    /// Vanilla `LiteralResult`: a named `SlotRanges` entry.
+    Literal(&'static SlotRange),
+    /// Vanilla `HolderResult`: a registered `slot_source` entry.
+    Named(&'static steel_registry::slot_source::SlotSourceEntry),
 }
 
-impl SlotRange {
-    /// The vanilla serialized name accepted by `SlotsArgument`.
+impl SlotSourceArg {
+    /// Vanilla `SlotSourceArgument.Result.name`: the slot range name, or the
+    /// registered `slot_source` id.
     #[must_use]
-    pub(crate) fn name(&self) -> &str {
-        &self.name
+    pub(crate) fn name(self) -> SlotSourceName {
+        match self {
+            Self::Literal(range) => SlotSourceName::Literal(range.name()),
+            Self::Named(entry) => SlotSourceName::Resource(&entry.key),
+        }
+    }
+}
+
+/// Vanilla `SlotSourceArgument.Result.name`'s value.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SlotSourceName {
+    /// The literal `SlotRanges` name.
+    Literal(&'static str),
+    /// The registered `slot_source` id.
+    Resource(&'static Identifier),
+}
+
+impl fmt::Display for SlotSourceName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Literal(name) => formatter.write_str(name),
+            Self::Resource(key) => write!(formatter, "{key}"),
+        }
+    }
+}
+
+/// A resolved vanilla `ResourceOrIdArgument.lootModifier` (`item_modifier`).
+pub(crate) type ItemModifierRef = &'static steel_registry::item_modifier::ItemModifier;
+
+/// A parsed vanilla `ResourceOrIdArgument` int number provider.
+///
+/// Vanilla accepts either `minecraft:<path>` resolved against the
+/// `context_int_provider` registry or an inline provider. Steel has no runtime
+/// inline JSON codec, so inline input is limited to a bare integer — which is
+/// exactly what a bare number means in vanilla data.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum IntNumberProviderArg {
+    /// Inline constant provider.
+    Constant(i32),
+    /// `minecraft:<id>` resolved against `ContextIntProviderTypes`.
+    Named(&'static steel_registry::context_int_provider::ContextIntProviderEntry),
+}
+
+impl IntNumberProviderArg {
+    /// Vanilla `ContextIntProvider.getIntUnsafe`; `None` is Java's
+    /// `ArithmeticException`.
+    pub(crate) fn get_int_unsafe<R: rand::Rng>(
+        &self,
+        context: &mut LootContext<'_, R>,
+    ) -> Option<i32> {
+        match self {
+            Self::Constant(value) => Some(*value),
+            Self::Named(entry) => entry.provider.get_int_unsafe(context),
+        }
     }
 
-    /// The vanilla slot ids covered by this range, in vanilla order.
+    /// The registry id when this provider came from `minecraft:<id>`, else `None`.
     #[must_use]
-    pub(crate) fn slots(&self) -> &[i32] {
-        &self.slots
+    pub(crate) fn identifier(&self) -> Option<&Identifier> {
+        match self {
+            Self::Constant(_) => None,
+            Self::Named(entry) => Some(&entry.key),
+        }
+    }
+}
+
+/// A parsed vanilla `ResourceOrIdArgument` float number provider; see
+/// [`IntNumberProviderArg`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum FloatNumberProviderArg {
+    /// Inline constant provider.
+    Constant(f32),
+    /// `minecraft:<id>` resolved against `ContextFloatProviderTypes`.
+    Named(&'static steel_registry::context_float_provider::ContextFloatProviderEntry),
+}
+
+impl FloatNumberProviderArg {
+    /// Vanilla `ContextFloatProvider.getFloatUnsafe`; non-finite results are
+    /// handled by the `/compute` caller, matching vanilla's validity check.
+    pub(crate) fn get_float_unsafe<R: rand::Rng>(&self, context: &mut LootContext<'_, R>) -> f32 {
+        match self {
+            Self::Constant(value) => *value,
+            Self::Named(entry) => entry.provider.get_float_unsafe(context),
+        }
     }
 
-    /// Returns whether this range covers exactly one slot.
+    /// The registry id when this provider came from `minecraft:<id>`, else `None`.
     #[must_use]
-    pub(crate) fn is_single(&self) -> bool {
-        self.slots.len() == 1
+    pub(crate) fn identifier(&self) -> Option<&Identifier> {
+        match self {
+            Self::Constant(_) => None,
+            Self::Named(entry) => Some(&entry.key),
+        }
     }
 }
 
@@ -1684,6 +1809,42 @@ unit_argument_parser!(
     protocol(ProtocolArgumentType::ResourceLocation, None)
 );
 unit_argument_parser!(
+    IntNumberProviderParser,
+    "steel:command/parser/int_number_provider",
+    IntNumberProviderValue,
+    parse | reader,
+    _source | { parse_int_number_provider(reader).map(IntNumberProviderValue) },
+    suggest | _context,
+    builder | {
+        suggest_resources(
+            REGISTRY
+                .context_int_providers
+                .iter()
+                .map(|(_, entry)| &entry.key),
+            builder,
+        );
+    },
+    protocol(ProtocolArgumentType::ResourceLocation, None)
+);
+unit_argument_parser!(
+    FloatNumberProviderParser,
+    "steel:command/parser/float_number_provider",
+    FloatNumberProviderValue,
+    parse | reader,
+    _source | { parse_float_number_provider(reader).map(FloatNumberProviderValue) },
+    suggest | _context,
+    builder | {
+        suggest_resources(
+            REGISTRY
+                .context_float_providers
+                .iter()
+                .map(|(_, entry)| &entry.key),
+            builder,
+        );
+    },
+    protocol(ProtocolArgumentType::ResourceLocation, None)
+);
+unit_argument_parser!(
     FloatRangeParser,
     "steel:command/parser/float_range",
     FloatRange,
@@ -1828,6 +1989,36 @@ unit_argument_parser!(
         suggest_slot_ranges(builder, false);
     },
     protocol(ProtocolArgumentType::ItemSlots, None)
+);
+unit_argument_parser!(
+    SlotSourceParser,
+    "steel:command/parser/slot_source",
+    SlotSourceValue,
+    parse | reader,
+    _source | { parse_slot_source(reader).map(SlotSourceValue) },
+    suggest | _context,
+    builder | {
+        suggest_slot_sources(builder);
+    },
+    protocol(
+        ProtocolArgumentType::SlotSource,
+        Some(ProtocolSuggestionType::AskServer)
+    )
+);
+unit_argument_parser!(
+    ItemModifierParser,
+    "steel:command/parser/item_modifier",
+    ItemModifierValue,
+    parse | reader,
+    _source | { parse_item_modifier(reader).map(ItemModifierValue) },
+    suggest | _context,
+    builder | {
+        suggest_resources(
+            REGISTRY.item_modifiers.iter().map(|(_, entry)| &entry.key),
+            builder,
+        );
+    },
+    protocol(ProtocolArgumentType::LootModifier, None)
 );
 unit_argument_parser!(
     TemplateMirrorParser,
@@ -2379,6 +2570,87 @@ pub(super) fn unknown_resource(
         .message([key.to_string(), registry.to_string()])
         .component();
     reader.error(CommandSyntaxErrorKind::Dynamic(Box::new(message)))
+}
+
+/// Parses vanilla `SlotSourceArgument`.
+///
+/// Vanilla first tries `SlotRanges.tryRead` (the token up to a space) and, when
+/// no range matches, rewinds and parses a `ResourceOrIdArgument` against the
+/// `slot_source` registry.
+fn parse_slot_source(reader: &mut StringReader<'_>) -> Result<SlotSourceArg, CommandSyntaxError> {
+    let checkpoint = reader.checkpoint();
+    let raw = reader.read_unquoted_token().to_owned();
+    if let Some(range) = crate::loot::slot::range::name_to_range(&raw) {
+        return Ok(SlotSourceArg::Literal(range));
+    }
+    reader.restore(checkpoint);
+    let key = parse_identifier(reader)?;
+    REGISTRY.slot_sources.by_key(&key).map_or_else(
+        || Err(unknown_resource(reader, &key, &SLOT_SOURCE_REGISTRY)),
+        |entry| Ok(SlotSourceArg::Named(entry)),
+    )
+}
+
+/// Parses vanilla `ResourceOrIdArgument.lootModifier`; see
+/// [`parse_int_number_provider`] for the shared inline-input limitation.
+fn parse_item_modifier(
+    reader: &mut StringReader<'_>,
+) -> Result<ItemModifierRef, CommandSyntaxError> {
+    let key = parse_identifier(reader)?;
+    REGISTRY.item_modifiers.by_key(&key).map_or_else(
+        || Err(unknown_resource(reader, &key, &ITEM_MODIFIER_REGISTRY)),
+        Ok,
+    )
+}
+
+/// Parses vanilla `ResourceOrIdArgument.intProvider`.
+///
+/// A bare integer is an inline constant; anything else is a `minecraft:<id>`
+/// resolved against the `context_int_provider` registry. Steel has no inline
+/// JSON codec, so non-constant inline providers are rejected like any other
+/// unparsable resource.
+fn parse_int_number_provider(
+    reader: &mut StringReader<'_>,
+) -> Result<IntNumberProviderArg, CommandSyntaxError> {
+    let checkpoint = reader.checkpoint();
+    if let Ok(value) = reader.read_int() {
+        return Ok(IntNumberProviderArg::Constant(value));
+    }
+    reader.restore(checkpoint);
+    let key = parse_identifier(reader)?;
+    REGISTRY.context_int_providers.by_key(&key).map_or_else(
+        || {
+            Err(unknown_resource(
+                reader,
+                &key,
+                &CONTEXT_INT_PROVIDER_REGISTRY,
+            ))
+        },
+        |entry| Ok(IntNumberProviderArg::Named(entry)),
+    )
+}
+
+/// Parses vanilla `ResourceOrIdArgument.floatProvider`; see
+/// [`parse_int_number_provider`].
+fn parse_float_number_provider(
+    reader: &mut StringReader<'_>,
+) -> Result<FloatNumberProviderArg, CommandSyntaxError> {
+    let checkpoint = reader.checkpoint();
+    if let Ok(value) = reader.read_float() {
+        return Ok(FloatNumberProviderArg::Constant(value));
+    }
+    reader.restore(checkpoint);
+    let key = parse_identifier(reader)?;
+    REGISTRY.context_float_providers.by_key(&key).map_or_else(
+        || {
+            Err(unknown_resource(
+                reader,
+                &key,
+                &CONTEXT_FLOAT_PROVIDER_REGISTRY,
+            ))
+        },
+        |entry| Ok(FloatNumberProviderArg::Named(entry)),
+    )
 }
 
 fn suggest_storage_keys<S>(source: &S, builder: &mut SuggestionsBuilder<'_>)
@@ -3156,11 +3428,7 @@ fn parse_style_int(reader: &StringReader<'_>, value: &NbtTag) -> Result<i32, Com
 
 fn parse_slot_range(reader: &mut StringReader<'_>) -> Result<SlotRange, CommandSyntaxError> {
     let raw = reader.read_unquoted_string();
-    let parsed = slot_ranges()
-        .iter()
-        .find(|range| range.name() == raw)
-        .cloned();
-    if let Some(range) = parsed {
+    if let Some(range) = crate::loot::slot::range::name_to_range(raw).cloned() {
         return Ok(range);
     }
     Err(translated_argument_error(
@@ -3172,7 +3440,7 @@ fn parse_slot_range(reader: &mut StringReader<'_>) -> Result<SlotRange, CommandS
 
 fn suggest_slot_ranges(builder: &mut SuggestionsBuilder<'_>, single_only: bool) {
     let prefix = builder.remaining();
-    for range in slot_ranges() {
+    for range in crate::loot::slot::range::slot_ranges() {
         if single_only && !range.is_single() {
             continue;
         }
@@ -3182,56 +3450,18 @@ fn suggest_slot_ranges(builder: &mut SuggestionsBuilder<'_>, single_only: bool) 
     }
 }
 
-/// Vanilla `SlotRanges`: every named slot range, in vanilla declaration order.
-fn slot_ranges() -> &'static [SlotRange] {
-    static SLOT_RANGES: std::sync::LazyLock<Vec<SlotRange>> =
-        std::sync::LazyLock::new(build_slot_ranges);
-    &SLOT_RANGES
+/// Vanilla `SlotSourceArgument.listSuggestions`: every `SlotRanges` name plus
+/// every registered `slot_source` id.
+fn suggest_slot_sources(builder: &mut SuggestionsBuilder<'_>) {
+    suggest_slot_ranges(builder, false);
+    suggest_resources(
+        REGISTRY.slot_sources.iter().map(|(_, entry)| &entry.key),
+        builder,
+    );
 }
 
-fn build_slot_ranges() -> Vec<SlotRange> {
-    fn single(ranges: &mut Vec<SlotRange>, name: impl Into<String>, id: i32) {
-        push(ranges, name, vec![id]);
-    }
+/// The registry feeding the `slot_source` argument.
+const SLOT_SOURCE_REGISTRY: Identifier = steel_registry::SLOT_SOURCE_REGISTRY;
 
-    fn push(ranges: &mut Vec<SlotRange>, name: impl Into<String>, slots: Vec<i32>) {
-        ranges.push(SlotRange {
-            name: name.into().into_boxed_str(),
-            slots: slots.into_boxed_slice(),
-        });
-    }
-
-    fn range(ranges: &mut Vec<SlotRange>, prefix: &str, offset: i32, size: i32) {
-        let mut all = Vec::with_capacity(size as usize);
-        for index in 0..size {
-            let slot = offset + index;
-            single(ranges, format!("{prefix}{index}"), slot);
-            all.push(slot);
-        }
-        push(ranges, format!("{prefix}*"), all);
-    }
-
-    let mut ranges = Vec::new();
-    single(&mut ranges, "contents", 0);
-    range(&mut ranges, "container.", 0, 54);
-    range(&mut ranges, "hotbar.", 0, 9);
-    range(&mut ranges, "inventory.", 9, 27);
-    range(&mut ranges, "enderchest.", 200, 27);
-    range(&mut ranges, "mob.inventory.", 300, 8);
-    range(&mut ranges, "horse.", 500, 15);
-    single(&mut ranges, "weapon", 98);
-    single(&mut ranges, "weapon.mainhand", 98);
-    single(&mut ranges, "weapon.offhand", 99);
-    push(&mut ranges, "weapon.*", vec![98, 99]);
-    single(&mut ranges, "armor.head", 103);
-    single(&mut ranges, "armor.chest", 102);
-    single(&mut ranges, "armor.legs", 101);
-    single(&mut ranges, "armor.feet", 100);
-    single(&mut ranges, "armor.body", 105);
-    push(&mut ranges, "armor.*", vec![103, 102, 101, 100, 105]);
-    single(&mut ranges, "saddle", 106);
-    single(&mut ranges, "horse.chest", 499);
-    single(&mut ranges, "player.cursor", 499);
-    range(&mut ranges, "player.crafting.", 500, 4);
-    ranges
-}
+/// The registry feeding the `item_modifier` argument.
+const ITEM_MODIFIER_REGISTRY: Identifier = steel_registry::ITEM_MODIFIER_REGISTRY;

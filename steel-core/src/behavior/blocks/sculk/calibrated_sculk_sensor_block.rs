@@ -24,6 +24,7 @@ use steel_utils::{BlockPos, BlockStateId, value_providers::IntProvider};
 use crate::behavior::blocks::sculk::sculk_sensor_block::SculkSensorBlock;
 use crate::behavior::{BlockBehavior, BlockEntityCreation, BlockPlaceContext, try_drop_experience};
 use crate::block_entity::BlockEntityTicker;
+use crate::entity::ai::path::PathComputationType;
 use crate::world::{LevelReader, SignalQueryContext, World};
 
 /// Vanilla `CalibratedSculkSensorBlock.getActiveTicks`.
@@ -66,10 +67,11 @@ impl CalibratedSculkSensorBlock {
         world.update_neighbors_at(pos, block);
         world.update_neighbors_at(pos.below(), block);
         SculkSensorBlock::try_resonate_vibration(source_entity, world, pos, vibration_frequency);
+        // Vanilla `LevelAccessor.gameEvent(entity, event, pos)` builds a state-less context.
         world.game_event(
             &vanilla_game_events::SCULK_SENSOR_TENDRILS_CLICKING,
             pos,
-            &crate::world::game_event::GameEventContext::new(source_entity, Some(active)),
+            &crate::world::game_event::GameEventContext::new(source_entity, None),
         );
         if !state.get_value(WATERLOGGED) {
             let pitch = rand::random::<f32>() * 0.2 + 0.8;
@@ -96,22 +98,9 @@ impl BlockBehavior for CalibratedSculkSensorBlock {
     }
 
     fn tick(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
-        // Same state machine as the base sensor but with the 10-tick active pulse.
-        match SculkSensorBlock::phase(state) {
-            SculkSensorPhase::Active => {
-                SculkSensorBlock::deactivate(self.block, world, pos, state);
-            }
-            SculkSensorPhase::Cooldown => {
-                world.set_block(
-                    pos,
-                    state
-                        .set_value(PHASE, SculkSensorPhase::Inactive)
-                        .set_value(POWER, 0_u8),
-                    UpdateFlags::UPDATE_ALL,
-                );
-            }
-            SculkSensorPhase::Inactive => {}
-        }
+        // Vanilla does not override `tick`: the calibrated block inherits `SculkSensorBlock.tick`
+        // unchanged (only the pulse length differs, via `getActiveTicks`).
+        SculkSensorBlock::tick_phase(self.block, world, pos, state);
     }
 
     fn on_place(
@@ -122,9 +111,44 @@ impl BlockBehavior for CalibratedSculkSensorBlock {
         old_state: BlockStateId,
         _moved_by_piston: bool,
     ) {
-        if state.get_block() != old_state.get_block() && state.get_value(POWER) > 0 {
-            world.set_block(pos, state.set_value(POWER, 0_u8), UpdateFlags::UPDATE_ALL);
-        }
+        // Vanilla inherits `SculkSensorBlock.onPlace` unchanged.
+        SculkSensorBlock::reset_power_on_place(self.block, world, pos, state, old_state);
+    }
+
+    fn update_shape(
+        &self,
+        state: BlockStateId,
+        world: &dyn crate::world::ScheduledTickAccess,
+        pos: BlockPos,
+        _direction: Direction,
+        _neighbor_pos: BlockPos,
+        _neighbor_state: BlockStateId,
+    ) -> BlockStateId {
+        // Vanilla inherits `SculkSensorBlock.updateShape` (the waterlogged fluid tick).
+        crate::behavior::block::schedule_water_tick_if_waterlogged(state, world, pos);
+        state
+    }
+
+    fn step_on(
+        &self,
+        state: BlockStateId,
+        world: &Arc<World>,
+        pos: BlockPos,
+        entity: &dyn crate::entity::Entity,
+    ) {
+        // Vanilla inherits `SculkSensorBlock.stepOn`; Steel must re-declare it because behaviors
+        // dispatch per block instead of by Java class inheritance.
+        SculkSensorBlock::schedule_step_vibration(world, pos, state, entity);
+        self.default_step_on(state, world, pos, entity);
+    }
+
+    fn is_pathfindable(
+        &self,
+        _state: BlockStateId,
+        _computation_type: PathComputationType,
+    ) -> bool {
+        // Vanilla `SculkSensorBlock.isPathfindable` always returns `false`, inherited unchanged.
+        false
     }
 
     fn affect_neighbors_after_removal(

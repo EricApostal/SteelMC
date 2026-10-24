@@ -28,6 +28,7 @@ use crate::entity::ai::goal::{
     BreedGoal, FloatGoal, FollowParentGoal, HurtByTargetGoal, MeleeAttackGoal,
     NearestAttackableTargetGoal, TemptGoal, WaterAvoidingRandomStrollGoal,
 };
+use crate::entity::ai::navigation::NavigationKind;
 use crate::entity::damage::DamageSource;
 use crate::entity::neutral_mob::{NeutralMob, PersistentAnger};
 use crate::entity::{
@@ -40,6 +41,10 @@ use crate::world::World;
 
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
 const XP_REWARD: i32 = 3;
+
+/// Vanilla `Bee.createNavigation` installs a 48-block required path length.
+const BEE_REQUIRED_PATH_LENGTH: f32 = 48.0;
+
 /// Vanilla `Bee.PERSISTENT_ANGER_TIME` (`rangeOfSeconds(20, 39)`).
 const PERSISTENT_ANGER_TIME_MIN: i64 = 20 * 20;
 const PERSISTENT_ANGER_TIME_MAX: i64 = 39 * 20;
@@ -103,6 +108,21 @@ impl BeeEntity {
         let living_base = LivingEntityBase::new(entity_type);
         let mob_base = MobBase::new();
         mob_base.set_xp_reward(XP_REWARD);
+        {
+            // Vanilla `Bee.createNavigation`: a `Bee$1` flying navigation with door
+            // opening disabled, floating disabled, a 48-block required path length,
+            // and the block-below stable-destination rule.
+            let mut navigation = mob_base.navigation().lock();
+            navigation.set_kind(NavigationKind::Fly);
+            navigation.set_can_open_doors(false);
+            navigation.set_can_float(false);
+            navigation.set_fly_stable_destination_block_below(true);
+            let follow_range = living_base
+                .attributes()
+                .lock()
+                .required_value(vanilla_attributes::FOLLOW_RANGE);
+            navigation.set_required_path_length(BEE_REQUIRED_PATH_LENGTH, follow_range);
+        }
         let ageable_base = AgeableMobBase::new();
         let animal_base = AnimalBase::new();
         AnimalBase::initialize_pathfinding_malus(&mob_base);

@@ -10,9 +10,11 @@ use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{
     BellAttachType, BlockStateProperties, BoolProperty, Direction, EnumProperty,
 };
+use steel_registry::blocks::shapes::SupportType;
 use steel_registry::vanilla_custom_stats::BELL_RING;
 use steel_registry::{
-    sound_events, vanilla_block_entity_types, vanilla_blocks, vanilla_game_events,
+    item_stack::ItemStack, sound_events, vanilla_block_entity_types, vanilla_block_tags::BlockTag,
+    vanilla_blocks, vanilla_entities, vanilla_game_events, vanilla_game_rules,
 };
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId, Downcast as _};
@@ -27,6 +29,7 @@ use crate::entity::Entity;
 use crate::entity::ai::path::PathComputationType;
 use crate::entity::projectile::Projectile;
 use crate::player::Player;
+use crate::world::explosion::{BlockInteraction, ExplosionInfo, default_on_explosion_hit};
 use crate::world::game_event::GameEventContext;
 use crate::world::{ClipHitResult, LevelReader, ScheduledTickAccess, SignalGetter as _, World};
 
@@ -57,10 +60,29 @@ impl BellBlock {
         }
     }
 
+    /// Vanilla `Block.canSupportCenter`.
+    ///
+    /// Unlike a full-face check this accepts any shape that covers the centre of
+    /// the face, and rejects `minecraft:unstable_bottom_center` blocks when the
+    /// required support direction is `DOWN`.
+    fn can_support_center(world: &dyn LevelReader, pos: BlockPos, direction: Direction) -> bool {
+        let state = world.get_block_state(pos);
+        !(direction == Direction::Down
+            && state.get_block().has_tag(&BlockTag::UNSTABLE_BOTTOM_CENTER))
+            && world.is_face_sturdy_for(state, pos, direction, SupportType::Center)
+    }
+
+    /// Vanilla `BellBlock.canSurvive` support test for one connection direction.
+    ///
+    /// A ceiling bell hangs from `Block.canSupportCenter`; every other attachment
+    /// uses `FaceAttachedHorizontalDirectionalBlock.canAttach`.
     fn has_support(world: &dyn LevelReader, pos: BlockPos, direction: Direction) -> bool {
         let support_pos = pos.relative(direction);
-        let support = world.get_block_state(support_pos);
+        if direction == Direction::Up {
+            return Self::can_support_center(world, support_pos, Direction::Down);
+        }
 
+        let support = world.get_block_state(support_pos);
         world.is_face_sturdy(support, support_pos, direction.opposite())
     }
 
@@ -107,6 +129,17 @@ impl BellBlock {
         }
 
         true
+    }
+
+    /// Vanilla `ServerExplosion.canTriggerBlocks`.
+    ///
+    /// `ServerExplosion::can_trigger_blocks` is private to `world::explosion`,
+    /// so its wind-charge `mob_griefing` refinement is mirrored here.
+    fn can_trigger_blocks(world: &World, explosion: &ExplosionInfo<'_>) -> bool {
+        explosion.block_interaction == BlockInteraction::TriggerBlock
+            && (!explosion.source.is_some_and(|source| {
+                source.entity_type() == &vanilla_entities::BREEZE_WIND_CHARGE
+            }) || world.get_game_rule(&vanilla_game_rules::MOB_GRIEFING))
     }
 
     fn is_proper_hit(state: BlockStateId, direction: Direction, height: f64) -> bool {
@@ -336,17 +369,37 @@ impl BlockBehavior for BellBlock {
     ) -> bool {
         false
     }
+
+    /// Vanilla `BellBlock.onExplosionHit`: an explosion that can trigger blocks
+    /// rings the bell before the default explosion handling runs.
+    fn on_explosion_hit(
+        &self,
+        state: BlockStateId,
+        world: &Arc<World>,
+        pos: BlockPos,
+        explosion: &ExplosionInfo<'_>,
+        on_drop: &mut dyn FnMut(ItemStack, BlockPos),
+    ) {
+        if Self::can_trigger_blocks(world, explosion) {
+            Self::attempt_to_ring(None, world, pos, None);
+        }
+        default_on_explosion_hit(state, world, pos, explosion, on_drop);
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use glam::DVec3;
     use steel_registry::init_vanilla_registry;
+    use steel_registry::vanilla_damage_types;
     use steel_utils::ChunkPos;
 
     use super::*;
     use crate::behavior::{BLOCK_BEHAVIORS, init_behaviors};
     use crate::block_entity::init_block_entities;
-    use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
+    use crate::entity::SharedEntity;
+    use crate::entity::damage::DamageSource;
+    use crate::test_support::{TestEntity, TestLevel, fresh_test_world, insert_ready_full_chunk};
 
     #[test]
     fn wall_attachment_uses_facing_as_support_direction() {
@@ -405,5 +458,151 @@ mod tests {
                 .get_block_entity_ticker(world, state, entity.get_type())
                 .is_some()
         );
+    }
+
+    #[test]
+    fn ceiling_bell_hangs_from_center_support_and_rejects_unstable_bottom_center() {
+        init_vanilla_registry();
+        init_behaviors();
+        let behavior = BellBlock::new(&vanilla_blocks::BELL);
+        let pos = BlockPos::new(0, 64, 0);
+        let ceiling = vanilla_blocks::BELL
+            .default_state()
+            .set_value(BELL_ATTACHMENT, BellAttachType::Ceiling);
+
+        // A hopper's bottom covers only the centre of its downward face, so
+        // vanilla's `Block.canSupportCenter` accepts it while a full-face
+        // `isFaceSturdy` check does not.
+        let hopper_pos = pos.above();
+        let hopper_state = vanilla_blocks::HOPPER.default_state();
+        let hopper = TestLevel::default().with_block(hopper_pos, hopper_state);
+        assert!(
+            hopper.is_face_sturdy_for(
+                hopper_state,
+                hopper_pos,
+                Direction::Down,
+                SupportType::Center,
+            ),
+            "hopper bottom should provide centre support"
+        );
+        assert!(
+            !hopper.is_face_sturdy(hopper_state, hopper_pos, Direction::Down),
+            "hopper bottom should not be full-face sturdy"
+        );
+        assert!(behavior.can_survive(ceiling, &hopper, pos));
+
+        // Fence gates are listed in `minecraft:unstable_bottom_center`, and their
+        // vanilla support shape (`Block.column(16.0, 4.0, 5.0, 24.0)`) also starts
+        // 5/16 above the block bottom, so `Block.canSupportCenter` rejects them on
+        // both counts: `getFaceShape(DOWN)` slices the shape below its lowest
+        // coordinate and comes back empty.
+        let gate_pos = pos.above();
+        let gate_state = vanilla_blocks::OAK_FENCE_GATE.default_state();
+        let gate = TestLevel::default().with_block(gate_pos, gate_state);
+        assert!(
+            gate_state
+                .get_block()
+                .has_tag(&BlockTag::UNSTABLE_BOTTOM_CENTER)
+        );
+        assert!(
+            !gate.is_face_sturdy_for(gate_state, gate_pos, Direction::Down, SupportType::Center),
+            "a closed fence gate's support shape does not touch its bottom face"
+        );
+        assert!(!behavior.can_survive(ceiling, &gate, pos));
+
+        // Floor attachment still uses the full-face `canAttach` check.
+        let floor = vanilla_blocks::BELL.default_state();
+        assert!(!behavior.can_survive(floor, &hopper, pos));
+    }
+
+    fn explosion<'a>(
+        source: &'a SharedEntity,
+        block_interaction: BlockInteraction,
+        damage_source: &'a DamageSource,
+    ) -> ExplosionInfo<'a> {
+        ExplosionInfo {
+            center: DVec3::new(8.5, 64.5, 8.5),
+            radius: 4.0,
+            block_interaction,
+            fire: false,
+            source: Some(source),
+            indirect_source: None,
+            damage_source,
+        }
+    }
+
+    #[test]
+    fn trigger_block_explosion_rings_bell_like_vanilla() {
+        init_vanilla_registry();
+        init_block_entities();
+        init_behaviors();
+        let world_fixture = fresh_test_world("bell_explosion_ring");
+        let world = &world_fixture.world;
+        let pos = BlockPos::new(8, 64, 8);
+        insert_ready_full_chunk(world, ChunkPos::from_block_pos(pos));
+        assert!(world.set_block(
+            pos.relative(Direction::Down),
+            vanilla_blocks::STONE.default_state(),
+            UpdateFlags::UPDATE_ALL,
+        ));
+        let state = vanilla_blocks::BELL.default_state();
+        assert!(world.set_block(pos, state, UpdateFlags::UPDATE_ALL));
+
+        let source: SharedEntity = TestEntity::shared(
+            9_101,
+            DVec3::new(8.5, 64.0, 8.5),
+            Arc::downgrade(world),
+            &vanilla_entities::TNT,
+        );
+        let damage_source = DamageSource::environment(&vanilla_damage_types::EXPLOSION);
+        let explosion = explosion(&source, BlockInteraction::TriggerBlock, &damage_source);
+
+        let behavior = BLOCK_BEHAVIORS.get_behavior(&vanilla_blocks::BELL);
+        let mut drops = Vec::new();
+        behavior.on_explosion_hit(state, world, pos, &explosion, &mut |item, drop_pos| {
+            drops.push((item, drop_pos));
+        });
+
+        // Vanilla `BellBlock.attemptToRing(level, pos, null)` rings through the
+        // block entity and keeps the bell alive for trigger-block explosions.
+        let entity = world
+            .get_block_entity(pos)
+            .expect("belled ring should leave its block entity in place");
+        assert!(entity.downcast_ref::<BellBlockEntity>().is_some());
+        assert_eq!(
+            world.get_block_state(pos).get_block(),
+            &vanilla_blocks::BELL
+        );
+        assert!(drops.is_empty(), "trigger-block explosions keep the block");
+    }
+
+    #[test]
+    fn can_trigger_blocks_matches_vanilla_explosion_modes() {
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world("bell_explosion_modes");
+        let world = &world_fixture.world;
+        let source: SharedEntity = TestEntity::shared(
+            9_102,
+            DVec3::new(8.5, 64.0, 8.5),
+            Arc::downgrade(world),
+            &vanilla_entities::BREEZE_WIND_CHARGE,
+        );
+        let damage_source = DamageSource::environment(&vanilla_damage_types::EXPLOSION);
+
+        assert!(BellBlock::can_trigger_blocks(
+            world,
+            &explosion(&source, BlockInteraction::TriggerBlock, &damage_source)
+        ));
+        assert!(!BellBlock::can_trigger_blocks(
+            world,
+            &explosion(&source, BlockInteraction::Destroy, &damage_source)
+        ));
+
+        // Breeze wind charges additionally follow the `mob_griefing` rule.
+        assert!(world.set_game_rule(&vanilla_game_rules::MOB_GRIEFING, false));
+        assert!(!BellBlock::can_trigger_blocks(
+            world,
+            &explosion(&source, BlockInteraction::TriggerBlock, &damage_source)
+        ));
     }
 }

@@ -90,8 +90,9 @@ impl PlayerAdvancement {
                     && player
                         .level()
                         .is_some_and(|level| level.get_game_rule(&SHOW_ADVANCEMENT_MESSAGES))
+                    && let Some(server) = player.server_if_present()
                 {
-                    player.server().broadcast_system_chat(
+                    server.broadcast_system_chat(
                         &display
                             .frame_type
                             .create_announcement(advancement, player.display_name()),

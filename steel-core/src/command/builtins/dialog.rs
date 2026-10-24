@@ -44,9 +44,8 @@ fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
             ),
         )
         .then(
-            literal("clear").then(
-                argument("targets", SteelArgumentType::players()).executes(clear_dialog),
-            ),
+            literal("clear")
+                .then(argument("targets", SteelArgumentType::players()).executes(clear_dialog)),
         )
 }
 

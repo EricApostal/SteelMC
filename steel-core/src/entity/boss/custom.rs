@@ -631,3 +631,157 @@ const fn boss_bar_text_color(color: BossBarColor) -> Color {
         BossBarColor::White => Color::White,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use steel_registry::init_vanilla_registry;
+    use steel_utils::Identifier;
+    use text_components::TextComponent;
+    use uuid::Uuid;
+
+    use super::{BossBarColor, BossBarOverlay, CustomBossEvent, CustomBossEvents, DEFAULT_MAX};
+    use crate::entity::boss::event::tests::recording_player;
+    use crate::test_support::fresh_test_world;
+
+    /// Vanilla `CustomBossEvent.setValue`/`setMax`: the bar renders `value / max`
+    /// clamped to `0..=1` while the stored `value` stays unclamped.
+    #[test]
+    fn custom_boss_event_value_and_max_derive_the_clamped_progress() {
+        let id = Identifier::vanilla_static("progress");
+        let mut bar = CustomBossEvent::new(Uuid::new_v4(), id, TextComponent::plain("Bar"));
+
+        // Vanilla's constructor calls `setProgress(0.0F)` over the inherited 1.0.
+        assert!((bar.event().progress() - 0.0).abs() < f32::EPSILON);
+        assert_eq!(bar.max(), DEFAULT_MAX);
+
+        bar.set_max(200);
+        bar.set_value(50);
+        assert!((bar.event().progress() - 0.25).abs() < f32::EPSILON);
+
+        // `value` is stored as given; only the derived progress clamps.
+        bar.set_value(500);
+        assert_eq!(bar.value(), 500);
+        assert!((bar.event().progress() - 1.0).abs() < f32::EPSILON);
+        bar.set_value(-5);
+        assert_eq!(bar.value(), -5);
+        assert!((bar.event().progress() - 0.0).abs() < f32::EPSILON);
+    }
+
+    /// Vanilla `CustomBossEvents` + `/bossbar`: create and remove reach clients, and the
+    /// manager's saved form round-trips the bar's options and viewer set.
+    #[test]
+    fn custom_boss_events_create_update_remove_and_round_trip() {
+        let id = Identifier::vanilla_static("raid_bar");
+        let mut events = CustomBossEvents::new();
+
+        let uuid = {
+            let bar = events.create(&id);
+            bar.set_name(TextComponent::plain("Raid"));
+            bar.set_color(BossBarColor::Yellow);
+            bar.set_value(30);
+            bar.set_max(120);
+            bar.event().id()
+        };
+        assert_eq!(events.ids(), vec![id.clone()]);
+
+        // The manager's save form carries every packed field.
+        let saved = events.to_saved();
+        let restored = CustomBossEvents::from_saved(saved);
+        let bar = restored
+            .get(&id)
+            .expect("the bar should survive the round trip");
+        assert_eq!(bar.event().id(), uuid);
+        assert_eq!(bar.name().clone(), TextComponent::plain("Raid"));
+        assert_eq!(bar.color(), BossBarColor::Yellow);
+        assert_eq!(bar.value(), 30);
+        assert_eq!(bar.max(), 120);
+        assert_eq!(bar.overlay(), BossBarOverlay::Progress);
+
+        // `remove` drops the bar and marks the manager dirty.
+        let mut restored = restored;
+        restored.mark_saved();
+        assert!(!restored.is_dirty());
+        assert!(restored.remove(&id).is_some());
+        assert!(restored.is_dirty());
+        assert!(restored.get(&id).is_none());
+        assert!(restored.ids().is_empty());
+    }
+
+    /// Vanilla `CustomBossEvent.addPlayer`/`removePlayer`/`setPlayers`: a bar delivers its
+    /// operations only to the viewers it tracks, and hiding it removes it from them.
+    #[test]
+    fn custom_boss_event_delivers_only_to_its_viewers() {
+        init_vanilla_registry();
+        let fixture = fresh_test_world("custom_boss_event_viewers");
+        let (viewer, viewer_connection) = recording_player(&fixture.world, "BarViewer");
+        let (outsider, outsider_connection) = recording_player(&fixture.world, "BarOutsider");
+        // Building the test players writes packets of their own; `reset` is called again
+        // immediately before each measured tick, since world-player bookkeeping also writes.
+        viewer_connection.reset();
+        outsider_connection.reset();
+
+        let id = Identifier::vanilla_static("delivery");
+        let mut events = CustomBossEvents::new();
+        {
+            let bar = events.create(&id);
+            bar.add_player(Arc::clone(&viewer));
+        }
+        // Vanilla `CustomBossEvent.addPlayer` persists the viewer and marks the bar dirty.
+        assert!(events.is_dirty());
+
+        viewer_connection.reset();
+        outsider_connection.reset();
+        events.tick(&[Arc::clone(&viewer), Arc::clone(&outsider)]);
+        assert!(viewer_connection.sent() >= 1, "the add reaches the viewer");
+        assert_eq!(
+            outsider_connection.sent(),
+            0,
+            "a player the bar does not list receives nothing"
+        );
+
+        // `/bossbar set <id> players` reconciles the tracked set.
+        let bar = events.get_mut(&id).expect("bar should exist");
+        assert!(bar.set_players(&[Arc::clone(&outsider)]));
+        assert_eq!(bar.player_uuids().len(), 1);
+        viewer_connection.reset();
+        outsider_connection.reset();
+        events.tick(&[Arc::clone(&viewer), Arc::clone(&outsider)]);
+        assert!(
+            viewer_connection.sent() >= 1,
+            "the dropped viewer gets a remove"
+        );
+        assert!(
+            outsider_connection.sent() >= 1,
+            "the new viewer gets an add"
+        );
+
+        // Vanilla `CustomBossEvents.onPlayerDisconnect` keeps the persisted viewer entry
+        // while dropping the live handle, so a reconnect re-shows the bar.
+        events.tick(&[]);
+        let bar = events.get(&id).expect("bar should exist");
+        assert_eq!(bar.event().player_count(), 0);
+        assert_eq!(bar.player_uuids().len(), 1, "the persisted viewer survives");
+
+        outsider_connection.reset();
+        events.tick(&[Arc::clone(&outsider)]);
+        assert!(
+            outsider_connection.sent() >= 1,
+            "the reconnecting viewer is re-added"
+        );
+
+        // `setVisible(false)` removes the bar from the viewers' screens.
+        events
+            .get_mut(&id)
+            .expect("bar should exist")
+            .set_visible(false);
+        outsider_connection.reset();
+        events.tick(&[Arc::clone(&outsider)]);
+        assert!(outsider_connection.sent() >= 1, "hiding removes the bar");
+        assert!(
+            viewer_connection.sent() == 0 || outsider_connection.sent() >= 1,
+            "delivery followed the tracked set"
+        );
+    }
+}

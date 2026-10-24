@@ -293,6 +293,9 @@ impl Server {
         }
         let pos = player.position();
         let rotation = player.rotation();
+        // Vanilla `PlayerList.placeNewPlayer`: the server's MOTD and favicon follow the level
+        // setup and precede the player-info snapshot the client needs before entity spawns.
+        player.send_packet(self.config.server_data_packet());
         // The client drops a player entity spawn when it does not already know that
         // player's profile. Vanilla publishes player info before adding the player to
         // the level, which can immediately start entity tracking for existing players.
@@ -310,6 +313,10 @@ impl Server {
             // Vanilla `PlayerList.placeNewPlayer`: the book is sent once the
             // player's saved data has been applied.
             player.send_initial_recipe_book();
+            // Vanilla `PlayerList.placeNewPlayer`: the join sync sends the domain's teams,
+            // each displayed objective once (DisplaySlot order) and their scores.
+            self.scoreboards
+                .send_initial_state(player.get_world().domain(), &player);
             // Vanilla `PlayerList.placeNewPlayer`: every tracked counter is marked
             // dirty so the first `RequestStats` (statistics screen) sends the whole
             // saved state instead of only the counters touched after joining.

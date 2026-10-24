@@ -4,12 +4,16 @@ use steel_macros::block_behavior;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{BlockStateProperties, BoolProperty};
+use steel_utils::Downcast as _;
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId, Direction, WorldAabb};
 
 use crate::behavior::blocks::redstone::{MAX_REDSTONE_SIGNAL, MIN_REDSTONE_SIGNAL};
 use crate::behavior::{BlockBehavior, BlockPlaceContext, RailBehavior};
-use crate::entity::{Entity, InsideBlockEffectCollector};
+use crate::entity::entities::objects::CommandBlockMinecartEntity;
+use crate::entity::{Entity, InsideBlockEffectCollector, container_of_entity};
+use crate::inventory::container::calculate_redstone_signal_from_container;
+use crate::inventory::lock::ContainerLockGuard;
 use crate::world::{LevelReader, ScheduledTickAccess, SignalQueryContext, World};
 
 use super::base_rail_block::BaseRailBlock;
@@ -224,15 +228,39 @@ impl BlockBehavior for DetectorRailBlock {
 
     fn get_analog_output_signal(
         &self,
-        _state: BlockStateId,
-        _world: &dyn LevelReader,
-        _pos: BlockPos,
+        state: BlockStateId,
+        world: &dyn LevelReader,
+        pos: BlockPos,
         _direction: Direction,
     ) -> i32 {
-        // Vanilla reads the command-block success count or the contents of the
-        // first container minecart above this rail. Steel implements neither a
-        // command-block minecart nor a container-backed chest minecart yet, so
-        // vanilla's observable analogue output is indistinguishable from zero.
+        if !state.get_value(POWERED) {
+            return MIN_REDSTONE_SIGNAL;
+        }
+
+        // Vanilla `DetectorRailBlock.getAnalogOutputSignal` scans the search box
+        // for a command-block minecart first, then for a container minecart.
+        let entities = world.entities_in_aabb(&Self::search_bounds(pos));
+
+        for entity in &entities {
+            if let Some(command_cart) = entity.downcast_ref::<CommandBlockMinecartEntity>() {
+                return command_cart.success_count();
+            }
+        }
+
+        for entity in &entities {
+            if !entity.entity_type().is_abstract_minecart || !entity.is_alive() {
+                continue;
+            }
+            let Some(container) = container_of_entity(entity.as_ref()) else {
+                continue;
+            };
+            let guard = ContainerLockGuard::lock_all(&[&container]);
+            return guard.get(container.container_id()).map_or(
+                MIN_REDSTONE_SIGNAL,
+                calculate_redstone_signal_from_container,
+            );
+        }
+
         MIN_REDSTONE_SIGNAL
     }
 
@@ -247,12 +275,15 @@ mod tests {
 
     use glam::DVec3;
     use steel_registry::init_vanilla_registry;
-    use steel_registry::{vanilla_blocks, vanilla_entities};
+    use steel_registry::item_stack::ItemStack;
+    use steel_registry::{vanilla_blocks, vanilla_entities, vanilla_items};
     use steel_utils::ChunkPos;
 
     use super::*;
     use crate::behavior::{BLOCK_BEHAVIORS, init_behaviors};
+    use crate::entity::entities::objects::HopperMinecartEntity;
     use crate::entity::{InsideBlockEffectCollector, RemovalReason, SharedEntity};
+    use crate::inventory::container::Container;
     use crate::test_support::{TestEntity, fresh_test_world, insert_ready_full_chunk};
 
     #[test]
@@ -316,5 +347,54 @@ mod tests {
         minecart.set_removed(RemovalReason::Discarded);
         behavior.tick(powered, world, pos);
         assert!(!world.get_block_state(pos).get_value(POWERED));
+    }
+
+    #[test]
+    fn container_minecart_contents_drive_analog_output() {
+        init_vanilla_registry();
+        init_behaviors();
+        let world_fixture = fresh_test_world("detector_rail_analog");
+        let world = &world_fixture.world;
+        let pos = BlockPos::new(8, 64, 8);
+        insert_ready_full_chunk(world, ChunkPos::from_block_pos(pos));
+        world.set_block(
+            pos.below(),
+            vanilla_blocks::STONE.default_state(),
+            UpdateFlags::UPDATE_NONE,
+        );
+        let state = vanilla_blocks::DETECTOR_RAIL.default_state();
+        world.set_block(pos, state, UpdateFlags::UPDATE_NONE);
+
+        let cart = HopperMinecartEntity::new(
+            &vanilla_entities::HOPPER_MINECART,
+            8_002,
+            DVec3::new(8.5, 64.0, 8.5),
+            Arc::downgrade(world),
+        );
+        cart.with_inventory_mut(|inventory| {
+            inventory.set_item(0, ItemStack::with_count(&vanilla_items::STONE, 64));
+            inventory.set_item(1, ItemStack::with_count(&vanilla_items::STONE, 64));
+        });
+        let cart: SharedEntity = Arc::new(cart);
+        world
+            .try_add_entity(Arc::clone(&cart))
+            .expect("test minecart should enter loaded chunk");
+
+        let powered = state.set_value(POWERED, true);
+        world.set_block(pos, powered, UpdateFlags::UPDATE_NONE);
+
+        let behavior = BLOCK_BEHAVIORS.get_behavior(&vanilla_blocks::DETECTOR_RAIL);
+        // Vanilla `AbstractContainerMenu.getRedstoneSignalFromContainer`: two full
+        // stacks across five slots is 2/5, curving to floor(0.4 * 14) + 1 = 6.
+        assert_eq!(
+            behavior.get_analog_output_signal(powered, world.as_ref(), pos, Direction::Up),
+            6
+        );
+
+        // An unpowered rail never emits an analogue signal.
+        assert_eq!(
+            behavior.get_analog_output_signal(state, world.as_ref(), pos, Direction::Up),
+            0
+        );
     }
 }

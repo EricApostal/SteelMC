@@ -86,10 +86,10 @@ fn first_matching_pos_in_closed_box(
     max: BlockPos,
     mut predicate: impl FnMut(BlockPos) -> bool,
 ) -> Option<BlockPos> {
-    // Vanilla `BlockPos.betweenClosed` iterates x, then y, then z.
-    for x in min.x()..=max.x() {
+    // Vanilla `BlockPos.betweenClosed` iterates x fastest, then y, then z.
+    for z in min.z()..=max.z() {
         for y in min.y()..=max.y() {
-            for z in min.z()..=max.z() {
+            for x in min.x()..=max.x() {
                 let pos = BlockPos::new(x, y, z);
                 if predicate(pos) {
                     return Some(pos);

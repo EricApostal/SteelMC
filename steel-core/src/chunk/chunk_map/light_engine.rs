@@ -201,3 +201,89 @@ impl ChunkMap {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::fresh_test_world;
+
+    /// Vanilla `LevelLightEngine.getDebugSectionType`/`getDebugData` report the
+    /// `LayerLightSectionStorage.SectionState` type as `"0"`/`"1"`/`"2"`, and
+    /// `updateSectionStatus` propagates neighbour counts into adjacent sections.
+    #[test]
+    fn light_debug_data_reports_vanilla_section_types_and_neighbor_counts() {
+        let fixture = fresh_test_world("light_debug_data");
+        let chunk_map = &fixture.world.chunk_map;
+        let center = SectionPos::new(3, 4, -2);
+        let neighbor = SectionPos::new(3, 5, -2);
+
+        // No section state yet: EMPTY ("2") on both sections.
+        assert_eq!(
+            chunk_map.light_debug_section_type(LightLayer::Block, center),
+            SectionType::Empty
+        );
+        assert_eq!(chunk_map.light_debug_data(LightLayer::Block, center), "2");
+
+        // A non-empty real section stores light data -> LIGHT_AND_DATA ("0"); its
+        // neighbours only carry the neighbour count -> LIGHT_ONLY ("1").
+        chunk_map.update_light_section_status(center, false);
+        assert_eq!(
+            chunk_map.light_debug_section_type(LightLayer::Block, center),
+            SectionType::LightAndData
+        );
+        assert_eq!(chunk_map.light_debug_data(LightLayer::Block, center), "0");
+        assert_eq!(
+            chunk_map.light_debug_section_type(LightLayer::Sky, neighbor),
+            SectionType::LightOnly
+        );
+        assert_eq!(chunk_map.light_debug_data(LightLayer::Sky, neighbor), "1");
+        assert!(chunk_map.has_light_inconsistencies());
+
+        // Emptying the section drops its own state and decrements the neighbour count.
+        chunk_map.update_light_section_status(center, true);
+        assert_eq!(
+            chunk_map.light_debug_section_type(LightLayer::Block, center),
+            SectionType::Empty
+        );
+        assert_eq!(
+            chunk_map.light_debug_section_type(LightLayer::Block, neighbor),
+            SectionType::Empty
+        );
+    }
+
+    /// Vanilla `LayerLightSectionStorage.setLightEnabled`/`lightOnInColumn`: a column is
+    /// lit only while both of its layers are enabled.
+    #[test]
+    fn light_enabled_column_tracks_both_layers() {
+        let fixture = fresh_test_world("light_enabled_column");
+        let chunk_map = &fixture.world.chunk_map;
+        let chunk_pos = ChunkPos::new(3, -2);
+
+        assert!(!chunk_map.light_on_in_column(chunk_pos));
+
+        chunk_map.set_light_enabled(chunk_pos, true);
+        assert!(chunk_map.light_on_in_column(chunk_pos));
+
+        chunk_map.set_light_enabled(chunk_pos, false);
+        assert!(!chunk_map.light_on_in_column(chunk_pos));
+    }
+
+    /// Vanilla `LayerLightSectionStorage.queueSectionData` keeps queued light until
+    /// `markNewInconsistencies` publishes it, and `getDataLayerData` prefers it.
+    #[test]
+    fn queued_section_data_wins_over_stored_light() {
+        let fixture = fresh_test_world("light_queued_section_data");
+        let chunk_map = &fixture.world.chunk_map;
+        let section_pos = SectionPos::new(3, 4, -2);
+        let layer = LightLayer::Block;
+
+        assert!(chunk_map.light_data_layer(layer, section_pos).is_none());
+
+        chunk_map.queue_light_section_data(layer, section_pos, Some(DataLayer::filled(7)));
+        assert!(chunk_map.has_light_inconsistencies());
+        let queued = chunk_map
+            .light_data_layer(layer, section_pos)
+            .expect("queued layer must be visible");
+        assert_eq!(queued.get(0, 0, 0), 7);
+    }
+}

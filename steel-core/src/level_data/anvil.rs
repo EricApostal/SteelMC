@@ -92,6 +92,11 @@ pub(crate) fn apply_level_dat(
     dimension_dir: &Path,
     level: &mut LevelData,
 ) -> io::Result<()> {
+    crate::datafixer::ensure_current(
+        crate::datafixer::version_of(data),
+        crate::datafixer::DataFixType::Level,
+        "level.dat",
+    )?;
     if let Some(time) = data.long("Time") {
         level.game_time = Some(time);
     }

@@ -853,11 +853,11 @@ pub(crate) fn try_to_tame<E: Nautilus>(entity: &E, player: &Player) {
 
 /// Vanilla `TamableAnimal.tame`.
 ///
-/// GAP: `CriteriaTriggers.TAME_ANIMAL` is not fired; Steel has no tame-animal
-/// advancement trigger yet (same gap as `Parrot`).
+/// Raises `TAME_ANIMAL` for the taming player, matching vanilla.
 pub(crate) fn tame<E: Nautilus>(entity: &E, player: &Player) {
     entity.set_tame_flag(true);
     entity.set_owner_uuid(Some(player.uuid()));
+    crate::player::advancement::triggers::raise_tame_animal(player, entity);
 }
 
 /// Vanilla `AbstractNautilus.requiresCustomPersistence`.

@@ -12,6 +12,7 @@ use std::{
 };
 pub use steel_protocol::packet_traits::CompressionInfo;
 use steel_protocol::packets::config::{CServerLinks, Link, ServerLinksType};
+use steel_protocol::packets::game::CServerData;
 use steel_registry::vanilla_dimension_types;
 use steel_utils::Identifier;
 use steel_utils::codec::Or;
@@ -142,6 +143,21 @@ impl Default for RuntimeConfig {
 }
 
 impl RuntimeConfig {
+    /// Builds the `CServerData` packet from config.
+    ///
+    /// Vanilla `PlayerList.placeNewPlayer` sends the server's MOTD and favicon to a joining
+    /// player (`ServerPlayer.sendServerStatus`), using the raw icon bytes rather than the
+    /// status ping's `data:image/png;base64,` data URI.
+    #[must_use]
+    pub fn server_data_packet(&self) -> CServerData {
+        let icon_bytes = if self.use_favicon {
+            std::fs::read(&self.favicon).ok()
+        } else {
+            None
+        };
+        CServerData::new(TextComponent::plain(self.motd.clone()), icon_bytes)
+    }
+
     /// Builds the `CServerLinks` packet from config, if server links are enabled.
     #[must_use]
     pub fn server_links_packet(&self) -> Option<CServerLinks> {

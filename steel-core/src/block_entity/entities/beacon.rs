@@ -445,6 +445,8 @@ mod tests {
     #[test]
     fn activating_pyramid_grants_the_create_beacon_criterion() {
         init_vanilla_registry();
+        crate::behavior::init_behaviors();
+        crate::block_entity::init_block_entities();
         let world_fixture = fresh_test_world("beacon_construct_beacon");
         let world = &world_fixture.world;
         let pos = BlockPos::new(8, 64, 8);
@@ -466,11 +468,7 @@ mod tests {
         assert!(world.set_block(pos, state, UpdateFlags::UPDATE_ALL));
 
         let player = TestPlayerBuilder::new(Arc::clone(world), "BeaconTester", 1).build();
-        assert!(
-            player
-                .try_set_position(DVec3::new(8.5, 64.05, 6.5))
-                .is_ok()
-        );
+        assert!(player.try_set_position(DVec3::new(8.5, 64.05, 6.5)).is_ok());
         assert!(world.add_player(Arc::clone(&player), ResetReason::InitialJoin));
 
         let beacon = BeaconBlockEntity::new(Weak::clone(&Arc::downgrade(world)), pos, state);

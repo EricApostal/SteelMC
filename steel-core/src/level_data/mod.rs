@@ -28,6 +28,17 @@ pub use game_time::{GameTime, GameTimeSource};
 
 pub mod anvil;
 
+/// Version of the `level.toml` layout, written as an extra top-level key (`level_toml_version`)
+/// next to the serialized [`LevelData`].
+///
+/// This is the first stamped version, so an unstamped file — every `level.toml` written
+/// before this gate existed — counts as version 1. Only a *newer* stamp is refused: files
+/// from the future may carry keys this build silently misreads as defaults.
+///
+/// Vanilla's own `DataVersion`/`version`/`LevelVersion` tags belong to `level.dat` and are
+/// gated in [`anvil::apply_level_dat`].
+pub const LEVEL_TOML_VERSION: u64 = 1;
+
 /// Returns the file-name-stem used as a vanilla `LevelName`, mirroring the world directory.
 fn level_name(world_dir: &Path) -> &str {
     world_dir
@@ -443,6 +454,21 @@ impl LevelDataManager {
                         format!("Invalid {}: {e}", path.display()),
                     )
                 })?;
+                // `level_toml_version` is a manager key, not a `LevelData` field; strip it
+                // before deserializing the payload.
+                let toml_version = table
+                    .remove("level_toml_version")
+                    .and_then(|version| {
+                        version.as_integer().map(|version| {
+                            u64::try_from(version).unwrap_or(u64::MAX)
+                        })
+                    })
+                    .unwrap_or(LEVEL_TOML_VERSION);
+                crate::datafixer::ensure_steel_current(
+                    toml_version,
+                    LEVEL_TOML_VERSION,
+                    &format!("level file {}", path.display()),
+                )?;
                 let removed_legacy_time = matches!(&source, GameTimeSource::Derived(_))
                     && table.remove("game_time").is_some();
                 let mut loaded: LevelData = table.try_into().map_err(|e| {
@@ -595,7 +621,17 @@ impl LevelDataManager {
         // Export runtime game rules to serializable format before saving
         self.data.save_game_rules();
 
-        let content = toml::to_string_pretty(&self.data)
+        // The version stamp is an extra key outside `LevelData`: `LevelData` never sees it
+        // (unknown keys are ignored on deserialize), so old and new payloads stay compatible
+        // while files from a newer build fail the load-side gate instead of degrading
+        // silently into defaults.
+        let mut table = toml::Table::try_from(&self.data)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        table.insert(
+            "level_toml_version".to_owned(),
+            toml::Value::Integer(i64::try_from(LEVEL_TOML_VERSION).unwrap_or(i64::MAX)),
+        );
+        let content = toml::to_string_pretty(&table)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         fs::write(world_path, content).await?;
 

@@ -225,6 +225,7 @@ impl KineticWeapon {
                 .map_or(0, KineticWeaponCondition::max_duration_ticks)
     }
 
+    #[must_use]
     pub const fn delay_ticks(&self) -> i32 {
         self.delay_ticks
     }

@@ -347,7 +347,6 @@ fn update_pattern_blocks(level: &Arc<World>, found: &PatternMatch, pattern: &Blo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use steel_registry::init_vanilla_registry;
     use steel_utils::Downcast as _;
 
     /// A pattern cell without a predicate would silently never match, so every declared
@@ -393,8 +392,7 @@ mod tests {
         use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
         use steel_utils::ChunkPos;
 
-        init_vanilla_registry();
-        crate::entity::init_entities();
+        crate::bootstrap::init_globals();
 
         let fixture = fresh_test_world("pumpkin_iron_golem");
         let world = &fixture.world;
@@ -458,8 +456,7 @@ mod tests {
         use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
         use steel_utils::ChunkPos;
 
-        init_vanilla_registry();
-        crate::entity::init_entities();
+        crate::bootstrap::init_globals();
 
         let fixture = fresh_test_world("pumpkin_snow_golem");
         let world = &fixture.world;
@@ -498,7 +495,7 @@ mod tests {
         use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
         use steel_utils::ChunkPos;
 
-        init_vanilla_registry();
+        crate::bootstrap::init_globals();
         let fixture = fresh_test_world("pumpkin_can_spawn");
         let world = &fixture.world;
         insert_ready_full_chunk(world, ChunkPos::new(1, 1));
@@ -511,6 +508,8 @@ mod tests {
             "bare air matches nothing"
         );
 
+        // Two iron blocks in a column are only part of `getOrCreateIronGolemBase`
+        // (`~ ~ / ### / ~#~`): the row under the pumpkin needs all three cells.
         world.set_block(
             BlockPos::new(18, 69, 18),
             vanilla_blocks::IRON_BLOCK.default_state(),
@@ -522,8 +521,22 @@ mod tests {
             UpdateFlags::UPDATE_CLIENTS,
         );
         assert!(
+            !can_spawn_golem(world.as_ref(), top),
+            "an incomplete base pattern must not accept the pumpkin"
+        );
+
+        // The full base: the three-block row below the pumpkin's cell plus the middle
+        // block of the row beneath it.
+        for x in 17..=19 {
+            world.set_block(
+                BlockPos::new(x, 69, 18),
+                vanilla_blocks::IRON_BLOCK.default_state(),
+                UpdateFlags::UPDATE_CLIENTS,
+            );
+        }
+        assert!(
             can_spawn_golem(world.as_ref(), top),
-            "a column of two iron blocks completes the iron base pattern"
+            "a pumpkin placed at `top` completes the iron base pattern"
         );
     }
 
@@ -559,8 +572,7 @@ mod tests {
         use crate::test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk};
         use steel_utils::ChunkPos;
 
-        init_vanilla_registry();
-        crate::entity::init_entities();
+        crate::bootstrap::init_globals();
 
         let fixture = fresh_test_world("pumpkin_golem_summoned_entity");
         let world = &fixture.world;
@@ -581,13 +593,12 @@ mod tests {
                 UpdateFlags::UPDATE_CLIENTS,
             );
         }
-        for x in [7, 9] {
-            world.set_block(
-                BlockPos::new(x, 68, 8),
-                vanilla_blocks::IRON_BLOCK.default_state(),
-                UpdateFlags::UPDATE_CLIENTS,
-            );
-        }
+        // The bottom row is `~#~`: only the middle cell is iron, the neighbours stay air.
+        world.set_block(
+            BlockPos::new(8, 68, 8),
+            vanilla_blocks::IRON_BLOCK.default_state(),
+            UpdateFlags::UPDATE_CLIENTS,
+        );
 
         let player = TestPlayerBuilder::new(Arc::clone(world), "GolemWatcher", 1).build();
         assert!(player.try_set_position(DVec3::new(8.5, 68.05, 8.5)).is_ok());

@@ -71,6 +71,7 @@ pub use creaking_heart::CreakingHeartBlockEntity;
 pub use daylight_detector::DaylightDetectorBlockEntity;
 pub use decorated_pot::{DECORATED_POT_SHERDS, DecoratedPotBlockEntity};
 pub use dispenser::{DISPENSER_SLOTS, DispenserBlockEntity, DropperBlockEntity, insert_item_into};
+pub(crate) use dispenser::{shuffle, shuffle_and_split_items};
 pub use enchanting_table::EnchantingTableBlockEntity;
 pub use end_gateway::EndGatewayBlockEntity;
 pub use end_portal::EndPortalBlockEntity;

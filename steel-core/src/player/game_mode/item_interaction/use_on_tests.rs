@@ -17,10 +17,10 @@ use steel_utils::{BlockPos, BlockStateId, ChunkPos, Direction, Downcast as _};
 use text_components::TextComponent;
 use uuid::Uuid;
 
+use crate::behavior::advancement_hooks::test_support::criterion_granted;
 use crate::behavior::{
     BlockHitResult, InteractionResult, blocks::facing_text_slot, init_behaviors,
 };
-use crate::behavior::advancement_hooks::test_support::criterion_granted;
 use crate::block_entity::SharedBlockEntity;
 use crate::block_entity::entities::{SignBlockEntity, SignText};
 use crate::entity::{Entity as _, entities::ItemEntity};

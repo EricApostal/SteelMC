@@ -527,9 +527,12 @@ fn spawner_block_entities_preserve_nbt_through_proto_save_load() {
     );
 
     // Keys the implemented `SpawnerBlockEntity` models, so the round trip proves the
-    // proto save/load path preserves entity-specific NBT.
+    // proto save/load path preserves entity-specific NBT. Vanilla `SpawnData.CODEC`
+    // wraps the entity under `entity` (`SpawnData.ENTITY_TAG`).
+    let mut entity_to_spawn = NbtCompound::new();
+    entity_to_spawn.insert("id", "minecraft:zombie");
     let mut spawn_data = NbtCompound::new();
-    spawn_data.insert("id", "minecraft:zombie");
+    spawn_data.insert("entity", entity_to_spawn);
     let mut nbt = NbtCompound::new();
     nbt.insert("Delay", 42_i16);
     nbt.insert("SpawnData", spawn_data);
@@ -574,7 +577,8 @@ fn spawner_block_entities_preserve_nbt_through_proto_save_load() {
     assert_eq!(
         saved
             .compound("SpawnData")
-            .and_then(|data| data.string("id"))
+            .and_then(|data| data.compound("entity"))
+            .and_then(|entity| entity.string("id"))
             .map(ToString::to_string),
         Some("minecraft:zombie".to_owned())
     );

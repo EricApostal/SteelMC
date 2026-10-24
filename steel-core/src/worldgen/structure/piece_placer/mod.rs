@@ -452,13 +452,17 @@ mod tests {
         }
     }
 
+    /// Every vanilla mob type now has a runtime factory, so the only entity type the
+    /// registry cannot create is `PLAYER` (players never come from an entity factory).
+    /// `create_mob` must skip such a type instead of spawning a partial entity.
     #[test]
-    fn unsupported_structure_mob_is_skipped() {
+    fn unsupported_structure_entity_is_skipped() {
         init_globals();
 
+        assert!(!ENTITIES.has_factory(&vanilla_entities::PLAYER));
         assert!(
             StructurePiecePlacer::create_mob(
-                &vanilla_entities::GIANT,
+                &vanilla_entities::PLAYER,
                 DVec3::ZERO,
                 Weak::new(),
                 true,

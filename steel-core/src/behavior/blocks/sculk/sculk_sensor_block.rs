@@ -88,7 +88,7 @@ impl SculkSensorBlock {
         world.game_event(
             &steel_registry::vanilla_game_events::SCULK_SENSOR_TENDRILS_CLICKING,
             pos,
-            &crate::world::game_event::GameEventContext::new(source_entity, Some(active)),
+            &crate::world::game_event::GameEventContext::new(source_entity, None),
         );
         if !state.get_value(WATERLOGGED) {
             // Vanilla `level.getRandom().nextFloat() * 0.2F + 0.8F`; ambient pitch jitter.
@@ -163,6 +163,104 @@ impl SculkSensorBlock {
         world.update_neighbors_at(pos, block);
         world.update_neighbors_at(pos.below(), block);
     }
+
+    /// Vanilla `SculkSensorBlock.tick`, shared with `CalibratedSculkSensorBlock` (which inherits
+    /// it unchanged and only overrides `getActiveTicks`).
+    pub fn tick_phase(block: BlockRef, world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
+        match Self::phase(state) {
+            SculkSensorPhase::Active => Self::deactivate(block, world, pos, state),
+            // Vanilla clears cooldown to inactive, keeping `POWER` (already 0), and plays
+            // `SCULK_CLICKING_STOP` unless waterlogged.
+            SculkSensorPhase::Cooldown => {
+                world.set_block(
+                    pos,
+                    state.set_value(PHASE, SculkSensorPhase::Inactive),
+                    UpdateFlags::UPDATE_ALL,
+                );
+                if !state.get_value(WATERLOGGED) {
+                    world.play_sound(
+                        &sound_events::BLOCK_SCULK_SENSOR_CLICKING_STOP,
+                        SoundSource::Blocks,
+                        pos,
+                        1.0,
+                        rand::random::<f32>() * 0.2 + 0.8,
+                        None,
+                    );
+                }
+            }
+            SculkSensorPhase::Inactive => {}
+        }
+    }
+
+    /// Vanilla `SculkSensorBlock.onPlace`, shared with `CalibratedSculkSensorBlock`.
+    ///
+    /// Vanilla skips the client side, guards on a pending active tick so a re-placed sensor keeps
+    /// its pulse, and uses flags 18 (`UPDATE_CLIENTS | UPDATE_KNOWN_SHAPE`).
+    pub fn reset_power_on_place(
+        _block: BlockRef,
+        world: &Arc<World>,
+        pos: BlockPos,
+        state: BlockStateId,
+        old_state: BlockStateId,
+    ) {
+        if state.get_block() != old_state.get_block()
+            && state.get_value(POWER) > 0
+            && !world.has_scheduled_block_tick(pos, state.get_block())
+        {
+            world.set_block(
+                pos,
+                state.set_value(POWER, 0_u8),
+                UpdateFlags::UPDATE_CLIENTS | UpdateFlags::UPDATE_KNOWN_SHAPE,
+            );
+        }
+    }
+
+    /// Vanilla `SculkSensorBlock.stepOn` vibration half, shared with
+    /// `CalibratedSculkSensorBlock` (which inherits it unchanged).
+    ///
+    /// Vanilla gates on `canActivate`, the entity not being a warden, the block entity being a
+    /// `SculkSensorBlockEntity` (either variant) and `canReceiveVibration` with a state-only
+    /// context, then force-schedules the STEP vibration from the entity's exact position.
+    pub fn schedule_step_vibration(
+        world: &Arc<World>,
+        pos: BlockPos,
+        state: BlockStateId,
+        entity: &dyn crate::entity::Entity,
+    ) {
+        if !Self::can_activate(state)
+            || entity.entity_type() == &steel_registry::vanilla_entities::WARDEN
+        {
+            return;
+        }
+        let Some(block_entity) = world.get_block_entity(pos) else {
+            return;
+        };
+        use steel_utils::Downcast as _;
+        let probe = crate::world::game_event::GameEventContext::new(None, Some(state));
+        let listener = if let Some(sensor) =
+            block_entity.downcast_ref::<crate::block_entity::entities::SculkSensorBlockEntity>()
+        {
+            if !sensor.can_receive_vibration(world, pos, &vanilla_game_events::STEP, &probe) {
+                return;
+            }
+            Arc::clone(sensor.vibration_listener())
+        } else if let Some(sensor) = block_entity
+            .downcast_ref::<crate::block_entity::entities::CalibratedSculkSensorBlockEntity>(
+        ) {
+            if !sensor.can_receive_vibration(world, pos, &vanilla_game_events::STEP, &probe) {
+                return;
+            }
+            Arc::clone(sensor.vibration_listener())
+        } else {
+            return;
+        };
+        listener.force_schedule_vibration(
+            world,
+            &vanilla_game_events::STEP,
+            &crate::world::game_event::GameEventContext::new(Some(entity), Some(state)),
+            entity.position(),
+        );
+    }
 }
 
 impl BlockBehavior for SculkSensorBlock {
@@ -194,64 +292,13 @@ impl BlockBehavior for SculkSensorBlock {
         pos: BlockPos,
         entity: &dyn crate::entity::Entity,
     ) {
-        // Vanilla `stepOn` force-schedules a STEP vibration through the BE listener when inactive.
-        // Vanilla `stepOn`: inactive, non-Warden, and the vibration user accepts `STEP`.
-        if !Self::can_activate(state)
-            || entity.entity_type() == &steel_registry::vanilla_entities::WARDEN
-        {
-            self.default_step_on(state, world, pos, entity);
-            return;
-        }
-        use steel_utils::Downcast as _;
-        let Some(block_entity) = world.get_block_entity(pos) else {
-            self.default_step_on(state, world, pos, entity);
-            return;
-        };
-        let Some(sensor) =
-            block_entity.downcast_ref::<crate::block_entity::entities::SculkSensorBlockEntity>()
-        else {
-            self.default_step_on(state, world, pos, entity);
-            return;
-        };
-        let context = crate::world::game_event::GameEventContext::new(Some(entity), Some(state));
-        // Vanilla `stepOn` also requires `VibrationUser.canReceiveVibration` for the stepped block.
-        if !sensor.can_receive_vibration(world, pos, &vanilla_game_events::STEP, &context) {
-            self.default_step_on(state, world, pos, entity);
-            return;
-        }
-        sensor.vibration_listener().force_schedule_vibration(
-            world,
-            &vanilla_game_events::STEP,
-            &context,
-            entity.position(),
-        );
+        // Vanilla `stepOn` runs the vibration half first, then `super.stepOn`.
+        Self::schedule_step_vibration(world, pos, state, entity);
         self.default_step_on(state, world, pos, entity);
     }
 
     fn tick(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
-        match Self::phase(state) {
-            SculkSensorPhase::Active => Self::deactivate(self.block, world, pos, state),
-            // Vanilla `tick` clears cooldown to inactive, keeping `POWER` (already 0), and plays
-            // `SCULK_CLICKING_STOP` unless waterlogged.
-            SculkSensorPhase::Cooldown => {
-                world.set_block(
-                    pos,
-                    state.set_value(PHASE, SculkSensorPhase::Inactive),
-                    UpdateFlags::UPDATE_ALL,
-                );
-                if !state.get_value(WATERLOGGED) {
-                    world.play_sound(
-                        &sound_events::BLOCK_SCULK_SENSOR_CLICKING_STOP,
-                        SoundSource::Blocks,
-                        pos,
-                        1.0,
-                        rand::random::<f32>() * 0.2 + 0.8,
-                        None,
-                    );
-                }
-            }
-            SculkSensorPhase::Inactive => {}
-        }
+        Self::tick_phase(self.block, world, pos, state);
     }
 
     fn on_place(
@@ -262,20 +309,7 @@ impl BlockBehavior for SculkSensorBlock {
         old_state: BlockStateId,
         _moved_by_piston: bool,
     ) {
-        // Vanilla skips the client side, guards on a pending active tick so a re-placed sensor
-        // keeps its pulse, and uses flags 18 (`UPDATE_CLIENTS | UPDATE_KNOWN_SHAPE`).
-        // Steel runs block behaviors server-side only, so vanilla's client-side early return is
-        // a no-op here (no deviation in effect).
-        if state.get_block() != old_state.get_block()
-            && state.get_value(POWER) > 0
-            && !world.has_scheduled_block_tick(pos, self.block)
-        {
-            world.set_block(
-                pos,
-                state.set_value(POWER, 0_u8),
-                UpdateFlags::UPDATE_CLIENTS | UpdateFlags::UPDATE_KNOWN_SHAPE,
-            );
-        }
+        Self::reset_power_on_place(self.block, world, pos, state, old_state);
     }
 
     fn affect_neighbors_after_removal(
@@ -293,6 +327,15 @@ impl BlockBehavior for SculkSensorBlock {
 
     fn is_signal_source(&self, _state: BlockStateId, _context: SignalQueryContext) -> bool {
         true
+    }
+
+    fn is_pathfindable(
+        &self,
+        _state: BlockStateId,
+        _computation_type: crate::entity::ai::path::PathComputationType,
+    ) -> bool {
+        // Vanilla `SculkSensorBlock.isPathfindable` always returns `false`.
+        false
     }
 
     fn get_own_signal(
@@ -380,5 +423,169 @@ impl BlockBehavior for SculkSensorBlock {
             // Vanilla `ConstantInt.of(5)`.
             try_drop_experience(world, pos, tool, &IntProvider::Constant(5));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use glam::DVec3;
+    use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_game_events};
+    use steel_utils::types::UpdateFlags;
+    use steel_utils::{ChunkPos, Downcast as _};
+
+    use super::*;
+    use crate::behavior::init_behaviors;
+    use crate::block_entity::BlockEntity as _;
+    use crate::block_entity::entities::SculkSensorBlockEntity;
+    use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
+    use crate::world::game_event::vibration::VibrationCallback as _;
+    use crate::world::game_event::{GameEventContext, GameEventListener as _};
+
+    /// Places a sculk sensor with its block entity in a ticking test chunk whose 3x3 chunk
+    /// neighbourhood is loaded, as `VibrationUser.requiresAdjacentChunksToBeTicking` demands
+    /// before an arrived vibration is delivered.
+    fn place_sensor(world: &Arc<World>, pos: BlockPos) {
+        insert_ready_full_chunk(world, ChunkPos::from_block_pos(pos));
+        let chunk = ChunkPos::from_block_pos(pos);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                if dx != 0 || dz != 0 {
+                    insert_ready_full_chunk(world, ChunkPos::new(chunk.0.x + dx, chunk.0.y + dz));
+                }
+            }
+        }
+        assert!(world.set_block(
+            pos,
+            vanilla_blocks::SCULK_SENSOR.default_state(),
+            UpdateFlags::UPDATE_ALL,
+        ));
+    }
+
+    /// Ticks the sensor block entity `count` times.
+    fn tick_sensor(world: &Arc<World>, pos: BlockPos, count: usize) {
+        let entity = world
+            .get_block_entity(pos)
+            .expect("placed sculk sensor should have a block entity");
+        for _ in 0..count {
+            entity.tick(world);
+        }
+    }
+
+    /// Vanilla `SculkSensorBlock` never emits redstone while inactive; this exercises the whole
+    /// vibration path (event -> listener candidate -> travel time -> `activate`) end to end.
+    #[test]
+    fn absorbed_vibration_activates_and_emits_redstone_power() {
+        init_vanilla_registry();
+        init_behaviors();
+        let world_fixture = fresh_test_world("sculk_sensor_activation");
+        let world = &world_fixture.world;
+        let pos = BlockPos::new(8, 64, 8);
+        place_sensor(world, pos);
+        assert_eq!(world.get_block_state(pos).get_value(POWER), 0);
+
+        // A step two blocks away, exactly what `Entity.walkDist` reports server-side.
+        world.game_event(
+            &vanilla_game_events::STEP,
+            pos.offset(2, 0, 0),
+            &GameEventContext::default(),
+        );
+        // `VibrationSelector.chosenCandidate` only releases a candidate on a later game tick than
+        // the one it was buffered on.
+        crate::test_support::advance_test_game_time_to(world, world.game_time() + 1);
+
+        // One tick to schedule the two blocks of travel time, then the arrival tick that
+        // activates the sensor.
+        tick_sensor(world, pos, 2);
+
+        let activated = world.get_block_state(pos);
+        assert_eq!(SculkSensorBlock::phase(activated), SculkSensorPhase::Active);
+        // Vanilla `getRedstoneStrengthForDistance(2.0, 8) = max(1, 15 - floor(15/8*2)) = 12`.
+        assert_eq!(activated.get_value(POWER), 12);
+        assert!(world.has_scheduled_block_tick(pos, &vanilla_blocks::SCULK_SENSOR));
+
+        let entity = world.get_block_entity(pos).expect("sensor block entity");
+        let sensor = entity
+            .downcast_ref::<SculkSensorBlockEntity>()
+            .expect("sculk sensor block entity");
+        assert_eq!(sensor.last_power(), 12);
+        // STEP maps to vibration frequency 1, which the comparator output mirrors.
+        assert_eq!(sensor.last_vibration_frequency(), 1);
+        let behavior = SculkSensorBlock::new(&vanilla_blocks::SCULK_SENSOR);
+        assert_eq!(
+            behavior.get_analog_output_signal(activated, world.as_ref(), pos, Direction::Down,),
+            1,
+        );
+        assert_eq!(
+            behavior.get_own_signal(activated, world.as_ref(), pos, SignalQueryContext::DEFAULT),
+            12,
+        );
+    }
+
+    #[test]
+    fn active_tick_cools_down_and_cooldown_tick_returns_to_inactive() {
+        init_vanilla_registry();
+        init_behaviors();
+        let world_fixture = fresh_test_world("sculk_sensor_cooldown");
+        let world = &world_fixture.world;
+        let pos = BlockPos::new(8, 64, 8);
+        place_sensor(world, pos);
+        let behavior = SculkSensorBlock::new(&vanilla_blocks::SCULK_SENSOR);
+
+        let active = world
+            .get_block_state(pos)
+            .set_value(PHASE, SculkSensorPhase::Active)
+            .set_value(POWER, 7_u8);
+        world.set_block(pos, active, UpdateFlags::UPDATE_ALL);
+
+        behavior.tick(active, world, pos);
+        let cooldown = world.get_block_state(pos);
+        assert_eq!(
+            SculkSensorBlock::phase(cooldown),
+            SculkSensorPhase::Cooldown
+        );
+        assert_eq!(cooldown.get_value(POWER), 0);
+        assert!(world.has_scheduled_block_tick(pos, &vanilla_blocks::SCULK_SENSOR));
+
+        behavior.tick(cooldown, world, pos);
+        assert_eq!(
+            SculkSensorBlock::phase(world.get_block_state(pos)),
+            SculkSensorPhase::Inactive
+        );
+    }
+
+    #[test]
+    fn direct_signal_is_upward_only_while_the_own_signal_is_full_power() {
+        init_vanilla_registry();
+        init_behaviors();
+        let world_fixture = fresh_test_world("sculk_sensor_direct_signal");
+        let world = &world_fixture.world;
+        let pos = BlockPos::new(8, 64, 8);
+        place_sensor(world, pos);
+        let behavior = SculkSensorBlock::new(&vanilla_blocks::SCULK_SENSOR);
+        let active = world
+            .get_block_state(pos)
+            .set_value(PHASE, SculkSensorPhase::Active)
+            .set_value(POWER, 9_u8);
+
+        assert_eq!(
+            behavior.get_direct_signal(
+                active,
+                world.as_ref(),
+                pos,
+                Direction::Up,
+                SignalQueryContext::DEFAULT,
+            ),
+            9,
+        );
+        assert_eq!(
+            behavior.get_direct_signal(
+                active,
+                world.as_ref(),
+                pos,
+                Direction::North,
+                SignalQueryContext::DEFAULT,
+            ),
+            0,
+        );
     }
 }

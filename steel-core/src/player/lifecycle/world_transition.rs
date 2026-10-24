@@ -69,6 +69,13 @@ impl Player {
             }
             self.reset_flying_ticks();
         } else {
+            // Vanilla `ServerPlayer.teleport` calls `triggerDimensionChangeTriggers`
+            // with the prior level when the player moves to a different level.
+            crate::player::advancement::triggers::raise_changed_dimension(
+                self,
+                &current_world.key,
+                &new_world.key,
+            );
             self.reset(new_world, ResetReason::WorldChange);
             if !self.spawn_with_velocity_packet(
                 position,

@@ -49,9 +49,12 @@ impl SculkShriekerBlock {
         state.get_value(SHRIEKING)
     }
 
-    /// Vanilla `SculkShriekerBlockEntity.shriek` block half: set `SHRIEKING`, schedule the 90-tick
-    /// expiry, emit the `shriek` game event. `LevelEvent 3007`/`PARTICLES_SCULK_SHRIEK` is emitted
-    /// by the entity alongside this call.
+    /// Vanilla `SculkShriekerBlockEntity.shriek` block half: set `SHRIEKING` and schedule the
+    /// 90-tick expiry.
+    ///
+    /// Vanilla uses `Level.setBlock(pos, state, 2)` — clients only, no neighbour updates — and
+    /// emits both `LevelEvent 3007`/`PARTICLES_SCULK_SHRIEK` and the `shriek` game event
+    /// separately in [`SculkShriekerBlockEntity`](crate::block_entity::entities::SculkShriekerBlockEntity).
     pub fn start_shriek(block: BlockRef, world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
         if state.get_value(SHRIEKING) {
             return;
@@ -59,14 +62,9 @@ impl SculkShriekerBlock {
         world.set_block(
             pos,
             state.set_value(SHRIEKING, true),
-            UpdateFlags::UPDATE_ALL,
+            UpdateFlags::UPDATE_CLIENTS,
         );
         world.schedule_block_tick_default(pos, block, SCULK_SHRIEKING_TICKS);
-        world.game_event(
-            &steel_registry::vanilla_game_events::SHRIEK,
-            pos,
-            &crate::world::game_event::GameEventContext::new(None, Some(state)),
-        );
     }
 
     /// Reads `can_summon` without panicking on states that lack the property.
@@ -165,5 +163,68 @@ impl BlockBehavior for SculkShriekerBlock {
             // Vanilla `ConstantInt.of(5)`.
             try_drop_experience(world, pos, tool, &IntProvider::Constant(5));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use steel_registry::{init_vanilla_registry, vanilla_blocks};
+    use steel_utils::ChunkPos;
+    use steel_utils::types::UpdateFlags;
+
+    use super::*;
+    use crate::behavior::init_behaviors;
+    use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
+
+    #[test]
+    fn shriek_sets_the_state_and_schedules_the_ninety_tick_expiry() {
+        init_vanilla_registry();
+        init_behaviors();
+        let world_fixture = fresh_test_world("sculk_shrieker_shriek");
+        let world = &world_fixture.world;
+        let pos = BlockPos::new(8, 64, 8);
+        insert_ready_full_chunk(world, ChunkPos::from_block_pos(pos));
+        let state = vanilla_blocks::SCULK_SHRIEKER.default_state();
+        world.set_block(pos, state, UpdateFlags::UPDATE_ALL);
+
+        SculkShriekerBlock::start_shriek(&vanilla_blocks::SCULK_SHRIEKER, world, pos, state);
+        assert!(SculkShriekerBlock::is_shrieking(world.get_block_state(pos)));
+        assert!(world.has_scheduled_block_tick(pos, &vanilla_blocks::SCULK_SHRIEKER));
+        assert_eq!(SCULK_SHRIEKING_TICKS, 90);
+    }
+
+    #[test]
+    fn expiry_tick_clears_shrieking_and_responds() {
+        init_vanilla_registry();
+        init_behaviors();
+        let world_fixture = fresh_test_world("sculk_shrieker_expiry");
+        let world = &world_fixture.world;
+        let pos = BlockPos::new(8, 64, 8);
+        insert_ready_full_chunk(world, ChunkPos::from_block_pos(pos));
+        let behavior = SculkShriekerBlock::new(&vanilla_blocks::SCULK_SHRIEKER);
+        // `can_summon` gates `tryRespond`; without it the expiry only clears the state.
+        let shrieking = vanilla_blocks::SCULK_SHRIEKER
+            .default_state()
+            .set_value(SHRIEKING, true)
+            .set_value(CAN_SUMMON, true);
+        world.set_block(pos, shrieking, UpdateFlags::UPDATE_ALL);
+
+        behavior.tick(shrieking, world, pos);
+        assert!(!SculkShriekerBlock::is_shrieking(
+            world.get_block_state(pos)
+        ));
+    }
+
+    #[test]
+    fn can_summon_reads_the_block_property() {
+        init_vanilla_registry();
+        assert!(!SculkShriekerBlock::can_summon(
+            vanilla_blocks::SCULK_SHRIEKER.default_state()
+        ));
+        assert!(SculkShriekerBlock::can_summon(
+            vanilla_blocks::SCULK_SHRIEKER
+                .default_state()
+                .set_value(CAN_SUMMON, true)
+        ));
     }
 }

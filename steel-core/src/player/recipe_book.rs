@@ -10,19 +10,24 @@ use std::sync::OnceLock;
 
 use rustc_hash::FxHashMap;
 use steel_protocol::packets::game::{
-    CRecipeBookAdd, CRecipeBookRemove, CRecipeBookSettings, ItemHolder, ItemHolderSet,
-    RecipeBookAddEntry, RecipeBookSettings, RecipeBookType, RecipeBookTypeSettings, RecipeDisplay,
-    RecipeDisplayEntry, RecipeDisplayId, SlotDisplay,
+    CRecipeBookAdd, CRecipeBookRemove, CRecipeBookSettings, CUpdateRecipes, ComponentTypeRef,
+    ItemHolder, ItemHolderSet, RecipeBookAddEntry, RecipeBookSettings, RecipeBookType,
+    RecipeBookTypeSettings, RecipeDisplay, RecipeDisplayEntry, RecipeDisplayId,
+    RecipePropertySetEntry, SelectableStonecutterRecipe, SlotDisplay,
 };
 use steel_registry::advancement::triggers::TriggerEvent;
+use steel_registry::data_components::vanilla_components;
+use steel_registry::data_components::{DataComponentPatch, DataComponentType};
 use steel_registry::item_stack::ItemStack;
+use steel_registry::item_stack_template::ItemStackTemplate;
 use steel_registry::recipe::vanilla_recipe_book_categories as categories;
 use steel_registry::recipe::{
-    CookingBookCategory, CookingRecipe, CraftingBookCategory, CraftingRecipe, Ingredient,
-    RecipeBookCategoryKind, RecipeBookCategoryRef, ShapedRecipe, ShapelessRecipe, SmithingRecipe,
-    StonecuttingRecipe, UntypedRecipeRef, vanilla_recipe_types,
+    BrewingRecipe, CookingBookCategory, CookingRecipe, CraftingBookCategory, CraftingRecipe,
+    DyeRecipe, ImbueRecipe, Ingredient, RecipeBookCategoryKind, RecipeBookCategoryRef,
+    ShapedRecipe, ShapelessRecipe, SmithingRecipe, StonecuttingRecipe, TransmuteRecipe,
+    UntypedRecipeRef, vanilla_recipe_types,
 };
-use steel_registry::{REGISTRY, vanilla_items};
+use steel_registry::{REGISTRY, RegistryExt as _, vanilla_items};
 use steel_utils::Identifier;
 
 use crate::entity::{Entity as _, living_loot_equipment};
@@ -520,6 +525,172 @@ static DISPLAY_INDEX: OnceLock<DisplayIndex> = OnceLock::new();
 /// The index is built once and cached. A pre-registry call is not cached so a
 /// caller cannot freeze an empty index before `init_vanilla_registry`; that
 /// runtime guard is why this uses `OnceLock` instead of `LazyLock`.
+
+/// The `minecraft:update_recipes` payload, built once from the frozen recipe registry.
+///
+/// Built once and cached for the same reason as [`DISPLAY_INDEX`]: a pre-registry call must
+/// not freeze an empty payload.
+static UPDATE_RECIPES: OnceLock<CUpdateRecipes> = OnceLock::new();
+
+/// Vanilla `RecipeManager.getSynchronizedItemProperties` + `getSynchronizedStonecutterRecipes`.
+///
+/// Returns the `minecraft:update_recipes` packet vanilla sends to a joining player
+/// (`PlayerList.placeNewPlayer`) and to every player on a resource reload
+/// (`PlayerList.reloadResources`), or `None` while the recipe registry is still empty.
+///
+/// The property-set order follows `RecipeManager.RECIPE_PROPERTY_SETS` and the item order
+/// inside each set follows the recipe registry's iteration order; vanilla collects the items
+/// into a hash set, so the client only ever treats them as a membership test.
+#[must_use]
+pub fn update_recipes_packet() -> Option<&'static CUpdateRecipes> {
+    if let Some(packet) = UPDATE_RECIPES.get() {
+        return Some(packet);
+    }
+    if REGISTRY.recipes.is_empty() {
+        return None;
+    }
+    Some(UPDATE_RECIPES.get_or_init(build_update_recipes))
+}
+
+/// Vanilla `RecipeManager.finalizeRecipeLoading`'s property-set and stonecutter passes.
+fn build_update_recipes() -> CUpdateRecipes {
+    let item_sets = vec![
+        property_set("smithing_base", smithing_base_ingredient),
+        property_set("smithing_template", smithing_template_ingredient),
+        property_set("smithing_addition", smithing_addition_ingredient),
+        property_set(
+            "furnace_input",
+            single_item_ingredient(vanilla_recipe_types::SMELTING.key()),
+        ),
+        property_set(
+            "blast_furnace_input",
+            single_item_ingredient(vanilla_recipe_types::BLASTING.key()),
+        ),
+        property_set(
+            "smoker_input",
+            single_item_ingredient(vanilla_recipe_types::SMOKING.key()),
+        ),
+        property_set(
+            "campfire_input",
+            single_item_ingredient(vanilla_recipe_types::CAMPFIRE_COOKING.key()),
+        ),
+        property_set("brewing_input", brewing_input_ingredient),
+        property_set("brewing_reagent", brewing_reagent_ingredient),
+    ];
+
+    CUpdateRecipes {
+        item_sets,
+        stonecutter_recipes: stonecutter_recipes(),
+    }
+}
+
+/// Vanilla `RecipePropertySet.create`: the union of `extract`'s ingredient items.
+///
+/// A recipe contributes nothing when `extract` yields no ingredient, matching vanilla's
+/// `IngredientExtractor` returning an empty `Optional`.
+fn property_set(
+    key: &'static str,
+    extract: impl Fn(UntypedRecipeRef) -> Option<Ingredient>,
+) -> RecipePropertySetEntry {
+    let mut items: Vec<steel_registry::items::ItemRef> = Vec::new();
+    for recipe in REGISTRY.recipes.iter() {
+        let Some(ingredient) = extract(recipe) else {
+            continue;
+        };
+        for item in ingredient.get_items() {
+            if !items.contains(&item) {
+                items.push(item);
+            }
+        }
+    }
+    RecipePropertySetEntry {
+        key: Identifier::vanilla_static(key),
+        items,
+    }
+}
+
+/// Vanilla `RecipeManager`'s `additionIngredient` extractor.
+fn smithing_addition_ingredient(recipe: UntypedRecipeRef) -> Option<Ingredient> {
+    match recipe.downcast_data::<SmithingRecipe>()? {
+        SmithingRecipe::Transform(transform) => transform.addition.clone(),
+        SmithingRecipe::Trim(trim) => Some(trim.addition.clone()),
+    }
+}
+
+/// Vanilla `RecipeManager`'s `baseIngredient` extractor.
+fn smithing_base_ingredient(recipe: UntypedRecipeRef) -> Option<Ingredient> {
+    match recipe.downcast_data::<SmithingRecipe>()? {
+        SmithingRecipe::Transform(transform) => Some(transform.base.clone()),
+        SmithingRecipe::Trim(trim) => Some(trim.base.clone()),
+    }
+}
+
+/// Vanilla `RecipeManager`'s `templateIngredient` extractor.
+fn smithing_template_ingredient(recipe: UntypedRecipeRef) -> Option<Ingredient> {
+    match recipe.downcast_data::<SmithingRecipe>()? {
+        SmithingRecipe::Transform(transform) => transform.template.clone(),
+        SmithingRecipe::Trim(trim) => Some(trim.template.clone()),
+    }
+}
+
+/// Vanilla `RecipeManager.forSingleInput`: the input of every cooking recipe of `type_key`.
+fn single_item_ingredient(
+    type_key: &'static Identifier,
+) -> impl Fn(UntypedRecipeRef) -> Option<Ingredient> {
+    move |recipe| {
+        if &recipe.recipe_type().key != type_key {
+            return None;
+        }
+        Some(recipe.downcast_data::<CookingRecipe>()?.ingredient.clone())
+    }
+}
+
+/// Vanilla `RecipeManager`'s `BrewingRecipe.getInput` extractor.
+fn brewing_input_ingredient(recipe: UntypedRecipeRef) -> Option<Ingredient> {
+    Some(
+        recipe
+            .downcast_data::<BrewingRecipe>()?
+            .input
+            .ingredient
+            .clone(),
+    )
+}
+
+/// Vanilla `RecipeManager`'s `BrewingRecipe.getReagent` extractor.
+fn brewing_reagent_ingredient(recipe: UntypedRecipeRef) -> Option<Ingredient> {
+    Some(
+        recipe
+            .downcast_data::<BrewingRecipe>()?
+            .reagent
+            .ingredient
+            .clone(),
+    )
+}
+
+/// Vanilla `SelectableRecipe.SingleInputSet` built from every stonecutter recipe.
+///
+/// Vanilla skips recipes whose placement is impossible (an empty ingredient) and whose
+/// result display is disabled; Steel has no feature flags, so every display is enabled.
+fn stonecutter_recipes() -> Vec<SelectableStonecutterRecipe> {
+    let mut entries = Vec::new();
+    for recipe in REGISTRY.recipes.iter() {
+        let Some(stonecutting) = recipe.downcast_data::<StonecuttingRecipe>() else {
+            continue;
+        };
+        if stonecutting.ingredient.is_empty() {
+            continue;
+        }
+        let Some(input) = ingredient_holder_set(&stonecutting.ingredient) else {
+            continue;
+        };
+        entries.push(SelectableStonecutterRecipe {
+            input,
+            option_display: stack_display(&stonecutting.result),
+        });
+    }
+    entries
+}
+
 #[must_use]
 fn display_index() -> Option<&'static DisplayIndex> {
     if let Some(index) = DISPLAY_INDEX.get() {
@@ -546,10 +717,6 @@ fn build_display_index() -> DisplayIndex {
             // Only special recipes lack book metadata; vanilla gives them no display.
             continue;
         };
-        let Some(display) = recipe_display(recipe) else {
-            continue;
-        };
-
         let group = book.group.as_ref().map(|group| {
             let next = i32::try_from(groups.len()).unwrap_or(i32::MAX);
             *groups.entry(group.clone()).or_insert(next)
@@ -563,20 +730,22 @@ fn build_display_index() -> DisplayIndex {
                 .collect::<Vec<_>>()
         });
 
-        let display_id = i32::try_from(entries.len()).unwrap_or(i32::MAX);
-        let index = entries.len();
-        entries.push(RecipeDisplayEntry {
-            id: RecipeDisplayId { index: display_id },
-            display,
-            group,
-            category,
-            crafting_requirements,
-        });
-        owners.push(recipe.key().clone());
-        by_recipe
-            .entry(recipe.key().clone())
-            .or_default()
-            .push(index);
+        for display in recipe_displays(recipe) {
+            let display_id = i32::try_from(entries.len()).unwrap_or(i32::MAX);
+            let index = entries.len();
+            entries.push(RecipeDisplayEntry {
+                id: RecipeDisplayId { index: display_id },
+                display,
+                group,
+                category,
+                crafting_requirements: crafting_requirements.clone(),
+            });
+            owners.push(recipe.key().clone());
+            by_recipe
+                .entry(recipe.key().clone())
+                .or_default()
+                .push(index);
+        }
     }
 
     DisplayIndex {
@@ -628,44 +797,164 @@ fn recipe_book_category(
     }
 }
 
-/// Vanilla `Recipe.display()`. Every vanilla serializer yields at most one display.
-fn recipe_display(recipe: UntypedRecipeRef) -> Option<RecipeDisplay> {
+/// Vanilla `Recipe.display()`: every display the recipe yields.
+///
+/// `TransmuteRecipe` is the only vanilla serializer that yields more than one
+/// display (one per accepted material count); every other serializer yields
+/// either exactly one or none.
+fn recipe_displays(recipe: UntypedRecipeRef) -> Vec<RecipeDisplay> {
     let type_key = &recipe.recipe_type().key;
 
     if type_key == vanilla_recipe_types::CRAFTING.key() {
-        return match recipe.downcast_data::<CraftingRecipe>()? {
-            CraftingRecipe::Shaped(shaped) => Some(shaped_display(shaped)),
-            CraftingRecipe::Shapeless(shapeless) => Some(shapeless_display(shapeless)),
+        let Some(crafting) = recipe.downcast_data::<CraftingRecipe>() else {
+            return Vec::new();
+        };
+        return match crafting {
+            CraftingRecipe::Shaped(shaped) => vec![shaped_display(shaped)],
+            CraftingRecipe::Shapeless(shapeless) => vec![shapeless_display(shapeless)],
+            CraftingRecipe::Dye(dye) => dye_display(dye).into_iter().collect(),
+            CraftingRecipe::Imbue(imbue) => vec![imbue_display(imbue)],
+            CraftingRecipe::Transmute(transmute) => transmute_displays(transmute),
             // Vanilla's remaining crafting serializers extend `CustomRecipe`, whose
             // default `display()` is empty; they are all special recipes.
-            _ => None,
+            _ => Vec::new(),
         };
     }
     if type_key == vanilla_recipe_types::SMELTING.key() {
-        return cooking_display(recipe, &vanilla_items::FURNACE);
+        return cooking_display(recipe, &vanilla_items::FURNACE)
+            .into_iter()
+            .collect();
     }
     if type_key == vanilla_recipe_types::BLASTING.key() {
-        return cooking_display(recipe, &vanilla_items::BLAST_FURNACE);
+        return cooking_display(recipe, &vanilla_items::BLAST_FURNACE)
+            .into_iter()
+            .collect();
     }
     if type_key == vanilla_recipe_types::SMOKING.key() {
-        return cooking_display(recipe, &vanilla_items::SMOKER);
+        return cooking_display(recipe, &vanilla_items::SMOKER)
+            .into_iter()
+            .collect();
     }
     if type_key == vanilla_recipe_types::CAMPFIRE_COOKING.key() {
-        return cooking_display(recipe, &vanilla_items::CAMPFIRE);
+        return cooking_display(recipe, &vanilla_items::CAMPFIRE)
+            .into_iter()
+            .collect();
     }
     if type_key == vanilla_recipe_types::STONECUTTING.key() {
-        let stonecutting = recipe.downcast_data::<StonecuttingRecipe>()?;
-        return Some(RecipeDisplay::Stonecutter {
+        let Some(stonecutting) = recipe.downcast_data::<StonecuttingRecipe>() else {
+            return Vec::new();
+        };
+        return vec![RecipeDisplay::Stonecutter {
             input: ingredient_display(&stonecutting.ingredient),
             result: stack_display(&stonecutting.result),
             crafting_station: station_display(&vanilla_items::STONECUTTER),
-        });
+        }];
     }
     if type_key == vanilla_recipe_types::SMITHING.key() {
-        return smithing_display(recipe.downcast_data::<SmithingRecipe>()?);
+        return recipe
+            .downcast_data::<SmithingRecipe>()
+            .and_then(smithing_display)
+            .into_iter()
+            .collect();
     }
     // Brewing recipes are special and carry no display, matching vanilla.
-    None
+    Vec::new()
+}
+
+/// Vanilla `DyeRecipe.display()`.
+fn dye_display(recipe: &DyeRecipe) -> Option<RecipeDisplay> {
+    let dye = SlotDisplay::OnlyWithComponent {
+        contents: Box::new(ingredient_display(&recipe.dye)),
+        component: component_type_ref(vanilla_components::DYE)?,
+    };
+    let target = ingredient_display(&recipe.target);
+    Some(RecipeDisplay::ShapelessCrafting {
+        ingredients: vec![target.clone(), dye.clone()],
+        result: SlotDisplay::Dyed {
+            dye: Box::new(dye),
+            target: Box::new(target),
+        },
+        crafting_station: station_display(&vanilla_items::CRAFTING_TABLE),
+    })
+}
+
+/// Vanilla `ImbueRecipe.display()`.
+fn imbue_display(recipe: &ImbueRecipe) -> RecipeDisplay {
+    let material = ingredient_display(&recipe.material);
+    let source = SlotDisplay::WithAnyPotion(Box::new(ingredient_display(&recipe.source)));
+    RecipeDisplay::ShapedCrafting {
+        width: 3,
+        height: 3,
+        ingredients: vec![
+            material.clone(),
+            material.clone(),
+            material.clone(),
+            material.clone(),
+            source,
+            material.clone(),
+            material.clone(),
+            material.clone(),
+            material,
+        ],
+        result: SlotDisplay::WithAnyPotion(Box::new(stack_display(&recipe.result))),
+        crafting_station: station_display(&vanilla_items::CRAFTING_TABLE),
+    }
+}
+
+/// Vanilla `TransmuteRecipe.display()`: one shapeless display per material count.
+fn transmute_displays(recipe: &TransmuteRecipe) -> Vec<RecipeDisplay> {
+    let base_count = recipe.result.as_ref().map_or(1, ItemStackTemplate::count);
+    let material = ingredient_display(&recipe.material);
+    let mut ingredients = vec![ingredient_display(&recipe.input)];
+    let mut displays = Vec::new();
+
+    for material_count in recipe.min_material_count..=recipe.max_material_count {
+        ingredients.push(material.clone());
+        let result_count = if recipe.add_material_count_to_result {
+            let extra = i32::try_from(material_count).unwrap_or(i32::MAX);
+            base_count.saturating_add(extra)
+        } else {
+            base_count
+        };
+        let Some(result) = transmute_result_display(recipe, result_count) else {
+            continue;
+        };
+        displays.push(RecipeDisplay::ShapelessCrafting {
+            ingredients: ingredients.clone(),
+            result,
+            crafting_station: station_display(&vanilla_items::CRAFTING_TABLE),
+        });
+    }
+    displays
+}
+
+/// Vanilla `TransmuteRecipe.resultDisplay`: the fixed result, or the input item
+/// composite when the recipe keeps the input item.
+fn transmute_result_display(recipe: &TransmuteRecipe, count: i32) -> Option<SlotDisplay> {
+    if let Some(result) = &recipe.result {
+        let template = ItemStackTemplate::try_with_count_and_patch(
+            result.item(),
+            count,
+            result.components().clone(),
+        )
+        .ok()?;
+        return Some(SlotDisplay::ItemStack(template));
+    }
+
+    let mut contents = Vec::new();
+    for item in recipe.input.get_items() {
+        let template =
+            ItemStackTemplate::try_with_count_and_patch(item, count, DataComponentPatch::new())
+                .ok()?;
+        contents.push(SlotDisplay::ItemStack(template));
+    }
+    Some(SlotDisplay::Composite(contents))
+}
+
+/// Vanilla `DataComponents.DYE` as a network component-type reference.
+fn component_type_ref<T>(component: DataComponentType<T>) -> Option<ComponentTypeRef> {
+    let id = REGISTRY.data_components.get_id(component)?;
+    REGISTRY.data_components.by_id(id).map(ComponentTypeRef)
 }
 
 /// Vanilla `ShapedCraftingRecipeDisplay`.
@@ -781,6 +1070,7 @@ fn station_display(item: &'static steel_registry::items::Item) -> SlotDisplay {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use steel_registry::TaggedRegistryExt as _;
     use steel_registry::init_vanilla_registry;
 
     #[test]
@@ -819,13 +1109,180 @@ mod tests {
             ingredients,
             crafting_station,
             ..
-        }) = recipe_display(recipe)
+        }) = recipe_displays(recipe).into_iter().next()
         else {
             panic!("iron pickaxe must resolve to a shaped crafting display");
         };
         assert_eq!((width, height), (3, 3));
         assert_eq!(ingredients.len(), 9);
         assert!(matches!(crafting_station, SlotDisplay::Item(_)));
+    }
+
+    #[test]
+    fn dye_display_marks_the_dye_and_dyes_the_target() {
+        init_vanilla_registry();
+        let recipe = REGISTRY
+            .recipes
+            .by_key(&Identifier::vanilla_static("leather_boots_dyed"))
+            .expect("leather boots dye recipe is registered");
+        let displays = recipe_displays(recipe);
+        let [
+            RecipeDisplay::ShapelessCrafting {
+                ingredients,
+                result,
+                crafting_station,
+            },
+        ] = displays.as_slice()
+        else {
+            panic!("leather boots must resolve to one shapeless display: {displays:?}");
+        };
+        assert!(matches!(crafting_station, SlotDisplay::Item(_)));
+
+        let [target, dye] = ingredients.as_slice() else {
+            panic!("dye display must have a target and a dye slot");
+        };
+        let SlotDisplay::Tag(ItemHolderSet::Direct(targets)) = target else {
+            panic!("the dyed target is the leather boots item");
+        };
+        assert_eq!(targets[0].key, Identifier::vanilla_static("leather_boots"));
+
+        let SlotDisplay::OnlyWithComponent {
+            contents,
+            component,
+        } = dye
+        else {
+            panic!("the dye slot must require the dye component");
+        };
+        assert_eq!(component.0.key, Identifier::vanilla_static("dye"));
+        let SlotDisplay::Tag(ItemHolderSet::Tag(dye_tag)) = &**contents else {
+            panic!("the dye ingredient is the dyes tag");
+        };
+        assert_eq!(*dye_tag, Identifier::vanilla_static("dyes"));
+
+        let SlotDisplay::Dyed {
+            dye: result_dye,
+            target: result_target,
+        } = result
+        else {
+            panic!("the result display must be dyed");
+        };
+        let SlotDisplay::OnlyWithComponent {
+            contents: result_contents,
+            component: result_component,
+        } = &**result_dye
+        else {
+            panic!("the dyed result uses the same component-filtered dye display");
+        };
+        assert_eq!(result_component.0.key, Identifier::vanilla_static("dye"));
+        let SlotDisplay::Tag(ItemHolderSet::Tag(result_dye_tag)) = &**result_contents else {
+            panic!("the dyed result dye is the dyes tag");
+        };
+        assert_eq!(*result_dye_tag, Identifier::vanilla_static("dyes"));
+        let SlotDisplay::Tag(ItemHolderSet::Direct(result_targets)) = &**result_target else {
+            panic!("the dyed result target is the leather boots item");
+        };
+        assert_eq!(
+            result_targets[0].key,
+            Identifier::vanilla_static("leather_boots")
+        );
+    }
+
+    #[test]
+    fn imbue_display_places_the_source_in_the_centre() {
+        init_vanilla_registry();
+        let recipe = REGISTRY
+            .recipes
+            .by_key(&Identifier::vanilla_static("tipped_arrow"))
+            .expect("tipped arrow is registered");
+        let displays = recipe_displays(recipe);
+        let [
+            RecipeDisplay::ShapedCrafting {
+                width,
+                height,
+                ingredients,
+                result,
+                ..
+            },
+        ] = displays.as_slice()
+        else {
+            panic!("tipped arrow must resolve to one shaped display: {displays:?}");
+        };
+        assert_eq!((*width, *height), (3, 3));
+        assert_eq!(ingredients.len(), 9);
+        let SlotDisplay::WithAnyPotion(source) = &ingredients[4] else {
+            panic!("the centre slot must be the potion source");
+        };
+        let SlotDisplay::Tag(ItemHolderSet::Direct(sources)) = &**source else {
+            panic!("the potion source is a direct item set");
+        };
+        assert_eq!(
+            sources[0].key,
+            Identifier::vanilla_static("lingering_potion")
+        );
+
+        let SlotDisplay::WithAnyPotion(result) = result else {
+            panic!("the imbued result must accept any potion");
+        };
+        let SlotDisplay::ItemStack(result) = &**result else {
+            panic!("the imbued result is an item stack display");
+        };
+        assert_eq!(
+            result.item().key,
+            Identifier::vanilla_static("tipped_arrow")
+        );
+        assert_eq!(result.count(), 8);
+    }
+
+    #[test]
+    fn transmute_displays_cover_every_material_count() {
+        init_vanilla_registry();
+        let recipe = REGISTRY
+            .recipes
+            .by_key(&Identifier::vanilla_static("map_cloning"))
+            .expect("map cloning is registered");
+        let Some(CraftingRecipe::Transmute(transmute)) = recipe.downcast_data::<CraftingRecipe>()
+        else {
+            panic!("map cloning must be a transmute recipe");
+        };
+        assert!(transmute.add_material_count_to_result);
+
+        let displays = recipe_displays(recipe);
+        assert_eq!(
+            displays.len(),
+            transmute.max_material_count - transmute.min_material_count + 1
+        );
+        for (offset, display) in displays.iter().enumerate() {
+            let RecipeDisplay::ShapelessCrafting {
+                ingredients,
+                result,
+                ..
+            } = display
+            else {
+                panic!("transmute displays are shapeless");
+            };
+            let material_count = transmute.min_material_count + offset;
+            assert_eq!(ingredients.len(), 1 + material_count);
+
+            // `map_cloning` keeps the input item, so the result is a composite
+            // over every cloneable map at the count the material implies.
+            let SlotDisplay::Composite(contents) = result else {
+                panic!("a kept input item is displayed as a composite");
+            };
+            assert!(!contents.is_empty());
+            for content in contents {
+                let SlotDisplay::ItemStack(template) = content else {
+                    panic!("composite entries are item stack displays");
+                };
+                assert_eq!(template.count(), 1 + i32::try_from(material_count).unwrap());
+                assert!(
+                    REGISTRY.items.is_in_tag(
+                        template.item(),
+                        &Identifier::vanilla_static("clonable_maps")
+                    ),
+                    "composite entries stay inside the input ingredient"
+                );
+            }
+        }
     }
 
     #[test]
@@ -871,5 +1328,77 @@ mod tests {
         assert_eq!(restored.known(), book.known());
         assert_eq!(restored.settings(), book.settings());
         assert!(restored.contains(recipe.key()));
+    }
+
+    #[test]
+    fn update_recipes_packet_carries_every_property_set_and_stonecutter_option() {
+        init_vanilla_registry();
+        let packet = update_recipes_packet().expect("registry is initialized");
+
+        let keys: Vec<String> = packet
+            .item_sets
+            .iter()
+            .map(|entry| entry.key.to_string())
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                "minecraft:smithing_base",
+                "minecraft:smithing_template",
+                "minecraft:smithing_addition",
+                "minecraft:furnace_input",
+                "minecraft:blast_furnace_input",
+                "minecraft:smoker_input",
+                "minecraft:campfire_input",
+                "minecraft:brewing_input",
+                "minecraft:brewing_reagent",
+            ]
+        );
+        for entry in &packet.item_sets {
+            assert!(
+                !entry.items.is_empty(),
+                "property set {} has no items",
+                entry.key
+            );
+        }
+
+        // Every non-special stonecutter recipe becomes one selectable option.
+        let stonecutting: usize = REGISTRY
+            .recipes
+            .iter()
+            .filter(|recipe| {
+                recipe
+                    .downcast_data::<StonecuttingRecipe>()
+                    .is_some_and(|recipe| !recipe.ingredient.is_empty())
+            })
+            .count();
+        assert!(stonecutting > 0);
+        assert_eq!(packet.stonecutter_recipes.len(), stonecutting);
+        assert!(
+            packet
+                .stonecutter_recipes
+                .iter()
+                .all(|option| matches!(option.option_display, SlotDisplay::ItemStack(_)))
+        );
+    }
+
+    #[test]
+    fn furnace_input_covers_the_smelting_ingredients() {
+        init_vanilla_registry();
+        let packet = update_recipes_packet().expect("registry is initialized");
+        let furnace = packet
+            .item_sets
+            .iter()
+            .find(|entry| entry.key == Identifier::vanilla_static("furnace_input"))
+            .expect("furnace input is synchronized");
+
+        let raw_iron = REGISTRY
+            .items
+            .by_key(&Identifier::vanilla_static("raw_iron"))
+            .expect("raw iron is registered");
+        assert!(
+            furnace.items.contains(&raw_iron),
+            "raw iron smelts, so it must satisfy minecraft:furnace_input"
+        );
     }
 }

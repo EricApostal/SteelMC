@@ -28,6 +28,7 @@ use crate::behavior::{BLOCK_BEHAVIORS, BlockCollisionContext};
 use crate::block_entity::{BlockEntity, BlockEntityBase};
 use crate::entity::Entity as _;
 use crate::entity::RemovalReason;
+use crate::entity::container_of_entity;
 use crate::entity::entities::ItemEntity;
 use crate::inventory::container::Container;
 use crate::inventory::lock::{ContainerLockGuard, ContainerRef, SharedContainer};
@@ -393,19 +394,43 @@ impl Container for HopperContainer {
     fn set_changed(&mut self) {}
 }
 
-/// Returns the container capability of the block entity at `pos`, if any.
+/// Returns the container reachable at `pos`, if any.
 ///
-/// Vanilla parity: `HopperBlockEntity.getBlockContainer` as reached through
-/// `getContainerAt`. Blocks whose `WorldlyContainerHolder` capability is not yet
-/// modeled in Steel (composters) and entity containers (hopper/chest minecarts)
-/// are not covered here.
+/// Vanilla parity: `HopperBlockEntity.getContainerAt`. Vanilla first tries the
+/// block container (`getBlockContainer`) and only falls back to an entity
+/// container (`getEntityContainer`) when the block exposes none. The entity
+/// lookup mirrors `ContainerEntity`: any alive entity intersecting the block's
+/// centered unit cube whose container is exposed (chest/hopper minecarts, chest
+/// boats and rafts), chosen at random when several overlap.
+///
+/// Blocks whose `WorldlyContainerHolder` capability is not yet modeled in Steel
+/// (composters) are still not covered here.
 ///
 /// This is a reusable container-transfer helper shared with other
 /// Vanilla-style dispensers; callers must hold no container locks.
 pub fn container_at(world: &Arc<World>, pos: BlockPos) -> Option<ContainerRef> {
-    world
+    if let Some(container) = world
         .get_block_entity(pos)
         .and_then(ContainerRef::from_block_entity)
+    {
+        return Some(container);
+    }
+
+    let x = f64::from(pos.x()) + 0.5;
+    let y = f64::from(pos.y()) + 0.5;
+    let z = f64::from(pos.z()) + 0.5;
+    let aabb = WorldAabb::new(x - 0.5, y - 0.5, z - 0.5, x + 0.5, y + 0.5, z + 0.5);
+    let containers: Vec<ContainerRef> = world
+        .get_entities_in_aabb(&aabb)
+        .into_iter()
+        .filter(|entity| entity.is_alive())
+        .filter_map(|entity| container_of_entity(entity.as_ref()))
+        .collect();
+    if containers.is_empty() {
+        return None;
+    }
+    let index = rand::random_range(0..containers.len());
+    containers.get(index).cloned()
 }
 
 /// Returns the slots of `container` reachable through `direction`.
@@ -679,5 +704,64 @@ mod tests {
         assert!((aabb.min_corner().y - 64.6875).abs() < 1e-9);
         assert_eq!(aabb.max_corner().x, 3.0);
         assert!((aabb.max_corner().y - 66.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn container_at_resolves_an_entity_container_and_the_hopper_pulls_from_it() {
+        use glam::DVec3;
+        use steel_registry::vanilla_entities;
+        use steel_utils::ChunkPos;
+
+        use crate::entity::SharedEntity;
+        use crate::entity::entities::objects::ChestMinecartEntity;
+        use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
+
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world("hopper_entity_container");
+        let world = &world_fixture.world;
+        let pos = BlockPos::new(8, 64, 8);
+        insert_ready_full_chunk(world, ChunkPos::from_block_pos(pos));
+
+        let hopper = HopperBlockEntity::new(
+            Arc::downgrade(world),
+            pos,
+            steel_registry::vanilla_blocks::HOPPER.default_state(),
+        );
+
+        let cart = Arc::new(ChestMinecartEntity::new(
+            &vanilla_entities::CHEST_MINECART,
+            8_003,
+            DVec3::new(8.5, 65.0, 8.5),
+            Arc::downgrade(world),
+        ));
+        world
+            .try_add_entity(Arc::clone(&cart) as SharedEntity)
+            .expect("chest minecart should enter loaded chunk");
+
+        let cart_container = cart.container_ref();
+        let cart_id = cart_container.container_id();
+        {
+            let mut guard = ContainerLockGuard::lock_all(&[&cart_container]);
+            guard.set_item(cart_id, 0, ItemStack::with_count(&vanilla_items::STONE, 3));
+        }
+
+        // Vanilla `getContainerAt` falls back to the entity container above.
+        assert!(
+            container_at(world, pos.above()).is_some(),
+            "the chest minecart above must be resolved as a container"
+        );
+
+        BlockEntity::tick(&hopper, world);
+
+        assert_eq!(hopper.container.lock().get_item(0).count(), 1);
+        let guard = ContainerLockGuard::lock_all(&[&cart_container]);
+        assert_eq!(
+            guard
+                .get(cart_id)
+                .expect("cart container")
+                .get_item(0)
+                .count(),
+            2
+        );
     }
 }

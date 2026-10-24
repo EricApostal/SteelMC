@@ -108,7 +108,12 @@ impl Slot for ResultSlot {
     }
 
     fn remove(&self, guard: &mut ContainerLockGuard, _amount: i32) -> ItemStack {
-        mem::take(self.get_item_mut(guard))
+        let mut taken = mem::take(self.get_item_mut(guard));
+        // Vanilla `Slot.onTake` → `ItemStack.onCraftedBy` →
+        // `Item.onCraftedPostProcess`, which runs before the stack reaches the
+        // player (cartography lock/scale rewrites the stack here).
+        self.handler.on_result_crafted(&mut taken);
+        taken
     }
 
     fn is_fake(&self) -> bool {

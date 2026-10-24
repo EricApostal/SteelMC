@@ -15,9 +15,11 @@
 //! Implemented from `AbstractBoat`: the five-state float status machine
 //! (`IN_WATER`/`UNDER_WATER`/`UNDER_FLOWING_WATER`/`ON_LAND`/`IN_AIR`), buoyancy and
 //! per-status friction, `outOfControlTicks` passenger ejection, bubble-column wobble,
-//! fall-distance bookkeeping, paddle animation and sounds, occupant seating, nearby
-//! entity boarding/pushing, `VehicleEntity` damage and drops, and chest-boat storage
-//! (`Items` list plus the deferred `LootTable`/`LootTableSeed` fields).
+//! fall-distance bookkeeping, paddle animation and sounds, occupant seating with rider
+//! rotation clamping (`positionRider`/`clampRotation`), nearby entity boarding/pushing,
+//! `VehicleEntity` damage and drops, and chest-boat storage
+//! (`Items` list plus the deferred `LootTable`/`LootTableSeed` fields) opened through
+//! `AbstractChestBoat`'s three-row chest menu.
 //!
 //! Divergences from vanilla, all deliberate:
 //!
@@ -40,10 +42,20 @@
 //!
 //! - No `getDismountLocationForPassenger` hook on `Entity`; boats fall back to the
 //!   generic dismount helper.
-//! - No entity-container menu open path (`Player.openMenu(this)`), so a chest boat's
-//!   menu cannot be opened from here.
-//! - No loot-table fill API for entity containers, so `LootTable`/`LootTableSeed` are
-//!   persisted but not unpacked on open.
+//! - No per-entity removal hook: `EntityLevelCallback::on_remove` runs after
+//!   `AbstractBoat.remove` would have dropped a leash and after
+//!   `AbstractChestBoat.remove` would have dropped the chest contents, so the
+//!   `RemovalReason::should_destroy` halves of both overrides are unreachable here.
+//! - No `onPassengerTurned` hook, so the `yRotO` nudge vanilla applies to a passenger
+//!   that turns in a boat is dropped.
+//! - No `modifyPassengerFluidInteractionBox` hook, so a passenger in an upright boat
+//!   keeps its full fluid-interaction box instead of the hull-truncated one.
+//! - No leash-offset or quad-leash hook on `Leashable`, so boats keep the shared
+//!   `ENTITY_LEASH_ATTACHMENT_POINT` instead of vanilla's `getLeashOffset` and
+//!   `getQuadLeashOffsets`.
+//! - No `PiglinAi.angerNearbyPiglins` equivalent, so the piglin anger that vanilla's
+//!   `ContainerEntity.chestVehicleDestroyed` applies when a player destroys or opens a
+//!   chest boat is not applied.
 //! - No entity-to-team lookup, so the team `collisionRule` half of
 //!   `EntitySelector.pushableBy` cannot be evaluated; the spectator and pushable filters
 //!   are applied.
@@ -53,42 +65,54 @@ use std::f64::consts as f64_consts;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
+use rand::{SeedableRng as _, rngs::StdRng};
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_macros::entity_behavior;
+use steel_math::wrap_degrees;
 use steel_registry::REGISTRY;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::data_components::vanilla_components::CUSTOM_NAME;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::fluid::FluidStateExt;
 use steel_registry::item_stack::ItemStack;
-use steel_registry::particle_type::ParticleData;
+use steel_registry::loot_table::{LootContext, LootTableRef};
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::AbstractBoatEntityData;
 use steel_registry::vanilla_entity_type_tags::EntityTypeTag;
 use steel_registry::vanilla_game_rules::ENTITY_DROPS;
-use steel_registry::vanilla_particle_types::SPLASH;
 use steel_registry::{
     RegistryExt as _, TaggedRegistryExt as _, sound_events, vanilla_blocks, vanilla_game_events,
+    vanilla_menu_types,
 };
 use steel_utils::entity_events::EntityStatus;
-use steel_utils::locks::SyncMutex;
+use steel_utils::locks::{IntoShared as _, Shared, SyncMutex};
 use steel_utils::types::InteractionHand;
-use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier, WorldAabb};
+use steel_utils::{
+    BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier, WorldAabb, translations,
+};
+use text_components::TextComponent;
 
 use crate::behavior::InteractionResult;
+use crate::block_entity::entities::{shuffle, shuffle_and_split_items};
+use crate::entity::ai::control::rotate_if_necessary;
 use crate::entity::damage::DamageSource;
 use crate::entity::leash::{LeashData, Leashable};
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityMovementEmission, EntitySyncedData, RemovalReason,
-    SharedEntity, reset_forward_direction_of_relative_portal_position,
+    Entity, EntityBase, EntityBaseLoad, EntityEventSource, EntityMovementEmission,
+    EntitySyncedData, LivingEntity as _, RemovalReason, SharedEntity, WeakEntity, entity_loot_ref,
+    living_loot_equipment, position_rider_default,
+    reset_forward_direction_of_relative_portal_position,
 };
 use crate::fluid::{get_fluid_state, get_height};
 use crate::inventory::container::{Container, SimpleContainer};
+use crate::inventory::lock::ContainerRef;
+use crate::inventory::menu::{FillDirection, Menu, MenuBehavior, MenuBuilder, MenuKind};
 use crate::physics::MoverType;
 use crate::physics::collision::{WorldCollisionProvider, has_block_collision};
 use crate::physics::shapes::join_is_not_empty;
 use crate::player::Player;
+use crate::player::player_inventory::PlayerInventory;
 use crate::portal::portal_shape::PortalShape;
 use crate::world::World;
 
@@ -109,6 +133,10 @@ const BOAT_AIR_DRAG: f64 = 1.0;
 
 /// Slot count of a chest boat, vanilla `AbstractChestBoat.CONTAINER_SIZE`.
 const CHEST_BOAT_SLOTS: usize = 27;
+
+/// Head-yaw limit for a passenger clamped to the hull, vanilla
+/// `AbstractBoat.clampRotation`.
+const MAX_PASSENGER_HEAD_YAW: f32 = 105.0;
 
 /// Boat float status, vanilla `AbstractBoat.Status`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,6 +210,26 @@ pub struct ChestBoatStorage {
     items: SimpleContainer,
     loot_table: Option<Identifier>,
     loot_table_seed: i64,
+}
+
+// SAFETY: This Steel-owned key uniquely identifies the chest-boat storage; the
+// storage is `Send`/`Sync`, so erasing it behind `ContainerRef` is sound.
+unsafe impl DowncastType for ChestBoatStorage {
+    const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:entity/chest_boat_storage");
+}
+
+impl Container for ChestBoatStorage {
+    fn items(&self) -> &[ItemStack] {
+        self.items.items()
+    }
+
+    fn items_mut(&mut self) -> &mut [ItemStack] {
+        self.items.items_mut()
+    }
+
+    fn set_changed(&mut self) {
+        // Vanilla `AbstractChestBoat.setChanged` is empty, like `SimpleContainer`'s.
+    }
 }
 
 impl ChestBoatStorage {
@@ -299,6 +347,53 @@ impl Default for ChestBoatStorage {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// SAFETY: This Steel-owned key uniquely identifies the chest-boat menu kind.
+unsafe impl DowncastType for ChestBoatMenuKind {
+    const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:menu/chest_boat");
+}
+
+/// Vanilla `AbstractChestBoat.createMenu` + `ContainerEntity.isChestVehicleStillValid`:
+/// the shared three-row chest layout over the boat's container, which closes when the
+/// boat is gone or the player walks out of entity interaction range.
+struct ChestBoatMenuKind {
+    boat: WeakEntity,
+}
+
+impl MenuKind for ChestBoatMenuKind {
+    /// Vanilla `AbstractChestBoat.stopOpen`: announce the close as a game event.
+    fn removed(&mut self, _behavior: &mut MenuBehavior, player: &Player) {
+        let Some(boat) = self.boat.upgrade() else {
+            return;
+        };
+        boat.game_event_with_source_entity(&vanilla_game_events::CONTAINER_CLOSE, Some(player));
+    }
+
+    /// Vanilla `ContainerEntity.isChestVehicleStillValid`.
+    fn still_valid(&self, _behavior: &MenuBehavior, player: &Player) -> bool {
+        let Some(boat) = self.boat.upgrade() else {
+            return false;
+        };
+        !boat.is_removed() && player.is_within_entity_interaction_range(boat.bounding_box(), 4.0)
+    }
+}
+
+/// Builds vanilla `ChestMenu.threeRows` over a chest boat's container.
+fn build_chest_menu(
+    container_id: u8,
+    inventory: Shared<PlayerInventory>,
+    container: ContainerRef,
+    kind: ChestBoatMenuKind,
+) -> Menu {
+    // Vanilla `AbstractChestBoat.createMenu` returns `ChestMenu.threeRows`: the 3-row
+    // generic menu type over the 27 boat slots plus the standard player inventory.
+    let mut builder = MenuBuilder::new(&vanilla_menu_types::GENERIC_9X3, container_id);
+    let chest = builder.section(container, CHEST_BOAT_SLOTS);
+    let player = builder.player_inventory(&inventory);
+    builder.route(chest, player.all(), FillDirection::Backward);
+    builder.route(player.all(), chest, FillDirection::Forward);
+    builder.build(kind)
 }
 
 /// Vanilla `AbstractBoat` behavior shared by all four concrete boat structs.
@@ -766,28 +861,9 @@ trait AbstractBoat: Entity + Leashable {
         }
 
         if !self.is_under_water() && rand::random_range(0..100) == 0 {
-            if let Some(world) = self.level() {
-                let position = self.position();
-                world.play_sound_at(
-                    self.swim_sound(),
-                    self.sound_source(),
-                    position,
-                    1.0,
-                    0.8 + 0.4 * rand::random::<f32>(),
-                    None,
-                );
-                world.send_particles(
-                    ParticleData::simple(&SPLASH),
-                    DVec3::new(
-                        position.x + rand::random::<f64>(),
-                        position.y + 0.7,
-                        position.z + rand::random::<f64>(),
-                    ),
-                    1,
-                    DVec3::ZERO,
-                    0.0,
-                );
-            }
+            // Vanilla's splash sound and particle are `playLocalSound`/`addParticle`,
+            // both no-ops on the server, and the riding client runs this same hook
+            // itself; only the game event is server-visible.
             let controlling = self.controlling_passenger();
             self.game_event_with_source_entity(
                 &vanilla_game_events::SPLASH,
@@ -817,6 +893,7 @@ trait AbstractBoat: Entity + Leashable {
             let quarter = FRAC_PI_4;
             if previous % full_turn <= quarter
                 && next % full_turn >= quarter
+                && !self.is_silent()
                 && let Some(sound) = self.paddle_sound()
             {
                 let position = self.position();
@@ -868,6 +945,10 @@ trait AbstractBoat: Entity + Leashable {
         let own_width = own_box.max_x() - own_box.min_x();
 
         for entity in candidates {
+            // Vanilla `Level.getEntities(this, ...)` never returns the boat itself.
+            if entity.id() == self.id() {
+                continue;
+            }
             // `EntitySelector.pushableBy`: spectators and non-pushable entities are
             // excluded before either the boarding or the pushing branch.
             if entity.is_spectator() || !entity.is_pushable() {
@@ -930,6 +1011,74 @@ trait AbstractBoat: Entity + Leashable {
             self.ride_height(dimensions),
             offset * angle.cos(),
         )
+    }
+
+    /// Vanilla `AbstractBoat.positionRider`.
+    ///
+    /// The hull's per-tick turn also rotates server-authoritative passengers before they
+    /// are clamped to the hull. `Entity.isLocalInstanceAuthoritative` is
+    /// `!isClientAuthoritative` on the server, and a passenger is client-authoritative
+    /// only when it is a player or a player controls it.
+    fn boat_position_rider(&self, passenger: &dyn Entity) {
+        position_rider_default(self, passenger);
+        if REGISTRY
+            .entity_types
+            .is_in_tag(passenger.entity_type(), &EntityTypeTag::CAN_TURN_IN_BOATS)
+        {
+            return;
+        }
+
+        let player_controlled = passenger.as_player().is_some()
+            || passenger
+                .controlling_passenger()
+                .is_some_and(|controller| controller.as_player().is_some());
+        if !player_controlled {
+            let delta_rotation = self.boat_state().lock().delta_rotation;
+            let (yaw, pitch) = passenger.rotation();
+            passenger.set_rotation((yaw + delta_rotation, pitch));
+            if let Some(living) = passenger.as_living_entity() {
+                living.set_y_head_rot(living.y_head_rot() + delta_rotation);
+            }
+        }
+
+        self.clamp_boat_rotation(passenger);
+    }
+
+    /// Vanilla `AbstractBoat.clampRotation`.
+    ///
+    /// Vanilla returns the applied yaw delta from `onPassengerTurned` to advance
+    /// `yRotO`; `Entity` has no passenger-turned hook here, so it is dropped.
+    fn clamp_boat_rotation(&self, passenger: &dyn Entity) {
+        let body_y_rot = self.calculate_passenger_body_y_rot(passenger);
+        if let Some(living) = passenger.as_living_entity() {
+            // `Entity.setYBodyRot` is a no-op for non-living passengers.
+            living.set_y_body_rot(body_y_rot);
+        }
+
+        if let Some(mob) = passenger.as_mob() {
+            // Vanilla forces a mob passenger to face the hull, then clamps its head.
+            passenger.set_rotation((body_y_rot, passenger.rotation().1));
+            mob.set_y_head_rot(rotate_if_necessary(
+                mob.y_head_rot(),
+                mob.y_body_rot(),
+                mob.max_head_y_rot(),
+            ));
+        } else {
+            let (yaw, pitch) = passenger.rotation();
+            let delta = wrap_degrees(yaw - body_y_rot);
+            let target_delta = delta.clamp(-MAX_PASSENGER_HEAD_YAW, MAX_PASSENGER_HEAD_YAW);
+            passenger.set_rotation((yaw + target_delta - delta, pitch));
+        }
+    }
+
+    /// Vanilla `AbstractBoat.calculatePassengerBodyYRot`.
+    fn calculate_passenger_body_y_rot(&self, passenger: &dyn Entity) -> f32 {
+        let yaw = self.rotation().0;
+        if passenger.as_animal().is_some() && self.passengers().len() == self.max_passengers() {
+            yaw + if passenger.id() % 2 == 0 { 90.0 } else { 270.0 }
+        } else {
+            yaw
+        }
     }
 
     /// Vanilla `VehicleEntity.hurtServer`.
@@ -1039,6 +1188,13 @@ trait AbstractBoat: Entity + Leashable {
         }
     }
 
+    /// Vanilla `Entity.interact` reached through the boat classes: the plain hulls stop
+    /// at `AbstractBoat.interact`, while the chest hulls fall through to
+    /// `AbstractChestBoat.interact`.
+    fn boat_entity_interact(&self, player: &Player) -> InteractionResult {
+        self.boat_interact(player)
+    }
+
     /// Drops every passenger, vanilla `Entity.ejectPassengers`.
     fn eject_passengers(&self) {
         for passenger in self.passengers() {
@@ -1144,6 +1300,18 @@ macro_rules! impl_boat_entity {
                 true
             }
 
+            /// Vanilla `AbstractBoat.canVehicleCollide`.
+            fn can_collide_with(&self, other: &dyn Entity) -> bool {
+                (other.can_be_collided_with(Some(self.as_entity_event_source()))
+                    || other.is_pushable())
+                    && !self.is_passenger_of_same_vehicle(other)
+            }
+
+            /// Vanilla `AbstractBoat.positionRider`.
+            fn position_rider(&self, passenger: &dyn Entity) {
+                self.boat_position_rider(passenger);
+            }
+
             fn dimension_changing_delay(&self) -> i32 {
                 10
             }
@@ -1229,7 +1397,7 @@ macro_rules! impl_boat_entity {
                 _hand: InteractionHand,
                 _location: DVec3,
             ) -> InteractionResult {
-                self.boat_interact(player)
+                self.boat_entity_interact(player)
             }
 
             fn as_leashable(&self) -> Option<&dyn Leashable> {
@@ -1280,14 +1448,25 @@ macro_rules! impl_boat_public_api {
     };
 }
 
-/// Generates the chest-boat API and storage hooks for a chest-boat struct.
+/// Generates the chest-boat container API, menu wiring and storage hooks for a
+/// chest-boat struct.
 macro_rules! impl_chest_boat {
     ($struct_name:ident) => {
         impl $struct_name {
             /// Returns the chest storage and deferred loot state.
             #[must_use]
-            pub const fn chest(&self) -> &SyncMutex<ChestBoatStorage> {
+            pub const fn chest(&self) -> &Shared<ChestBoatStorage> {
                 &self.chest
+            }
+
+            /// Returns the hull's container capability.
+            ///
+            /// Vanilla `AbstractChestBoat` implements `ContainerEntity`, so the
+            /// hull is reachable through `HopperBlockEntity.getContainerAt` and
+            /// `DetectorRailBlock.getAnalogOutputSignal`.
+            #[must_use]
+            pub fn container_ref(&self) -> ContainerRef {
+                ContainerRef::from(&self.chest)
             }
 
             /// Sets the deferred loot table used when the container is first opened.
@@ -1301,10 +1480,139 @@ macro_rules! impl_chest_boat {
                 !self.is_removed()
                     && player.is_within_entity_interaction_range(self.bounding_box(), 4.0)
             }
+
+            /// Vanilla `AbstractChestBoat.interact`'s container half, reached through
+            /// `ContainerEntity.interactWithContainerVehicle` and
+            /// `AbstractChestBoat.createMenu`.
+            fn open_chest_menu(&self, player: &Player) -> InteractionResult {
+                // Vanilla `AbstractChestBoat.createMenu` refuses to build a menu for a
+                // spectator while the loot table is still pending, but the interaction
+                // still consumes the use and still announces the open.
+                let spectator_blocked =
+                    self.chest.lock().loot_table().is_some() && player.is_spectator();
+                if !spectator_blocked
+                    && let Some(world) = self.level()
+                    && let Some(boat) = world.get_entity_by_id(self.id())
+                {
+                    // Vanilla `AbstractChestBoat.createMenu` unpacks before it builds.
+                    self.unpack_chest_loot(Some(player));
+
+                    let kind = ChestBoatMenuKind {
+                        boat: Arc::downgrade(&boat),
+                    };
+                    let inventory = Arc::clone(&player.inventory);
+                    let container = ContainerRef::from(&self.chest);
+                    player.open_menu(
+                        TextComponent::translated(translations::CONTAINER_CHEST.msg()),
+                        move |context| {
+                            build_chest_menu(context.container_id, inventory, container, kind)
+                        },
+                    );
+                }
+                self.game_event_with_source_entity(
+                    &vanilla_game_events::CONTAINER_OPEN,
+                    Some(player),
+                );
+                InteractionResult::Success
+            }
+
+            /// Vanilla `AbstractChestBoat.interact`: mount first, then fall through to
+            /// the chest unless the hull can still take the player as a passenger.
+            fn chest_boat_interact(&self, player: &Player) -> InteractionResult {
+                let mounted = AbstractBoat::boat_interact(self, player);
+                if mounted != InteractionResult::Pass {
+                    return mounted;
+                }
+
+                if self.can_add_passenger(player) && !player.is_secondary_use_active() {
+                    return InteractionResult::Pass;
+                }
+
+                self.open_chest_menu(player)
+            }
+
+            /// Vanilla `ContainerEntity.unpackChestVehicleLootTable`: roll the deferred
+            /// loot table into the hull the first time its contents are needed.
+            fn unpack_chest_loot(&self, player: Option<&Player>) {
+                let Some(loot_table_key) = self.chest.lock().loot_table().cloned() else {
+                    return;
+                };
+                let loot_table = REGISTRY.loot_tables.by_key(&loot_table_key);
+
+                // Vanilla triggers `GENERATE_LOOT` before the loot is rolled.
+                if let Some(player) = player
+                    && let Some(world) = self.level()
+                {
+                    crate::behavior::advancement_hooks::raise_generate_loot(
+                        player,
+                        &world,
+                        &loot_table_key,
+                    );
+                }
+
+                let seed = {
+                    let mut chest = self.chest.lock();
+                    let seed = std::mem::take(&mut chest.loot_table_seed);
+                    chest.loot_table = None;
+                    seed
+                };
+                if seed == 0 {
+                    self.fill_chest_from_loot_table(loot_table, &mut rand::rng(), player);
+                } else {
+                    self.fill_chest_from_loot_table(
+                        loot_table,
+                        &mut StdRng::seed_from_u64(seed as u64),
+                        player,
+                    );
+                }
+            }
+
+            /// Vanilla `LootTable.fill` against the hull's empty slots, using the same
+            /// slot distribution as the dispenser family (`Util.shuffle` +
+            /// `LootTable.shuffleAndSplitItems`).
+            fn fill_chest_from_loot_table<R: rand::Rng>(
+                &self,
+                loot_table: Option<LootTableRef>,
+                rng: &mut R,
+                player: Option<&Player>,
+            ) {
+                let Some(table) = loot_table else {
+                    return;
+                };
+                let origin = self.position();
+                let equipment = player.map(living_loot_equipment);
+                let items = {
+                    let mut context =
+                        LootContext::new(rng).with_origin(origin.x, origin.y, origin.z);
+                    if let (Some(player), Some(equipment)) = (player, equipment.as_ref()) {
+                        context = context
+                            .with_luck(player.get_luck())
+                            .with_this_entity(entity_loot_ref(player, Some(equipment)));
+                    }
+                    table.get_random_items(&mut context)
+                };
+
+                let mut chest = self.chest.lock();
+                let mut available_slots: Vec<usize> = (0..CHEST_BOAT_SLOTS)
+                    .filter(|&slot| chest.items()[slot].is_empty())
+                    .collect();
+                shuffle(&mut available_slots, rng);
+                let items = shuffle_and_split_items(items, available_slots.len(), rng);
+                for item in items {
+                    let Some(slot) = available_slots.pop() else {
+                        log::warn!("Tried to over-fill a chest boat");
+                        break;
+                    };
+                    chest.set_item(slot, item);
+                }
+            }
         }
 
         impl DropChestContents for $struct_name {
             fn drop_chest_contents(&self) {
+                // Vanilla `ContainerEntity.getChestVehicleItem` unpacks before the
+                // contents are read by `chestVehicleDestroyed`.
+                self.unpack_chest_loot(None);
                 let stacks = {
                     let mut chest = self.chest.lock();
                     let stacks = chest.items().to_vec();
@@ -1453,7 +1761,7 @@ pub struct ChestBoatEntity {
     entity_data: SyncMutex<AbstractBoatEntityData>,
     boat: SyncMutex<BoatState>,
     leash_data: SyncMutex<Option<LeashData>>,
-    chest: SyncMutex<ChestBoatStorage>,
+    chest: Shared<ChestBoatStorage>,
 }
 
 impl ChestBoatEntity {
@@ -1464,7 +1772,7 @@ impl ChestBoatEntity {
             entity_data: SyncMutex::new(AbstractBoatEntityData::new()),
             boat: SyncMutex::new(BoatState::new()),
             leash_data: SyncMutex::new(None),
-            chest: SyncMutex::new(ChestBoatStorage::new()),
+            chest: ChestBoatStorage::new().into_shared(),
         }
     }
 
@@ -1505,9 +1813,19 @@ impl AbstractBoat for ChestBoatEntity {
     }
 
     /// Vanilla `AbstractChestBoat.destroy`: drop the boat, then the chest contents.
+    ///
+    /// The contents half mirrors `ContainerEntity.chestVehicleDestroyed`, which drops
+    /// them only when the `ENTITY_DROPS` game rule allows entity drops.
     fn destroy_vehicle(&self, world: &World, source: &DamageSource) {
         self.destroy_hull(world, source);
-        self.drop_chest_contents();
+        if world.get_game_rule(&ENTITY_DROPS) {
+            self.drop_chest_contents();
+        }
+    }
+
+    /// Vanilla `AbstractChestBoat.interact`.
+    fn boat_entity_interact(&self, player: &Player) -> InteractionResult {
+        self.chest_boat_interact(player)
     }
 }
 
@@ -1525,7 +1843,7 @@ pub struct ChestRaftEntity {
     entity_data: SyncMutex<AbstractBoatEntityData>,
     boat: SyncMutex<BoatState>,
     leash_data: SyncMutex<Option<LeashData>>,
-    chest: SyncMutex<ChestBoatStorage>,
+    chest: Shared<ChestBoatStorage>,
 }
 
 impl ChestRaftEntity {
@@ -1536,7 +1854,7 @@ impl ChestRaftEntity {
             entity_data: SyncMutex::new(AbstractBoatEntityData::new()),
             boat: SyncMutex::new(BoatState::new()),
             leash_data: SyncMutex::new(None),
-            chest: SyncMutex::new(ChestBoatStorage::new()),
+            chest: ChestBoatStorage::new().into_shared(),
         }
     }
 
@@ -1577,9 +1895,19 @@ impl AbstractBoat for ChestRaftEntity {
     }
 
     /// Vanilla `AbstractChestBoat.destroy`: drop the raft, then the chest contents.
+    ///
+    /// The contents half mirrors `ContainerEntity.chestVehicleDestroyed`, which drops
+    /// them only when the `ENTITY_DROPS` game rule allows entity drops.
     fn destroy_vehicle(&self, world: &World, source: &DamageSource) {
         self.destroy_hull(world, source);
-        self.drop_chest_contents();
+        if world.get_game_rule(&ENTITY_DROPS) {
+            self.drop_chest_contents();
+        }
+    }
+
+    /// Vanilla `AbstractChestBoat.interact`.
+    fn boat_entity_interact(&self, player: &Player) -> InteractionResult {
+        self.chest_boat_interact(player)
     }
 }
 
@@ -1612,7 +1940,7 @@ impl_chest_boat!(ChestRaftEntity);
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
-    use std::sync::Weak;
+    use std::sync::{Arc, Weak};
 
     use glam::DVec3;
     use simdnbt::borrow::read_compound as read_borrowed_compound;
@@ -1621,14 +1949,23 @@ mod tests {
     use steel_registry::item_stack::ItemStack;
     use steel_registry::vanilla_entities;
     use steel_registry::vanilla_items;
-    use steel_utils::Identifier;
+    use steel_registry::vanilla_menu_types;
+    use steel_utils::{ChunkPos, Identifier};
 
-    use crate::entity::Entity;
+    use crate::behavior::InteractionResult;
+    use crate::entity::entities::{ArmorStandEntity, PigEntity};
+    use crate::entity::{Entity, EntityBase, LivingEntity, SharedEntity, next_entity_id};
+    use crate::inventory::lock::ContainerRef;
+    use crate::player::player_inventory::PlayerInventory;
+    use crate::test_support::{
+        TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk, test_world,
+    };
     use crate::world::World;
 
     use super::{
-        AbstractBoat as _, BoatEntity, BoatStatus, ChestBoatEntity, ChestBoatStorage,
-        ChestRaftEntity, RaftEntity,
+        AbstractBoat as _, BoatEntity, BoatStatus, CHEST_BOAT_SLOTS, ChestBoatEntity,
+        ChestBoatMenuKind, ChestBoatStorage, ChestRaftEntity, MAX_PASSENGER_HEAD_YAW, RaftEntity,
+        build_chest_menu,
     };
 
     fn boat() -> BoatEntity {
@@ -1807,6 +2144,293 @@ mod tests {
         assert_eq!(
             spruce.entity_type().key.to_string(),
             "minecraft:spruce_boat"
+        );
+    }
+
+    #[test]
+    fn boat_aligns_a_mob_passenger_with_the_hull() {
+        init_vanilla_registry();
+
+        let boat = Arc::new(boat());
+        let boat_shared: SharedEntity = Arc::<BoatEntity>::clone(&boat);
+        let pig = Arc::new(PigEntity::new(
+            &vanilla_entities::PIG,
+            4,
+            DVec3::ZERO,
+            Weak::<World>::new(),
+        ));
+        let pig_shared: SharedEntity = Arc::<PigEntity>::clone(&pig);
+        EntityBase::restore_passenger_relationship(&boat_shared, &pig_shared);
+
+        boat.set_rotation((0.0, 0.0));
+        pig.set_rotation((90.0, 0.0));
+        pig.set_y_head_rot(90.0);
+        pig.set_y_body_rot(90.0);
+
+        boat.position_rider(pig.as_ref());
+
+        // Vanilla `clampRotation`: a mob passenger is turned to the hull and its head
+        // is clamped by `Mob.clampHeadRotationToBody` (75 degrees by default).
+        assert_eq!(pig.rotation().0, 0.0);
+        assert_eq!(pig.y_body_rot(), 0.0);
+        assert_eq!(pig.y_head_rot(), 75.0);
+    }
+
+    #[test]
+    fn boat_rotates_an_uncontrolled_passenger_with_the_hull_turn() {
+        init_vanilla_registry();
+
+        let boat = Arc::new(boat());
+        let boat_shared: SharedEntity = Arc::<BoatEntity>::clone(&boat);
+        let stand = Arc::new(ArmorStandEntity::new(
+            &vanilla_entities::ARMOR_STAND,
+            7,
+            DVec3::ZERO,
+            Weak::<World>::new(),
+        ));
+        let stand_shared: SharedEntity = Arc::<ArmorStandEntity>::clone(&stand);
+        EntityBase::restore_passenger_relationship(&boat_shared, &stand_shared);
+
+        boat.set_rotation((0.0, 0.0));
+        boat.boat.lock().delta_rotation = 1.0;
+        stand.set_rotation((0.0, 0.0));
+        stand.set_y_head_rot(0.0);
+
+        boat.position_rider(stand.as_ref());
+
+        // A passenger no player controls is server-authoritative, so vanilla's
+        // `positionRider` adds the hull's turn to its yaw and head yaw.
+        assert_eq!(stand.rotation().0, 1.0);
+        assert_eq!(stand.y_head_rot(), 1.0);
+    }
+
+    #[test]
+    fn boat_clamps_a_non_mob_passenger_inside_the_head_limit() {
+        init_vanilla_registry();
+
+        let boat = Arc::new(boat());
+        let boat_shared: SharedEntity = Arc::<BoatEntity>::clone(&boat);
+        let stand = Arc::new(ArmorStandEntity::new(
+            &vanilla_entities::ARMOR_STAND,
+            8,
+            DVec3::ZERO,
+            Weak::<World>::new(),
+        ));
+        let stand_shared: SharedEntity = Arc::<ArmorStandEntity>::clone(&stand);
+        EntityBase::restore_passenger_relationship(&boat_shared, &stand_shared);
+
+        boat.set_rotation((0.0, 0.0));
+        stand.set_rotation((120.0, 10.0));
+
+        boat.position_rider(stand.as_ref());
+
+        // Vanilla `clampRotation` limits a non-mob passenger to 105 degrees off the hull.
+        assert_eq!(stand.rotation().0, MAX_PASSENGER_HEAD_YAW);
+        assert_eq!(stand.rotation().1, 10.0);
+        assert_eq!(stand.y_body_rot(), 0.0);
+    }
+
+    #[test]
+    fn boat_sides_full_animal_passengers_by_entity_id() {
+        init_vanilla_registry();
+
+        let boat = Arc::new(boat());
+        let boat_shared: SharedEntity = Arc::<BoatEntity>::clone(&boat);
+        let even = Arc::new(PigEntity::new(
+            &vanilla_entities::PIG,
+            4,
+            DVec3::ZERO,
+            Weak::<World>::new(),
+        ));
+        let odd = Arc::new(PigEntity::new(
+            &vanilla_entities::PIG,
+            5,
+            DVec3::ZERO,
+            Weak::<World>::new(),
+        ));
+        let even_shared: SharedEntity = Arc::<PigEntity>::clone(&even);
+        let odd_shared: SharedEntity = Arc::<PigEntity>::clone(&odd);
+        EntityBase::restore_passenger_relationship(&boat_shared, &even_shared);
+        EntityBase::restore_passenger_relationship(&boat_shared, &odd_shared);
+
+        boat.set_rotation((0.0, 0.0));
+
+        // Vanilla `calculatePassengerBodyYRot` turns a full boat of animals sideways.
+        assert_eq!(boat.calculate_passenger_body_y_rot(even.as_ref()), 90.0);
+        assert_eq!(boat.calculate_passenger_body_y_rot(odd.as_ref()), 270.0);
+
+        boat.position_rider(even.as_ref());
+        assert_eq!(even.rotation().0, 90.0);
+        assert_eq!(even.y_body_rot(), 90.0);
+        assert!((even.y_body_rot() - even.y_head_rot()).abs() <= 75.0);
+    }
+
+    #[test]
+    fn boat_bubble_column_applies_the_column_direction() {
+        init_vanilla_registry();
+
+        for (drag_down, expected) in [(true, -0.7), (false, 0.6)] {
+            let boat = boat();
+            {
+                let mut state = boat.boat.lock();
+                state.is_above_bubble_column = true;
+                state.bubble_column_direction_is_down = drag_down;
+            }
+            boat.set_bubble_time(1);
+            boat.set_velocity(DVec3::ZERO);
+
+            boat.tick_bubble_column();
+
+            // Vanilla `handleBubbleColumnEffect` pushes down on a drag-down column and
+            // launches on an up column.
+            assert_eq!(boat.velocity().y, expected);
+        }
+    }
+
+    #[test]
+    fn boat_collision_follows_can_vehicle_collide() {
+        init_vanilla_registry();
+
+        let boat = Arc::new(boat());
+        let boat_shared: SharedEntity = Arc::<BoatEntity>::clone(&boat);
+        let other = Arc::new(BoatEntity::new(
+            &vanilla_entities::OAK_BOAT,
+            9,
+            DVec3::ZERO,
+            Weak::<World>::new(),
+        ));
+        let other_shared: SharedEntity = Arc::<BoatEntity>::clone(&other);
+
+        // Boats are always collidable, so an unrelated boat collides.
+        assert!(boat.can_collide_with(other.as_ref()));
+
+        // A passenger of this boat never collides with it
+        // (`!vehicle.isPassengerOfSameVehicle(entity)`).
+        EntityBase::restore_passenger_relationship(&boat_shared, &other_shared);
+        assert!(!boat.can_collide_with(other.as_ref()));
+    }
+
+    fn chest_boat(entity_id: i32, position: DVec3) -> ChestBoatEntity {
+        ChestBoatEntity::new(
+            &vanilla_entities::OAK_CHEST_BOAT,
+            entity_id,
+            position,
+            Weak::<World>::new(),
+        )
+    }
+
+    #[test]
+    fn chest_boat_menu_matches_chest_menu_three_rows() {
+        init_vanilla_registry();
+
+        let player = TestPlayerBuilder::new(Arc::clone(test_world()), "BoatViewer", 40).build();
+        let boat = Arc::new(chest_boat(41, player.position()));
+        let boat_shared: SharedEntity = Arc::<ChestBoatEntity>::clone(&boat);
+
+        // A fresh three-row chest menu has the 27 boat slots plus the 36
+        // player slots of vanilla `ChestMenu.threeRows`.
+        let kind = ChestBoatMenuKind {
+            boat: Arc::downgrade(&boat_shared),
+        };
+        let menu = build_chest_menu(
+            0,
+            Arc::clone(&player.inventory),
+            ContainerRef::from(boat.chest()),
+            kind,
+        );
+        assert_eq!(
+            menu.menu_type().map(|menu_type| &menu_type.key),
+            Some(&vanilla_menu_types::GENERIC_9X3.key)
+        );
+        assert_eq!(
+            menu.behavior().slots().len(),
+            CHEST_BOAT_SLOTS + PlayerInventory::INVENTORY_SIZE
+        );
+        assert!(menu.still_valid(&player));
+
+        // Out of entity interaction range the menu stops being valid.
+        boat.try_set_position(DVec3::new(1000.0, 64.0, 1000.0))
+            .expect("test boat should move");
+        assert!(!menu.still_valid(&player));
+    }
+
+    #[test]
+    fn chest_boat_unpacks_pending_loot_table_once() {
+        init_vanilla_registry();
+
+        let boat = chest_boat(42, DVec3::ZERO);
+        boat.set_loot_table(Identifier::vanilla_static("blocks/stone"), 7);
+        boat.unpack_chest_loot(None);
+
+        {
+            let chest = boat.chest().lock();
+            assert!(chest.loot_table().is_none());
+            assert_eq!(chest.loot_table_seed(), 0);
+            let filled = chest
+                .items()
+                .iter()
+                .filter(|stack| !stack.is_empty())
+                .collect::<Vec<_>>();
+            assert_eq!(filled.len(), 1);
+            assert!(filled[0].is(&vanilla_items::COBBLESTONE));
+        }
+
+        // The cleared loot table means a second read cannot re-roll it.
+        boat.unpack_chest_loot(None);
+        assert_eq!(
+            boat.chest()
+                .lock()
+                .items()
+                .iter()
+                .filter(|stack| !stack.is_empty())
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn chest_boat_interact_opens_the_container_when_full() {
+        init_vanilla_registry();
+        let fixture = fresh_test_world("chest_boat_container_interact");
+        let world = &fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+
+        let boat = Arc::new(ChestBoatEntity::new(
+            &vanilla_entities::OAK_CHEST_BOAT,
+            next_entity_id(),
+            DVec3::new(8.5, 64.0, 8.5),
+            Arc::downgrade(world),
+        ));
+        let boat_shared: SharedEntity = Arc::<ChestBoatEntity>::clone(&boat);
+        world
+            .try_add_entity(Arc::clone(&boat_shared))
+            .expect("chest boat should attach to the loaded chunk");
+
+        // The single-seat hull is taken, so the interacting player cannot board.
+        let passenger = Arc::new(PigEntity::new(
+            &vanilla_entities::PIG,
+            next_entity_id(),
+            DVec3::new(8.5, 64.0, 8.5),
+            Arc::downgrade(world),
+        ));
+        let passenger_shared: SharedEntity = Arc::<PigEntity>::clone(&passenger);
+        EntityBase::restore_passenger_relationship(&boat_shared, &passenger_shared);
+
+        let player = TestPlayerBuilder::new(Arc::clone(world), "BoatOpener", 99).build();
+        boat.set_loot_table(Identifier::vanilla_static("blocks/stone"), 7);
+
+        // Vanilla `AbstractChestBoat.interact` falls through to the container.
+        assert_eq!(
+            boat.boat_entity_interact(&player),
+            InteractionResult::Success
+        );
+        let chest = boat.chest().lock();
+        assert!(chest.loot_table().is_none());
+        assert!(
+            chest
+                .items()
+                .iter()
+                .any(|stack| stack.is(&vanilla_items::COBBLESTONE))
         );
     }
 }

@@ -285,11 +285,13 @@ fn reload_after_selection(
         Ok(summary) => {
             tracing::info!(
                 packs = summary.packs_loaded,
+                pack_ids = ?summary.pack_ids,
                 new_packs = ?summary.new_packs,
                 functions = summary.functions_loaded,
                 elapsed = ?summary.elapsed,
                 "Reloaded data packs after selection change"
             );
+            datapack::resend_clients(context.source().server());
             Ok(())
         }
         Err(error) => {

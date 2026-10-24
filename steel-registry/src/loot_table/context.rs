@@ -21,6 +21,8 @@ pub enum LootContextEntity {
     KillerPlayer,
     /// The entity interacting with a block/entity.
     Interacting,
+    /// The target entity (vanilla `LootContextParams.TARGET_ENTITY`).
+    Target,
 }
 
 /// The type of loot table, determining when/how it's used.
@@ -190,17 +192,19 @@ pub enum NumberProvider {
         /// Operand.
         input: &'static NumberProvider,
     },
-    /// `minecraft:sqrt`: the square root of the input.
+    /// `minecraft:sqrt`: the square root of the input (`Mth.sqrt`).
     SquareRoot {
         /// Operand.
         input: &'static NumberProvider,
     },
-    /// `minecraft:sin`: the sine of the input, in radians.
+    /// `minecraft:sin`: the sine of the input, in radians (`Mth.sin`, the
+    /// 65536-entry lookup table rather than the FPU sine).
     Sine {
         /// Operand.
         input: &'static NumberProvider,
     },
-    /// `minecraft:cos`: the cosine of the input, in radians.
+    /// `minecraft:cos`: the cosine of the input, in radians (`Mth.cos`, the
+    /// same lookup table phase-shifted by a quarter turn).
     Cosine {
         /// Operand.
         input: &'static NumberProvider,
@@ -486,7 +490,8 @@ impl NumberProvider {
                 if base == 0.0 && exponent == 0.0 {
                     f32::NAN
                 } else {
-                    base.powf(exponent)
+                    // Vanilla `Math.pow(double, double)` then `d2f`.
+                    f64::from(base).powf(f64::from(exponent)) as f32
                 }
             }
             Self::Negate { input } => -input.eval_float_unsafe(ctx),
@@ -502,16 +507,18 @@ impl NumberProvider {
                     value.ceil()
                 }
             }
-            Self::SquareRoot { input } => input.eval_float_unsafe(ctx).sqrt(),
-            Self::Sine { input } => input.eval_float_unsafe(ctx).sin(),
-            Self::Cosine { input } => input.eval_float_unsafe(ctx).cos(),
+            Self::SquareRoot { input } => mth_sqrt(input.eval_float_unsafe(ctx)),
+            Self::Sine { input } => steel_math::trig::sin(f64::from(input.eval_float_unsafe(ctx))),
+            Self::Cosine { input } => {
+                steel_math::trig::cos(f64::from(input.eval_float_unsafe(ctx)))
+            }
             Self::Length { inputs } => {
-                let mut sum_of_squares = 0.0;
+                let mut sum_of_squares = 0.0_f32;
                 for input in *inputs {
                     let value = input.eval_float_unsafe(ctx);
                     sum_of_squares += value * value;
                 }
-                sum_of_squares.sqrt()
+                mth_sqrt(sum_of_squares)
             }
             Self::FromInt { input } => input.eval_int_unsafe(ctx).map_or(0.0, |value| value as f32),
             Self::Conditional {
@@ -535,7 +542,7 @@ impl NumberProvider {
                 }
                 selected.eval_float_unsafe(ctx)
             }
-            Self::WeightedList { distribution } => match weighted_pick(*distribution, ctx.rng) {
+            Self::WeightedList { distribution } => match weighted_pick(distribution, ctx.rng) {
                 Some(provider) => provider.eval_float_unsafe(ctx),
                 None => 0.0,
             },
@@ -680,7 +687,7 @@ impl NumberProvider {
                 }
                 selected.eval_int_unsafe(ctx)
             }
-            Self::WeightedList { distribution } => match weighted_pick(*distribution, ctx.rng) {
+            Self::WeightedList { distribution } => match weighted_pick(distribution, ctx.rng) {
                 Some(provider) => provider.eval_int_unsafe(ctx),
                 None => Some(0),
             },
@@ -702,9 +709,12 @@ impl NumberProvider {
                 Some(value) => Some(value as i32),
                 None => fallback.eval_int_unsafe(ctx),
             },
-            Self::EnchantmentLevel { amount } => Some(math_round(
-                amount.calculate(ctx.enchantment_level.unwrap_or(0)),
-            )),
+            // `minecraft:enchantment_level` is a float-only provider; used where an
+            // int is expected it goes through the same `(int)` cast as the other
+            // float-only providers, so a non-representable level is an error.
+            Self::EnchantmentLevel { amount } => {
+                float_to_int(amount.calculate(ctx.enchantment_level.unwrap_or(0)))
+            }
             Self::EnvironmentAttribute { attribute } => Some(
                 ctx.environment_attributes
                     .and_then(|attributes| attributes.get_attribute(attribute, ctx.origin))
@@ -736,6 +746,14 @@ fn uniform_int(rng: &mut impl rand::Rng, min: i32, max: i32) -> i32 {
     } else {
         rng.random_range(min..=max)
     }
+}
+
+/// Vanilla `Mth.sqrt(float)`: `(float) Math.sqrt((double) value)`.
+///
+/// The double-precision intermediate matters: a direct `f32::sqrt` can differ
+/// from vanilla in the last bit through double rounding.
+fn mth_sqrt(value: f32) -> f32 {
+    f64::from(value).sqrt() as f32
 }
 
 /// Vanilla `Mth.nextFloat(random, min, max)`: `min` when `min >= max`, otherwise
@@ -818,8 +836,8 @@ fn weighted_pick(
 
 /// Resolves a `minecraft:<path>` provider reference through the context's
 /// [`NumberProviderLookup`], if the server installed one.
-fn referenced<'r, R: rand::Rng>(
-    ctx: &'r LootContext<'_, R>,
+fn referenced<R: rand::Rng>(
+    ctx: &LootContext<'_, R>,
     key: &Identifier,
 ) -> Option<&'static NumberProvider> {
     ctx.number_providers?.get_number_provider(key)
@@ -936,6 +954,8 @@ pub struct LootContextRef<'a> {
     pub last_damage_player: Option<EntityRef<'a>>,
     /// The entity interacting with a block or entity.
     pub interacting_entity: Option<EntityRef<'a>>,
+    /// The target entity (vanilla `LootContextParams.TARGET_ENTITY`).
+    pub target_entity: Option<EntityRef<'a>>,
     /// Vanilla `LootContextParams.ORIGIN`, used by positional environment attributes.
     pub origin: Option<(f64, f64, f64)>,
 }
@@ -944,7 +964,7 @@ impl<'a> LootContextRef<'a> {
     /// A parameter view that carries nothing but the hooks of `self`, backed by
     /// `rng` (used by the context-free entry points such as
     /// [`NumberProvider::get_simple`]).
-    fn to_context<'r, R: rand::Rng>(&self, rng: &'r mut R) -> LootContext<'r, R>
+    fn to_context<'r, R: rand::Rng>(self, rng: &'r mut R) -> LootContext<'r, R>
     where
         'a: 'r,
     {
@@ -959,6 +979,7 @@ impl<'a> LootContextRef<'a> {
         ctx.direct_killer_entity = self.direct_killer_entity;
         ctx.last_damage_player = self.last_damage_player;
         ctx.interacting_entity = self.interacting_entity;
+        ctx.target_entity = self.target_entity;
         ctx.origin = self.origin;
         ctx
     }
@@ -972,6 +993,7 @@ impl<'a> LootContextRef<'a> {
             LootContextEntity::DirectKiller => self.direct_killer_entity,
             LootContextEntity::KillerPlayer => self.last_damage_player,
             LootContextEntity::Interacting => self.interacting_entity,
+            LootContextEntity::Target => self.target_entity,
         }
     }
 }
@@ -1014,6 +1036,8 @@ pub struct LootContext<'a, R: rand::Rng> {
     pub block_entity: Option<BlockEntityRef<'a>>,
     /// The entity interacting with a block/entity (e.g., player opening a chest).
     pub interacting_entity: Option<EntityRef<'a>>,
+    /// The target entity (vanilla `LootContextParams.TARGET_ENTITY`).
+    pub target_entity: Option<EntityRef<'a>>,
     /// Scoreboard lookup for `minecraft:score` number providers; `None` yields `0`.
     pub scoreboard: Option<&'a dyn ScoreboardValueLookup>,
     /// Command-storage lookup for `minecraft:storage` number providers; `None`
@@ -1208,6 +1232,7 @@ impl<'a, R: rand::Rng> LootContext<'a, R> {
             damage_source: None,
             block_entity: None,
             interacting_entity: None,
+            target_entity: None,
             scoreboard: None,
             command_storage: None,
             environment_attributes: None,
@@ -1323,6 +1348,13 @@ impl<'a, R: rand::Rng> LootContext<'a, R> {
         self
     }
 
+    /// Set the target entity (`LootContextParams.TARGET_ENTITY`).
+    #[must_use]
+    pub const fn with_target_entity(mut self, entity: EntityRef<'a>) -> Self {
+        self.target_entity = Some(entity);
+        self
+    }
+
     /// Set the scoreboard lookup used by `minecraft:score` number providers.
     #[must_use]
     pub const fn with_scoreboard(mut self, scoreboard: &'a dyn ScoreboardValueLookup) -> Self {
@@ -1396,6 +1428,7 @@ impl<'a, R: rand::Rng> LootContext<'a, R> {
             direct_killer_entity: self.direct_killer_entity,
             last_damage_player: self.last_damage_player,
             interacting_entity: self.interacting_entity,
+            target_entity: self.target_entity,
             origin: self.origin,
         }
     }
@@ -1424,6 +1457,7 @@ impl<'a, R: rand::Rng> LootContext<'a, R> {
             LootContextEntity::DirectKiller => self.direct_killer_entity,
             LootContextEntity::KillerPlayer => self.last_damage_player,
             LootContextEntity::Interacting => self.interacting_entity,
+            LootContextEntity::Target => self.target_entity,
         }
     }
 }

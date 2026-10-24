@@ -106,7 +106,7 @@ impl ShriekerCore {
         }
         *self.warning_level.lock() = 0;
         if !self.can_respond(world) || self.try_to_warn(world, player) {
-            self.shriek(world);
+            self.shriek(world, Some(player.as_ref() as &dyn Entity));
             *self.shriek_count.lock() += 1;
         }
     }
@@ -120,8 +120,9 @@ impl ShriekerCore {
         maybe_warning_level.is_some()
     }
 
-    /// Vanilla `shriek`.
-    fn shriek(&self, world: &Arc<World>) {
+    /// Vanilla `shriek`: set `SHRIEKING`, schedule the 90-tick expiry, emit the client particle
+    /// event, then announce the `shriek` game event with the triggering player as its source.
+    fn shriek(&self, world: &Arc<World>, source: Option<&dyn Entity>) {
         let state = world.get_block_state(self.pos);
         if state.get_value(SHRIEKING) {
             return;
@@ -133,6 +134,11 @@ impl ShriekerCore {
             self.pos,
             0,
             None,
+        );
+        world.game_event(
+            &vanilla_game_events::SHRIEK,
+            self.pos,
+            &GameEventContext::new(source, None),
         );
         self.set_changed(world);
     }
@@ -211,6 +217,11 @@ impl VibrationCallback for ShriekerCallback {
         SHRIEKER_LISTENER_RADIUS
     }
 
+    /// Vanilla `SculkShriekerBlockEntity.VibrationUser.requiresAdjacentChunksToBeTicking`.
+    fn requires_adjacent_chunks_to_be_ticking(&self) -> bool {
+        true
+    }
+
     fn position_source(&self) -> PositionSource {
         block_position_source(self.core.pos)
     }
@@ -247,8 +258,11 @@ impl VibrationCallback for ShriekerCallback {
         _event: GameEventRef,
         _distance: f32,
         source_uuid: Option<uuid::Uuid>,
+        projectile_owner_uuid: Option<uuid::Uuid>,
     ) {
-        let player = player_for_uuid(world, source_uuid);
+        // Vanilla `VibrationUser.onReceiveVibration` resolves the player from the projectile owner
+        // *instead of* the source entity when a projectile owner is present.
+        let player = player_for_uuid(world, projectile_owner_uuid.or(source_uuid));
         self.core.try_shriek(world, player.as_ref());
     }
 }
@@ -308,14 +322,18 @@ impl SculkShriekerBlockEntity {
         self.core.try_shriek(world, player.as_ref());
     }
 
-    /// Vanilla `tryRespond`, called from the block tick once `shrieking` expires.
+    /// Vanilla `SculkShriekerBlockEntity.tryRespond`, called from the block tick once `shrieking`
+    /// expires.
     pub fn try_respond(&self, world: &Arc<World>) {
         self.core.try_respond(world);
     }
 
-    /// Vanilla `preRemoveSideEffects`: respond when removed mid-shriek.
-    fn respond_if_shrieking(&self, world: &Arc<World>) {
-        if SculkShriekerBlock::is_shrieking(world.get_block_state(self.core.pos)) {
+    /// Vanilla `preRemoveSideEffects`: respond when the removed state was mid-shriek.
+    ///
+    /// Vanilla reads the *passed* state, which still holds `SHRIEKING` while the block is being
+    /// replaced; re-reading the world here would already see the new block.
+    fn respond_if_shrieking(&self, world: &Arc<World>, state: BlockStateId) {
+        if SculkShriekerBlock::is_shrieking(state) {
             self.core.try_respond(world);
         }
     }
@@ -347,9 +365,9 @@ impl BlockEntity for SculkShriekerBlockEntity {
         Some(Arc::clone(&self.listener) as SharedGameEventListener)
     }
 
-    fn pre_remove_side_effects(&self, _pos: BlockPos, _state: BlockStateId) {
+    fn pre_remove_side_effects(&self, _pos: BlockPos, state: BlockStateId) {
         if let Some(world) = self.get_level() {
-            self.respond_if_shrieking(&world);
+            self.respond_if_shrieking(&world, state);
         }
     }
 }

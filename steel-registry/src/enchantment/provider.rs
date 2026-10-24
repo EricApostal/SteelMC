@@ -119,7 +119,7 @@ impl EnchantmentProvider {
                 let level = level
                     .sample(random)
                     .clamp(enchantment.get_min_level(), enchantment.get_max_level());
-                item.upgrade_enchantment((*enchantment).key.clone(), level as u32);
+                item.upgrade_enchantment(enchantment.key.clone(), level as u32);
             }
         }
     }
@@ -193,42 +193,49 @@ pub fn by_key(key: &Identifier) -> Option<&'static EnchantmentProvider> {
 }
 
 /// Vanilla `VanillaEnchantmentProviders.MOB_SPAWN_EQUIPMENT`.
+#[must_use]
 pub fn mob_spawn_equipment() -> &'static EnchantmentProvider {
     by_key(&Identifier::vanilla_static("mob_spawn_equipment"))
         .expect("mob_spawn_equipment provider is registered")
 }
 
 /// Vanilla `VanillaEnchantmentProviders.PILLAGER_SPAWN_CROSSBOW`.
+#[must_use]
 pub fn pillager_spawn_crossbow() -> &'static EnchantmentProvider {
     by_key(&Identifier::vanilla_static("pillager_spawn_crossbow"))
         .expect("pillager_spawn_crossbow provider is registered")
 }
 
 /// Vanilla `VanillaEnchantmentProviders.RAID_PILLAGER_POST_WAVE_3`.
+#[must_use]
 pub fn raid_pillager_post_wave_3() -> &'static EnchantmentProvider {
     by_key(&Identifier::vanilla_static("raid/pillager_post_wave_3"))
         .expect("raid/pillager_post_wave_3 provider is registered")
 }
 
 /// Vanilla `VanillaEnchantmentProviders.RAID_PILLAGER_POST_WAVE_5`.
+#[must_use]
 pub fn raid_pillager_post_wave_5() -> &'static EnchantmentProvider {
     by_key(&Identifier::vanilla_static("raid/pillager_post_wave_5"))
         .expect("raid/pillager_post_wave_5 provider is registered")
 }
 
 /// Vanilla `VanillaEnchantmentProviders.RAID_VINDICATOR`.
+#[must_use]
 pub fn raid_vindicator() -> &'static EnchantmentProvider {
     by_key(&Identifier::vanilla_static("raid/vindicator"))
         .expect("raid/vindicator provider is registered")
 }
 
 /// Vanilla `VanillaEnchantmentProviders.RAID_VINDICATOR_POST_WAVE_5`.
+#[must_use]
 pub fn raid_vindicator_post_wave_5() -> &'static EnchantmentProvider {
     by_key(&Identifier::vanilla_static("raid/vindicator_post_wave_5"))
         .expect("raid/vindicator_post_wave_5 provider is registered")
 }
 
 /// Vanilla `VanillaEnchantmentProviders.ENDERMAN_LOOT_DROP`.
+#[must_use]
 pub fn enderman_loot_drop() -> &'static EnchantmentProvider {
     by_key(&Identifier::vanilla_static("enderman_loot_drop"))
         .expect("enderman_loot_drop provider is registered")

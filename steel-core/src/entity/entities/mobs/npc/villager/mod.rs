@@ -930,12 +930,11 @@ impl VillagerEntity {
         };
 
         self.set_villager_data(self.villager_data().with_profession_ref(profession));
-        // Vanilla `AssignProfessionFromJobSite` assigns the profession and then calls
-        // `Villager.refreshBrain`, because the core/work packages and `ValidateNearbyPoi`
-        // capture the profession when they are built. Without the rebuild the villager
-        // keeps `profession_held_job_site(none) == never`, so its brand-new job site is
-        // validated away and `ResetProfession` drops it straight back to `none`.
-        self.refresh_brain();
+        // `set_villager_data` already requests the deferred brain refresh that vanilla's
+        // `Villager.refreshBrain` performs: the core/work packages and `ValidateNearbyPoi`
+        // capture the profession when they are built, and `VillagerEntity::brain_tick`
+        // drains the request right after `brain::tick`. Calling the locking
+        // `refresh_brain()` here would re-lock the brain mutex this behavior already holds.
         true
     }
 
@@ -1469,6 +1468,11 @@ impl Mob for VillagerEntity {
             return InteractionResult::Success;
         }
 
+        // Vanilla `Villager.interact` reads `AbstractVillager.getOffers`, which builds the
+        // offer list on first access (`updateTrades`) — a villager that acquired its
+        // profession in-world has a reset, still-empty list, so reading the raw merchant
+        // offers here would make it shake its head forever.
+        self.ensure_offers_initialized();
         let no_offers = self.merchant.offers().is_empty();
         if hand == InteractionHand::MainHand {
             if no_offers {

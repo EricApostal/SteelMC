@@ -242,7 +242,8 @@ impl ContextIntProvider {
             Self::Sum { inputs } => {
                 let mut total = 0_i64;
                 for input in *inputs {
-                    total += i64::from(input.get_int_unsafe(ctx)?);
+                    // Vanilla accumulates in a `long`, which wraps on overflow.
+                    total = total.wrapping_add(i64::from(input.get_int_unsafe(ctx)?));
                 }
                 long_to_int(total)
             }
@@ -250,7 +251,8 @@ impl ContextIntProvider {
                 let mut total = 0_i64;
                 let mut count = 0_i64;
                 for input in *inputs {
-                    total += i64::from(input.get_int_unsafe(ctx)?);
+                    // Vanilla accumulates in a `long`, which wraps on overflow.
+                    total = total.wrapping_add(i64::from(input.get_int_unsafe(ctx)?));
                     count += 1;
                 }
                 long_to_int(total.checked_div(count)?)
@@ -272,7 +274,8 @@ impl ContextIntProvider {
             Self::Product { inputs } => {
                 let mut value = 1_i64;
                 for input in *inputs {
-                    value *= i64::from(input.get_int_unsafe(ctx)?);
+                    // Vanilla accumulates in a `long`, which wraps on overflow.
+                    value = value.wrapping_mul(i64::from(input.get_int_unsafe(ctx)?));
                 }
                 long_to_int(value)
             }
@@ -324,7 +327,7 @@ impl ContextIntProvider {
                 }
                 selected.get_int_unsafe(ctx)
             }
-            Self::WeightedList(distribution) => match weighted_pick(*distribution, &mut *ctx.rng) {
+            Self::WeightedList(distribution) => match weighted_pick(distribution, &mut *ctx.rng) {
                 Some(provider) => provider.get_int_unsafe(ctx),
                 None => Some(0),
             },
@@ -499,6 +502,7 @@ pub(crate) fn params_of<'a, R: rand::Rng>(ctx: &LootContext<'a, R>) -> LootConte
         direct_killer_entity: ctx.direct_killer_entity,
         last_damage_player: ctx.last_damage_player,
         interacting_entity: ctx.interacting_entity,
+        target_entity: ctx.target_entity,
         origin: ctx.origin,
     }
 }

@@ -16,8 +16,8 @@ use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
-use steel_registry::vanilla_entity_data::ShulkerEntityData;
 use steel_registry::vanilla_block_tags::BlockTag;
+use steel_registry::vanilla_entity_data::ShulkerEntityData;
 use steel_registry::{
     sound_events, vanilla_attributes, vanilla_blocks, vanilla_damage_type_tags, vanilla_entities,
     vanilla_game_events,
@@ -31,18 +31,19 @@ use crate::entity::ai::goal::{
     Goal, GoalControls, HurtByTargetGoal, LookAtPlayerGoal, NearestAttackableTargetGoal,
     RandomLookAroundGoal,
 };
+use crate::entity::attribute::{AttributeModifier, AttributeModifierOperation};
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::objects::projectiles::ShulkerBulletEntity;
-use crate::entity::attribute::{AttributeModifier, AttributeModifierOperation};
 use crate::entity::projectile::spawn_projectile;
 use crate::entity::{
     Entity, EntityBase, EntityBaseLoad, EntityEventSource, EntityMoveError, EntityMovementEmission,
-    EntityPose,
-    EntitySpawnReason, EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase, Monster,
-    PathfinderMob, SharedEntity, SpawnGroupData, next_entity_id, physics_state_for_move,
+    EntityPose, EntitySpawnReason, EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase,
+    Monster, PathfinderMob, SharedEntity, SpawnGroupData, next_entity_id, physics_state_for_move,
     record_movement_for_block_effects, should_apply_resolved_movement,
 };
-use crate::physics::{MoveResult, MoverType, WorldCollisionProvider, move_entity as resolve_entity_movement};
+use crate::physics::{
+    MoveResult, MoverType, WorldCollisionProvider, move_entity as resolve_entity_movement,
+};
 use crate::world::{LevelReader as _, World};
 use steel_utils::Downcast as _;
 
@@ -97,7 +98,9 @@ const fn pack_difference_in_position(
     let x_diff = to.x() - from.x();
     let y_diff = to.y() - from.y();
     let z_diff = to.z() - from.z();
-    ((x_diff + x_radius) & 0xFF) << 16 | ((y_diff + y_radius) & 0xFF) << 8 | ((z_diff + z_radius) & 0xFF)
+    ((x_diff + x_radius) & 0xFF) << 16
+        | ((y_diff + y_radius) & 0xFF) << 8
+        | ((z_diff + z_radius) & 0xFF)
 }
 
 /// Vanilla `Shulker.currentPeekAmount`/`currentPeekAmountO`: the interpolated lid
@@ -528,8 +531,8 @@ impl ShulkerEntity {
             return false;
         }
 
-        let moving_piston_here = state.get_block() == &vanilla_blocks::MOVING_PISTON
-            && pos == self.block_position();
+        let moving_piston_here =
+            state.get_block() == &vanilla_blocks::MOVING_PISTON && pos == self.block_position();
         !moving_piston_here
     }
 
@@ -689,7 +692,10 @@ impl Goal for ShulkerPeekGoal {
         };
         mob.target().is_none()
             && rand::random_range(0..reduced_tick_delay(40)) == 0
-            && shulker.can_stay_at(mob.as_entity_event_source().block_position(), shulker.attach_face())
+            && shulker.can_stay_at(
+                mob.as_entity_event_source().block_position(),
+                shulker.attach_face(),
+            )
     }
 
     fn can_continue_to_use(&mut self, mob: &dyn PathfinderMob) -> bool {
@@ -791,7 +797,8 @@ impl Entity for ShulkerEntity {
         let physics_state = physics_state_for_move(entity);
         let start_position = physics_state.position();
         let collision_world = WorldCollisionProvider::for_entity(&world, entity);
-        let result = resolve_entity_movement(&physics_state, movement, mover_type, &collision_world);
+        let result =
+            resolve_entity_movement(&physics_state, movement, mover_type, &collision_world);
 
         record_movement_for_block_effects(
             entity,
@@ -932,9 +939,9 @@ impl Entity for ShulkerEntity {
         if self.get_health() < self.get_max_health() * 0.5 && rand::random_range(0..4) == 0 {
             self.teleport_somewhere();
         } else if source.is(&vanilla_damage_type_tags::DamageTypeTag::IS_PROJECTILE)
-            && source.direct_entity().is_some_and(|entity| {
-                entity.entity_type() == &vanilla_entities::SHULKER_BULLET
-            })
+            && source
+                .direct_entity()
+                .is_some_and(|entity| entity.entity_type() == &vanilla_entities::SHULKER_BULLET)
         {
             self.hit_by_shulker_bullet();
         }

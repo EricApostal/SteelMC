@@ -21,6 +21,7 @@ use steel_utils::saved_data::names as saved_data_names;
 use text_components::{Modifier as _, TextComponent};
 use thiserror::Error;
 
+use crate::server::Server;
 use crate::server::worlds::WorldMap;
 use crate::world::World;
 
@@ -35,7 +36,7 @@ pub use criteria::{CriteriaKind, ObjectiveCriteria, RenderType};
 pub use display::DisplaySlot;
 pub use format::{NumberFormat, ScoreExtras};
 pub use team::{CollisionRule, PlayerTeam, TeamColor, TeamVisibility, format_name_for_team};
-pub use update::{ScoreboardPacket, ScoreboardUpdate};
+pub use update::ScoreboardPacket;
 
 /// Vanilla `Scoreboard.HIDDEN_SCORE_PREFIX`: holders whose name starts with this
 /// are hidden from the sidebar.
@@ -346,7 +347,12 @@ pub struct Scoreboard {
     state: SyncRwLock<PersistentScoreboard>,
     revision: AtomicU64,
     saved_revision: AtomicU64,
-    updates: SyncMutex<Vec<ScoreboardUpdate>>,
+    /// Objectives every client in this domain currently tracks, mirroring vanilla
+    /// `ServerScoreboard.trackedObjectives`: an objective is tracked while at least one
+    /// display slot shows it, which is also when vanilla broadcasts its score changes.
+    tracked: SyncRwLock<BTreeSet<String>>,
+    /// `Clientbound*Scoreboard*` packets queued for the next per-tick flush.
+    pending: SyncMutex<Vec<ScoreboardPacket>>,
 }
 
 impl Scoreboard {
@@ -357,7 +363,8 @@ impl Scoreboard {
             state: SyncRwLock::new(PersistentScoreboard::default()),
             revision: AtomicU64::new(0),
             saved_revision: AtomicU64::new(0),
-            updates: SyncMutex::new(Vec::new()),
+            tracked: SyncRwLock::new(BTreeSet::new()),
+            pending: SyncMutex::new(Vec::new()),
         }
     }
 
@@ -367,7 +374,8 @@ impl Scoreboard {
             state: SyncRwLock::new(state),
             revision: AtomicU64::new(0),
             saved_revision: AtomicU64::new(0),
-            updates: SyncMutex::new(Vec::new()),
+            tracked: SyncRwLock::new(BTreeSet::new()),
+            pending: SyncMutex::new(Vec::new()),
         })
     }
 
@@ -422,7 +430,8 @@ impl Scoreboard {
         persistent.objectives.insert(name.clone(), state);
         drop(persistent);
         self.mark_dirty();
-        self.queue(ScoreboardUpdate::ObjectiveAdded { name });
+        // Vanilla `ServerScoreboard.onObjectiveAdded` only marks the scoreboard dirty: the
+        // objective reaches clients when `setDisplayObjective` starts tracking it.
         Ok(objective)
     }
 
@@ -440,14 +449,31 @@ impl Scoreboard {
             scores.remove(name);
         }
         persistent.scores.retain(|_, scores| !scores.is_empty());
-        persistent
-            .display_slots
-            .retain(|_, objective| objective != name);
+        // Vanilla clears every slot showing the objective through `setDisplayObjective`:
+        // every slot but the last one still leaves the objective displayed elsewhere, so it
+        // broadcasts that slot's clear; the last one stops tracking it.
+        let mut packets = Vec::new();
+        for slot in DisplaySlot::ALL {
+            if persistent.display_slots.get(&slot).map(String::as_str) != Some(name) {
+                continue;
+            }
+            persistent.display_slots.remove(&slot);
+            if persistent
+                .display_slots
+                .values()
+                .any(|objective| objective == name)
+            {
+                packets.push(ScoreboardPacket::display_objective(slot, None));
+            } else {
+                packets.push(ScoreboardPacket::objective_remove(name));
+            }
+        }
         drop(persistent);
+        self.tracked.write().remove(name);
+        for packet in packets {
+            self.queue(packet);
+        }
         self.mark_dirty();
-        self.queue(ScoreboardUpdate::ObjectiveRemoved {
-            name: name.to_owned(),
-        });
         Ok(())
     }
 
@@ -527,7 +553,14 @@ impl Scoreboard {
         self.state.read().display_slots.get(&slot).cloned()
     }
 
-    /// Vanilla `Scoreboard.setDisplayObjective`.
+    /// Vanilla `Scoreboard.setDisplayObjective` + `ServerScoreboard.setDisplayObjective`.
+    ///
+    /// The slot contents change first. When the replaced objective no longer shows in any
+    /// slot it stops being tracked, which sends `ClientboundSetObjectivePacket(objective, 1)`;
+    /// while it is still shown elsewhere, vanilla broadcasts the new slot contents. A new
+    /// objective that no client tracks yet is started with the full
+    /// [`Self::get_start_tracking_packets`] bundle, because a client that never saw the
+    /// objective would otherwise clear the slot when it cannot resolve the name.
     ///
     /// # Errors
     ///
@@ -538,24 +571,56 @@ impl Scoreboard {
         objective: Option<&ScoreboardObjective>,
     ) -> Result<(), ScoreboardError> {
         let mut persistent = self.state.write();
-        match objective {
+        let new_name = match objective {
             Some(objective) => {
                 if !persistent.objectives.contains_key(objective.name()) {
                     return Err(ScoreboardError::MissingObjective(
                         objective.name().to_owned(),
                     ));
                 }
-                persistent
-                    .display_slots
-                    .insert(slot, objective.name().to_owned());
+                Some(objective.name().to_owned())
             }
-            None => {
-                persistent.display_slots.remove(&slot);
+            None => None,
+        };
+        let old_name = match &new_name {
+            Some(name) => persistent.display_slots.insert(slot, name.clone()),
+            None => persistent.display_slots.remove(&slot),
+        };
+
+        let mut tracked = self.tracked.write();
+        let mut packets = Vec::new();
+        if old_name != new_name
+            && let Some(old) = old_name.as_deref()
+        {
+            if persistent
+                .display_slots
+                .values()
+                .any(|objective| objective == old)
+            {
+                packets.push(ScoreboardPacket::display_objective(
+                    slot,
+                    new_name.as_deref(),
+                ));
+            } else {
+                tracked.remove(old);
+                packets.push(ScoreboardPacket::objective_remove(old));
             }
         }
+        if let Some(new) = new_name.as_deref() {
+            if tracked.contains(new) {
+                packets.push(ScoreboardPacket::display_objective(slot, Some(new)));
+            } else {
+                tracked.insert(new.to_owned());
+                packets.extend(start_tracking_packets(&persistent, new));
+            }
+        }
+        drop(tracked);
         drop(persistent);
+
+        for packet in packets {
+            self.queue(packet);
+        }
         self.mark_dirty();
-        self.queue(ScoreboardUpdate::DisplaySlotChanged { slot });
         Ok(())
     }
 
@@ -575,7 +640,8 @@ impl Scoreboard {
         persistent.teams.insert(name.clone(), team.clone());
         drop(persistent);
         self.mark_dirty();
-        self.queue(ScoreboardUpdate::TeamAdded { name });
+        // Vanilla `ServerScoreboard.onTeamAdded`.
+        self.queue(ScoreboardPacket::team_add(&name, &team));
         Ok(team)
     }
 
@@ -592,9 +658,8 @@ impl Scoreboard {
         persistent.holder_teams.retain(|_, team| team != name);
         drop(persistent);
         self.mark_dirty();
-        self.queue(ScoreboardUpdate::TeamRemoved {
-            name: name.to_owned(),
-        });
+        // Vanilla `ServerScoreboard.onTeamRemoved`.
+        self.queue(ScoreboardPacket::team_remove(name));
         Ok(())
     }
 
@@ -798,18 +863,16 @@ impl Scoreboard {
         let name = team.name().to_owned();
         drop(persistent);
         self.mark_dirty();
+        // Vanilla `Scoreboard.addPlayerToTeam`: moving between teams sends the old team's
+        // remove before the new team's add (`ServerScoreboard.removePlayerFromTeam` and
+        // `ServerScoreboard.addPlayerToTeam`).
         if let Some(previous) = previous {
-            self.queue(ScoreboardUpdate::TeamPlayersChanged {
-                name: previous,
-                joined: Vec::new(),
-                left: vec![holder.name().to_owned()],
-            });
+            self.queue(ScoreboardPacket::team_player_remove(
+                &previous,
+                holder.name(),
+            ));
         }
-        self.queue(ScoreboardUpdate::TeamPlayersChanged {
-            name,
-            joined: vec![holder.name().to_owned()],
-            left: Vec::new(),
-        });
+        self.queue(ScoreboardPacket::team_player_add(&name, holder.name()));
         Ok(())
     }
 
@@ -837,11 +900,8 @@ impl Scoreboard {
         let name = team.name().to_owned();
         drop(persistent);
         self.mark_dirty();
-        self.queue(ScoreboardUpdate::TeamPlayersChanged {
-            name,
-            joined: Vec::new(),
-            left: vec![holder.name().to_owned()],
-        });
+        // Vanilla `ServerScoreboard.removePlayerFromTeam`.
+        self.queue(ScoreboardPacket::team_player_remove(&name, holder.name()));
         Ok(())
     }
 
@@ -985,10 +1045,7 @@ impl Scoreboard {
         }
         drop(persistent);
         self.mark_dirty();
-        self.queue(ScoreboardUpdate::ScoreChanged {
-            owner: holder.name().to_owned(),
-            objective: objective.name().to_owned(),
-        });
+        self.queue_score_change(holder.name(), objective.name());
         Ok(())
     }
 
@@ -1041,10 +1098,7 @@ impl Scoreboard {
         display: Option<TextComponent>,
     ) -> Result<(), ScoreboardError> {
         self.mutate_score(holder, objective, |state| state.display = display)?;
-        self.queue(ScoreboardUpdate::ScoreChanged {
-            owner: holder.name().to_owned(),
-            objective: objective.name().to_owned(),
-        });
+        self.queue_score_change(holder.name(), objective.name());
         Ok(())
     }
 
@@ -1062,10 +1116,7 @@ impl Scoreboard {
         self.mutate_score(holder, objective, |state| {
             state.number_format = number_format
         })?;
-        self.queue(ScoreboardUpdate::ScoreChanged {
-            owner: holder.name().to_owned(),
-            objective: objective.name().to_owned(),
-        });
+        self.queue_score_change(holder.name(), objective.name());
         Ok(())
     }
 
@@ -1081,28 +1132,44 @@ impl Scoreboard {
     ) -> Result<(), ScoreboardError> {
         ensure_holder_name(holder.name())?;
         let mut persistent = self.state.write();
+        let mut packets = Vec::new();
         if let Some(objective) = objective {
             ensure_objective_exists(&persistent, objective)?;
+            // Vanilla `Scoreboard.resetSinglePlayerScore`: an emptied holder goes through
+            // `onPlayerRemoved`, an objective that still has scores through
+            // `onPlayerScoreRemoved`, and a reset that removed nothing broadcasts nothing.
             if let Some(scores) = persistent.scores.get_mut(holder.name()) {
-                scores.remove(objective.name());
+                let removed = scores.remove(objective.name()).is_some();
                 if scores.is_empty() {
                     persistent.scores.remove(holder.name());
+                    if !self.tracked.read().is_empty() {
+                        packets.push(ScoreboardPacket::all_scores_reset(holder.name()));
+                    }
+                } else if removed && self.tracked.read().contains(objective.name()) {
+                    packets.push(ScoreboardPacket::score_reset(
+                        holder.name(),
+                        objective.name(),
+                    ));
                 }
             }
         } else {
-            persistent.scores.remove(holder.name());
+            // Vanilla `Scoreboard.resetAllPlayerScores` -> `onPlayerRemoved`, which only
+            // fires when the holder actually had scores.
+            if persistent.scores.remove(holder.name()).is_some() && !self.tracked.read().is_empty()
+            {
+                packets.push(ScoreboardPacket::all_scores_reset(holder.name()));
+            }
         }
         drop(persistent);
         self.mark_dirty();
-        self.queue(ScoreboardUpdate::ScoreRemoved {
-            owner: holder.name().to_owned(),
-            objective: objective.map(|objective| objective.name().to_owned()),
-        });
+        for packet in packets {
+            self.queue(packet);
+        }
         Ok(())
     }
 
-    /// Vanilla `Scoreboard.resetAllPlayerScores` for a whole holder, including
-    /// team membership.
+    /// Vanilla `Scoreboard.entityRemoved` / `resetAllPlayerScores` for a whole holder,
+    /// including team membership.
     ///
     /// # Errors
     ///
@@ -1117,22 +1184,18 @@ impl Scoreboard {
         {
             entry.remove_player(holder.name());
         }
+        let tracked_empty = self.tracked.read().is_empty();
         drop(persistent);
         if removed_scores || team.is_some() {
             self.mark_dirty();
         }
-        if removed_scores {
-            self.queue(ScoreboardUpdate::ScoreRemoved {
-                owner: holder.name().to_owned(),
-                objective: None,
-            });
+        // Vanilla `resetAllPlayerScores` only calls `onPlayerRemoved` when the holder had
+        // scores, and `Scoreboard.removePlayerFromTeam` only broadcasts when it was on a team.
+        if removed_scores && !tracked_empty {
+            self.queue(ScoreboardPacket::all_scores_reset(holder.name()));
         }
         if let Some(team) = team {
-            self.queue(ScoreboardUpdate::TeamPlayersChanged {
-                name: team,
-                joined: Vec::new(),
-                left: vec![holder.name().to_owned()],
-            });
+            self.queue(ScoreboardPacket::team_player_remove(&team, holder.name()));
         }
         Ok(())
     }
@@ -1212,11 +1275,14 @@ impl Scoreboard {
             return Err(ScoreboardError::MissingObjective(name.to_owned()));
         };
         mutate(state);
+        let snapshot = objective_snapshot(name, state);
         drop(persistent);
         self.mark_dirty();
-        self.queue(ScoreboardUpdate::ObjectiveChanged {
-            name: name.to_owned(),
-        });
+        // Vanilla `ServerScoreboard.onObjectiveChanged` only broadcasts while the
+        // objective is tracked by at least one display slot.
+        if self.tracked.read().contains(name) {
+            self.queue(ScoreboardPacket::objective_change(name, snapshot));
+        }
         Ok(())
     }
 
@@ -1230,11 +1296,11 @@ impl Scoreboard {
             return Err(ScoreboardError::MissingTeam(name.to_owned()));
         };
         mutate(team);
+        let snapshot = team.clone();
         drop(persistent);
         self.mark_dirty();
-        self.queue(ScoreboardUpdate::TeamChanged {
-            name: name.to_owned(),
-        });
+        // Vanilla `ServerScoreboard.onTeamChanged` broadcasts unconditionally.
+        self.queue(ScoreboardPacket::team_change(name, &snapshot));
         Ok(())
     }
 
@@ -1258,59 +1324,67 @@ impl Scoreboard {
         Ok(())
     }
 
-    fn queue(&self, update: ScoreboardUpdate) {
-        self.updates.lock().push(update);
-    }
-
-    /// Takes the client presentation updates queued since the last flush.
-    #[must_use]
-    pub fn take_updates(&self) -> Vec<ScoreboardUpdate> {
-        std::mem::take(&mut *self.updates.lock())
-    }
-
-    /// Builds the client packets for the queued updates and clears the queue.
-    #[must_use]
-    pub fn pending_packets(&self) -> Vec<update::ScoreboardPacket> {
-        let updates = self.take_updates();
-        if updates.is_empty() {
-            return Vec::new();
+    /// Vanilla `ServerScoreboard.onScoreChanged`: a score broadcast only happens while the
+    /// objective is tracked by a display slot. Vanilla `broadcast` is reached from
+    /// `ScoreAccess.set`/`display`/`numberFormatOverride` with the authoritative value
+    /// already written, so the packet is built from the stored score here.
+    fn queue_score_change(&self, owner: &str, objective: &str) {
+        let tracked = self.tracked.read().contains(objective);
+        if !tracked {
+            return;
         }
         let persistent = self.state.read();
-        updates
-            .iter()
-            .flat_map(|update| update.packets(&persistent))
-            .collect()
+        let Some(score) = persistent
+            .scores
+            .get(owner)
+            .and_then(|scores| scores.get(objective))
+        else {
+            return;
+        };
+        let packet = ScoreboardPacket::score_changed(owner, objective, score);
+        drop(persistent);
+        self.queue(packet);
     }
 
-    /// Builds the vanilla `ServerScoreboard.addPlayer` full-state packets.
+    fn queue(&self, packet: ScoreboardPacket) {
+        self.pending.lock().push(packet);
+    }
+
+    /// Takes the client packets queued since the last flush, in mutation order.
     #[must_use]
-    pub fn full_state_packets(&self) -> Vec<update::ScoreboardPacket> {
+    pub fn pending_packets(&self) -> Vec<ScoreboardPacket> {
+        std::mem::take(&mut *self.pending.lock())
+    }
+
+    /// Builds the vanilla `ServerScoreboard.getStartTrackingPackets` for one objective.
+    ///
+    /// The objective is created first, then every display slot currently showing it,
+    /// then every score recorded in it.
+    #[must_use]
+    pub fn get_start_tracking_packets(&self, objective: &str) -> Vec<ScoreboardPacket> {
+        start_tracking_packets(&self.state.read(), objective)
+    }
+
+    /// Vanilla `PlayerList.updateEntireScoreboard`, the state a joining player needs.
+    ///
+    /// Every team is created first, then each objective currently in a display slot is
+    /// started exactly once through [`Self::get_start_tracking_packets`], in
+    /// `DisplaySlot` order.
+    #[must_use]
+    pub fn initial_sync_packets(&self) -> Vec<ScoreboardPacket> {
         let persistent = self.state.read();
         let mut packets = Vec::new();
-        for (name, state) in &persistent.objectives {
-            packets.push(update::ScoreboardPacket::objective_add(
-                name,
-                objective_snapshot(name, state),
-            ));
-        }
-        for (owner, scores) in &persistent.scores {
-            for (objective, state) in scores {
-                packets.push(update::ScoreboardPacket::score_changed(
-                    owner,
-                    objective,
-                    state,
-                    persistent.objectives.get(objective),
-                ));
-            }
-        }
-        for (slot, objective) in &persistent.display_slots {
-            packets.push(update::ScoreboardPacket::display_objective(
-                *slot,
-                Some(objective),
-            ));
-        }
         for (name, team) in &persistent.teams {
-            packets.push(update::ScoreboardPacket::team_add(name, team));
+            packets.push(ScoreboardPacket::team_add(name, team));
+        }
+        let mut started: BTreeSet<&str> = BTreeSet::new();
+        for slot in DisplaySlot::ALL {
+            let Some(objective) = persistent.display_slots.get(&slot) else {
+                continue;
+            };
+            if started.insert(objective.as_str()) {
+                packets.extend(start_tracking_packets(&persistent, objective));
+            }
         }
         packets
     }
@@ -1353,6 +1427,27 @@ impl ScoreState {
             },
         }
     }
+}
+
+fn start_tracking_packets(state: &PersistentScoreboard, objective: &str) -> Vec<ScoreboardPacket> {
+    let Some(objective_state) = state.objectives.get(objective) else {
+        return Vec::new();
+    };
+    let mut packets = vec![ScoreboardPacket::objective_add(
+        objective,
+        objective_snapshot(objective, objective_state),
+    )];
+    for slot in DisplaySlot::ALL {
+        if state.display_slots.get(&slot).map(String::as_str) == Some(objective) {
+            packets.push(ScoreboardPacket::display_objective(slot, Some(objective)));
+        }
+    }
+    for (owner, scores) in &state.scores {
+        if let Some(score) = scores.get(objective) {
+            packets.push(ScoreboardPacket::score_changed(owner, objective, score));
+        }
+    }
+    packets
 }
 
 fn objective_snapshot(name: &str, state: &ObjectiveState) -> ScoreboardObjective {
@@ -1510,18 +1605,30 @@ impl DomainScoreboards {
         sent
     }
 
-    /// Sends the full scoreboard state to one joining player, mirroring vanilla
-    /// `ServerScoreboard.addPlayer`.
-    pub fn send_full_state(&self, domain: &str, player: &crate::player::Player) -> usize {
+    /// Sends the scoreboard state to one joining player, mirroring vanilla
+    /// `PlayerList.updateEntireScoreboard`.
+    pub fn send_initial_state(&self, domain: &str, player: &crate::player::Player) -> usize {
         let Some(scoreboard) = self.scoreboards.get(domain) else {
             return 0;
         };
-        let packets = scoreboard.full_state_packets();
+        let packets = scoreboard.initial_sync_packets();
         for packet in &packets {
             packet.send_to(player);
         }
         packets.len()
     }
+}
+
+/// Per-tick flush of the scoreboard presentation.
+///
+/// Vanilla `ServerScoreboard` broadcasts from inside each mutation; Steel records the same
+/// operations and hands them to the owning domain's players once per tick, after commands and
+/// joins have run, so a `/scoreboard` or `/team` burst reaches clients as one batch.
+///
+/// Vanilla equivalent: `ServerScoreboard`'s own `broadcastAll` calls, plus
+/// `PlayerList.updateEntireScoreboard` for a joining player.
+pub fn tick_scoreboards(server: &Server) {
+    server.scoreboards.flush_updates(&server.worlds);
 }
 
 fn domain_default_world<'a>(worlds: &'a WorldMap, domain: &str) -> io::Result<&'a World> {
@@ -1556,9 +1663,14 @@ mod tests {
 
     use super::{
         AsyncMutex, CriteriaKind, DisplaySlot, DomainScoreboards, NumberFormat, ObjectiveCriteria,
-        PersistentScoreboard, RenderType, ScoreHolder, Scoreboard, ScoreboardError, SyncMutex,
-        TeamColor, TeamVisibility,
+        PersistentScoreboard, RenderType, ScoreHolder, Scoreboard, ScoreboardError,
+        ScoreboardPacket, SyncMutex, TeamColor, TeamVisibility,
     };
+
+    /// Vanilla `NumberFormat.Fixed` over a plain contents component.
+    fn fixed_number_format() -> NumberFormat {
+        NumberFormat::Fixed(TextComponent::plain("many".to_owned()))
+    }
 
     #[test]
     fn score_value_and_lock_state_are_independent() {
@@ -1686,6 +1798,7 @@ mod tests {
 
     #[test]
     fn stat_criteria_update_every_matching_objective() {
+        steel_registry::init_vanilla_registry();
         let scoreboard = Scoreboard::new();
         let criteria = ObjectiveCriteria::parse("minecraft.mined:minecraft.stone")
             .expect("stat criteria should parse");
@@ -1734,7 +1847,7 @@ mod tests {
     }
 
     #[test]
-    fn full_state_packets_cover_objectives_scores_slots_and_teams() {
+    fn start_tracking_packets_cover_the_objective_its_slots_and_its_scores() {
         let scoreboard = Scoreboard::new();
         let objective = scoreboard
             .add_objective("kills")
@@ -1747,9 +1860,24 @@ mod tests {
             .set_display_objective(DisplaySlot::Sidebar, Some(&objective))
             .expect("display slot should be set");
         scoreboard.add_team("red").expect("team should be added");
+        // A different objective's score must not leak into this objective's bundle.
+        let other = scoreboard
+            .add_objective("deaths")
+            .expect("objective should be added");
+        scoreboard
+            .set_score(&holder, &other, 2)
+            .expect("score should be set");
 
-        let packets = scoreboard.full_state_packets();
-        assert_eq!(packets.len(), 4);
+        // Vanilla `ServerScoreboard.getStartTrackingPackets` emits the objective
+        // itself, then one display-slot packet per slot showing it, then its scores.
+        assert_eq!(scoreboard.get_start_tracking_packets("kills").len(), 3);
+        assert_eq!(scoreboard.get_start_tracking_packets("deaths").len(), 2);
+        assert!(
+            scoreboard.get_start_tracking_packets("missing").is_empty(),
+            "an unknown objective starts no tracking"
+        );
+        // Teams, then the displayed objective's bundle: objective + its slot + its score.
+        assert_eq!(scoreboard.initial_sync_packets().len(), 4);
     }
 
     #[test]
@@ -1886,19 +2014,419 @@ mod tests {
         );
     }
 
+    /// Vanilla `ServerScoreboard`: creating an objective only marks the scoreboard dirty, so
+    /// nothing is queued until a display slot starts tracking it — and the queue drains once.
     #[test]
-    fn queued_updates_are_drained_once() {
+    fn untracked_objectives_queue_nothing_until_a_display_slot_shows_them() {
         let scoreboard = Scoreboard::new();
-        scoreboard
+        let objective = scoreboard
             .add_objective("kills")
             .expect("objective should be added");
-        let first = scoreboard.take_updates();
-        assert_eq!(first.len(), 1);
-        assert!(scoreboard.take_updates().is_empty());
+        assert!(scoreboard.pending_packets().is_empty());
+
+        scoreboard
+            .set_display_objective(DisplaySlot::Sidebar, Some(&objective))
+            .expect("display slot should be set");
+        let first = scoreboard.pending_packets();
+        assert_eq!(
+            first.len(),
+            2,
+            "start tracking sends the objective and the slot"
+        );
+        assert!(scoreboard.pending_packets().is_empty());
     }
 
+    /// Vanilla `ServerScoreboard` broadcast surface: creating an objective, scoring,
+    /// and showing it in the sidebar queues exactly the `ClientboundSetObjective`,
+    /// `ClientboundSetScore`, and `ClientboundSetDisplayObjective` packets the next
+    /// tick delivers to every client.
     #[test]
-    fn unused_imports_are_exercised() {
-        // Intentionally empty: see the module tests above.
+    fn sidebar_objective_mutations_reach_the_client_packets() {
+        let scoreboard = Scoreboard::new();
+        let objective = scoreboard
+            .add_objective_full(
+                "kills",
+                ObjectiveCriteria::dummy(),
+                TextComponent::plain("Kills".to_owned()),
+                RenderType::Integer,
+                false,
+                None,
+            )
+            .expect("objective should be added");
+        let holder = ScoreHolder::new("Steve");
+        scoreboard
+            .set_score(&holder, &objective, 7)
+            .expect("score should be writable");
+        scoreboard
+            .set_display_objective(DisplaySlot::Sidebar, Some(&objective))
+            .expect("display slot should be set");
+
+        let names: Vec<&str> = scoreboard
+            .pending_packets()
+            .iter()
+            .map(|packet| match packet {
+                ScoreboardPacket::Objective(packet) => {
+                    assert_eq!(packet.objective_name, "kills");
+                    assert_eq!(
+                        packet.display_name,
+                        TextComponent::plain("Kills".to_owned())
+                    );
+                    "objective-add"
+                }
+                ScoreboardPacket::Score(packet) => {
+                    assert_eq!(packet.objective_name, "kills");
+                    assert_eq!(packet.owner, "Steve");
+                    assert_eq!(packet.score, 7);
+                    "score"
+                }
+                ScoreboardPacket::DisplayObjective(packet) => {
+                    assert!(matches!(
+                        packet.slot,
+                        steel_protocol::packets::game::ScoreboardDisplaySlot::Sidebar
+                    ));
+                    assert_eq!(packet.objective_name.as_deref(), Some("kills"));
+                    "display-slot"
+                }
+                other => panic!("unexpected packet: {other:?}"),
+            })
+            .collect();
+        // Vanilla `ServerScoreboard.getStartTrackingPackets` order: the objective, then the
+        // display slot that tracks it, then the scores already recorded in it. The objective
+        // and its score are held back until the slot makes the objective tracked.
+        assert_eq!(names, ["objective-add", "display-slot", "score"]);
+        assert!(scoreboard.pending_packets().is_empty());
+    }
+
+    /// Vanilla `ServerScoreboard.onTeamAdded/onTeamChanged`: a team's display options
+    /// reach clients in `ClientboundSetPlayerTeamPacket` add/change packets carrying
+    /// the same parameters.
+    #[test]
+    fn team_display_properties_reach_the_client_packets() {
+        use steel_protocol::packets::game::{TeamAction, TeamColor as WireTeamColor};
+
+        let scoreboard = Scoreboard::new();
+        scoreboard.add_team("red").expect("team should be added");
+        let holder = ScoreHolder::new("Steve");
+        let red = scoreboard.team("red").expect("team should exist");
+        scoreboard
+            .add_holder_to_team(&holder, &red)
+            .expect("holder should join red");
+        scoreboard
+            .set_team_display_name("red", TextComponent::plain("Red Team".to_owned()))
+            .expect("display name should change");
+        scoreboard
+            .set_team_color("red", Some(TeamColor::Red))
+            .expect("color should change");
+        scoreboard
+            .set_team_prefix("red", TextComponent::plain("[".to_owned()))
+            .expect("prefix should change");
+
+        let mut kinds: Vec<&str> = Vec::new();
+        let mut last_change = None;
+        for packet in scoreboard.pending_packets() {
+            let ScoreboardPacket::Team(packet) = packet else {
+                panic!("expected only team packets, got {packet:?}");
+            };
+            assert_eq!(packet.name, "red");
+            match packet.method {
+                TeamAction::Add => {
+                    let params = packet.parameters.expect("add carries parameters");
+                    // Vanilla `/team add <name>` starts with the name as the display name.
+                    assert_eq!(params.display_name, TextComponent::plain("red"));
+                    assert_eq!(
+                        packet.players,
+                        Vec::<String>::new(),
+                        "a freshly created team has no members"
+                    );
+                    kinds.push("add");
+                }
+                TeamAction::Join => {
+                    assert!(packet.parameters.is_none());
+                    assert_eq!(packet.players, vec!["Steve".to_owned()]);
+                    kinds.push("join");
+                }
+                TeamAction::Change => {
+                    last_change = packet.parameters;
+                    kinds.push("change");
+                }
+                action => panic!("unexpected team packet action: {action:?}"),
+            }
+        }
+        // Vanilla's packet mix for this burst: `createAddOrModifyPacket(team, true)` on
+        // creation, one `createPlayerPacket(team, player, ADD)` for the join, and one
+        // `createAddOrModifyPacket(team, false)` per option change. Every change re-sends the
+        // full parameters block, so the last one carries all three new values.
+        assert_eq!(kinds, ["add", "join", "change", "change", "change"]);
+        let params = last_change.expect("change carries parameters");
+        assert_eq!(
+            params.display_name,
+            TextComponent::plain("Red Team".to_owned())
+        );
+        assert_eq!(params.player_prefix, TextComponent::plain("[".to_owned()));
+        assert_eq!(params.color, Some(WireTeamColor::Red));
+    }
+
+    /// Vanilla `PlayerList.updateEntireScoreboard` + `getStartTrackingPackets`: the
+    /// join sync creates every team first, then starts each displayed objective once
+    /// with its display slots and scores, never resending one objective.
+    #[test]
+    fn initial_sync_sends_teams_then_displayed_objectives_once() {
+        let scoreboard = Scoreboard::new();
+        let kills = scoreboard
+            .add_objective("kills")
+            .expect("objective should be added");
+        let deaths = scoreboard
+            .add_objective("deaths")
+            .expect("objective should be added");
+        let holder = ScoreHolder::new("Steve");
+        scoreboard
+            .set_score(&holder, &kills, 3)
+            .expect("score should be writable");
+        scoreboard
+            .set_score(&holder, &deaths, 1)
+            .expect("hidden scores should be writable");
+        scoreboard
+            .set_display_objective(DisplaySlot::Sidebar, Some(&kills))
+            .expect("display slot should be set");
+        scoreboard
+            .set_display_objective(DisplaySlot::List, Some(&kills))
+            .expect("display slot should be set");
+        scoreboard.add_team("red").expect("team should be added");
+
+        let packet_kinds: Vec<String> = scoreboard
+            .initial_sync_packets()
+            .iter()
+            .map(|packet| match packet {
+                ScoreboardPacket::Team(packet) => {
+                    assert_eq!(packet.name, "red");
+                    "team".to_owned()
+                }
+                ScoreboardPacket::Objective(packet) => {
+                    format!("objective:{}", packet.objective_name)
+                }
+                ScoreboardPacket::Score(packet) => {
+                    format!("score:{}:{}", packet.objective_name, packet.owner)
+                }
+                ScoreboardPacket::DisplayObjective(_) => "display-slot".to_owned(),
+                other => panic!("unexpected packet: {other:?}"),
+            })
+            .collect();
+        // Teams first, then the displayed objective's create + both of its display slots +
+        // its score exactly once; the undisplaced `deaths` objective stays server-side.
+        assert_eq!(
+            packet_kinds,
+            [
+                "team",
+                "objective:kills",
+                "display-slot",
+                "display-slot",
+                "score:kills:Steve",
+            ]
+        );
+    }
+
+    /// The objective's `Fixed` number format travels in the objective packet (vanilla
+    /// `ClientboundSetObjectivePacket`), while scores carry only their own override.
+    #[test]
+    fn objective_format_and_score_override_travel_in_separate_packets() {
+        let scoreboard = Scoreboard::new();
+        let objective = scoreboard
+            .add_objective_full(
+                "styled",
+                ObjectiveCriteria::dummy(),
+                TextComponent::new(),
+                RenderType::Integer,
+                false,
+                Some(fixed_number_format()),
+            )
+            .expect("objective should be added");
+        let holder = ScoreHolder::new("Steve");
+        scoreboard
+            .set_score(&holder, &objective, 4)
+            .expect("score should be writable");
+        scoreboard
+            .set_display_objective(DisplaySlot::Sidebar, Some(&objective))
+            .expect("display slot should be set");
+
+        let mut objective_packet = None;
+        let mut score_packet = None;
+        for packet in scoreboard.pending_packets() {
+            match packet {
+                ScoreboardPacket::Objective(packet) => objective_packet = Some(packet),
+                ScoreboardPacket::Score(packet) => score_packet = Some(packet),
+                ScoreboardPacket::DisplayObjective(_) => {}
+                other => panic!("unexpected packet: {other:?}"),
+            }
+        }
+        let objective_packet = objective_packet.expect("start tracking sends the objective");
+        let score_packet = score_packet.expect("start tracking sends the score");
+        assert!(objective_packet.number_format.is_some());
+        // Vanilla `ServerScoreboard.onScoreChanged` sends only the per-score override;
+        // the objective's format must not leak into the score packet.
+        assert!(score_packet.number_format.is_none());
+    }
+
+    /// Vanilla `ServerScoreboard.setDisplayObjective`: showing an objective no client has
+    /// seen starts tracking it — the objective, its display slots, and its scores — rather
+    /// than only moving the slot. A bare `ClientboundSetDisplayObjectivePacket` for an
+    /// unknown name is resolved to `null` by the client, which clears the sidebar.
+    #[test]
+    fn displaying_a_previously_untracked_objective_starts_tracking_it() {
+        use steel_protocol::packets::game::ObjectiveMethod;
+
+        let scoreboard = Scoreboard::new();
+        let first = scoreboard
+            .add_objective("first")
+            .expect("objective should be added");
+        let second = scoreboard
+            .add_objective("second")
+            .expect("objective should be added");
+        let holder = ScoreHolder::new("Steve");
+        scoreboard
+            .set_score(&holder, &second, 9)
+            .expect("score should be writable");
+
+        // Nothing reaches clients while the objective is not displayed.
+        assert!(scoreboard.pending_packets().is_empty());
+
+        scoreboard
+            .set_display_objective(DisplaySlot::Sidebar, Some(&first))
+            .expect("display slot should be set");
+        scoreboard
+            .set_display_objective(DisplaySlot::Sidebar, Some(&second))
+            .expect("display slot should be set");
+
+        let kinds: Vec<String> = scoreboard
+            .pending_packets()
+            .iter()
+            .map(|packet| match packet {
+                ScoreboardPacket::Objective(packet) => match packet.method {
+                    ObjectiveMethod::Add => format!("add:{}", packet.objective_name),
+                    ObjectiveMethod::Remove => format!("remove:{}", packet.objective_name),
+                    ObjectiveMethod::Change => format!("change:{}", packet.objective_name),
+                },
+                ScoreboardPacket::DisplayObjective(packet) => {
+                    format!("slot:{}", packet.objective_name.as_deref().unwrap_or("-"))
+                }
+                ScoreboardPacket::Score(packet) => {
+                    format!("score:{}:{}", packet.objective_name, packet.owner)
+                }
+                ScoreboardPacket::ResetScore(packet) => format!("reset:{}", packet.owner),
+                ScoreboardPacket::Team(packet) => format!("team:{}", packet.name),
+            })
+            .collect();
+        // `first` starts tracking, then the swap stops it and starts `second`.
+        assert_eq!(
+            kinds,
+            [
+                "add:first",
+                "slot:first",
+                "remove:first",
+                "add:second",
+                "slot:second",
+                "score:second:Steve",
+            ]
+        );
+
+        // Re-setting the slot to the same objective only re-sends the slot contents.
+        scoreboard
+            .set_display_objective(DisplaySlot::Sidebar, Some(&second))
+            .expect("display slot should be set");
+        let repeat = scoreboard.pending_packets();
+        assert_eq!(repeat.len(), 1);
+        assert!(matches!(repeat[0], ScoreboardPacket::DisplayObjective(_)));
+    }
+
+    /// Clearing a slot: while the objective still shows in another slot the slot clear is
+    /// broadcast; when it leaves every slot it stops being tracked
+    /// (`ClientboundSetObjectivePacket(objective, 1)`), exactly like vanilla.
+    #[test]
+    fn clearing_a_display_slot_stops_tracking_only_on_the_last_slot() {
+        use steel_protocol::packets::game::ObjectiveMethod;
+
+        let scoreboard = Scoreboard::new();
+        let objective = scoreboard
+            .add_objective("kills")
+            .expect("objective should be added");
+        scoreboard
+            .set_display_objective(DisplaySlot::Sidebar, Some(&objective))
+            .expect("display slot should be set");
+        scoreboard
+            .set_display_objective(DisplaySlot::List, Some(&objective))
+            .expect("display slot should be set");
+        let _ = scoreboard.pending_packets();
+
+        scoreboard
+            .set_display_objective(DisplaySlot::Sidebar, None)
+            .expect("display slot should be cleared");
+        let first_clear = scoreboard.pending_packets();
+        assert_eq!(first_clear.len(), 1);
+        assert!(
+            matches!(
+                &first_clear[0],
+                ScoreboardPacket::DisplayObjective(packet) if packet.objective_name.is_none()
+            ),
+            "a slot clear is broadcast while the objective is still displayed"
+        );
+
+        scoreboard
+            .set_display_objective(DisplaySlot::List, None)
+            .expect("display slot should be cleared");
+        let last_clear = scoreboard.pending_packets();
+        assert_eq!(last_clear.len(), 1);
+        assert!(
+            matches!(
+                &last_clear[0],
+                ScoreboardPacket::Objective(packet)
+                    if packet.method == ObjectiveMethod::Remove
+                        && packet.objective_name == "kills"
+            ),
+            "the last slot stops tracking the objective"
+        );
+    }
+
+    /// The per-tick flush writes the queued packets to each client in the domain through
+    /// `ScoreboardPacket::send_to`, which is what `DomainScoreboards::flush_updates` calls.
+    #[test]
+    fn queued_packets_are_written_to_the_client_connection() {
+        use std::sync::Arc;
+
+        use steel_registry::init_vanilla_registry;
+
+        use crate::entity::boss::event::tests::recording_player;
+        use crate::test_support::fresh_test_world;
+
+        init_vanilla_registry();
+        let fixture = fresh_test_world("scoreboard_flush_delivery");
+        let (player, connection) = recording_player(&fixture.world, "SidebarViewer");
+
+        let scoreboard = Scoreboard::new();
+        let objective = scoreboard
+            .add_objective("kills")
+            .expect("objective should be added");
+        let holder = ScoreHolder::new("Steve");
+        scoreboard
+            .set_score(&holder, &objective, 1)
+            .expect("score should be writable");
+        scoreboard
+            .set_display_objective(DisplaySlot::Sidebar, Some(&objective))
+            .expect("display slot should be set");
+
+        let packets = scoreboard.pending_packets();
+        assert_eq!(
+            packets.len(),
+            3,
+            "a sidebar objective writes its whole bundle"
+        );
+        for packet in &packets {
+            packet.send_to(&player);
+        }
+        assert_eq!(
+            connection.sent(),
+            3,
+            "every queued packet reaches the client connection"
+        );
+        assert!(scoreboard.pending_packets().is_empty());
+        let _ = Arc::clone(&player);
     }
 }

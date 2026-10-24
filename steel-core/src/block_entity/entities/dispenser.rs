@@ -132,7 +132,10 @@ pub fn insert_item_into(container: &mut dyn Container, mut stack: ItemStack) -> 
 }
 
 /// Vanilla `Util.shuffle`: Fisher-Yates from the end of the slice.
-fn shuffle<T>(values: &mut [T], rng: &mut impl rand::Rng) {
+///
+/// Shared with the entity container carts, whose loot fill is the same
+/// `LootTable.fill` slot distribution.
+pub(crate) fn shuffle<T>(values: &mut [T], rng: &mut impl rand::Rng) {
     for i in (2..=values.len()).rev() {
         values.swap(i - 1, rng.random_range(0..i));
     }
@@ -140,7 +143,10 @@ fn shuffle<T>(values: &mut [T], rng: &mut impl rand::Rng) {
 
 /// Vanilla `LootTable.shuffleAndSplitItems`: split oversized stacks so the
 /// generated items spread over the available slots, then shuffle the result.
-fn shuffle_and_split_items(
+///
+/// Shared with the entity container carts, whose loot fill is the same
+/// `LootTable.fill` slot distribution.
+pub(crate) fn shuffle_and_split_items(
     items: Vec<ItemStack>,
     available_slots: usize,
     rng: &mut impl rand::Rng,

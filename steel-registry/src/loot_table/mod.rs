@@ -21,3 +21,6 @@ pub use registry::*;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod number_provider_tests;

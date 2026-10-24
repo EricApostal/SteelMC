@@ -33,6 +33,9 @@ pub const MAP_COLOR_BYTES: usize = MAP_SIZE * MAP_SIZE;
 /// Vanilla `MapItemSavedData.HoldingPlayer`: one viewer's dirty tracking.
 #[derive(Clone, Debug)]
 struct HoldingPlayer {
+    /// The viewer's plain-text name, used to remove their marker after the
+    /// player object is gone (disconnect).
+    name: String,
     dirty_data: bool,
     dirty_rect: Option<(u8, u8, u8, u8)>,
     dirty_decorations: bool,
@@ -43,6 +46,7 @@ struct HoldingPlayer {
 impl Default for HoldingPlayer {
     fn default() -> Self {
         Self {
+            name: String::new(),
             dirty_data: true,
             dirty_rect: None,
             dirty_decorations: true,
@@ -264,15 +268,18 @@ impl MapItemSavedData {
     }
 
     /// Vanilla `MapItemSavedData.scaled`: a new map one zoom step out.
+    ///
+    /// Vanilla calls `createFresh` with the current center, which re-aligns the
+    /// center to the coarser scale grid; a scaled copy therefore does not
+    /// necessarily share its source's center.
     #[must_use]
     pub fn scaled(&self) -> Self {
-        Self::with_center(
-            self.center_x,
-            self.center_z,
+        Self::create_fresh(
+            f64::from(self.center_x),
+            f64::from(self.center_z),
             self.scale.saturating_add(1).min(MAX_SCALE),
             self.tracking_position,
             self.unlimited_tracking,
-            false,
             self.dimension.clone(),
         )
     }
@@ -283,9 +290,14 @@ impl MapItemSavedData {
         1 << self.scale
     }
 
-    /// Vanilla `MapItemSavedData.getHoldingPlayer`: registers a map viewer.
-    pub fn track_viewer(&mut self, player: Uuid) {
-        self.carried_by_players.entry(player).or_default();
+    /// Vanilla `MapItemSavedData.getHoldingPlayer`: registers a map viewer and
+    /// remembers their plain-text name for marker cleanup.
+    pub fn track_viewer(&mut self, player: Uuid, name: &str) {
+        let holding = self.carried_by_players.entry(player).or_default();
+        if holding.name != name {
+            holding.name.clear();
+            holding.name.push_str(name);
+        }
     }
 
     /// Vanilla `MapItemSavedData.removeHoldingPlayer`.
@@ -297,6 +309,20 @@ impl MapItemSavedData {
     #[must_use]
     pub fn is_tracked_viewer(&self, player: Uuid) -> bool {
         self.carried_by_players.contains_key(&player)
+    }
+
+    /// Returns every registered viewer's UUID, mirroring vanilla's `carriedBy`.
+    pub fn viewer_ids(&self) -> impl Iterator<Item = Uuid> + '_ {
+        self.carried_by_players.keys().copied()
+    }
+
+    /// Returns the plain-text name recorded for a viewer.
+    #[must_use]
+    pub fn viewer_name(&self, player: Uuid) -> Option<&str> {
+        self.carried_by_players
+            .get(&player)
+            .map(|holding| holding.name.as_str())
+            .filter(|name| !name.is_empty())
     }
 
     /// Vanilla `MapItemSavedData.getHoldingPlayer(player).step++`: advances the
@@ -757,11 +783,6 @@ mod tests {
         assert_eq!(map.colors.len(), MAP_COLOR_BYTES);
         assert_eq!(map.scale_factor(), 1);
 
-        let scaled = map.scaled();
-        assert_eq!(scaled.scale, 1);
-        assert_eq!(scaled.scale_factor(), 2);
-        assert_eq!(scaled.center_x, 0);
-
         let capped = MapItemSavedData::create_fresh(
             0.0,
             0.0,
@@ -772,6 +793,24 @@ mod tests {
         )
         .scaled();
         assert_eq!(capped.scale, MAX_SCALE);
+    }
+
+    /// Vanilla `MapItemSavedData.scaled` re-runs `createFresh`, so the new
+    /// center snaps to the coarser scale grid instead of keeping the source
+    /// center. A scale-0 map centered on 0 becomes a scale-1 map centered on 64.
+    #[test]
+    fn scaled_maps_recenter_on_the_coarser_grid() {
+        let map = fresh();
+        let scaled = map.scaled();
+        assert_eq!(scaled.scale, 1);
+        assert_eq!(scaled.scale_factor(), 2);
+        assert_eq!((scaled.center_x, scaled.center_z), (64, 64));
+
+        // Re-scaling an already-aligned center snaps again on the coarser grid:
+        // createFresh(64, 64, 2) => floor(128 / 512) = 0 => 0 * 512 + 256 - 64.
+        let again = scaled.scaled();
+        assert_eq!(again.scale, 2);
+        assert_eq!((again.center_x, again.center_z), (192, 192));
     }
 
     #[test]
@@ -832,7 +871,7 @@ mod tests {
     fn color_updates_mark_every_viewer_dirty() {
         let mut map = fresh();
         let viewer = uuid::Uuid::from_u128(1);
-        map.track_viewer(viewer);
+        map.track_viewer(viewer, "viewer");
         map.update_color(3, 4, 12);
         assert_eq!(map.colors[4 * super::MAP_SIZE + 3], 12);
         let packet = map.update_packet(7, viewer).expect("patch should be sent");

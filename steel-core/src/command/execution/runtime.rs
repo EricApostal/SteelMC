@@ -15,12 +15,15 @@ use super::{
     SteelArgumentType, StructureOrTagKey, WorldArgument,
     argument::{
         AngleValue, AttributeValue, ColumnPos, ColumnPosValue, ComponentValue, CoordinateAxes,
-        DomainValue, EnchantmentValue, EntityTypeValue, FloatRange, GameModeValue, HexColorValue,
-        IdentifierValue, ItemStackValue, MessageValue, MobEffectValue, NbtPathValue, NbtTagValue,
+        DomainValue, EnchantmentValue, EntityTypeValue, FloatNumberProviderArg,
+        FloatNumberProviderValue, FloatRange, GameModeValue, HexColorValue, IdentifierValue,
+        IntNumberProviderArg, IntNumberProviderValue, ItemModifierRef, ItemModifierValue,
+        ItemStackValue, MessageValue, MobEffectValue, NbtPathValue, NbtTagValue,
         ObjectiveCriteriaValue, ObjectiveValue, Operation, OperationValue, ParticleValue,
-        ScoreboardSlotValue, SlotRange, SlotsValue, SteelArgumentValue, StyleValue,
-        SwingAnimationValue, TeamColorValue, TeamValue, TemplateMirrorValue, TemplateRotationValue,
-        TimeValue, TimelineValue, UuidValue, WorldClockValue, resolve_message,
+        ScoreboardSlotValue, SlotSourceArg, SlotSourceValue, SlotsValue, SteelArgumentValue,
+        StyleValue, SwingAnimationValue, TeamColorValue, TeamValue, TemplateMirrorValue,
+        TemplateRotationValue, TimeValue, TimelineValue, UuidValue, WorldClockValue,
+        resolve_message,
     },
     selector::EntitySelector,
 };
@@ -33,6 +36,7 @@ use crate::command::incorrectly_typed_argument;
 use crate::{
     chunk::heightmap::HeightmapType,
     entity::{EntityAnchor, SharedEntity},
+    loot::slot::range::SlotRange,
     permission::{PermissionMetadataExpression, PermissionRuleExpression},
     player::Player,
     scoreboard::{DisplaySlot, ScoreHolder, TeamColor},
@@ -41,8 +45,8 @@ use simdnbt::owned::NbtTag;
 use steel_registry::advancement::registry::AdvancementRef;
 use steel_registry::attribute::AttributeRef;
 use steel_registry::damage_type::DamageTypeRef;
-use steel_registry::dialog::DialogRef;
 use steel_registry::data_components::vanilla_components::SwingAnimationType;
+use steel_registry::dialog::DialogRef;
 use steel_registry::mob_effect::MobEffectRef;
 use steel_registry::particle_type::ParticleTypeRef;
 use steel_registry::{
@@ -516,10 +520,40 @@ where
             .map(|value| &value.0)
     }
 
+    /// Returns a parsed vanilla `ResourceOrIdArgument` int provider.
+    pub(crate) fn int_number_provider(
+        &self,
+        name: &str,
+    ) -> Result<&IntNumberProviderArg, CommandSyntaxError> {
+        self.typed_argument::<IntNumberProviderValue>(name)
+            .map(|value| &value.0)
+    }
+
+    /// Returns a parsed vanilla `ResourceOrIdArgument` float provider.
+    pub(crate) fn float_number_provider(
+        &self,
+        name: &str,
+    ) -> Result<&FloatNumberProviderArg, CommandSyntaxError> {
+        self.typed_argument::<FloatNumberProviderValue>(name)
+            .map(|value| &value.0)
+    }
+
     /// Returns a parsed vanilla slot range.
     pub(crate) fn slots(&self, name: &str) -> Result<&SlotRange, CommandSyntaxError> {
         self.typed_argument::<SlotsValue>(name)
             .map(|value| &value.0)
+    }
+
+    /// Returns a parsed vanilla `SlotSourceArgument` result.
+    pub(crate) fn slot_source(&self, name: &str) -> Result<SlotSourceArg, CommandSyntaxError> {
+        self.typed_argument::<SlotSourceValue>(name)
+            .map(|value| value.0)
+    }
+
+    /// Returns a parsed vanilla `ResourceOrIdArgument.lootModifier` entry.
+    pub(crate) fn item_modifier(&self, name: &str) -> Result<ItemModifierRef, CommandSyntaxError> {
+        self.typed_argument::<ItemModifierValue>(name)
+            .map(|value| value.0)
     }
 
     /// Returns a parsed structure mirror.

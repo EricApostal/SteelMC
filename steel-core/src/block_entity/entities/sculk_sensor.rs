@@ -48,44 +48,69 @@ pub(crate) struct PersistedInfo {
 /// Vanilla `VibrationSystem.Data` codec fields.
 pub(crate) struct PersistedVibration {
     current: Option<PersistedInfo>,
+    selector: Option<PersistedInfo>,
+    selector_tick: i64,
     travel_time_in_ticks: i32,
 }
 
 fn persist_vibration(state: &VibrationListenerState) -> PersistedVibration {
     PersistedVibration {
-        current: state.current_vibration().map(|info| PersistedInfo {
-            event_key: info.event.key.clone(),
-            distance: info.distance,
-            x: info.pos.x,
-            y: info.pos.y,
-            z: info.pos.z,
-            source: info.uuid,
-            projectile_owner: info.projectile_owner_uuid,
-        }),
+        current: state.current_vibration().map(persist_info),
+        selector: state.selector().current().map(persist_info),
+        // Vanilla `VibrationSelector.CODEC` writes `-1` for the `tick` field of an empty selector.
+        selector_tick: state.selector().selected_tick().unwrap_or(-1),
         travel_time_in_ticks: state.travel_time_in_ticks(),
     }
 }
 
+fn persist_info(info: &VibrationInfo) -> PersistedInfo {
+    PersistedInfo {
+        event_key: info.event.key.clone(),
+        distance: info.distance,
+        x: info.pos.x,
+        y: info.pos.y,
+        z: info.pos.z,
+        source: info.uuid,
+        projectile_owner: info.projectile_owner_uuid,
+    }
+}
+
 /// Restores a persisted `listener` compound onto `state`.
+///
+/// Vanilla `VibrationSystem.Data.CODEC` always constructs the restored data with
+/// `reloadVibrationParticle = true`, which re-sends the in-flight particle once the listener has
+/// a client nearby again.
 pub(crate) fn restore_vibration(
     state: &SyncMutex<VibrationListenerState>,
     persisted: PersistedVibration,
 ) {
     let mut guard = state.lock();
+    if let Some(info) = persisted.selector
+        && let Some(event) = REGISTRY.game_events.by_key(&info.event_key)
+    {
+        guard
+            .selector_mut()
+            .restore(restore_info(event, info), persisted.selector_tick);
+    }
     let Some(info) = persisted.current else {
         return;
     };
     let Some(event) = REGISTRY.game_events.by_key(&info.event_key) else {
         return;
     };
-    guard.set_current_vibration(Some(VibrationInfo {
+    guard.set_current_vibration(Some(restore_info(event, info)));
+    guard.set_travel_time_in_ticks(persisted.travel_time_in_ticks);
+    guard.set_reload_vibration_particle(true);
+}
+
+fn restore_info(event: GameEventRef, info: PersistedInfo) -> VibrationInfo {
+    VibrationInfo {
         event,
         distance: info.distance,
         pos: DVec3::new(info.x, info.y, info.z),
         uuid: info.source,
         projectile_owner_uuid: info.projectile_owner,
-    }));
-    guard.set_travel_time_in_ticks(persisted.travel_time_in_ticks);
+    }
 }
 
 /// Vanilla `UUIDUtil.CODEC` (a four-int array).
@@ -93,27 +118,41 @@ fn insert_uuid(nbt: &mut NbtCompound, key: &str, uuid: uuid::Uuid) {
     nbt.insert(key, NbtTag::IntArray(uuid.to_int_array().to_vec()));
 }
 
+/// Vanilla `VibrationInfo.CODEC` (`game_event`, `distance`, `pos`, optional source UUIDs).
+fn insert_info_compound(compound: &mut NbtCompound, info: &PersistedInfo) {
+    compound.insert("game_event", info.event_key.to_string());
+    compound.insert("distance", info.distance);
+    // Vanilla `Vec3.CODEC`: `[x, y, z]` doubles.
+    compound.insert(
+        "pos",
+        NbtTag::List(NbtList::Double(vec![info.x, info.y, info.z])),
+    );
+    if let Some(source) = info.source {
+        insert_uuid(compound, "source", source);
+    }
+    if let Some(projectile_owner) = info.projectile_owner {
+        insert_uuid(compound, "projectile_owner", projectile_owner);
+    }
+}
+
 /// Writes the `listener` compound shared by both sensor variants and the shrieker.
 pub(crate) fn save_listener_nbt(nbt: &mut NbtCompound, state: &VibrationListenerState) {
     let persisted = persist_vibration(state);
     let mut listener = NbtCompound::new();
-    if let Some(current) = persisted.current {
+    if let Some(current) = &persisted.current {
         let mut event = NbtCompound::new();
-        event.insert("game_event", current.event_key.to_string());
-        event.insert("distance", current.distance);
-        // Vanilla `Vec3.CODEC`: `[x, y, z]` doubles.
-        event.insert(
-            "pos",
-            NbtTag::List(NbtList::Double(vec![current.x, current.y, current.z])),
-        );
-        if let Some(source) = current.source {
-            insert_uuid(&mut event, "source", source);
-        }
-        if let Some(projectile_owner) = current.projectile_owner {
-            insert_uuid(&mut event, "projectile_owner", projectile_owner);
-        }
+        insert_info_compound(&mut event, current);
         listener.insert("event", event);
     }
+    // Vanilla `VibrationSelector.CODEC` is a required field of `Data.CODEC`.
+    let mut selector = NbtCompound::new();
+    if let Some(candidate) = &persisted.selector {
+        let mut event = NbtCompound::new();
+        insert_info_compound(&mut event, candidate);
+        selector.insert("event", event);
+    }
+    selector.insert("tick", persisted.selector_tick);
+    listener.insert("selector", selector);
     listener.insert("event_delay", persisted.travel_time_in_ticks);
     nbt.insert("listener", listener);
 }
@@ -121,35 +160,44 @@ pub(crate) fn save_listener_nbt(nbt: &mut NbtCompound, state: &VibrationListener
 /// Reads the `listener` compound shared by both sensor variants and the shrieker.
 pub(crate) fn load_listener_nbt(nbt: &NbtCompoundView<'_, '_>) -> PersistedVibration {
     let listener = nbt.compound("listener");
-    let current = listener.and_then(|listener| {
-        let event = listener.compound("event")?;
-        let key = event.string("game_event")?;
-        let pos = event
-            .list("pos")
-            .and_then(|pos| pos.doubles())
-            .unwrap_or_default();
-        Some(PersistedInfo {
-            event_key: key
-                .to_string_lossy()
-                .parse::<Identifier>()
-                .unwrap_or_else(|_| Identifier::new_static("minecraft", "step")),
-            distance: event.float("distance").unwrap_or(0.0),
-            x: pos.first().copied().unwrap_or(0.0),
-            y: pos.get(1).copied().unwrap_or(0.0),
-            z: pos.get(2).copied().unwrap_or(0.0),
-            source: event
-                .int_array("source")
-                .and_then(|uuid| uuid::Uuid::from_int_array(&uuid)),
-            projectile_owner: event
-                .int_array("projectile_owner")
-                .and_then(|uuid| uuid::Uuid::from_int_array(&uuid)),
-        })
-    });
+    let current = listener.and_then(|listener| listener.compound("event").map(load_info));
+    let selector = listener.and_then(|listener| listener.compound("selector"));
     PersistedVibration {
         current,
+        selector: selector
+            .and_then(|selector| selector.compound("event"))
+            .map(load_info),
+        selector_tick: selector
+            .and_then(|selector| selector.long("tick"))
+            .unwrap_or(-1),
         travel_time_in_ticks: listener
             .and_then(|listener| listener.int("event_delay"))
             .unwrap_or(0),
+    }
+}
+
+/// Vanilla `VibrationInfo.CODEC` decode.
+fn load_info(event: NbtCompoundView<'_, '_>) -> PersistedInfo {
+    let pos = event
+        .list("pos")
+        .and_then(|pos| pos.doubles())
+        .unwrap_or_default();
+    PersistedInfo {
+        event_key: event
+            .string("game_event")
+            .map(|key| key.to_string_lossy().parse::<Identifier>())
+            .and_then(Result::ok)
+            .unwrap_or_else(|| Identifier::new_static("minecraft", "step")),
+        distance: event.float("distance").unwrap_or(0.0),
+        x: pos.first().copied().unwrap_or(0.0),
+        y: pos.get(1).copied().unwrap_or(0.0),
+        z: pos.get(2).copied().unwrap_or(0.0),
+        source: event
+            .int_array("source")
+            .and_then(|uuid| uuid::Uuid::from_int_array(&uuid)),
+        projectile_owner: event
+            .int_array("projectile_owner")
+            .and_then(|uuid| uuid::Uuid::from_int_array(&uuid)),
     }
 }
 
@@ -212,6 +260,17 @@ impl VibrationCallback for SensorCallback {
         self.radius
     }
 
+    /// Vanilla `SculkSensorBlockEntity.VibrationUser.canTriggerAvoidVibration`: the sensors grant
+    /// the `avoid_vibration` criterion.
+    fn can_trigger_avoid_vibration(&self) -> bool {
+        true
+    }
+
+    /// Vanilla `SculkSensorBlockEntity.VibrationUser.requiresAdjacentChunksToBeTicking`.
+    fn requires_adjacent_chunks_to_be_ticking(&self) -> bool {
+        true
+    }
+
     fn position_source(&self) -> PositionSource {
         block_position_source(self.pos)
     }
@@ -254,6 +313,7 @@ impl VibrationCallback for SensorCallback {
         event: GameEventRef,
         distance: f32,
         source_uuid: Option<uuid::Uuid>,
+        _projectile_owner_uuid: Option<uuid::Uuid>,
     ) {
         let entity = source_uuid.and_then(|uuid| world.get_entity_by_uuid(&uuid));
         self.on_signal_received_with_context(world, event, distance, entity.as_deref());
@@ -373,6 +433,16 @@ impl VibrationCallback for CalibratedCallback {
         CALIBRATED_SENSOR_LISTENER_RADIUS
     }
 
+    /// Inherited from `SculkSensorBlockEntity.VibrationUser` in Vanilla.
+    fn can_trigger_avoid_vibration(&self) -> bool {
+        true
+    }
+
+    /// Inherited from `SculkSensorBlockEntity.VibrationUser` in Vanilla.
+    fn requires_adjacent_chunks_to_be_ticking(&self) -> bool {
+        true
+    }
+
     fn position_source(&self) -> PositionSource {
         block_position_source(self.inner.pos)
     }
@@ -396,7 +466,7 @@ impl VibrationCallback for CalibratedCallback {
     }
 
     fn on_signal_received(&self, world: &Arc<World>, event: GameEventRef, distance: f32) {
-        self.on_signal_received_from(world, event, distance, None);
+        self.on_signal_received_from(world, event, distance, None, None);
     }
 
     fn on_signal_received_from(
@@ -405,6 +475,7 @@ impl VibrationCallback for CalibratedCallback {
         event: GameEventRef,
         distance: f32,
         source_uuid: Option<uuid::Uuid>,
+        _projectile_owner_uuid: Option<uuid::Uuid>,
     ) {
         let entity = source_uuid.and_then(|uuid| world.get_entity_by_uuid(&uuid));
         let state = world.get_block_state(self.inner.pos);
@@ -469,6 +540,20 @@ impl CalibratedSculkSensorBlockEntity {
     #[must_use]
     pub fn last_vibration_frequency(&self) -> i32 {
         *self.callback.inner.frequency.lock()
+    }
+
+    /// Vanilla `VibrationUser.canReceiveVibration` evaluated through the current world state so
+    /// `SculkSensorBlock::schedule_step_vibration` can apply the same gate as scheduled events.
+    #[must_use]
+    pub fn can_receive_vibration(
+        &self,
+        world: &Arc<World>,
+        pos: BlockPos,
+        event: GameEventRef,
+        context: &GameEventContext<'_>,
+    ) -> bool {
+        self.callback
+            .can_receive_vibration(world, pos, event, context)
     }
 
     /// The registered game-event listener.

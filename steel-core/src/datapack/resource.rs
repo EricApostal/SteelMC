@@ -77,8 +77,9 @@ impl MultiPackResourceManager {
     /// Vanilla `ResourceManager.listResources`: unions every pack's listing across
     /// every namespace.
     ///
-    /// The returned paths are relative to `<pack_type>/<namespace>/`, matching
-    /// vanilla's `ResourceLocation` conversion of a listed file.
+    /// Keys are the listed resource ids with the file extension stripped and `<path>` dropped
+    /// (`reload_test:entry` for `data/reload_test/function/entry.mcfunction`), which is what
+    /// every reader here resolves against.
     pub(crate) fn list_resources(
         &self,
         pack_type: PackType,
@@ -89,6 +90,9 @@ impl MultiPackResourceManager {
         for pack in &self.packs {
             for namespace in pack.get_namespaces(pack_type) {
                 let mut listed = Vec::new();
+                // Packs list directory-relative file names, so `<path>` has to be put back
+                // before asking for the bytes: `PackResources.getResource` takes a vanilla
+                // `Identifier`, whose path keeps both the directory and the extension.
                 pack.list_resources(pack_type, &namespace, path, "", &mut listed);
                 for relative in listed {
                     let Some(name) = relative
@@ -98,8 +102,8 @@ impl MultiPackResourceManager {
                     else {
                         continue;
                     };
-                    let key = format!("{namespace}:{name}");
-                    let location = match key.parse::<Identifier>() {
+                    let resource = format!("{namespace}:{path}/{relative}");
+                    let location = match resource.parse::<Identifier>() {
                         Ok(location) => location,
                         Err(error) => {
                             tracing::warn!(path = %relative, %error, "skipping unparsable resource path");
@@ -109,6 +113,7 @@ impl MultiPackResourceManager {
                     let Some(bytes) = pack.get_resource(pack_type, &location) else {
                         continue;
                     };
+                    let key = format!("{namespace}:{name}");
                     found.entry(key).or_default().push(Resource {
                         source_pack: pack.location().id.clone(),
                         bytes,

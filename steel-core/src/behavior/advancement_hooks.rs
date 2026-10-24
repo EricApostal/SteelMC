@@ -4,17 +4,20 @@
 //! (`player_view`, `event_base`, `raise`); these helpers mirror the exact vanilla
 //! raise sites (`CriteriaTriggers.*.trigger(...)`), verified against the vanilla
 //! jar, that live outside the player module: item behaviors in
-//! [`crate::behavior::items`], the brushable and beacon block entities, and the
-//! golem build in [`crate::world::village`].
+//! [`crate::behavior::items`], the brushable and beacon block entities, the
+//! golem build in [`crate::world::village`], and the brewing stand bottle slot
+//! in [`crate::inventory::menu::kinds`].
 //!
 //! Every helper takes the caller's [`World`] instead of reading it back from the
 //! player, and fires for every nearby [`Player`] vanilla notifies — not only the
-//! interacting one.
+//! interacting one. The brewing potion raise reads it back from the taker instead:
+//! vanilla notifies only the player taking the potion.
 
 use std::sync::Arc;
 
 use glam::DVec3;
 use steel_registry::advancement::triggers::TriggerEvent;
+use steel_registry::data_components::vanilla_components::PotionContents;
 use steel_registry::item_stack::ItemStack;
 use steel_utils::{BlockPos, Identifier, WorldAabb};
 
@@ -46,6 +49,28 @@ pub fn raise_consume_item(player: &Player, world: &Arc<World>, item: &ItemStack)
     )
 }
 
+/// Raises `minecraft:brewed_potion` (`CriteriaTriggers.BREWED_POTION`).
+///
+/// Vanilla `BrewingStandMenu.PotionSlot.onTake` fires this with the potion
+/// contents of the stack being taken out of a bottle slot; the criterion's
+/// `potion` term (when present) names the brewed potion's identifier.
+pub fn raise_brewed_potion(player: &Player, contents: &PotionContents) -> usize {
+    let world = player.get_world();
+    let origin = player.block_position();
+    let level = WorldLevelView::new(&world, origin);
+    let equipment = living_loot_equipment(player);
+    let known = player.recipe_book().unlocked_identifiers().to_vec();
+    let view = player_view(player, &level, Some(&equipment), &known);
+    raise(
+        player,
+        &Identifier::vanilla_static("brewed_potion"),
+        &TriggerEvent::BrewedPotion {
+            base: event_base(&view, &level, origin),
+            potion: contents.potion().map(|potion| &potion.value().key),
+        },
+    )
+}
+
 /// Raises `minecraft:item_used_on_block` (`CriteriaTriggers.ITEM_USED_ON_BLOCK`).
 ///
 /// The vanilla item-level call sites (`ShearsItem`, `HoneycombItem`,
@@ -54,9 +79,9 @@ pub fn raise_consume_item(player: &Player, world: &Arc<World>, item: &ItemStack)
 ///
 /// The central raise is a separate vanilla site: `ServerPlayerGameMode.useItemOn`
 /// fires it when the *block state's* own `useItemOn` consumes the action (for
-/// signs, campfires, lodestones, ...). Steel's equivalent
-/// (`player/game_mode/item_interaction.rs`) still lacks it; that file belongs to
-/// the game-mode lane.
+/// signs, campfires, lodestones, ...). Steel's equivalent is
+/// `player/game_mode/item_interaction.rs`, which raises it for every consuming
+/// block-state interaction.
 pub fn raise_item_used_on_block(
     player: &Player,
     world: &Arc<World>,
@@ -133,11 +158,9 @@ pub fn raise_construct_beacon(world: &Arc<World>, pos: BlockPos, levels: i32) ->
     );
 
     let mut granted = 0;
-    for entity in world
-        .get_entities_in_aabb_matching(&area, |entity| {
-            entity.entity_type() == &steel_registry::vanilla_entities::PLAYER
-        })
-    {
+    for entity in world.get_entities_in_aabb_matching(&area, |entity| {
+        entity.entity_type() == &steel_registry::vanilla_entities::PLAYER
+    }) {
         let Some(player) = entity.as_player() else {
             continue;
         };
@@ -170,8 +193,7 @@ pub fn raise_golem_summoned(world: &Arc<World>, summoned: &dyn Entity) -> usize 
     let summoned_view = entity_view(summoned, &level, summoned_equipment.as_ref());
 
     let mut granted = 0;
-    for entity in
-        world.get_entities_in_aabb_matching(&area, |entity| entity.as_player().is_some())
+    for entity in world.get_entities_in_aabb_matching(&area, |entity| entity.as_player().is_some())
     {
         let Some(player) = entity.as_player() else {
             continue;
@@ -214,9 +236,16 @@ pub(crate) mod test_support {
             .advancements
             .value_by_key(&Identifier::vanilla_static(advancement))
             .unwrap_or_else(|| panic!("`{advancement}` is not a registered advancement"));
-        player.advancements.lock().progress.get_progress(advancement).is_some_and(
-            |progress| progress.get_completed_criteria().any(|name| name == criterion),
-        )
+        player
+            .advancements
+            .lock()
+            .progress
+            .get_progress(advancement)
+            .is_some_and(|progress| {
+                progress
+                    .get_completed_criteria()
+                    .any(|name| name == criterion)
+            })
     }
 }
 
@@ -225,14 +254,22 @@ mod tests {
     use std::sync::Arc;
 
     use steel_registry::item_stack::ItemStack;
-    use steel_registry::{REGISTRY, init_vanilla_registry, vanilla_blocks, vanilla_items};
+    use steel_registry::registry_reference::RegistryReference;
+    use steel_registry::{
+        REGISTRY, init_vanilla_registry, vanilla_blocks, vanilla_game_rules, vanilla_items,
+        vanilla_potions,
+    };
     use steel_utils::types::UpdateFlags;
     use steel_utils::{BlockPos, ChunkPos, Identifier};
 
     use super::test_support::criterion_granted;
-    use super::{raise_item_used_on_block, raise_used_ender_eye};
+    use super::{
+        PotionContents, raise_brewed_potion, raise_item_used_on_block, raise_used_ender_eye,
+    };
     use crate::player::Player;
-    use crate::test_support::{TestPlayerBuilder, TestWorld, fresh_test_world, insert_ready_full_chunk};
+    use crate::test_support::{
+        TestPlayerBuilder, TestWorld, fresh_test_world, insert_ready_full_chunk,
+    };
 
     const COPPER_POS: BlockPos = BlockPos::new(8, 64, 8);
 
@@ -261,7 +298,10 @@ mod tests {
 
         let honeycomb = ItemStack::new(&vanilla_items::HONEYCOMB);
         let granted = raise_item_used_on_block(&player, world, COPPER_POS, &honeycomb);
-        assert!(granted >= 1, "honeycomb on copper matches `husbandry/wax_on`");
+        assert!(
+            granted >= 1,
+            "honeycomb on copper matches `husbandry/wax_on`"
+        );
         assert!(criterion_granted(&player, "husbandry/wax_on", "wax_on"));
 
         // The criterion's `match_tool` term means the same block with another tool
@@ -282,11 +322,36 @@ mod tests {
         let world = &world_fixture.world;
         let trigger = Identifier::vanilla_static("used_ender_eye");
         assert!(
-            REGISTRY.advancements.criteria_for_trigger(&trigger).is_empty(),
+            REGISTRY
+                .advancements
+                .criteria_for_trigger(&trigger)
+                .is_empty(),
             "vanilla ships no advancement on `used_ender_eye`"
         );
 
         assert_eq!(raise_used_ender_eye(&player, world, 25.0), 0);
         assert!(player.advancements.lock().progress.is_empty());
+    }
+
+    /// `nether/brew_potion` listens for `brewed_potion` with no potion term, so
+    /// raising the helper with brewed potion contents completes it, mirroring a
+    /// take from a brewing stand bottle slot.
+    #[test]
+    fn brewed_potion_grants_brew_potion() {
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world("advancement_hooks_brewed_potion");
+        let world = &world_fixture.world;
+        // The test player has no server to announce the chat message to.
+        assert!(world.set_game_rule(&vanilla_game_rules::SHOW_ADVANCEMENT_MESSAGES, false));
+        let player = TestPlayerBuilder::new(Arc::clone(world), "BrewedPotion", 1).build();
+
+        let contents = PotionContents::new(
+            Some(RegistryReference::new(&vanilla_potions::AWKWARD)),
+            None,
+            Vec::new(),
+            None,
+        );
+        assert!(raise_brewed_potion(&player, &contents) >= 1);
+        assert!(criterion_granted(&player, "nether/brew_potion", "potion"));
     }
 }

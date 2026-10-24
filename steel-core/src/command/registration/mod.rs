@@ -115,6 +115,17 @@ where
         self
     }
 
+    /// The literal roots this declaration claims: its id path followed by its aliases, in
+    /// registration order.
+    ///
+    /// This is the declaration-side mirror of the roots a built dispatcher gains, so the
+    /// graph-shape test can compare a graph against what was actually declared instead of
+    /// keeping a hand-maintained copy.
+    #[cfg(test)]
+    pub(crate) fn root_names(&self) -> impl Iterator<Item = &str> {
+        once(self.id.path.as_ref()).chain(self.aliases.iter().map(AsRef::as_ref))
+    }
+
     fn validate(&self) -> Result<(), CommandRegistrationError> {
         if self.id.namespace.is_empty()
             || self.id.path.is_empty()

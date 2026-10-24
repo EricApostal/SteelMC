@@ -210,6 +210,11 @@ impl Minecart for FurnaceMinecartEntity {
             .set_value(&BlockStateProperties::LIT, self.has_fuel())
     }
 
+    fn is_furnace(&self) -> bool {
+        // Vanilla `MinecartFurnace.isFurnace`.
+        true
+    }
+
     fn drop_item(&self) -> Option<ItemRef> {
         Some(&vanilla_items::FURNACE_MINECART)
     }
@@ -291,6 +296,11 @@ impl Entity for FurnaceMinecartEntity {
         self.interact_furnace(player, hand)
     }
 
+    fn push_entity(&self, entity: &dyn Entity) {
+        // Vanilla `AbstractMinecart.push`.
+        self.minecart_push(entity);
+    }
+
     fn is_pickable(&self) -> bool {
         !self.is_removed()
     }
@@ -347,17 +357,101 @@ impl Entity for FurnaceMinecartEntity {
 
 #[cfg(test)]
 mod tests {
-    use steel_registry::vanilla_entities;
+    use std::io::Cursor;
+    use std::sync::Weak;
+
+    use simdnbt::borrow::read_compound;
+    use simdnbt::owned::NbtCompound;
+    use steel_registry::{init_vanilla_registry, vanilla_entities, vanilla_items};
+
+    use crate::entity::EntityFluidContact;
 
     use super::*;
 
     fn furnace_cart() -> FurnaceMinecartEntity {
-        FurnaceMinecartEntity::new(
+        let cart = FurnaceMinecartEntity::new(
             &vanilla_entities::FURNACE_MINECART,
             1,
             DVec3::new(8.5, 64.0, 8.5),
             Weak::new(),
-        )
+        );
+        // A level-less fixture keeps vanilla's "no fluid contact" default; state it explicitly so
+        // `isInWater()` can never be true here.
+        cart.base()
+            .set_fluid_contact(EntityFluidContact::from_parts(0.0, 0.0, true, false));
+        cart
+    }
+
+    /// Re-parses saved NBT and hands the borrowed view to `load_additional`, mirroring the
+    /// entity reload path.
+    fn reload(nbt: &NbtCompound, load: impl FnOnce(BorrowedNbtCompoundView<'_, '_>)) {
+        let mut bytes = Vec::new();
+        nbt.write(&mut bytes);
+        let borrowed = read_compound(&mut Cursor::new(&bytes)).expect("test NBT should reborrow");
+        load((&borrowed).into());
+    }
+
+    #[test]
+    fn furnace_cart_reports_is_furnace() {
+        // Vanilla `MinecartFurnace.isFurnace`, the knob `pushOtherMinecart` reads.
+        assert!(furnace_cart().is_furnace());
+    }
+
+    #[test]
+    fn add_fuel_takes_the_tagged_items_and_pushes_away_from_the_player() {
+        init_vanilla_registry();
+        let cart = furnace_cart();
+        let player_pos = DVec3::new(4.5, 64.0, 8.5);
+
+        // Vanilla `ItemTags.FURNACE_MINECART_FUEL` is coal and charcoal only.
+        assert!(cart.add_fuel(player_pos, &ItemStack::new(&vanilla_items::COAL)));
+        assert_eq!(cart.fuel(), FUEL_TICKS_PER_ITEM);
+        assert!(cart.add_fuel(player_pos, &ItemStack::new(&vanilla_items::CHARCOAL)));
+        assert_eq!(cart.fuel(), 2 * FUEL_TICKS_PER_ITEM);
+
+        // Vanilla `addFuel`: `push = position - interactingPos`, horizontal only.
+        assert_eq!(cart.push_force(), DVec3::new(4.0, 0.0, 0.0));
+
+        // Blaze rods and stone are not minecart fuel.
+        assert!(!cart.add_fuel(player_pos, &ItemStack::new(&vanilla_items::BLAZE_ROD)));
+        assert!(!cart.add_fuel(player_pos, &ItemStack::new(&vanilla_items::STONE)));
+        assert_eq!(cart.fuel(), 2 * FUEL_TICKS_PER_ITEM);
+    }
+
+    #[test]
+    fn add_fuel_rejects_the_item_that_would_exceed_the_cap() {
+        init_vanilla_registry();
+        let cart = furnace_cart();
+        for _ in 0..8 {
+            assert!(cart.add_fuel(DVec3::ZERO, &ItemStack::new(&vanilla_items::COAL)));
+        }
+        // Eight items fit; the ninth would pass the vanilla `MAX_FUEL_TICKS` of 32000.
+        assert_eq!(cart.fuel(), 8 * FUEL_TICKS_PER_ITEM);
+        assert!(!cart.add_fuel(DVec3::ZERO, &ItemStack::new(&vanilla_items::COAL)));
+        assert_eq!(cart.fuel(), 8 * FUEL_TICKS_PER_ITEM);
+    }
+
+    #[test]
+    fn tick_burns_one_fuel_tick_and_drops_the_push_when_it_runs_out() {
+        init_vanilla_registry();
+        let cart = Arc::new(furnace_cart());
+        let mut nbt = NbtCompound::new();
+        nbt.insert("Fuel", 2i16);
+        nbt.insert("PushX", 2.0);
+        nbt.insert("PushZ", 1.0);
+        reload(&nbt, |view| cart.load_additional(view));
+
+        // The synced `id_fuel` flag is only refreshed by the tick itself.
+        assert!(!cart.has_fuel());
+        Arc::clone(&cart).tick();
+        assert_eq!(cart.fuel(), 1);
+        assert!(cart.has_fuel());
+        assert_eq!(cart.push_force(), DVec3::new(2.0, 0.0, 1.0));
+
+        Arc::clone(&cart).tick();
+        assert_eq!(cart.fuel(), 0);
+        assert!(!cart.has_fuel());
+        assert_eq!(cart.push_force(), DVec3::ZERO);
     }
 
     #[test]

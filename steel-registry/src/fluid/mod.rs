@@ -153,7 +153,7 @@ impl FluidState {
     /// Unlike [`Self::is_source`], a flowing state never matches — e.g. a falling
     /// full water block is not a source of type `minecraft:water`.
     #[must_use]
-    pub fn is_source_of_type(&self, fluid_type: FluidRef) -> bool {
+    pub const fn is_source_of_type(&self, fluid_type: FluidRef) -> bool {
         self.fluid_id == fluid_type && self.fluid_id.is_source
     }
 
@@ -222,6 +222,7 @@ impl FluidState {
     /// `minecraft:water`, lava `minecraft:lava`, and the empty fluid air. Vanilla
     /// builds this as `getBucketBlock().defaultBlockState().setValue(LEVEL, getLegacyLevel())`;
     /// a fluid whose block has no `LEVEL` property is returned as its default state.
+    #[must_use]
     pub fn create_legacy_block(self) -> BlockStateId {
         let air = || REGISTRY.blocks.get_default_state_id(&vanilla_blocks::AIR);
         if self.fluid_id.is_empty {

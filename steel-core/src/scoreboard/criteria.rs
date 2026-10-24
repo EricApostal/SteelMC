@@ -306,6 +306,7 @@ mod tests {
 
     #[test]
     fn stat_criteria_resolve_through_the_registries() {
+        steel_registry::init_vanilla_registry();
         let criteria =
             ObjectiveCriteria::parse("minecraft.mined:minecraft.stone").expect("stat should parse");
         let (stat_type, stat_value) = criteria.stat_ids().expect("stat ids should resolve");

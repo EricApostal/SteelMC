@@ -41,6 +41,16 @@ pub trait ResultHandler: Send + Sync {
     fn on_result_taken(&self, guard: &mut ContainerLockGuard, player: &Player)
     -> Option<ItemStack>;
 
+    /// Vanilla `ItemStack.onCraftedBy` / `Item.onCraftedPostProcess` for the
+    /// stack leaving this slot.
+    ///
+    /// [`ResultSlot`](super::ResultSlot) calls this on the stack it is about to
+    /// hand to the player, before [`on_result_taken`](Self::on_result_taken).
+    /// Handlers whose result item rewrites itself when crafted (the filled
+    /// map's `map_post_processing` lock/scale) override it; every other menu
+    /// keeps the no-op default.
+    fn on_result_crafted(&self, _stack: &mut ItemStack) {}
+
     /// Whether the stored result still matches the current inputs.
     fn is_result_valid(&self, guard: &ContainerLockGuard, player: &Player) -> bool;
 }
@@ -68,6 +78,10 @@ impl<T: ResultHandler + ?Sized> ResultHandler for Arc<T> {
         player: &Player,
     ) -> Option<ItemStack> {
         (**self).on_result_taken(guard, player)
+    }
+
+    fn on_result_crafted(&self, stack: &mut ItemStack) {
+        (**self).on_result_crafted(stack);
     }
 
     fn is_result_valid(&self, guard: &ContainerLockGuard, player: &Player) -> bool {

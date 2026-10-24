@@ -5,8 +5,9 @@
 //! inventory columns and the mount's entity id, and the client builds the same
 //! `HorseInventoryMenu` (saddle slot, body-armor slot, chest storage, player
 //! inventory) the server installed. These tests pin that contract end to end:
-//! the columns come from the mount's own `hasChest` state, and the packet's
-//! container id really addresses the mount menu.
+//! the columns come from the mount's own `hasChest` state, the packet's
+//! container id really addresses the mount menu, slot clicks move items out of
+//! the mount inventory, and closing the screen unregisters the menu.
 
 use std::{io::Cursor, sync::Arc};
 
@@ -14,14 +15,16 @@ use rustc_hash::FxHashMap;
 use steel_protocol::packet_traits::{CompressionInfo, EncodedPacket};
 use steel_protocol::packets::game::{ClickType, HashedStack, SContainerClick};
 use steel_registry::{
-    init_vanilla_registry, item_stack::ItemStack, packets::play::C_MOUNT_SCREEN_OPEN,
+    init_vanilla_registry,
+    item_stack::ItemStack,
+    packets::play::{C_CONTAINER_CLOSE, C_MOUNT_SCREEN_OPEN},
     vanilla_entities, vanilla_items,
 };
+use steel_utils::ChunkPos;
 use steel_utils::codec::VarInt;
 use steel_utils::locks::SyncMutex;
 use steel_utils::serial::ReadFrom as _;
 use steel_utils::types::InteractionHand;
-use steel_utils::{ChunkPos, Downcast as _};
 use text_components::TextComponent;
 
 use super::{SLOT_INVENTORY_START, get_inventory_size};
@@ -144,11 +147,15 @@ fn mount_screen_open_uses_the_mount_menu_and_vanilla_columns() {
     assert_eq!(donkey.inventory_columns(), 5);
 
     // Crouch (shift) + empty-hand interact: vanilla `AbstractHorse.mobInteract`
-    // opens `HasCustomInventoryScreen` instead of riding.
+    // opens `HasCustomInventoryScreen` instead of riding. Steel reads the
+    // shift state from the synced shift-key flag (`Player::is_secondary_use_active`
+    // -> `is_crouching` -> `isShiftKeyDown`), which is what a sneaking client
+    // actually sets; the pose alone does not make the player crouch.
     player
         .inventory
         .lock()
         .set_item_in_hand(InteractionHand::MainHand, ItemStack::empty());
+    player.set_crouching(true);
     player.set_pose(EntityPose::Sneaking);
     assert!(
         matches!(
@@ -186,5 +193,50 @@ fn mount_screen_open_uses_the_mount_menu_and_vanilla_columns() {
     assert!(
         donkey.carried_items().lock().get_item(0).is_empty(),
         "the chest slot click should move the stone out of the mount inventory"
+    );
+
+    // Closing unregisters the menu: the server echoes the close, the donkey
+    // keeps only what the menu showed, and clicks on the stale container id
+    // can no longer move items.
+    donkey
+        .carried_items()
+        .lock()
+        .set_item(1, ItemStack::new(&vanilla_items::STONE));
+    player.close_container();
+    let closes: Vec<i32> = recording
+        .packets
+        .lock()
+        .iter()
+        .filter_map(|packet| {
+            let mut cursor = Cursor::new(packet.encoded_data.as_slice());
+            let _length = VarInt::read(&mut cursor).ok()?;
+            let packet_id = VarInt::read(&mut cursor).ok()?.0;
+            (packet_id == C_CONTAINER_CLOSE)
+                .then(|| VarInt::read(&mut cursor).ok())
+                .flatten()
+                .map(|id| id.0)
+        })
+        .collect();
+    assert_eq!(
+        closes,
+        [container_id],
+        "the close should echo the screen id"
+    );
+    assert!(
+        !player.has_container_open(),
+        "the mount menu should be unregistered after close"
+    );
+    player.handle_container_click(SContainerClick {
+        container_id,
+        state_id: 0,
+        slot_num: SLOT_INVENTORY_START as i16 + 1,
+        button_num: 0,
+        click_type: ClickType::Pickup,
+        changed_slots: FxHashMap::default(),
+        carried_item: HashedStack::Empty,
+    });
+    assert!(
+        !donkey.carried_items().lock().get_item(1).is_empty(),
+        "a click on the unregistered container id must not touch the mount inventory"
     );
 }

@@ -1053,12 +1053,12 @@ mod tests {
     use steel_utils::{BlockPos, ChunkPos};
 
     use super::*;
-    use crate::behavior::init_behaviors;
     use crate::chunk::chunk_holder::TickingReadiness;
     use crate::chunk::chunk_ticket_manager::ChunkTicketLevel;
     use crate::player::ResetReason;
     use crate::test_support::{
         TestPlayerBuilder, fresh_test_world_with_dimension_type, insert_ready_full_chunk,
+        insert_unready_full_chunk,
     };
 
     /// `nether_wastes` monster spawn list, in the registry entity-type order the
@@ -1071,9 +1071,12 @@ mod tests {
         "zombified_piglin",
     ];
 
-    /// Netherrack floor height: the tests keep air above it so `ON_GROUND`
-    /// placement has a valid surface with two empty blocks above.
-    const FLOOR_Y: i32 = 3;
+    /// Netherrack floor height. Vanilla's `BiomeManager` fuzzes the biome lookup by up to
+    /// two blocks below the sampled position, so the floor has to sit well above the
+    /// dimension's minimum Y — at `y = 3` the fuzzed quart cell falls below the world and
+    /// reads a default biome. The tests keep air above it so `ON_GROUND` placement has a
+    /// valid surface with two empty blocks above.
+    const FLOOR_Y: i32 = 32;
 
     /// Entity-ticking spawn grid. Vanilla's global monster cap is
     /// `maxInstancesPerChunk * spawnableChunkCount / 289`, so a single chunk caps
@@ -1082,13 +1085,8 @@ mod tests {
     const GRID_X: i32 = 6;
     const GRID_Z: i32 = 5;
 
-    /// Inserts one entity-ticking chunk whose whole column carries the
-    /// `nether_wastes` biome and a netherrack floor.
-    fn prepare_nether_chunk(world: &Arc<World>, pos: ChunkPos) {
-        let holder = insert_ready_full_chunk(world, pos);
-        holder.set_simulation_level(Some(ChunkTicketLevel::ENTITY_TICKING_CHUNK));
-        holder.transition_ticking_readiness(TickingReadiness::EntityTicking);
-
+    /// Writes the `nether_wastes` biome into every section of `pos`.
+    fn write_nether_biome(world: &Arc<World>, pos: ChunkPos) {
         let biome_id = vanilla_biomes::NETHER_WASTES.id() as u16;
         world
             .chunk_map
@@ -1105,6 +1103,16 @@ mod tests {
                 }
             })
             .expect("prepared chunk should be loaded");
+    }
+
+    /// Inserts one entity-ticking chunk whose whole column carries the
+    /// `nether_wastes` biome and a netherrack floor.
+    fn prepare_nether_chunk(world: &Arc<World>, pos: ChunkPos) {
+        let holder = insert_ready_full_chunk(world, pos);
+        holder.set_simulation_level(Some(ChunkTicketLevel::ENTITY_TICKING_CHUNK));
+        holder.transition_ticking_readiness(TickingReadiness::EntityTicking);
+
+        write_nether_biome(world, pos);
 
         let netherrack = vanilla_blocks::NETHERRACK.default_state();
         for local_x in 0..16 {
@@ -1119,9 +1127,18 @@ mod tests {
         }
     }
 
+    /// `nether_wastes` biome only, not entity ticking: vanilla's `BiomeManager` fuzzes the
+    /// biome lookup by up to two quart cells, so the ring around the spawn grid has to
+    /// carry the nether biome as well — otherwise a fuzzed lookup near the grid edge reads
+    /// the neighbouring chunk's generated `plains` biome and spawns overworld monsters.
+    fn prepare_nether_biome_ring(world: &Arc<World>, pos: ChunkPos) {
+        insert_unready_full_chunk(world, pos);
+        write_nether_biome(world, pos);
+    }
+
     #[test]
     fn nether_wastes_resolves_vanilla_monster_spawn_list() {
-        init_behaviors();
+        crate::bootstrap::init_globals();
         let fixture = fresh_test_world_with_dimension_type(
             "nether_biome_spawn_list",
             "nether_biome_spawn_list",
@@ -1166,7 +1183,7 @@ mod tests {
 
     #[test]
     fn nether_world_spawns_monsters_around_a_player() {
-        init_behaviors();
+        crate::bootstrap::init_globals();
         let fixture = fresh_test_world_with_dimension_type(
             "nether_natural_spawn",
             "nether_natural_spawn",
@@ -1174,12 +1191,17 @@ mod tests {
         );
         let world = &fixture.world;
 
-        for chunk_x in 0..GRID_X {
-            for chunk_z in 0..GRID_Z {
-                prepare_nether_chunk(world, ChunkPos::new(chunk_x, chunk_z));
+        for chunk_x in -1..=GRID_X {
+            for chunk_z in -1..=GRID_Z {
+                let pos = ChunkPos::new(chunk_x, chunk_z);
+                if (0..GRID_X).contains(&chunk_x) && (0..GRID_Z).contains(&chunk_z) {
+                    prepare_nether_chunk(world, pos);
+                } else {
+                    prepare_nether_biome_ring(world, pos);
+                }
             }
         }
-        let player = TestPlayerBuilder::new(Arc::clone(world), "NetherSpawnTester", 4242).build();
+        let player = TestPlayerBuilder::new(Arc::clone(world), "NetherSpawner", 4242).build();
         player.snap_to(DVec3::new(48.5, f64::from(FLOOR_Y + 1), 40.5), 0.0, 0.0);
         assert!(world.add_player(Arc::clone(&player), ResetReason::InitialJoin));
 

@@ -65,6 +65,7 @@ use std::ptr;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
+use steel_protocol::packets::common::CPostEffects;
 use steel_protocol::packets::game::{
     CEntityEvent, CPlayerCombatEnd, CPlayerCombatEnter, CPlayerCombatKill, CPlayerLookAt, CRespawn,
     CSetDefaultSpawnPosition, CSetHealth, CSetHeldSlot, CSetPassengers, ClientCommandAction,
@@ -265,6 +266,10 @@ pub struct Player {
     /// Live locator-bar waypoint connections this player receives, keyed by transmitter UUID
     /// (vanilla `ServerWaypointManager.connections` row for this player).
     pub(crate) waypoint_tracks: SyncMutex<waypoint::WaypointTracks>,
+
+    /// Vanilla `ServerPlayer.postEffects`: ordered client post-processing effect
+    /// identifiers applied by `/posteffect add|remove|clear`.
+    post_effects: SyncMutex<Vec<Identifier>>,
 
     /// Player abilities (flight, invulnerability, build permissions, speeds, etc.)
     pub abilities: SyncMutex<Abilities>,
@@ -674,6 +679,7 @@ impl Player {
             shoulder_entity_right: SyncMutex::new(NbtCompound::new()),
             time_entity_sat_on_shoulder: SyncMutex::new(0),
             waypoint_tracks: SyncMutex::new(waypoint::new_tracks()),
+            post_effects: SyncMutex::new(Vec::new()),
             abilities: SyncMutex::new(Abilities::default()),
             block_breaking: SyncMutex::new(BlockBreakingManager::new()),
             living_base,
@@ -721,6 +727,56 @@ impl Player {
         {
             *fishing = None;
         }
+    }
+
+    /// Vanilla `ServerPlayer.getPostEffects`.
+    #[must_use]
+    pub fn post_effects(&self) -> Vec<Identifier> {
+        self.post_effects.lock().clone()
+    }
+
+    /// Vanilla `ServerPlayer.addPostEffect`: appends `effect` unless present.
+    ///
+    /// Returns whether the list changed, so `/posteffect add` can fail without
+    /// feedback like vanilla's `CommandResponseTracker` empty case.
+    pub fn add_post_effect(&self, effect: &Identifier) -> bool {
+        let mut post_effects = self.post_effects.lock();
+        if post_effects.iter().any(|active| active == effect) {
+            return false;
+        }
+        post_effects.push(effect.clone());
+        drop(post_effects);
+        self.send_post_effects();
+        true
+    }
+
+    /// Vanilla `ServerPlayer.removePostEffect`. Returns whether anything changed.
+    pub fn remove_post_effect(&self, effect: &Identifier) -> bool {
+        let mut post_effects = self.post_effects.lock();
+        let Some(index) = post_effects.iter().position(|active| active == effect) else {
+            return false;
+        };
+        post_effects.remove(index);
+        drop(post_effects);
+        self.send_post_effects();
+        true
+    }
+
+    /// Vanilla `ServerPlayer.clearPostEffects`. Returns whether anything changed.
+    pub fn clear_post_effects(&self) -> bool {
+        let mut post_effects = self.post_effects.lock();
+        if post_effects.is_empty() {
+            return false;
+        }
+        post_effects.clear();
+        drop(post_effects);
+        self.send_post_effects();
+        true
+    }
+
+    /// Vanilla `ServerPlayer.sendPostEffects`.
+    pub(crate) fn send_post_effects(&self) {
+        self.send_packet(CPostEffects::new(self.post_effects()));
     }
 
     fn send_experience_packet_if_dirty(&self) {
@@ -1185,6 +1241,14 @@ impl Player {
         self.server
             .upgrade()
             .expect("player must not outlive server")
+    }
+
+    /// Returns the server this player belongs to, or `None` when it has outlived it.
+    ///
+    /// Vanilla has no detached players, but Steel's unit tests build one; code paths that
+    /// only *notify* the server (advancement announcements) must tolerate its absence.
+    pub(crate) fn server_if_present(&self) -> Option<Arc<Server>> {
+        self.server.upgrade()
     }
 
     /// Returns the identity of the player's current continuous domain stay.
@@ -1931,9 +1995,18 @@ impl Entity for Player {
         true
     }
 
-    fn award_kill_score(&self, victim: &dyn Entity, _killing_blow: &DamageSource) {
+    fn award_kill_score(&self, victim: &dyn Entity, killing_blow: &DamageSource) {
         if self.id() != victim.id() {
-            // TODO: Trigger advancement criteria.
+            // Vanilla `ServerPlayer.awardKillScore` first calls `super`, i.e. the
+            // `Entity.awardKillScore` default that raises `ENTITY_KILLED_PLAYER`
+            // for a killed player.
+            if let Some(victim_player) = victim.as_player() {
+                crate::player::advancement::triggers::raise_entity_killed_player(
+                    victim_player,
+                    self.as_entity_event_source(),
+                    killing_blow,
+                );
+            }
             // TODO: Increment the score of some objectives of this player.
             self.award_custom_stat(if victim.as_player().is_some() {
                 &vanilla_custom_stats::PLAYER_KILLS
@@ -1941,6 +2014,13 @@ impl Entity for Player {
                 &vanilla_custom_stats::MOB_KILLS
             });
             // TODO: Handle team kill
+            // Vanilla `ServerPlayer.awardKillScore` raises `PLAYER_KILLED_ENTITY`
+            // with the killed entity and the killing blow, after the kill stats.
+            crate::player::advancement::triggers::raise_player_killed_entity(
+                self,
+                victim,
+                killing_blow,
+            );
         }
     }
 }
@@ -1961,6 +2041,18 @@ impl LivingEntity for Player {
         self.advance_tick();
         // Vanilla `ServerPlayer.tick` runs the warden spawn tracker before `super.tick()`.
         self.warden_spawn_tracker.lock().tick();
+        // Vanilla `ServerPlayer.tick` raises `TICK` unconditionally right after the
+        // warden spawn tracker and camera handling.
+        {
+            let world = self.get_world();
+            let origin = self.block_position();
+            let level = crate::player::advancement::triggers::WorldLevelView::new(&world, origin);
+            crate::player::advancement::triggers::raise_tick(self, &level, origin);
+            // Vanilla `ServerPlayer.doTick` raises `LOCATION` every 20 ticks.
+            if Entity::tick_count(self) % 20 == 0 {
+                crate::player::advancement::triggers::raise_location(self, &world, origin);
+            }
+        }
         self.tick_item_cooldowns();
         self.tick_attack_strength();
         self.tick_throttlers();

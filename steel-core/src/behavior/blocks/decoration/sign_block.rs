@@ -247,6 +247,8 @@ fn try_apply_sign_item(
     if let Some(nbt) = sign.get_update_tag() {
         world.broadcast_block_entity_update(pos, sign.get_type(), nbt);
     }
+    // Vanilla runs the side's click commands after a successful application.
+    let _ = sign.execute_click_commands_if_present(world, player, slot);
     player.award_stat(&vanilla_stat_types::ITEM_USED, stack.item());
     world.game_event(
         &vanilla_game_events::BLOCK_CHANGE,
@@ -284,6 +286,11 @@ fn try_open_sign_editor(
         return InteractionResult::Pass;
     };
 
+    // Vanilla determines the faced side first and runs its click commands
+    // before any editor consideration.
+    let slot = facing_text_slot(state, pos, player);
+    let executed = sign.execute_click_commands_if_present(world, player, slot);
+
     // Check 1: Is the sign waxed? Vanilla plays the interaction-fail sound and
     // still returns success (nothing else can happen).
     if sign.is_waxed() {
@@ -299,6 +306,11 @@ fn try_open_sign_editor(
         return InteractionResult::Success;
     }
 
+    // Vanilla returns before opening the editor when a click command ran.
+    if executed {
+        return InteractionResult::Success;
+    }
+
     // Check 2: Is another player editing?
     if sign.is_other_player_editing(player.gameprofile.id()) {
         return InteractionResult::Pass;
@@ -311,7 +323,6 @@ fn try_open_sign_editor(
     }
 
     // Determine which side the player is facing
-    let slot = facing_text_slot(state, pos, player);
     if !sign.get_text(slot).has_editable_text() {
         return InteractionResult::Pass;
     }

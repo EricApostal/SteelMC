@@ -3,7 +3,7 @@ use std::sync::Arc;
 use glam::DVec3;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::vanilla_attributes;
-use steel_utils::{BlockPos, ChunkPos};
+use steel_utils::{BlockPos, ChunkPos, axis::Axis};
 
 use super::{Mob, TARGET_REACH_DISTANCE_SQR};
 use crate::entity::ai::brain::memory::module_type as mem;
@@ -13,8 +13,8 @@ use crate::entity::ai::navigation::{
 };
 use crate::entity::ai::path::Path;
 use crate::entity::ai::walk::{
-    AmphibiousNodeEvaluator, MobNodeEvaluator, MobPathSettings, SwimNodeEvaluator,
-    WalkNodeEvaluator,
+    AmphibiousNodeEvaluator, FlightContext, FlyNodeEvaluator, MobNodeEvaluator, MobPathSettings,
+    SwimNodeEvaluator, WalkNodeEvaluator,
 };
 use crate::entity::{Entity, LivingEntity, SharedEntity};
 use crate::physics::WorldCollisionProvider;
@@ -385,6 +385,27 @@ pub trait PathfinderMob: Mob {
                 }
                 MobNodeEvaluator::Amphibious(amphibious)
             }
+            // Vanilla `FlyingPathNavigation.createPathFinder` selects
+            // `FlyNodeEvaluator`, whose `getStart` reads the mob position, its
+            // bounding box and `isInWater`.
+            NavigationKind::Fly => {
+                let bounding_box = settings.bounding_box();
+                let flight = FlightContext {
+                    position: settings.mob_position_vec(),
+                    bounding_box: [
+                        bounding_box.min(Axis::X),
+                        bounding_box.min(Axis::Y),
+                        bounding_box.min(Axis::Z),
+                        bounding_box.max(Axis::X),
+                        bounding_box.max(Axis::Y),
+                        bounding_box.max(Axis::Z),
+                    ],
+                    in_water: settings.in_water(),
+                };
+                let mut fly = FlyNodeEvaluator::new(settings);
+                fly.prepare(flight);
+                MobNodeEvaluator::Fly(fly)
+            }
         };
 
         navigation.create_path(
@@ -415,10 +436,20 @@ fn path_target_for_mob<M: PathfinderMob + ?Sized>(
     level: &dyn LevelReader,
     target: BlockPos,
 ) -> BlockPos {
-    if mob.can_path_to_targets_below_surface() {
-        target
-    } else {
+    // Vanilla `GroundPathNavigation.createPath(BlockPos, int)` is the only subclass
+    // override that rewrites the requested target to the surface; the flying,
+    // water-bound and amphibious navigations path to the requested position as-is.
+    let snaps_to_surface = {
+        let navigation = mob.mob_base().navigation().lock();
+        matches!(
+            navigation.kind(),
+            NavigationKind::Ground | NavigationKind::WallClimber
+        ) && !navigation.can_path_to_targets_below_surface()
+    };
+    if snaps_to_surface {
         find_ground_path_target_surface(level, target)
+    } else {
+        target
     }
 }
 

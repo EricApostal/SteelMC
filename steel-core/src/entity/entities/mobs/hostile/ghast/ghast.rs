@@ -1,7 +1,8 @@
 //! Vanilla `Ghast` (`net.minecraft.world.entity.monster.Ghast`).
 //!
-//! Vanilla ghasts fly with `FlyingPathNavigation` and `Ghast.GhastMoveControl`; Steel has no
-//! flying navigation, so [`GhastMoveControl`] is reproduced here as the entity's own
+//! Vanilla ghasts keep the default ground navigation (`Mob.createNavigation`,
+//! inert while airborne) and steer with `Ghast.GhastMoveControl`; Steel has no
+//! flying-navigation goals, so [`GhastMoveControl`] is reproduced here as the entity's own
 //! acceleration step (documented deviation: pathfinding is straight-line flight).
 
 use std::sync::{Arc, Weak};

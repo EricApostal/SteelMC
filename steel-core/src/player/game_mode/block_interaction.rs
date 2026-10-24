@@ -317,15 +317,12 @@ impl Player {
             return;
         }
 
-        let mut text = sign.get_text(packet.slot);
-        for (i, line) in packet.lines.iter().enumerate() {
-            if i < 4 {
-                let stripped = strip_formatting_codes(line);
-                text.set_message(i, TextComponent::plain(stripped));
-            }
-        }
-
-        sign.set_text(text, packet.slot);
+        let stripped = packet
+            .lines
+            .iter()
+            .map(|line| strip_formatting_codes(line))
+            .collect::<Vec<_>>();
+        sign.set_lines_preserving_style(packet.slot, &stripped);
         sign.set_player_who_may_edit(None);
         sign.set_changed();
 

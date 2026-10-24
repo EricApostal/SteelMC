@@ -11,11 +11,14 @@
 //! `/reload` covers the datapack data this layer loads at runtime: pack discovery
 //! and selection, `mcfunction` bodies, and function tags (`data/<ns>/tags/function`).
 //! Vanilla's other data-pack registries are deliberately not reloadable here:
-//! block/item/… registry tags, recipes, loot tables, advancements and
-//! structure/feature JSON are compiled into typed Rust by the build scripts, per
-//! `AGENTS.md` ("Do not design for runtime datapack JSON loading"), so `/reload`
-//! has nothing to re-read for them and never resends the registry tag or recipe
-//! packets vanilla broadcasts from `PlayerList.reloadResources`.
+//! block, item, worldgen and the other registry tags, plus recipes, loot tables,
+//! advancements and structure/feature JSON, are compiled into typed Rust by the
+//! build scripts, per `AGENTS.md` ("Do not design for runtime datapack JSON
+//! loading"), so `/reload` has nothing to re-read for them. It still re-broadcasts
+//! the client packets vanilla's `PlayerList.reloadResources` sends — the registry
+//! tags and the synchronized recipes, rebuilt for the play phase because the
+//! registries are static — and re-projects each player's command tree, see
+//! [`resend_clients`].
 
 use std::{
     path::{Path, PathBuf},
@@ -47,6 +50,7 @@ pub(crate) use resource::{MultiPackResourceManager, ReloadableResourceManager};
 pub(crate) use schedule::{ScheduleMode, ScheduleRegistry, ScheduledCallback};
 
 use crate::command::{execution::CommandSource, sender::CommandSender};
+use crate::player::Player;
 use crate::server::Server;
 
 use pack::PackType;
@@ -62,6 +66,8 @@ const LOAD_FUNCTION_TAG: Identifier = Identifier::vanilla_static("load");
 pub(crate) struct ReloadSummary {
     /// Number of enabled packs the reload read.
     pub(crate) packs_loaded: usize,
+    /// Ids of the enabled packs, in load order.
+    pub(crate) pack_ids: Vec<String>,
     /// Ids of packs this reload selected for the first time.
     pub(crate) new_packs: Vec<String>,
     /// Number of functions installed.
@@ -196,13 +202,14 @@ impl DatapackManager {
     /// Rebuilds the resource overlay and re-runs every listener.
     fn reload_listeners(&self, new_packs: Vec<String>) -> Result<ReloadSummary, PackError> {
         let started = Instant::now();
-        let (resources, packs_loaded) = {
+        let (resources, packs_loaded, pack_ids) = {
             let repository = self.repository.read();
             (
                 Arc::new(MultiPackResourceManager::from_packs(
                     &repository.selected_packs(),
                 )),
                 repository.enabled_ids().len(),
+                repository.enabled_ids(),
             )
         };
 
@@ -215,6 +222,7 @@ impl DatapackManager {
         let functions = self.functions.read();
         Ok(ReloadSummary {
             packs_loaded,
+            pack_ids,
             new_packs,
             functions_loaded: functions.len(),
             tags_loaded: functions.tag_ids().len(),
@@ -281,6 +289,63 @@ pub(crate) fn datapacks() -> &'static DatapackManager {
 #[must_use]
 pub(crate) fn try_datapacks() -> Option<&'static DatapackManager> {
     DATAPACKS.get()
+}
+
+/// Pushes the freshly reloaded data-pack state to every online client.
+///
+/// Vanilla's `PlayerList.reloadResources` broadcasts the registry tags
+/// (`ClientboundUpdateTagsPacket`) and the synchronized recipes
+/// (`ClientboundUpdateRecipesPacket`) to every player. Steel's registries are
+/// compiled in, so the payloads are the same as on a join: the recipes reuse the
+/// packet [`crate::player::recipe_book::update_recipes_packet`] built once at
+/// startup, and the tags are rebuilt for the play phase, because
+/// [`crate::server::registry_cache::RegistryCache`] caches the configuration-phase
+/// encoding whose packet id differs.
+///
+/// Steel additionally re-projects each player's command tree. Datapacks cannot add
+/// commands, so vanilla has nothing to resend here, but Steel's `/function`
+/// argument suggestions are served from the function registry this reload just
+/// replaced, and re-projecting keeps the client's graph consistent with the live
+/// dispatcher.
+pub(crate) fn resend_clients(server: &Arc<Server>) {
+    let recipes = crate::player::recipe_book::update_recipes_packet().cloned();
+    for player in server.get_players() {
+        // `CUpdateTags` is not `Clone`; rebuilding it per player is cheap enough for
+        // the rare reload and keeps the packet crate untouched.
+        player.send_packet(
+            crate::server::registry_cache::RegistryCache::build_tags_packet(
+                &steel_registry::REGISTRY,
+            ),
+        );
+        if let Some(recipes) = &recipes {
+            player.send_packet(recipes.clone());
+        }
+        resend_command_tree(server, &player);
+    }
+}
+
+/// Sends `player`'s freshly projected command tree.
+///
+/// Mirrors the tree half of [`Server::resend_player_permission_context`] without
+/// the permission-level entity event, which vanilla only sends on a join or an op
+/// change, not on a resource reload.
+fn resend_command_tree(server: &Arc<Server>, player: &Arc<Player>) {
+    let source = CommandSource::new(
+        CommandSender::Player(Arc::clone(player)),
+        Arc::clone(server),
+    );
+    let packet = {
+        let dispatcher = server.command_dispatcher();
+        crate::command::command_tree_packet(&dispatcher, &source)
+    };
+    match packet {
+        Ok(packet) => player.send_packet(packet),
+        Err(error) => tracing::error!(
+            player = %player.gameprofile.name(),
+            %error,
+            "failed to re-project the command tree after a datapack reload"
+        ),
+    }
 }
 
 /// Vanilla `ServerFunctionManager.tick`: `#load` (only on the tick after a reload)
@@ -458,12 +523,7 @@ mod tests {
         let manager = DatapackManager::new(&world).unwrap();
         // The freshly discovered world pack is enabled at construction, like vanilla
         // `MinecraftServer.configurePackRepository`, so it is already loaded.
-        assert!(
-            manager
-                .repository()
-                .read()
-                .is_enabled("file/reload_test")
-        );
+        assert!(manager.repository().read().is_enabled("file/reload_test"));
 
         let entry: Identifier = "reload_test:entry".parse().unwrap();
         let tag: Identifier = "reload_test:tick".parse().unwrap();
@@ -491,6 +551,59 @@ mod tests {
         std::fs::remove_file(function_dir.join("entry.mcfunction")).unwrap();
         manager.reload().unwrap();
         assert!(manager.functions().read().get(&entry).is_none());
+
+        std::fs::remove_dir_all(&world).ok();
+    }
+
+    #[test]
+    fn toggling_a_function_pack_changes_resolved_functions() {
+        use steel_utils::Identifier;
+
+        use super::PackInsert;
+
+        // A world pack that ships one function: `/function toggle_test:entry` resolves
+        // against the manager's function registry, which is exactly what
+        // `FunctionCommand`'s `resolve_functions` consults.
+        let world = super::repository::temp_dir("toggle-functions");
+        let pack = world.join("datapacks").join("toggle_test");
+        let function_dir = pack.join("data/toggle_test/function");
+        std::fs::create_dir_all(&function_dir).unwrap();
+        std::fs::write(
+            pack.join("pack.mcmeta"),
+            format!(
+                "{{\"pack\":{{\"min_format\":{format},\"max_format\":{format}}}}}",
+                format = super::pack::DATA_PACK_FORMAT
+            ),
+        )
+        .unwrap();
+        std::fs::write(function_dir.join("entry.mcfunction"), "say hi\n").unwrap();
+
+        let manager = DatapackManager::new(&world).unwrap();
+        manager.reload().unwrap();
+
+        let entry: Identifier = "toggle_test:entry".parse().unwrap();
+        assert!(manager.functions().read().get(&entry).is_some());
+
+        // `/datapack disable file/toggle_test` persists the choice, then the command
+        // re-runs the reload; the function is gone and `/function` no longer resolves.
+        manager
+            .repository()
+            .write()
+            .set_selected("file/toggle_test", false, PackInsert::Last)
+            .unwrap();
+        manager.save_selection().unwrap();
+        manager.reload().unwrap();
+        assert!(manager.functions().read().get(&entry).is_none());
+
+        // `/datapack enable file/toggle_test` restores it on the next reload.
+        manager
+            .repository()
+            .write()
+            .set_selected("file/toggle_test", true, PackInsert::Last)
+            .unwrap();
+        manager.save_selection().unwrap();
+        manager.reload().unwrap();
+        assert!(manager.functions().read().get(&entry).is_some());
 
         std::fs::remove_dir_all(&world).ok();
     }

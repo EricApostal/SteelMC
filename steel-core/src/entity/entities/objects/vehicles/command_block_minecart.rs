@@ -32,27 +32,42 @@ use steel_registry::{vanilla_blocks, vanilla_items};
 use steel_utils::axis::Axis;
 use steel_utils::block_util::FoundRectangle;
 use steel_utils::locks::SyncMutex;
+use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 use text_components::TextComponent;
 
+use crate::behavior::InteractionResult;
 use crate::entity::damage::DamageSource;
 use crate::entity::{Entity, EntityBase, EntityBaseLoad, EntitySyncedData};
+use crate::player::Player;
 use crate::world::World;
 
 use super::minecart_base::{self, Minecart, MinecartState};
 
 /// Vanilla `MinecartCommandBlock.ACTIVATION_DELAY`.
 const ACTIVATION_DELAY: i32 = 4;
+/// Vanilla `BaseCommandBlock.NO_LAST_EXECUTION`.
+const NO_LAST_EXECUTION: i64 = -1;
+/// Vanilla `BaseCommandBlock` easter egg command (`Searge`).
+const SEARGE_COMMAND: &str = "Searge";
+/// Vanilla `BaseCommandBlock` easter egg output.
+const SEARGE_OUTPUT: &str = "#itzlipofutzli";
 
 /// The `BaseCommandBlock` state a command minecart carries.
 #[derive(Debug, Clone, PartialEq)]
 struct CommandState {
     /// Vanilla `BaseCommandBlock.command`.
     command: String,
+    /// Vanilla `BaseCommandBlock.successCount`.
+    success_count: i32,
     /// Vanilla `BaseCommandBlock.lastOutput`, absent until a command runs.
     last_output: Option<TextComponent>,
     /// Vanilla `BaseCommandBlock.trackOutput`, `true` until the editor clears it.
     track_output: bool,
+    /// Vanilla `BaseCommandBlock.updateLastExecution`.
+    update_last_execution: bool,
+    /// Vanilla `BaseCommandBlock.lastExecution`, `-1` (`NO_LAST_EXECUTION`) when unset.
+    last_execution: i64,
     /// Vanilla `MinecartCommandBlock.lastActivated`, the last activation tick.
     last_activated: i32,
 }
@@ -61,8 +76,11 @@ impl CommandState {
     const fn new() -> Self {
         Self {
             command: String::new(),
+            success_count: 0,
             last_output: None,
             track_output: true,
+            update_last_execution: true,
+            last_execution: NO_LAST_EXECUTION,
             last_activated: 0,
         }
     }
@@ -116,9 +134,27 @@ impl CommandBlockMinecartEntity {
 
     /// Sets the command and mirrors it into synced data, vanilla `setCommand` +
     /// `MinecartCommandBase.onUpdated`.
+    ///
+    /// Vanilla `BaseCommandBlock.setCommand` also clears the success count.
     pub fn set_command(&self, command: String) {
-        self.command.lock().command.clone_from(&command);
+        {
+            let mut state = self.command.lock();
+            state.command.clone_from(&command);
+            state.success_count = 0;
+        }
         self.entity_data.lock().id_command_name.set(command);
+    }
+
+    /// The last command's success count, vanilla `BaseCommandBlock.getSuccessCount`.
+    #[must_use]
+    pub fn success_count(&self) -> i32 {
+        self.command.lock().success_count
+    }
+
+    /// The last command execution's game time, vanilla `BaseCommandBlock.lastExecution`.
+    #[must_use]
+    pub fn last_execution(&self) -> i64 {
+        self.command.lock().last_execution
     }
 
     /// The last command output, vanilla `getCommandBlock().getLastOutput()`.
@@ -161,29 +197,49 @@ impl CommandBlockMinecartEntity {
             return;
         }
 
-        self.perform_command(world);
+        let _ = self.perform_command(world);
         self.command.lock().last_activated = tick_count;
     }
 
     /// Vanilla `BaseCommandBlock.performCommand`.
     ///
-    /// The command string, its four-tick activation gate and the
-    /// `command_blocks_work` rule check are stored exactly as vanilla; only the
-    /// dispatch into the command dispatcher is unavailable (see the module
-    /// docs). `LastOutput` therefore stays at its previous value until the
-    /// dispatch API lands.
-    fn perform_command(&self, world: &World) {
-        let command = self.command();
-        // Vanilla `BaseCommandBlock.performCommand`: a disabled command block
-        // resets its success count and never runs the command.
-        if !world.is_command_block_enabled() || command.trim().is_empty() {
-            return;
+    /// The command string, the same-game-tick guard, the `Searge` easter egg and the
+    /// execution bookkeeping are mirrored exactly; only the dispatch into the command
+    /// dispatcher is unavailable (see the module docs), so `SuccessCount` stays at its
+    /// reset value and `LastOutput` keeps its previous value until that API lands.
+    fn perform_command(&self, world: &World) -> bool {
+        let game_time = world.game_time();
+        if game_time == self.command.lock().last_execution {
+            return false;
         }
 
-        // MISSING API: `Commands.performPrefixedCommand(source, command)`.
-        // `steel-core/src/command/builtins/mod.rs:96` builds the dispatcher, but no
-        // entity-facing execute-string entry point exists yet.
-        let _ = command;
+        let command = self.command();
+        if command.eq_ignore_ascii_case(SEARGE_COMMAND) {
+            // Vanilla assigns `lastOutput` directly here: `onUpdated` (and therefore the
+            // synced `id_last_output` slot) is deliberately not refreshed.
+            let mut state = self.command.lock();
+            state.last_output = Some(TextComponent::plain(SEARGE_OUTPUT));
+            state.success_count = 1;
+            return true;
+        }
+
+        self.command.lock().success_count = 0;
+        // Vanilla `BaseCommandBlock.performCommand`: a disabled command block never runs the
+        // command, and `StringUtil.isNullOrEmpty` only rejects the empty string.
+        if world.is_command_block_enabled() && !command.is_empty() {
+            // MISSING API: `Commands.performPrefixedCommand(source, command)`.
+            // `steel-core/src/command/builtins/mod.rs:96` builds the dispatcher, but no
+            // entity-facing execute-string entry point exists yet.
+            let _ = command;
+        }
+
+        let update_last_execution = self.command.lock().update_last_execution;
+        self.command.lock().last_execution = if update_last_execution {
+            game_time
+        } else {
+            NO_LAST_EXECUTION
+        };
+        true
     }
 }
 
@@ -231,6 +287,27 @@ impl Entity for CommandBlockMinecartEntity {
         Arc::clone(&self).minecart_tick();
     }
 
+    fn interact(
+        &self,
+        player: &Player,
+        _hand: InteractionHand,
+        _location: DVec3,
+    ) -> InteractionResult {
+        // Vanilla `MinecartCommandBlock.interact`: `super.interact` is `Entity.interact`,
+        // which is `PASS` for a cart. Vanilla then opens the editor from the client's own
+        // `interact` (`player.level().isClientSide()`), so the server only reports success.
+        if !player.can_use_game_master_blocks() {
+            return InteractionResult::Pass;
+        }
+
+        InteractionResult::Success
+    }
+
+    fn push_entity(&self, entity: &dyn Entity) {
+        // Vanilla `AbstractMinecart.push`.
+        self.minecart_push(entity);
+    }
+
     fn is_pickable(&self) -> bool {
         !self.is_removed()
     }
@@ -270,26 +347,49 @@ impl Entity for CommandBlockMinecartEntity {
     fn save_additional(&self, nbt: &mut NbtCompound) {
         self.save_minecart_data(nbt);
         let state = self.command.lock();
+        // Vanilla `BaseCommandBlock.save`. `CustomName` is skipped: vanilla writes the command
+        // block's own name under the entity's `CustomName` key, which Steel keeps on the entity.
         nbt.insert("Command", state.command.clone());
+        nbt.insert("SuccessCount", state.success_count);
         nbt.insert("TrackOutput", i8::from(state.track_output));
-        if let Some(last_output) = &state.last_output {
+        if state.track_output
+            && let Some(last_output) = &state.last_output
+        {
             nbt.insert("LastOutput", last_output.to_codec_nbt());
+        }
+        nbt.insert("UpdateLastExecution", i8::from(state.update_last_execution));
+        if state.update_last_execution && state.last_execution != NO_LAST_EXECUTION {
+            nbt.insert("LastExecution", state.last_execution);
         }
     }
 
     fn load_additional(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
         self.load_minecart_data(nbt);
         let command = nbt.string("Command").map_or_default(ToString::to_string);
-        let last_output = nbt
-            .get("LastOutput")
-            .and_then(|tag| TextComponent::from_nbt(&tag.to_owned()));
+        let success_count = nbt.int("SuccessCount").unwrap_or(0);
         let track_output = nbt.byte("TrackOutput").unwrap_or(1) != 0;
+        // Vanilla only reads the output back while output tracking is enabled.
+        let last_output = if track_output {
+            nbt.get("LastOutput")
+                .and_then(|tag| TextComponent::from_nbt(&tag.to_owned()))
+        } else {
+            None
+        };
+        let update_last_execution = nbt.byte("UpdateLastExecution").unwrap_or(1) != 0;
+        let last_execution = if update_last_execution {
+            nbt.long("LastExecution").unwrap_or(NO_LAST_EXECUTION)
+        } else {
+            NO_LAST_EXECUTION
+        };
 
         {
             let mut state = self.command.lock();
             state.command.clone_from(&command);
+            state.success_count = success_count;
             state.last_output.clone_from(&last_output);
             state.track_output = track_output;
+            state.update_last_execution = update_last_execution;
+            state.last_execution = last_execution;
         }
 
         let mut entity_data = self.entity_data.lock();
@@ -297,5 +397,178 @@ impl Entity for CommandBlockMinecartEntity {
         entity_data
             .id_last_output
             .set(Box::new(last_output.unwrap_or_default()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+    use std::sync::Weak;
+
+    use simdnbt::borrow::read_compound;
+    use simdnbt::owned::NbtCompound;
+    use steel_registry::{init_vanilla_registry, vanilla_entities};
+
+    use crate::entity::next_entity_id;
+    use crate::test_support::{TestPlayerBuilder, fresh_test_world};
+
+    use super::*;
+
+    fn command_cart() -> CommandBlockMinecartEntity {
+        CommandBlockMinecartEntity::new(
+            &vanilla_entities::COMMAND_BLOCK_MINECART,
+            1,
+            DVec3::ZERO,
+            Weak::new(),
+        )
+    }
+
+    /// Re-parses saved NBT and hands the borrowed view to `load_additional`, mirroring the
+    /// entity reload path.
+    fn reload(nbt: &NbtCompound, load: impl FnOnce(BorrowedNbtCompoundView<'_, '_>)) {
+        let mut bytes = Vec::new();
+        nbt.write(&mut bytes);
+        let borrowed = read_compound(&mut Cursor::new(&bytes)).expect("test NBT should reborrow");
+        load((&borrowed).into());
+    }
+
+    #[test]
+    fn only_game_master_players_can_open_the_editor() {
+        // Vanilla `MinecartCommandBlock.interact`: players without game-master-block rights get
+        // `PASS`; otherwise the server reports success (the client opens its own editor screen).
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world("command_minecart_interact");
+        let world = &world_fixture.world;
+        let cart = CommandBlockMinecartEntity::new(
+            &vanilla_entities::COMMAND_BLOCK_MINECART,
+            next_entity_id(),
+            DVec3::ZERO,
+            Arc::downgrade(world),
+        );
+
+        let player =
+            TestPlayerBuilder::new(Arc::clone(world), "NotGamemaster", next_entity_id()).build();
+        assert!(!player.can_use_game_master_blocks());
+        assert_eq!(
+            cart.interact(&player, InteractionHand::MainHand, DVec3::ZERO),
+            InteractionResult::Pass
+        );
+    }
+
+    #[test]
+    fn set_command_clears_the_success_count_and_syncs_the_command_name() {
+        init_vanilla_registry();
+        let cart = command_cart();
+        {
+            let mut state = cart.command.lock();
+            state.command = "say one".to_owned();
+            state.success_count = 4;
+        }
+
+        // Vanilla `BaseCommandBlock.setCommand`: the command plus `successCount = 0`.
+        cart.set_command("say two".to_owned());
+        assert_eq!(cart.command(), "say two");
+        assert_eq!(cart.success_count(), 0);
+
+        // Vanilla `MinecartCommandBase.onUpdated`: the synced slot follows the state.
+        assert_eq!(
+            cart.entity_data.lock().id_command_name.get().as_str(),
+            "say two"
+        );
+    }
+
+    #[test]
+    fn perform_command_runs_the_searge_egg_and_skips_repeat_ticks() {
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world("command_minecart_perform");
+        let world = &world_fixture.world;
+        let cart = CommandBlockMinecartEntity::new(
+            &vanilla_entities::COMMAND_BLOCK_MINECART,
+            next_entity_id(),
+            DVec3::ZERO,
+            Arc::downgrade(world),
+        );
+
+        // Vanilla `BaseCommandBlock.performCommand` easter egg: the output is stored locally
+        // (no `onUpdated`, so the synced slot stays empty) with a success count of 1.
+        cart.set_command("Searge".to_owned());
+        assert!(cart.perform_command(world));
+        assert_eq!(cart.success_count(), 1);
+        assert_eq!(
+            cart.last_output(),
+            Some(TextComponent::plain("#itzlipofutzli"))
+        );
+        assert_eq!(
+            cart.last_execution(),
+            NO_LAST_EXECUTION,
+            "the easter egg skips the execution bookkeeping"
+        );
+
+        cart.set_command("say hi".to_owned());
+        assert_eq!(cart.success_count(), 0);
+        assert!(cart.perform_command(world));
+        assert_eq!(cart.last_execution(), world.game_time());
+        assert!(
+            !cart.perform_command(world),
+            "vanilla runs at most once per game tick"
+        );
+    }
+
+    #[test]
+    fn save_load_round_trips_base_command_block_bookkeeping() {
+        init_vanilla_registry();
+        let mut nbt = NbtCompound::new();
+        nbt.insert("Command", "say hi");
+        nbt.insert("SuccessCount", 3);
+        nbt.insert("TrackOutput", 1i8);
+        let mut output = NbtCompound::new();
+        output.insert("text", "ran");
+        nbt.insert("LastOutput", output);
+        nbt.insert("UpdateLastExecution", 1i8);
+        nbt.insert("LastExecution", 100i64);
+
+        let cart = command_cart();
+        reload(&nbt, |view| cart.load_additional(view));
+        assert_eq!(cart.command(), "say hi");
+        assert_eq!(cart.success_count(), 3);
+        assert!(cart.track_output());
+        assert!(cart.last_output().is_some());
+        assert_eq!(cart.last_execution(), 100);
+
+        let loaded = command_cart();
+        let mut saved = NbtCompound::new();
+        cart.save_additional(&mut saved);
+        reload(&saved, |view| loaded.load_additional(view));
+        assert_eq!(loaded.command(), "say hi");
+        assert_eq!(loaded.success_count(), 3);
+        assert_eq!(loaded.last_execution(), 100);
+        assert_eq!(loaded.last_output(), cart.last_output());
+    }
+
+    #[test]
+    fn disabled_output_tracking_drops_the_output_on_save_and_load() {
+        init_vanilla_registry();
+        // Vanilla `BaseCommandBlock`: `TrackOutput = 0` clears `LastOutput` and skips both the
+        // write and the read.
+        let mut nbt = NbtCompound::new();
+        nbt.insert("Command", "say hi");
+        nbt.insert("TrackOutput", 0i8);
+        let mut output = NbtCompound::new();
+        output.insert("text", "ran");
+        nbt.insert("LastOutput", output);
+        nbt.insert("UpdateLastExecution", 0i8);
+        nbt.insert("LastExecution", 99i64);
+
+        let cart = command_cart();
+        reload(&nbt, |view| cart.load_additional(view));
+        assert!(!cart.track_output());
+        assert_eq!(cart.last_output(), None);
+        assert_eq!(cart.last_execution(), NO_LAST_EXECUTION);
+
+        let mut saved = NbtCompound::new();
+        cart.save_additional(&mut saved);
+        assert_eq!(saved.byte("TrackOutput"), Some(0));
+        assert!(saved.get("LastOutput").is_none());
+        assert!(saved.get("LastExecution").is_none());
     }
 }

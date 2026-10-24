@@ -10,9 +10,10 @@
 //! disk-backed storage. Vanilla's non-flush form schedules the same writes and
 //! returns early; Steel therefore never needs a separate flush step.
 //!
-//! `save-off` and `save-on` need vanilla's per-level `noSave` flag plus the
-//! periodic world autosave it gates; neither foundation exists yet, so this
-//! module only registers `save-all` for now.
+//! `save-off` and `save-on` mirror `SaveOffCommand`/`SaveOnCommand`: they toggle
+//! vanilla's per-level `noSave` flag (see `World::no_save`) which makes the
+//! periodic autosave skip those worlds. `/save-all` is always forced, so it
+//! saves `noSave` worlds anyway, exactly like vanilla.
 
 use std::sync::Arc;
 
@@ -32,6 +33,48 @@ use crate::{permission::PermissionLevel, server::Server};
 pub(super) fn registration() -> CommandRegistration<CommandSource> {
     CommandRegistration::new(Identifier::vanilla_static("save-all"), |_| command())
         .at_level(PermissionLevel::Owners)
+}
+
+/// Vanilla `SaveOffCommand`: disables the periodic autosave on every world.
+pub(super) fn save_off_registration() -> CommandRegistration<CommandSource> {
+    CommandRegistration::new(Identifier::vanilla_static("save-off"), |_| {
+        literal("save-off").executes(save_off)
+    })
+    .at_level(PermissionLevel::Owners)
+}
+
+/// Vanilla `SaveOnCommand`: re-enables the periodic autosave on every world.
+pub(super) fn save_on_registration() -> CommandRegistration<CommandSource> {
+    CommandRegistration::new(Identifier::vanilla_static("save-on"), |_| {
+        literal("save-on").executes(save_on)
+    })
+    .at_level(PermissionLevel::Owners)
+}
+
+fn save_off(c: &SteelCommandContext<CommandSource>) -> Result<i32, CommandSyntaxError> {
+    let server = Arc::clone(c.source().server());
+    if !server.set_auto_save(false) {
+        return Err(CommandSyntaxError::dynamic(
+            translations::COMMANDS_SAVE_ALREADY_OFF.msg().component(),
+        ));
+    }
+    c.source().send_success(
+        &translations::COMMANDS_SAVE_DISABLED.msg().component(),
+        true,
+    );
+    Ok(1)
+}
+
+fn save_on(c: &SteelCommandContext<CommandSource>) -> Result<i32, CommandSyntaxError> {
+    let server = Arc::clone(c.source().server());
+    if !server.set_auto_save(true) {
+        return Err(CommandSyntaxError::dynamic(
+            translations::COMMANDS_SAVE_ALREADY_ON.msg().component(),
+        ));
+    }
+    c.source()
+        .send_success(&translations::COMMANDS_SAVE_ENABLED.msg().component(), true);
+    Ok(1)
 }
 
 fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
@@ -78,34 +121,10 @@ fn start_save_all(
 ///
 /// Returns vanilla `MinecraftServer.saveAllChunks`'s structural result: `true`
 /// when at least one level was saved, `false` when the server has no levels.
+/// `/save-all` maps to `saveEverything(true, flush, true)`: the forced flag
+/// makes worlds whose `/save-off` `noSave` flag is set save anyway.
 async fn run_save_all(server: &Arc<Server>) -> bool {
-    for player in server.get_players() {
-        if let Err(error) = server.player_data_storage.save(&player).await {
-            log::error!(
-                "Failed to save player {} during save-all: {error}",
-                player.gameprofile.id()
-            );
-        }
-    }
-
-    let command_data = server.save_command_data().await;
-    match command_data.scoreboards {
-        Ok(saved) => tracing::debug!(saved, "save-all stored domain scoreboards"),
-        Err(error) => log::error!("save-all failed to store domain scoreboards: {error}"),
-    }
-    match command_data.storage {
-        Ok(saved) => tracing::debug!(saved, "save-all stored domain command storage"),
-        Err(error) => log::error!("save-all failed to store domain command storage: {error}"),
-    }
-
-    let mut chunks_saved = 0usize;
-    let mut levels_saved = 0usize;
-    for world in server.worlds.values() {
-        world.cleanup(&mut chunks_saved).await;
-        levels_saved += 1;
-    }
-    tracing::debug!(chunks_saved, levels_saved, "save-all finished");
-    levels_saved > 0
+    server.save_everything(true).await
 }
 
 /// In-flight `save-all`, resumed once the background save finishes.

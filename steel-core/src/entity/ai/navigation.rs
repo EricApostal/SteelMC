@@ -14,6 +14,8 @@ use crate::entity::ai::pathfinder::{PathFinder, PathRequest};
 use crate::entity::ai::walk::{NodeEvaluator, WalkNodeCollision, WalkNodeEvaluator};
 use crate::world::LevelReader;
 use crate::world::{ClipBlockShape, ClipFluid};
+use steel_registry::blocks::properties::Direction;
+use steel_registry::blocks::shapes::is_offset_face_full;
 
 const DIRECT_TARGET_REACHED_DISTANCE_SQR: f64 = 2.500_000_3e-7;
 const DEFAULT_REQUIRED_PATH_LENGTH: f32 = 16.0;
@@ -53,7 +55,7 @@ pub struct NavigationRecomputeRequest {
 /// Vanilla instantiates one subclass per mob in `Mob.createNavigation`; Steel
 /// stores a single [`PathNavigation`] per mob, so the subclass choice is a
 /// field. Every kind-specific method below cites the vanilla override it
-/// mirrors. `FlyingPathNavigation` remains the pre-existing `flying` flag path.
+/// mirrors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NavigationKind {
     /// Vanilla `GroundPathNavigation`.
@@ -65,6 +67,9 @@ pub enum NavigationKind {
     Amphibious,
     /// Vanilla `WallClimberNavigation`.
     WallClimber,
+    /// Vanilla `FlyingPathNavigation`: the mob hovers, so the navigation keeps the
+    /// raw mob position and never snaps waypoints to the ground.
+    Fly,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -94,11 +99,14 @@ pub struct PathNavigation {
     can_walk_over_fences: bool,
     avoid_sun: bool,
     can_path_to_targets_below_surface: bool,
-    /// Vanilla `FlyingPathNavigation`: the mob never follows the ground, so the
-    /// navigation keeps the direct target and skips ground-only checks.
-    flying: bool,
-    /// Vanilla `PathNavigation` subclass selection.
+    /// Vanilla `FlyingPathNavigation` subclass selection.
     kind: NavigationKind,
+    /// Vanilla `Bee$1.isStableDestination`: the destination is stable when the block
+    /// below the waypoint is not air, instead of the flying `entityCanStandOn` check.
+    fly_stable_destination_block_below: bool,
+    /// Vanilla `HappyGhast$BabyFlyingPathNavigation.canMoveDirectly`: the direct-line
+    /// clip ignores fluids.
+    fly_can_move_directly_ignores_fluids: bool,
     /// Vanilla `WaterBoundPathNavigation.allowBreaching` (dolphins only).
     allow_breaching: bool,
     /// Vanilla `AmphibiousNodeEvaluator.prefersShallowSwimming`.
@@ -142,8 +150,9 @@ impl PathNavigation {
             can_walk_over_fences: false,
             avoid_sun: false,
             can_path_to_targets_below_surface: false,
-            flying: false,
             kind: NavigationKind::Ground,
+            fly_stable_destination_block_below: false,
+            fly_can_move_directly_ignores_fluids: false,
             allow_breaching: false,
             prefers_shallow_swimming: false,
             no_cut_corner_path_type: None,
@@ -263,14 +272,14 @@ impl PathNavigation {
         self.avoid_sun = avoid_sun;
     }
 
-    /// Vanilla `FlyingPathNavigation.canUpdatePath`'s flight mode.
-    pub const fn is_flying(&self) -> bool {
-        self.flying
-    }
-
-    /// Enables vanilla `FlyingPathNavigation` semantics on this navigation.
-    pub const fn set_flying(&mut self, flying: bool) {
-        self.flying = flying;
+    /// Vanilla `GoalUtils.hasGroundPathNavigation`: `navigation.canNavigateGround()`,
+    /// true for the ground and amphibious navigations (including wall-climbers).
+    #[must_use]
+    pub const fn can_navigate_ground(&self) -> bool {
+        matches!(
+            self.kind,
+            NavigationKind::Ground | NavigationKind::Amphibious | NavigationKind::WallClimber
+        )
     }
 
     /// Vanilla `Mob.createNavigation`'s subclass choice.
@@ -282,6 +291,24 @@ impl PathNavigation {
     /// Selects the vanilla `PathNavigation` subclass behaviour.
     pub const fn set_kind(&mut self, kind: NavigationKind) {
         self.kind = kind;
+    }
+
+    /// Vanilla `Bee$1.isStableDestination` (the only flying navigation that checks
+    /// the block below instead of `entityCanStandOn`).
+    pub const fn set_fly_stable_destination_block_below(
+        &mut self,
+        fly_stable_destination_block_below: bool,
+    ) {
+        self.fly_stable_destination_block_below = fly_stable_destination_block_below;
+    }
+
+    /// Vanilla `HappyGhast$BabyFlyingPathNavigation.canMoveDirectly` (the only flying
+    /// navigation whose direct-line clip ignores fluids).
+    pub const fn set_fly_can_move_directly_ignores_fluids(
+        &mut self,
+        fly_can_move_directly_ignores_fluids: bool,
+    ) {
+        self.fly_can_move_directly_ignores_fluids = fly_can_move_directly_ignores_fluids;
     }
 
     /// Vanilla `WaterBoundPathNavigation.createPathFinder`'s dolphin check.
@@ -347,9 +374,10 @@ impl PathNavigation {
     pub const fn max_vertical_distance_to_waypoint(&self) -> f64 {
         match self.kind {
             NavigationKind::WaterBound => 0.5,
-            NavigationKind::Ground | NavigationKind::Amphibious | NavigationKind::WallClimber => {
-                1.0
-            }
+            NavigationKind::Ground
+            | NavigationKind::Amphibious
+            | NavigationKind::WallClimber
+            | NavigationKind::Fly => 1.0,
         }
     }
 
@@ -366,6 +394,11 @@ impl PathNavigation {
             }
             // Vanilla `AmphibiousPathNavigation.canUpdatePath` is always true.
             NavigationKind::Amphibious => true,
+            // Vanilla `FlyingPathNavigation.canUpdatePath`:
+            // `canFloat() && mob.isInLiquid() || !mob.isPassenger()`.
+            NavigationKind::Fly => {
+                (self.can_float && (mob.is_in_water() || mob.is_in_lava())) || !mob.is_passenger()
+            }
         }
     }
 
@@ -384,6 +417,8 @@ impl PathNavigation {
                 f64::from(self.surface_y(mob, level)),
                 position.z,
             ),
+            // Vanilla `FlyingPathNavigation.getTempMobPos`: the raw mob position.
+            NavigationKind::Fly => position,
         }
     }
 
@@ -419,13 +454,15 @@ impl PathNavigation {
         surface
     }
 
-    /// Vanilla `PathNavigation.getGroundY`, overridden to the raw target Y by
-    /// the water-bound and amphibious navigations.
+    /// Vanilla `PathNavigation.getGroundY`, overridden to the raw target Y by the
+    /// water-bound, amphibious and flying navigations. The flying nav never calls it
+    /// in `tick` (it pushes the raw next-entity Y into `MoveControl`), but Steel's
+    /// shared tick entry applies it, so the flying arm preserves the waypoint height.
     #[must_use]
     pub fn ground_y(&self, level: &dyn LevelReader, target: DVec3) -> f64 {
         if matches!(
             self.kind,
-            NavigationKind::WaterBound | NavigationKind::Amphibious
+            NavigationKind::WaterBound | NavigationKind::Amphibious | NavigationKind::Fly
         ) {
             return target.y;
         }
@@ -449,6 +486,22 @@ impl PathNavigation {
             NavigationKind::Ground | NavigationKind::WallClimber => {
                 level.get_block_state(pos.below()).is_solid_render()
             }
+            NavigationKind::Fly => {
+                if self.fly_stable_destination_block_below {
+                    // Vanilla `Bee$1.isStableDestination`.
+                    return !level.get_block_state(pos.below()).is_air();
+                }
+
+                // Vanilla `FlyingPathNavigation.isStableDestination`:
+                // `blockState.entityCanStandOn(level, pos, mob)` — the UP-face of the
+                // waypoint's collision shape is full. Steel's navigation context is
+                // entity-free, so it uses the static offset collision shape, matching
+                // the drowned's up-face check at the same layer.
+                is_offset_face_full(
+                    level.get_block_state(pos).get_collision_shape_at(pos),
+                    Direction::Up,
+                )
+            }
         }
     }
 
@@ -467,6 +520,15 @@ impl PathNavigation {
             NavigationKind::Amphibious => {
                 mob.is_in_water() && is_clear_for_movement_between(mob, start_pos, stop_pos, false)
             }
+            // Vanilla `FlyingPathNavigation.canMoveDirectly`: fluids either block the
+            // direct line (the base form) or not
+            // (`HappyGhast$BabyFlyingPathNavigation`).
+            NavigationKind::Fly => is_clear_for_movement_between(
+                mob,
+                start_pos,
+                stop_pos,
+                !self.fly_can_move_directly_ignores_fluids,
+            ),
             NavigationKind::Ground | NavigationKind::WallClimber => false,
         }
     }
@@ -776,7 +838,17 @@ impl PathNavigation {
             return None;
         };
 
-        if context.ground_mob_position.y > target.y
+        if matches!(self.kind, NavigationKind::Fly) {
+            // Vanilla `FlyingPathNavigation.tick` retires the waypoint once the mob
+            // shares its block, with no ground-height or on-ground check.
+            let mob_position = context.mob_position;
+            if fast_floor(mob_position.x) == fast_floor(target.x)
+                && fast_floor(mob_position.y) == fast_floor(target.y)
+                && fast_floor(mob_position.z) == fast_floor(target.z)
+            {
+                path.advance();
+            }
+        } else if context.ground_mob_position.y > target.y
             && !on_ground
             && fast_floor(context.ground_mob_position.x) == fast_floor(target.x)
             && fast_floor(context.ground_mob_position.z) == fast_floor(target.z)
@@ -1105,8 +1177,9 @@ mod tests {
     use steel_utils::{BlockPos, BlockStateId, WorldAabb};
     use steel_worldgen::density_functions::overworld::OverworldNoiseSettings;
 
-    use super::{NavigationPathRequest, NavigationTickContext, PathNavigation};
+    use super::{NavigationKind, NavigationPathRequest, NavigationTickContext, PathNavigation};
     use crate::behavior::init_behaviors;
+    use crate::entity::Entity;
     use crate::entity::ai::node::Node;
     use crate::entity::ai::path::{Path, PathType, PathfindingMalus};
     use crate::entity::ai::walk::{MobPathSettings, WalkNodeEvaluator};
@@ -1243,6 +1316,165 @@ mod tests {
         navigation.set_can_float(true);
 
         assert!(navigation.can_float());
+    }
+
+    /// Vanilla `FlyingPathNavigation.canUpdatePath` is
+    /// `canFloat() && isInLiquid() || !isPassenger()`, so a hovering mob keeps
+    /// updating its path while a ground navigation refuses in the same spot.
+    #[test]
+    fn flying_navigation_updates_path_while_airborne() {
+        let mob = test_mob();
+        assert!(!mob.on_ground());
+        assert!(!mob.is_in_water());
+        assert!(!mob.is_in_lava());
+
+        let mut navigation = PathNavigation::new();
+        assert!(
+            !navigation.can_update_path(&mob),
+            "a ground navigation must refuse to path while airborne"
+        );
+
+        navigation.set_kind(NavigationKind::Fly);
+        assert!(navigation.can_update_path(&mob));
+    }
+
+    /// Vanilla `FlyingPathNavigation.canUpdatePath` only needs `canFloat` while in
+    /// liquid: a floating non-passenger mob paths, a floating passenger does not.
+    #[test]
+    fn flying_navigation_path_update_ignores_can_float_when_airborne() {
+        let mob = test_mob();
+        let mut navigation = PathNavigation::new();
+        navigation.set_kind(NavigationKind::Fly);
+
+        assert!(navigation.can_update_path(&mob));
+
+        navigation.set_can_float(true);
+        assert!(navigation.can_update_path(&mob));
+    }
+
+    /// Vanilla `PathNavigation.canNavigateGround`: false for flying and water-bound
+    /// navigation, which is what `GoalUtils.hasGroundPathNavigation` gates doors and
+    /// sun avoidance on.
+    #[test]
+    fn can_navigate_ground_rejects_the_flying_and_water_bound_kinds() {
+        let mut navigation = PathNavigation::new();
+
+        assert!(navigation.can_navigate_ground());
+
+        navigation.set_kind(NavigationKind::WallClimber);
+        assert!(navigation.can_navigate_ground());
+
+        navigation.set_kind(NavigationKind::Amphibious);
+        assert!(navigation.can_navigate_ground());
+
+        navigation.set_kind(NavigationKind::WaterBound);
+        assert!(!navigation.can_navigate_ground());
+
+        navigation.set_kind(NavigationKind::Fly);
+        assert!(!navigation.can_navigate_ground());
+    }
+
+    /// Vanilla `FlyingPathNavigation.isStableDestination` is
+    /// `blockState.entityCanStandOn(level, pos, mob)`: the waypoint's own collision
+    /// shape needs a full up face, where the ground rule only looks one block below.
+    #[test]
+    fn flying_navigation_stable_destination_uses_the_waypoint_collision_shape() {
+        let air = empty_level();
+        let stone = REGISTRY.blocks.get_default_state_id(&vanilla_blocks::STONE);
+        let level = air.with(BlockPos::new(0, 64, 0), stone);
+
+        let mut flying = PathNavigation::new();
+        flying.set_kind(NavigationKind::Fly);
+        assert!(flying.is_stable_destination(&level, BlockPos::new(0, 64, 0)));
+        assert!(!flying.is_stable_destination(&level, BlockPos::new(0, 65, 0)));
+
+        let ground = PathNavigation::new();
+        assert!(!ground.is_stable_destination(&level, BlockPos::new(0, 64, 0)));
+        assert!(ground.is_stable_destination(&level, BlockPos::new(0, 65, 0)));
+    }
+
+    /// Vanilla `Bee$1.isStableDestination` replaces the flying rule with
+    /// "the block below the waypoint is not air".
+    #[test]
+    fn bee_flying_navigation_stable_destination_uses_the_block_below() {
+        let stone = REGISTRY.blocks.get_default_state_id(&vanilla_blocks::STONE);
+        let level = empty_level().with(BlockPos::new(0, 64, 0), stone);
+        let mut navigation = PathNavigation::new();
+        navigation.set_kind(NavigationKind::Fly);
+        navigation.set_fly_stable_destination_block_below(true);
+
+        assert!(!navigation.is_stable_destination(&level, BlockPos::new(0, 64, 0)));
+        assert!(navigation.is_stable_destination(&level, BlockPos::new(0, 65, 0)));
+    }
+
+    /// Vanilla `FlyingPathNavigation.tick` retires a waypoint once the mob shares its
+    /// block, without the ground variant's height and on-ground conditions.
+    #[test]
+    fn flying_navigation_advances_only_from_the_waypoint_block() {
+        let mut navigation = PathNavigation::new();
+        navigation.set_kind(NavigationKind::Fly);
+        let path = Path::new(
+            vec![
+                Node::new(0, 64, 0),
+                Node::new(1, 64, 0),
+                Node::new(2, 64, 0),
+            ],
+            BlockPos::new(2, 64, 0),
+            true,
+        );
+        assert!(move_to(
+            &mut navigation,
+            path,
+            1.0,
+            DVec3::new(0.5, 64.0, 0.5)
+        ));
+
+        // Sharing the start node's block retires it.
+        let start_block_target = navigation
+            .next_move_target_without_path_update(tick_context(DVec3::new(0.5, 64.0, 0.5)), false);
+        assert_eq!(
+            start_block_target.map(|(target, _)| target),
+            Some(DVec3::new(1.5, 64.0, 0.5))
+        );
+        assert_eq!(navigation.path().map(Path::next_node_index), Some(1));
+
+        // Hovering above the waypoint's block is not enough: unlike the ground rule
+        // (which retires a lower waypoint the airborne mob flies over), the flying
+        // rule needs the shared block.
+        let hover_target = navigation
+            .next_move_target_without_path_update(tick_context(DVec3::new(1.5, 65.0, 0.5)), false);
+        assert_eq!(
+            hover_target.map(|(target, _)| target),
+            Some(DVec3::new(1.5, 64.0, 0.5))
+        );
+        assert_eq!(navigation.path().map(Path::next_node_index), Some(1));
+
+        // Sharing the waypoint's block retires it.
+        let shared_block_target = navigation
+            .next_move_target_without_path_update(tick_context(DVec3::new(1.5, 64.0, 0.5)), false);
+        assert_eq!(
+            shared_block_target.map(|(target, _)| target),
+            Some(DVec3::new(2.5, 64.0, 0.5))
+        );
+        assert_eq!(navigation.path().map(Path::next_node_index), Some(2));
+    }
+
+    /// Vanilla `FlyingPathNavigation.getTempMobPos` and `tick` use the raw mob
+    /// position and the raw waypoint height.
+    #[test]
+    fn flying_navigation_keeps_the_raw_mob_position_and_waypoint_height() {
+        let mob = test_mob();
+        let level = empty_level();
+        let mut navigation = PathNavigation::new();
+        navigation.set_kind(NavigationKind::Fly);
+
+        assert_eq!(navigation.temp_mob_pos(&mob, &level), mob.position());
+        assert_eq!(
+            navigation
+                .ground_y(&level, DVec3::new(4.5, 70.0, 12.5))
+                .to_bits(),
+            70.0_f64.to_bits()
+        );
     }
 
     #[test]

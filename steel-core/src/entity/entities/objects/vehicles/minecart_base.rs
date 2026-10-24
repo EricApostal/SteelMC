@@ -41,6 +41,7 @@ use crate::physics::MoverType;
 use crate::portal::portal_shape::PortalShape;
 use crate::world::{LevelReader as _, SignalGetter, World};
 
+use super::chest_minecart::ChestMinecartEntity;
 use super::command_block_minecart::CommandBlockMinecartEntity;
 use super::furnace_minecart::FurnaceMinecartEntity;
 use super::hopper_minecart::HopperMinecartEntity;
@@ -190,11 +191,17 @@ pub(super) fn rail_position(world: &World, x: f64, y: f64, z: f64) -> Option<DVe
 /// Steel downcast test for vanilla's `instanceof AbstractMinecart`.
 pub(super) fn is_minecart_entity(entity: &dyn Entity) -> bool {
     entity.is::<MinecartEntity>()
+        || entity.is::<ChestMinecartEntity>()
         || entity.is::<FurnaceMinecartEntity>()
         || entity.is::<HopperMinecartEntity>()
         || entity.is::<TntMinecartEntity>()
         || entity.is::<SpawnerMinecartEntity>()
         || entity.is::<CommandBlockMinecartEntity>()
+}
+
+/// Steel downcast test for vanilla's `AbstractMinecart.isFurnace`.
+pub(super) fn is_furnace_entity(entity: &dyn Entity) -> bool {
+    entity.is::<FurnaceMinecartEntity>()
 }
 
 /// Vanilla `EntitySelector.pushableBy` without the unimplemented team rules.
@@ -252,6 +259,95 @@ pub(super) trait Minecart: Entity + Sized {
     /// Vanilla `isRideable`.
     fn is_rideable(&self) -> bool {
         false
+    }
+
+    /// Vanilla `AbstractMinecart.isFurnace`; only the furnace cart overrides it.
+    fn is_furnace(&self) -> bool {
+        false
+    }
+
+    /// Vanilla `AbstractMinecart.push` for the behavior Steel always uses.
+    ///
+    /// Vanilla routes cart-to-cart contact through `pushOtherMinecart`; every other entity gets
+    /// the generic impulse push. Emit this from the variant's `Entity::push_entity` override.
+    fn minecart_push(&self, entity: &dyn Entity) {
+        if entity.no_physics() || self.no_physics() || self.has_passenger(entity) {
+            return;
+        }
+
+        let mut x = entity.position().x - self.position().x;
+        let mut z = entity.position().z - self.position().z;
+        let mut distance = x * x + z * z;
+        if distance < 1.0e-4 {
+            return;
+        }
+
+        distance = distance.sqrt();
+        x /= distance;
+        z /= distance;
+        let power = (1.0 / distance).min(1.0);
+        // Vanilla: `xa *= 0.1F; za *= 0.1F; xa *= 0.5; za *= 0.5`.
+        x *= power * 0.05;
+        z *= power * 0.05;
+
+        if is_minecart_entity(entity) {
+            self.push_other_minecart(entity, x, z);
+        } else {
+            self.push_impulse(DVec3::new(-x, 0.0, -z));
+            entity.push_impulse(DVec3::new(x / 4.0, 0.0, z / 4.0));
+        }
+    }
+
+    /// Vanilla `AbstractMinecart.pushOtherMinecart` for the old behavior, including the
+    /// furnace asymmetries.
+    fn push_other_minecart(&self, other: &dyn Entity, xa: f64, za: f64) {
+        let xo = other.position().x - self.position().x;
+        let zo = other.position().z - self.position().z;
+        let dir = DVec3::new(xo, 0.0, zo).normalize();
+        let (yaw, _) = self.rotation();
+        let (sin, cos) = yaw.to_radians().sin_cos();
+        let facing = DVec3::new(f64::from(cos), 0.0, f64::from(sin)).normalize();
+        if dir.dot(facing).abs() < 0.8 {
+            return;
+        }
+
+        let movement = self.velocity();
+        let other_movement = other.velocity();
+        let other_is_furnace = is_furnace_entity(other);
+        let self_is_furnace = self.is_furnace();
+
+        if other_is_furnace && !self_is_furnace {
+            self.set_velocity(DVec3::new(movement.x * 0.2, movement.y, movement.z * 0.2));
+            self.push_impulse(DVec3::new(
+                other_movement.x - xa,
+                0.0,
+                other_movement.z - za,
+            ));
+            other.set_velocity(DVec3::new(
+                other_movement.x * 0.95,
+                other_movement.y,
+                other_movement.z * 0.95,
+            ));
+        } else if !other_is_furnace && self_is_furnace {
+            other.set_velocity(DVec3::new(
+                other_movement.x * 0.2,
+                other_movement.y,
+                other_movement.z * 0.2,
+            ));
+            other.push_impulse(DVec3::new(movement.x + xa, 0.0, movement.z + za));
+            self.set_velocity(DVec3::new(movement.x * 0.95, movement.y, movement.z * 0.95));
+        } else {
+            let xdd = (other_movement.x + movement.x) / 2.0;
+            let zdd = (other_movement.z + movement.z) / 2.0;
+            self.set_velocity(DVec3::new(movement.x * 0.2, movement.y, movement.z * 0.2));
+            self.push_impulse(DVec3::new(xdd - xa, 0.0, zdd - za));
+            other.set_velocity(DVec3::new(
+                other_movement.x * 0.2,
+                other_movement.y,
+                other_movement.z * 0.2,
+            ));
+            other.push_impulse(DVec3::new(xdd + xa, 0.0, zdd + za));
+        }
     }
 
     /// Vanilla `AbstractMinecart.getMaxSpeed` for the behaviour Steel always uses.
@@ -879,9 +975,10 @@ pub(super) fn minecart_relative_portal_position(
 mod tests {
     use std::sync::{Arc, Weak};
 
-    use steel_registry::{vanilla_entities, vanilla_game_rules};
+    use steel_registry::{init_vanilla_registry, vanilla_entities, vanilla_game_rules};
 
     use super::*;
+    use crate::entity::SharedEntity;
     use crate::test_support::fresh_test_world;
 
     fn plain_cart(world: Weak<World>) -> MinecartEntity {
@@ -918,5 +1015,85 @@ mod tests {
         // `NewMinecartBehavior`; the stable behavior stays at 0.4 on land.
         assert_eq!(default_max_speed(&cart, world), MAX_SPEED_ON_LAND);
         assert!(!cart.is_in_water());
+    }
+
+    #[test]
+    fn chest_carts_count_as_minecarts_for_collisions_and_boarding() {
+        // Vanilla's cart checks are `instanceof AbstractMinecart`: `push_and_pickup_entities`
+        // pushes a chest cart instead of trying to board it, and two such carts collide
+        // through `push_other_minecart` instead of the generic impulse push.
+        let chest = ChestMinecartEntity::new(
+            &vanilla_entities::CHEST_MINECART,
+            3,
+            DVec3::new(8.5, 64.0, 8.5),
+            Weak::new(),
+        );
+        assert!(is_minecart_entity(&chest));
+    }
+
+    #[test]
+    fn cart_push_into_a_furnace_cart_damps_the_pusher_like_vanilla() {
+        // Vanilla `AbstractMinecart.pushOtherMinecart`: with `xa = 0.05` for a cart half a block
+        // away and a yaw pointing at it, the normal cart is damped to 0.2 and receives the
+        // furnace cart's movement minus `xa`, while the furnace cart keeps 0.95 of its movement.
+        let cart = plain_cart(Weak::new());
+        let furnace = Arc::new(FurnaceMinecartEntity::new(
+            &vanilla_entities::FURNACE_MINECART,
+            2,
+            DVec3::new(9.0, 64.0, 8.5),
+            Weak::new(),
+        ));
+        let furnace_shared: SharedEntity = Arc::clone(&furnace) as SharedEntity;
+
+        cart.set_velocity(DVec3::new(0.4, 0.0, 0.0));
+        furnace.set_velocity(DVec3::new(0.3, 0.0, 0.0));
+        cart.push_entity(&*furnace_shared);
+
+        assert!((cart.velocity().x - 0.33).abs() < 1.0e-12);
+        assert!((furnace.velocity().x - 0.285).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn cart_push_is_skipped_when_the_other_cart_is_not_in_front() {
+        // The `|dir · facing| < 0.8` guard: a cart to the side is ignored entirely.
+        let cart = plain_cart(Weak::new());
+        let other = Arc::new(MinecartEntity::new(
+            &vanilla_entities::MINECART,
+            2,
+            DVec3::new(8.5, 64.0, 9.0),
+            Weak::new(),
+        ));
+        let other_shared: SharedEntity = Arc::clone(&other) as SharedEntity;
+
+        cart.set_velocity(DVec3::new(0.4, 0.0, 0.0));
+        other.set_velocity(DVec3::new(0.4, 0.0, 0.0));
+        cart.push_entity(&*other_shared);
+
+        assert_eq!(cart.velocity(), DVec3::new(0.4, 0.0, 0.0));
+        assert_eq!(other.velocity(), DVec3::new(0.4, 0.0, 0.0));
+    }
+
+    #[test]
+    fn cart_push_splits_movement_evenly_between_two_normal_carts() {
+        // Vanilla's final `pushOtherMinecart` branch: `xdd = (other + own) / 2`, both carts
+        // damped to 0.2 and pushed apart by `xa`.
+        init_vanilla_registry();
+        let cart = plain_cart(Weak::new());
+        let other = Arc::new(MinecartEntity::new(
+            &vanilla_entities::MINECART,
+            2,
+            DVec3::new(9.0, 64.0, 8.5),
+            Weak::new(),
+        ));
+        let other_shared: SharedEntity = Arc::clone(&other) as SharedEntity;
+
+        cart.set_velocity(DVec3::new(0.4, 0.0, 0.0));
+        other.set_velocity(DVec3::new(0.2, 0.0, 0.0));
+        cart.push_entity(&*other_shared);
+
+        // own: 0.4 * 0.2 = 0.08, impulse (0.3 - 0.05) = 0.25 -> 0.33
+        assert!((cart.velocity().x - 0.33).abs() < 1.0e-12);
+        // other: 0.2 * 0.2 = 0.04, impulse (0.3 + 0.05) = 0.35 -> 0.39
+        assert!((other.velocity().x - 0.39).abs() < 1.0e-12);
     }
 }

@@ -176,9 +176,11 @@ impl BlockBehavior for ObserverBlock {
 mod tests {
     use steel_registry::init_vanilla_registry;
     use steel_registry::vanilla_blocks;
+    use steel_utils::ChunkPos;
 
     use super::*;
-    use crate::test_support::TestLevel;
+    use crate::behavior::init_behaviors;
+    use crate::test_support::{TestLevel, fresh_test_world, insert_ready_full_chunk};
 
     fn observer_state(facing: Direction, powered: bool) -> BlockStateId {
         vanilla_blocks::OBSERVER
@@ -238,5 +240,58 @@ mod tests {
             ),
             0
         );
+    }
+
+    #[test]
+    fn update_shape_schedules_only_the_observed_face_while_unpowered() {
+        init_vanilla_registry();
+        let observer = ObserverBlock::new(&vanilla_blocks::OBSERVER);
+        let pos = BlockPos::new(0, 64, 0);
+
+        // A change behind the observer never starts the pulse.
+        let other_level = TestLevel::default();
+        observer.update_shape(
+            observer_state(Direction::East, false),
+            &other_level,
+            pos,
+            Direction::West,
+            pos.west(),
+            vanilla_blocks::STONE.default_state(),
+        );
+        assert!(other_level.scheduled_block_ticks.borrow().is_empty());
+
+        // An already powered observer already owns its off-tick, so `updateShape`
+        // stays out (vanilla `!state.getValue(POWERED)` gate).
+        let powered_level = TestLevel::default();
+        observer.update_shape(
+            observer_state(Direction::East, true),
+            &powered_level,
+            pos,
+            Direction::East,
+            pos.east(),
+            vanilla_blocks::STONE.default_state(),
+        );
+        assert!(powered_level.scheduled_block_ticks.borrow().is_empty());
+    }
+
+    #[test]
+    fn tick_drives_the_two_game_tick_pulse_and_only_reschedules_from_off() {
+        init_vanilla_registry();
+        init_behaviors();
+        let world_fixture = fresh_test_world("observer_pulse_tick");
+        let world = &world_fixture.world;
+        let pos = BlockPos::new(8, 64, 8);
+        insert_ready_full_chunk(world, ChunkPos::from_block_pos(pos));
+        let observer = ObserverBlock::new(&vanilla_blocks::OBSERVER);
+
+        let off = observer_state(Direction::East, false);
+        world.set_block(pos, off, UpdateFlags::UPDATE_NONE);
+        observer.tick(off, world, pos);
+        let on = world.get_block_state(pos);
+        assert!(on.get_value(POWERED));
+        assert!(world.has_scheduled_block_tick(pos, &vanilla_blocks::OBSERVER));
+
+        observer.tick(on, world, pos);
+        assert!(!world.get_block_state(pos).get_value(POWERED));
     }
 }

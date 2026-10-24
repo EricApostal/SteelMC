@@ -21,10 +21,13 @@ use steel_registry::vanilla_items;
 use steel_utils::axis::Axis;
 use steel_utils::block_util::FoundRectangle;
 use steel_utils::locks::SyncMutex;
+use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
+use crate::behavior::InteractionResult;
 use crate::entity::damage::DamageSource;
 use crate::entity::{Entity, EntityBase, EntityBaseLoad, EntitySyncedData};
+use crate::player::Player;
 use crate::world::World;
 
 use super::minecart_base::{self, Minecart, MinecartState};
@@ -129,6 +132,38 @@ impl Entity for MinecartEntity {
         Arc::clone(&self).minecart_tick();
     }
 
+    fn interact(
+        &self,
+        player: &Player,
+        _hand: InteractionHand,
+        _location: DVec3,
+    ) -> InteractionResult {
+        // Vanilla `Minecart.interact`: `super.interact` is `Entity.interact`, which is `PASS`
+        // for a cart, so only the boarding branch remains. The client-side
+        // `playerRotationOffset` interpolation bookkeeping is not mirrored.
+        if player.is_secondary_use_active() || self.is_vehicle() {
+            return InteractionResult::Pass;
+        }
+
+        let Some(world) = self.level() else {
+            return InteractionResult::Pass;
+        };
+        let Some(vehicle) = world.get_entity_by_id(self.id()) else {
+            return InteractionResult::Pass;
+        };
+
+        if player.start_riding(&vehicle) {
+            InteractionResult::SuccessServer
+        } else {
+            InteractionResult::Consume
+        }
+    }
+
+    fn push_entity(&self, entity: &dyn Entity) {
+        // Vanilla `AbstractMinecart.push`.
+        self.minecart_push(entity);
+    }
+
     fn is_pickable(&self) -> bool {
         !self.is_removed()
     }
@@ -171,5 +206,87 @@ impl Entity for MinecartEntity {
 
     fn load_additional(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
         self.load_minecart_data(nbt);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use steel_registry::{init_vanilla_registry, vanilla_entities};
+    use steel_utils::ChunkPos;
+
+    use crate::entity::{SharedEntity, next_entity_id};
+    use crate::player::ResetReason;
+    use crate::test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk};
+
+    use super::*;
+
+    const CART_POSITION: DVec3 = DVec3::new(8.5, 64.0, 8.5);
+
+    #[test]
+    fn sneaking_player_passes_on_a_plain_cart() {
+        // Vanilla `Minecart.interact`: `player.isSecondaryUseActive()` returns `PASS` before any
+        // boarding attempt, so no world lookup or mount happens.
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world("minecart_sneak_pass");
+        let world = &world_fixture.world;
+        let cart = MinecartEntity::new(
+            &vanilla_entities::MINECART,
+            next_entity_id(),
+            CART_POSITION,
+            Arc::downgrade(world),
+        );
+        let player =
+            TestPlayerBuilder::new(Arc::clone(world), "CartSneaker", next_entity_id()).build();
+        player.set_shared_shift_key_down(true);
+        assert!(player.is_secondary_use_active());
+
+        assert_eq!(
+            cart.interact(&player, InteractionHand::MainHand, CART_POSITION),
+            InteractionResult::Pass
+        );
+        assert!(cart.passengers().is_empty());
+    }
+
+    #[test]
+    fn empty_cart_boards_a_player_and_reports_success_server() {
+        // Vanilla `Minecart.interact` mounts the player and returns `SUCCESS_SERVER` on the
+        // server when `startRiding` succeeded.
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world("minecart_boardable");
+        let world = &world_fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::from_entity_pos(CART_POSITION));
+
+        let cart = Arc::new(MinecartEntity::new(
+            &vanilla_entities::MINECART,
+            next_entity_id(),
+            CART_POSITION,
+            Arc::downgrade(world),
+        ));
+        world
+            .try_add_entity(Arc::clone(&cart) as SharedEntity)
+            .expect("cart should attach to the loaded chunk");
+
+        let player =
+            TestPlayerBuilder::new(Arc::clone(world), "CartRider", next_entity_id()).build();
+        assert!(world.add_player(Arc::clone(&player), ResetReason::InitialJoin));
+
+        assert_eq!(
+            cart.interact(&player, InteractionHand::MainHand, CART_POSITION),
+            InteractionResult::SuccessServer
+        );
+        assert_eq!(
+            cart.passengers().len(),
+            1,
+            "the player should be sitting in the cart"
+        );
+
+        // Vanilla refuses a second rider while the cart is occupied.
+        let other =
+            TestPlayerBuilder::new(Arc::clone(world), "CartRider2", next_entity_id()).build();
+        assert!(world.add_player(Arc::clone(&other), ResetReason::InitialJoin));
+        assert_eq!(
+            cart.interact(&other, InteractionHand::MainHand, CART_POSITION),
+            InteractionResult::Pass
+        );
     }
 }

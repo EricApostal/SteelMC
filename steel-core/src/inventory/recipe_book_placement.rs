@@ -10,7 +10,7 @@ use steel_registry::data_components::vanilla_components::MAX_STACK_SIZE;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::ItemRef;
 use steel_registry::recipe::{
-    CraftingInput, CraftingRecipe, Ingredient, PlacementInfo, RecipeMatches as _, UntypedRecipeRef,
+    CraftingInput, CraftingRecipe, PlacementInfo, RecipeMatches as _, UntypedRecipeRef,
 };
 use steel_utils::locks::Shared;
 

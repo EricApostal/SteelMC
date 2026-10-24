@@ -485,3 +485,222 @@ impl ServerBossEvent {
         }
     }
 }
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use steel_protocol::packet_traits::{CompressionInfo, EncodedPacket};
+    use steel_registry::init_vanilla_registry;
+    use text_components::TextComponent;
+    use uuid::Uuid;
+
+    use super::{BossBarColor, BossBarOverlay, BossEventOperation, ServerBossEvent};
+    use crate::entity::Entity as _;
+    use crate::player::Player;
+    use crate::player::connection::{NetworkConnection, PlayerConnection};
+    use crate::test_support::{TestPlayerBuilder, fresh_test_world};
+    use crate::world::World;
+
+    /// A connection that counts the packets actually written to one client.
+    #[derive(Clone)]
+    pub(crate) struct RecordingConnection {
+        sent: Arc<AtomicUsize>,
+    }
+
+    impl RecordingConnection {
+        pub(crate) fn new() -> Self {
+            Self {
+                sent: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        /// Number of packets this connection received.
+        pub(crate) fn sent(&self) -> usize {
+            self.sent.load(Ordering::Acquire)
+        }
+
+        /// Clears the counter so an assertion can measure one operation.
+        pub(crate) fn reset(&self) {
+            self.sent.store(0, Ordering::Release);
+        }
+    }
+
+    impl NetworkConnection for RecordingConnection {
+        fn compression(&self) -> Option<CompressionInfo> {
+            None
+        }
+
+        fn send_encoded(&self, _packet: EncodedPacket) {
+            self.sent.fetch_add(1, Ordering::AcqRel);
+        }
+
+        fn send_encoded_bundle(&self, packets: Vec<EncodedPacket>) {
+            self.sent.fetch_add(packets.len(), Ordering::AcqRel);
+        }
+
+        fn disconnect_with_reason(&self, _reason: TextComponent) {}
+
+        fn tick(&self) {}
+
+        fn latency(&self) -> i32 {
+            0
+        }
+
+        fn close(&self) {}
+
+        fn closed(&self) -> bool {
+            false
+        }
+    }
+
+    /// A test player whose connection counts the packets it received.
+    pub(crate) fn recording_player(
+        world: &Arc<World>,
+        name: &str,
+    ) -> (Arc<Player>, RecordingConnection) {
+        let connection = RecordingConnection::new();
+        let player = TestPlayerBuilder::new(Arc::clone(world), name, 1)
+            .connection(Arc::new(PlayerConnection::Other(Box::new(
+                connection.clone(),
+            ))))
+            .build();
+        (player, connection)
+    }
+
+    /// The operation kind of a queued boss-bar packet.
+    pub(crate) fn operation_name(operation: &BossEventOperation) -> &'static str {
+        match operation {
+            BossEventOperation::Add { .. } => "add",
+            BossEventOperation::Remove => "remove",
+            BossEventOperation::UpdateProgress { .. } => "progress",
+            BossEventOperation::UpdateName { .. } => "name",
+            BossEventOperation::UpdateStyle { .. } => "style",
+            BossEventOperation::UpdateProperties { .. } => "properties",
+        }
+    }
+
+    /// Vanilla `ServerBossEvent`: the create/update/remove operation sequence.
+    ///
+    /// Vanilla sends from inside each setter; Steel records the same operations in order
+    /// and delivers them when [`ServerBossEvent::broadcast_pending`] runs.
+    #[test]
+    fn boss_event_create_update_and_remove_sequence() {
+        init_vanilla_registry();
+        let fixture = fresh_test_world("boss_event_sequence");
+        let (player, connection) = recording_player(&fixture.world, "BarViewer");
+        // Building the test player writes packets of its own; measure only the bar's.
+        connection.reset();
+        let id = Uuid::new_v4();
+
+        let mut bar = ServerBossEvent::new(
+            id,
+            TextComponent::plain("Ender Dragon"),
+            BossBarColor::Pink,
+            BossBarOverlay::Progress,
+        );
+        // Vanilla `BossEvent` starts visible with a full bar.
+        assert!(bar.is_visible());
+        assert!((bar.progress() - 1.0).abs() < f32::EPSILON);
+
+        bar.add_player(Arc::clone(&player));
+        bar.set_progress(0.5);
+        bar.set_name(TextComponent::plain("Doom"));
+        bar.set_color(BossBarColor::Red);
+        bar.set_overlay(BossBarOverlay::Notched10);
+        bar.set_darken_screen(true);
+
+        let operations: Vec<&str> = bar
+            .drain_packets()
+            .iter()
+            .map(|packet| {
+                assert_eq!(packet.id, id, "every operation targets the bar's own id");
+                operation_name(&packet.operation)
+            })
+            .collect();
+        // `setColor` and `setOverlay` each send their own `UpdateStyle`.
+        assert_eq!(
+            operations,
+            ["add", "progress", "name", "style", "style", "properties"]
+        );
+        assert_eq!(
+            connection.sent(),
+            0,
+            "draining the queue without delivering writes nothing"
+        );
+
+        bar.remove_player(&player.uuid());
+        assert_eq!(bar.player_count(), 0);
+        let removal = bar.drain_packets();
+        assert_eq!(removal.len(), 1);
+        assert_eq!(operation_name(&removal[0].operation), "remove");
+        // Vanilla `ServerBossEvent.removePlayer` reports whether it removed anything, and
+        // sends nothing for an untracked player.
+        assert!(!bar.remove_player(&player.uuid()));
+        assert!(!bar.has_pending_packets());
+    }
+
+    /// Vanilla `ServerBossEvent` visibility rules: while invisible the bar queues no
+    /// operations at all, and a visibility flip reaches every tracked player once,
+    /// ignoring the new flag (`setVisible` sends straight to `players`, unlike
+    /// `broadcast`).
+    #[test]
+    fn boss_event_visibility_gates_and_transitions_the_queue() {
+        init_vanilla_registry();
+        let fixture = fresh_test_world("boss_event_visibility");
+        let (player, connection) = recording_player(&fixture.world, "HiddenViewer");
+        connection.reset();
+
+        let mut bar = ServerBossEvent::new(
+            Uuid::new_v4(),
+            TextComponent::plain("Raid"),
+            BossBarColor::Red,
+            BossBarOverlay::Notched10,
+        );
+        bar.add_player(Arc::clone(&player));
+        assert_eq!(bar.player_count(), 1);
+        // Vanilla `ServerBossEvent.addPlayer` sends the add to that one player right away.
+        let added = bar.drain_packets();
+        assert_eq!(added.len(), 1);
+        assert_eq!(operation_name(&added[0].operation), "add");
+
+        // Vanilla `ServerBossEvent.setVisible(false)` sends the remove to every tracked
+        // player even though `broadcast` would now drop operations.
+        bar.set_visible(false);
+        assert!(!bar.is_visible());
+        let hidden = bar.drain_packets();
+        assert_eq!(hidden.len(), 1);
+        assert_eq!(operation_name(&hidden[0].operation), "remove");
+
+        // `broadcast` is suppressed while hidden.
+        bar.set_progress(0.25);
+        bar.set_name(TextComponent::plain("Raid II"));
+        assert!(!bar.has_pending_packets());
+
+        // Re-showing the bar sends the add to every still-tracked player.
+        bar.set_visible(true);
+        let shown = bar.drain_packets();
+        assert_eq!(shown.len(), 1);
+        let BossEventOperation::Add { progress, .. } = &shown[0].operation else {
+            panic!("re-showing the bar re-adds it: {:?}", shown[0].operation);
+        };
+        assert!((progress - 0.25).abs() < f32::EPSILON);
+
+        // A delivered operation now reaches the tracked player's connection.
+        bar.set_progress(0.75);
+        let queued = bar.drain_packets().len();
+        assert_eq!(queued, 1, "one progress operation was queued");
+        // Deliver it for real: the drain empties the queue and writes to the viewer.
+        bar.set_progress(0.5);
+        connection.reset();
+        bar.broadcast_pending();
+        assert!(!bar.has_pending_packets());
+        assert!(
+            connection.sent() >= 1,
+            "the queued operation reached the viewer's connection"
+        );
+    }
+}

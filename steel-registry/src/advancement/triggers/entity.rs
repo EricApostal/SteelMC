@@ -112,7 +112,7 @@ impl KilledTriggerInstance {
 }
 
 /// A damage view carrying no damage source, used when vanilla passes no damage.
-fn empty_damage() -> DamageView<'static> {
+const fn empty_damage() -> DamageView<'static> {
     DamageView {
         original: 0.0,
         actual: 0.0,

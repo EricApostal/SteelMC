@@ -12,18 +12,18 @@ use simdnbt::borrow::read_compound as read_borrowed_compound;
 use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_registry::init_vanilla_registry;
 use steel_registry::vanilla_blocks;
-use steel_utils::{ChunkPos, Identifier};
+use steel_utils::{BlockStateId, ChunkPos, Identifier};
 use tokio::fs;
 
 use crate::chunk::heightmap::HeightmapType;
 use crate::chunk::light::DATA_LAYER_SIZE;
 use crate::chunk::status::ChunkStatus;
-use crate::chunk_saver::anvil::chunk::{chunk_to_nbt, nbt_to_chunk};
+use crate::chunk_saver::anvil::chunk::{block_state_at, chunk_to_nbt, nbt_to_chunk};
 use crate::chunk_saver::anvil::entities::{entity_from_nbt, entity_to_nbt};
 use crate::chunk_saver::anvil::nbt::{read_compressed_nbt, write_gzip_nbt, write_raw_nbt};
 use crate::chunk_saver::anvil::poi::{VanillaPoi, poi_from_nbt, poi_to_nbt};
 use crate::chunk_saver::anvil::region::AnvilRegionFile;
-use crate::chunk_saver::bit_pack::pack_indices_from_iter;
+use crate::chunk_saver::bit_pack::{pack_indices_from_iter, unpack_indices};
 use crate::chunk_saver::format::{
     PersistentBiomeData, PersistentBlockState, PersistentLightData, PersistentLightSection,
     PersistentSection, PersistentTick,
@@ -154,6 +154,44 @@ fn reborrow(bytes: &[u8]) -> simdnbt::borrow::BaseNbtCompound<'_> {
     read_borrowed_compound(&mut io::Cursor::new(bytes)).expect("test NBT should parse")
 }
 
+/// Every block state of one section, resolved through the chunk's own palette.
+fn section_blocks(chunk: &PersistentChunk<'_>, index: usize) -> Vec<BlockStateId> {
+    let base_y = MIN_Y + 16 * index as i32;
+    let mut blocks = Vec::with_capacity(4096);
+    for y in 0i32..16 {
+        for z in 0u8..16 {
+            for x in 0u8..16 {
+                blocks.push(
+                    block_state_at(chunk, x, (base_y + y) as i16, z, MIN_Y)
+                        .expect("section blocks should resolve"),
+                );
+            }
+        }
+    }
+    blocks
+}
+
+/// Every biome of one section (4×4×4 cells), resolved through the chunk's own palette.
+fn section_biomes(chunk: &PersistentChunk<'_>, index: usize) -> Vec<Identifier> {
+    let biomes = match &chunk.sections[index] {
+        PersistentSection::Homogeneous { biomes, .. }
+        | PersistentSection::Heterogeneous { biomes, .. } => biomes,
+    };
+    match biomes {
+        PersistentBiomeData::Homogeneous { biome } => {
+            vec![chunk.biomes[usize::from(*biome)].clone(); 64]
+        }
+        PersistentBiomeData::Heterogeneous {
+            palette,
+            bits_per_entry,
+            biome_data,
+        } => unpack_indices(biome_data, *bits_per_entry)
+            .take(64)
+            .map(|cell| chunk.biomes[usize::from(palette[cell as usize])].clone())
+            .collect(),
+    }
+}
+
 #[test]
 fn chunk_nbt_round_trips_blocks_biomes_light_ticks_heightmaps_and_entities() {
     init_vanilla_registry();
@@ -169,23 +207,85 @@ fn chunk_nbt_round_trips_blocks_biomes_light_ticks_heightmaps_and_entities() {
     assert_eq!(status, ChunkStatus::Full);
     assert_eq!(decoded.last_modified, chunk.last_modified);
     assert_eq!(decoded.inhabited_time, chunk.inhabited_time);
-    assert_eq!(decoded.sections.len(), chunk.sections.len());
-    assert_eq!(decoded.block_states, chunk.block_states);
-    assert_eq!(decoded.biomes, chunk.biomes);
+    // Vanilla `SerializableChunkData.read` materialises the dimension's whole section array, so
+    // the stored sections come back inside 24; the ones the file omits decode as air + plains.
+    assert_eq!(decoded.sections.len(), (HEIGHT / 16) as usize);
+    for index in 0..chunk.sections.len() {
+        assert_eq!(
+            section_blocks(&decoded, index),
+            section_blocks(&chunk, index),
+            "section {index} keeps its blocks at the same world Y"
+        );
+        assert_eq!(
+            section_biomes(&decoded, index),
+            section_biomes(&chunk, index),
+            "section {index} keeps its biomes at the same world Y"
+        );
+    }
+    for index in chunk.sections.len()..decoded.sections.len() {
+        assert_eq!(
+            section_blocks(&decoded, index),
+            vec![vanilla_blocks::AIR.default_state(); 4096],
+            "unstored section {index} decodes as air"
+        );
+    }
+    // Palettes are rebuilt in decode order (air and plains are interned first), so the chunk
+    // palettes are compared by membership, not by index.
+    assert!(
+        chunk
+            .block_states
+            .iter()
+            .all(|state| decoded.block_states.contains(state)),
+        "every stored block state survives decoding"
+    );
+    assert!(
+        chunk
+            .biomes
+            .iter()
+            .all(|biome| decoded.biomes.contains(biome)),
+        "every stored biome survives decoding"
+    );
     assert_eq!(decoded.block_ticks.len(), 1);
     assert_eq!(decoded.block_ticks[0].delay, 42);
     assert_eq!(decoded.block_ticks[0].priority, 2);
     assert_eq!(decoded.heightmaps.len(), 1);
     assert_eq!(decoded.heightmaps[0].data, chunk.heightmaps[0].data);
-    assert_eq!(decoded.entities.len(), 1);
-    assert_eq!(decoded.entities[0].uuid, chunk.entities[0].uuid);
-    assert_eq!(decoded.entities[0].tags, vec!["steel".to_owned()]);
+    // A full chunk keeps entities out of the chunk record: vanilla writes them to
+    // `entities/*.mca` (`ChunkType.LEVELCHUNK`), which is why the writer took
+    // `include_entities = false`.
+    assert!(decoded.entities.is_empty());
+
+    // The protochunk form (what the storage backend writes for unfinished chunks) does carry
+    // them inline, and they decode field for field.
+    let inline = chunk_to_nbt(&chunk, pos, ChunkStatus::Features, MIN_Y, HEIGHT, true);
+    let inline_bytes = write_raw_nbt(&inline);
+    let inline_borrowed = reborrow(&inline_bytes);
+    let inline_view = simdnbt::borrow::NbtCompound::from(&inline_borrowed);
+    let (with_entities, _) =
+        nbt_to_chunk(&inline_view, pos, MIN_Y, HEIGHT).expect("chunk should decode");
+    assert_eq!(with_entities.entities.len(), 1);
+    assert_eq!(with_entities.entities[0].uuid, chunk.entities[0].uuid);
+    assert_eq!(with_entities.entities[0].tags, vec!["steel".to_owned()]);
+    // Light keeps both its vanilla section Y and its bytes: light index 1 is the world section
+    // at `min_y`, i.e. tag `Y = min_y / 16 - 1 + 1`.
     assert_eq!(decoded.light.block.len(), 1);
     assert_eq!(decoded.light.sky.len(), 1);
     assert_eq!(
         decoded.light.block[0].section_index(),
         chunk.light.block[0].section_index()
     );
+    assert_eq!(
+        decoded.light.sky[0].section_index(),
+        chunk.light.sky[0].section_index()
+    );
+    let PersistentLightSection::Initialized { data, .. } = &decoded.light.block[0] else {
+        panic!("block light should decode as initialized");
+    };
+    assert_eq!(data.as_slice(), &[0x21u8; DATA_LAYER_SIZE][..]);
+    let PersistentLightSection::Initialized { data, .. } = &decoded.light.sky[0] else {
+        panic!("sky light should decode as initialized");
+    };
+    assert_eq!(data.as_slice(), &[0xFFu8; DATA_LAYER_SIZE][..]);
     assert_eq!(decoded.postprocessing, chunk.postprocessing);
     assert!(decoded.structure_starts.is_empty());
 }

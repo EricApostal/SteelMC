@@ -228,9 +228,7 @@ mod tests {
         // `from_seed` must keep producing the exact stream decoration code relies on.
         let mut seeded = WorldgenRandom::from_seed(987_654_321);
         let mut wrapped =
-            WorldgenRandom::from_source(RandomSource::Xoroshiro(Xoroshiro::from_seed(
-                987_654_321,
-            )));
+            WorldgenRandom::from_source(RandomSource::Xoroshiro(Xoroshiro::from_seed(987_654_321)));
         for _ in 0..200 {
             assert_eq!(seeded.next_i32(), wrapped.next_i32());
             assert_eq!(seeded.next_i32_bounded(37), wrapped.next_i32_bounded(37));

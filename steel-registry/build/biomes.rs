@@ -444,7 +444,7 @@ fn validate_spawn_data(biomes: &[(String, BiomeJson)]) {
 
     let nether_wastes = biome_named("nether_wastes");
     assert_eq!(
-        monster_types(&nether_wastes),
+        monster_types(nether_wastes),
         vec![
             "enderman",
             "ghast",
@@ -466,7 +466,7 @@ fn validate_spawn_data(biomes: &[(String, BiomeJson)]) {
 
     let the_end = biome_named("the_end");
     assert_eq!(
-        monster_types(&the_end),
+        monster_types(the_end),
         vec!["enderman"],
         "the_end monster list diverged from vanilla"
     );

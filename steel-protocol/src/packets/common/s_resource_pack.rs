@@ -54,3 +54,36 @@ pub struct SResourcePack {
     /// The action the client performed.
     pub action: ResourcePackAction,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use steel_utils::serial::ReadFrom as _;
+
+    use super::*;
+
+    #[test]
+    fn resource_pack_reads_uuid_then_action_ordinal() {
+        let id = Uuid::from_u128(0x0011_2233_4455_6677_8899_aabb_ccdd_eeff);
+        let mut bytes = id.as_bytes().to_vec();
+        bytes.push(ResourcePackAction::Declined as u8);
+
+        let packet = SResourcePack::read(&mut Cursor::new(&bytes[..])).expect("should decode");
+
+        assert_eq!(packet.id, id);
+        assert_eq!(packet.action, ResourcePackAction::Declined);
+    }
+
+    #[test]
+    fn only_accepted_and_downloaded_are_non_terminal() {
+        assert!(!ResourcePackAction::Accepted.is_terminal());
+        assert!(!ResourcePackAction::Downloaded.is_terminal());
+        assert!(ResourcePackAction::SuccessfullyLoaded.is_terminal());
+        assert!(ResourcePackAction::Declined.is_terminal());
+        assert!(ResourcePackAction::FailedDownload.is_terminal());
+        assert!(ResourcePackAction::InvalidUrl.is_terminal());
+        assert!(ResourcePackAction::FailedReload.is_terminal());
+        assert!(ResourcePackAction::Discarded.is_terminal());
+    }
+}

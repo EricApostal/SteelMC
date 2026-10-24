@@ -3,10 +3,12 @@
 //! Five container slots (bottles 0-2, ingredient 3, fuel 4) plus the player
 //! inventory; four data slots track brew time, fuel, and their totals.
 
+use steel_registry::data_components::vanilla_components;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_menu_types;
 use steel_utils::{DowncastType, DowncastTypeKey, locks::Shared};
 
+use crate::behavior::advancement_hooks::raise_brewed_potion;
 use crate::block_entity::entities::BrewingStandContainer;
 use crate::inventory::menu::builder::SectionKind;
 use crate::inventory::prelude::*;
@@ -110,6 +112,22 @@ impl Slot for BrewingPotionSlot {
     /// holds exactly one item, so an occupied slot reports no capacity.
     fn get_max_stack_size(&self, _guard: &ContainerLockGuard) -> i32 {
         1
+    }
+
+    fn on_take(
+        &self,
+        guard: &mut ContainerLockGuard,
+        stack: &ItemStack,
+        player: &Player,
+    ) -> Option<ItemStack> {
+        // Vanilla `BrewingStandMenu.PotionSlot.onTake`: the `brewed_potion`
+        // trigger fires before the slot's own callback. Raising a trigger takes
+        // the advancement and recipe-book locks, so it runs with the containers
+        // released, like the unlocked result-slot side effects.
+        if let Some(contents) = stack.get(vanilla_components::POTION_CONTENTS).cloned() {
+            guard.run_unlocked(|| raise_brewed_potion(player, &contents));
+        }
+        self.base.on_take(guard, stack, player)
     }
 
     fn set_changed(&self, guard: &mut ContainerLockGuard) {
@@ -295,10 +313,16 @@ impl MenuKind for BrewingStandKind {
 mod tests {
     use std::sync::Arc;
 
-    use steel_registry::{init_vanilla_registry, item_stack::ItemStack, vanilla_items};
+    use steel_registry::data_components::vanilla_components;
+    use steel_registry::data_components::{DataComponentPatch, PotionContents};
+    use steel_registry::{
+        init_vanilla_registry, item_stack::ItemStack, registry_reference::RegistryReference,
+        vanilla_game_rules, vanilla_items, vanilla_potions,
+    };
     use steel_utils::locks::{IntoShared as _, Shared};
 
     use super::{FUEL_SLOT, INGREDIENT_SLOT, brewing_stand};
+    use crate::behavior::advancement_hooks::test_support::criterion_granted;
     use crate::block_entity::entities::BrewingStandContainer;
     use crate::inventory::click::{Click, MouseButton};
     use crate::inventory::container::{Container as _, SimpleContainer};
@@ -310,6 +334,21 @@ mod tests {
     /// Menu slot of the first main-inventory slot: the five container slots come
     /// first, then the 27 main slots in inventory order 9..36.
     const FIRST_MAIN_SLOT: usize = 5;
+
+    /// A potion carrying `minecraft:potion_contents`, as a brewed bottle does.
+    fn brewed_potion() -> ItemStack {
+        let mut patch = DataComponentPatch::new();
+        patch.set(
+            vanilla_components::POTION_CONTENTS,
+            PotionContents::new(
+                Some(RegistryReference::new(&vanilla_potions::AWKWARD)),
+                None,
+                Vec::new(),
+                None,
+            ),
+        );
+        ItemStack::with_count_and_patch(&vanilla_items::POTION, 1, patch)
+    }
 
     /// Builds a brewing stand menu over a five-slot stand container.
     fn brewing_menu(key: &'static str) -> (TestWorld, Arc<Player>, Shared<SimpleContainer>) {
@@ -402,6 +441,40 @@ mod tests {
                 .is(&vanilla_items::GLASS_BOTTLE)
         );
         assert!(player.inventory.lock().get_item(9).is_empty());
+    }
+
+    #[test]
+    fn taking_a_brewed_potion_fires_brewed_potion() {
+        let (world_fixture, player, container) = brewing_menu("brewing_stand_brewed_potion");
+        // The test player has no server to announce the chat message to.
+        assert!(
+            world_fixture
+                .world
+                .set_game_rule(&vanilla_game_rules::SHOW_ADVANCEMENT_MESSAGES, false)
+        );
+        let mut menu = brewing_stand(
+            Arc::clone(&player.inventory),
+            1,
+            ContainerRef::from(Arc::clone(&container)),
+        );
+        container.lock().set_item(0, brewed_potion());
+
+        menu.clicked(
+            Click::Pickup {
+                slot: 0,
+                button: MouseButton::Left,
+            },
+            &player,
+        );
+
+        assert!(
+            menu.behavior().carried().is(&vanilla_items::POTION),
+            "the brewed bottle moves to the cursor"
+        );
+        assert!(
+            criterion_granted(&player, "nether/brew_potion", "potion"),
+            "taking a potion out of a bottle slot completes `nether/brew_potion`"
+        );
     }
 
     #[test]

@@ -19,10 +19,14 @@ use steel_registry::{DyeColor, vanilla_block_entity_types};
 use steel_utils::{
     BlockPos, BlockStateId, DowncastType, DowncastTypeKey, locks::SyncMutex, types::SignTextSlot,
 };
-use text_components::{TextComponent, content::Content};
+use text_components::{
+    Modifier, TextComponent, content::Content, format::Color, translation::TranslatedMessage,
+};
 use uuid::Uuid;
 
 use crate::block_entity::{BlockEntity, BlockEntityBase};
+use crate::command::sender::CommandSender;
+use crate::player::Player;
 use crate::world::World;
 
 /// Number of text lines on each side of a sign.
@@ -76,6 +80,34 @@ impl SignText {
             self.messages[index] = message.clone();
             self.filtered_messages[index] = message;
         }
+    }
+
+    /// Vanilla `SignBlockEntity.updateMessages`: replaces one line's text while
+    /// keeping the line's existing style.
+    ///
+    /// The style carries the click and hover events that make sign commands
+    /// work, so editing a line must not drop them.
+    pub fn set_message_preserving_style(&mut self, index: usize, message: &str) {
+        if index >= SIGN_LINES {
+            return;
+        }
+        let mut line = TextComponent::plain(message.to_owned());
+        line.format = self.messages[index].format.clone();
+        line.interactions = self.messages[index].interactions.clone();
+        self.messages[index] = line.clone();
+        self.filtered_messages[index] = line;
+    }
+
+    /// Vanilla `SignText.hasAnyClickCommands`: whether any line carries a
+    /// `run_command` click event.
+    #[must_use]
+    pub fn has_any_click_commands(&self) -> bool {
+        self.messages.iter().any(|line| {
+            matches!(
+                line.interactions.click.as_ref(),
+                Some(text_components::interactivity::ClickEvent::RunCommand { .. })
+            )
+        })
     }
 
     /// Checks if any line has text content.
@@ -195,6 +227,9 @@ struct SignState {
     back_text: SignText,
     /// Whether the sign is waxed (prevents editing).
     is_waxed: bool,
+    /// Vanilla `allow_op_features`: whether click commands on this sign run
+    /// with op features. Only NBT-authored signs set it.
+    allow_op_features: bool,
     /// UUID of the player currently allowed to edit this sign.
     /// Used to prevent multiple players from editing simultaneously.
     player_who_may_edit: Option<Uuid>,
@@ -233,6 +268,7 @@ impl SignBlockEntity {
                 front_text: SignText::new(),
                 back_text: SignText::new(),
                 is_waxed: false,
+                allow_op_features: false,
                 player_who_may_edit: None,
             }),
         }
@@ -273,6 +309,82 @@ impl SignBlockEntity {
     #[must_use]
     pub fn is_waxed(&self) -> bool {
         self.sign.lock().is_waxed
+    }
+
+    /// Vanilla `SignBlockEntity.allowOpFeatures`.
+    #[must_use]
+    pub fn allows_op_features(&self) -> bool {
+        self.sign.lock().allow_op_features
+    }
+
+    /// Vanilla `SignText.hasAnyClickCommands` for one side.
+    #[must_use]
+    pub fn has_any_click_commands(&self, slot: SignTextSlot) -> bool {
+        self.get_text(slot).has_any_click_commands()
+    }
+
+    /// Vanilla `SignBlockEntity.canExecuteClickCommands`: a waxed sign whose
+    /// side carries a `run_command` click event.
+    #[must_use]
+    pub fn can_execute_click_commands(&self, slot: SignTextSlot) -> bool {
+        self.is_waxed() && self.has_any_click_commands(slot)
+    }
+
+    /// Vanilla `SignBlockEntity.executeClickCommandsIfPresent`: runs the
+    /// `run_command` click events on one side and reports whether any were
+    /// found.
+    ///
+    /// Vanilla builds a `GAMEMASTER`-level command source carrying the player
+    /// as its entity. Steel's command queue only offers player-sourced
+    /// execution, so the command runs with the clicking player's permissions;
+    /// the `found` result and the `sign.click_actions_disabled` overlay match
+    /// vanilla.
+    pub fn execute_click_commands_if_present(
+        &self,
+        world: &Arc<World>,
+        player: &Player,
+        slot: SignTextSlot,
+    ) -> bool {
+        let text = self.get_text(slot);
+        let allow_op_features = self.allows_op_features();
+        let mut found = false;
+        for line in &text.messages {
+            let Some(text_components::interactivity::ClickEvent::RunCommand { command }) =
+                line.interactions.click.as_ref()
+            else {
+                continue;
+            };
+            if allow_op_features {
+                let Some(source) = world.players.get_by_uuid(&player.gameprofile.id()) else {
+                    continue;
+                };
+                let command = command.strip_prefix('/').unwrap_or(command);
+                let _ = player
+                    .server()
+                    .submit_command(CommandSender::Player(source), command.to_owned());
+            }
+            found = true;
+        }
+        if found && !allow_op_features {
+            player.send_overlay_message(
+                &TextComponent::translated(TranslatedMessage::new(
+                    "sign.click_actions_disabled",
+                    None,
+                ))
+                .color(Color::Red),
+            );
+        }
+        found
+    }
+
+    /// Replaces one side's lines while keeping each line's style, mirroring
+    /// vanilla `SignBlockEntity.updateSignText` → `updateMessages`.
+    pub fn set_lines_preserving_style(&self, slot: SignTextSlot, lines: &[String]) {
+        let mut text = self.get_text(slot);
+        for (index, line) in lines.iter().take(SIGN_LINES).enumerate() {
+            text.set_message_preserving_style(index, line);
+        }
+        self.set_text(text, slot);
     }
 
     /// Vanilla `SignBlockEntity.setWaxed(true)`: returns whether the state changed
@@ -365,6 +477,10 @@ impl BlockEntity for SignBlockEntity {
 
         // Vanilla `input.getBooleanOr("is_waxed", false)`.
         sign.is_waxed = nbt_view.byte("is_waxed").is_some_and(|waxed| waxed != 0);
+        // Vanilla `input.getBooleanOr("allow_op_features", false)`.
+        sign.allow_op_features = nbt_view
+            .byte("allow_op_features")
+            .is_some_and(|allow| allow != 0);
     }
 
     fn apply_components_from_item(&self, item: &ItemStack) {
@@ -376,6 +492,10 @@ impl BlockEntity for SignBlockEntity {
 
     fn save_additional(&self, nbt: &mut NbtCompound) {
         let sign = self.sign.lock();
+        // Vanilla only writes `allow_op_features` when it is set.
+        if sign.allow_op_features {
+            nbt.insert("allow_op_features", 1_i8);
+        }
         // Save front text
         let mut front_nbt = NbtCompound::new();
         sign.front_text.save(&mut front_nbt);
@@ -580,5 +700,56 @@ mod tests {
 
         sign.tick(world);
         assert_eq!(sign.get_player_who_may_edit(), None);
+    }
+
+    /// Vanilla `SignBlockEntity.updateMessages` copies the old line's style onto
+    /// the new literal, so a `run_command` click event survives editing.
+    #[test]
+    fn edited_sign_lines_keep_their_click_events() {
+        let mut text = SignText::new();
+        text.messages[0] = TextComponent::plain("old").click_event(
+            text_components::interactivity::ClickEvent::run_command("/say hi"),
+        );
+        text.set_message_preserving_style(0, "new");
+
+        assert!(text.has_any_click_commands());
+        let line = &text.messages[0];
+        assert!(matches!(
+            &line.content,
+            text_components::content::Content::Text { text } if text.as_ref() == "new"
+        ));
+        assert!(matches!(
+            line.interactions.click.as_ref(),
+            Some(text_components::interactivity::ClickEvent::RunCommand { .. })
+        ));
+        assert_eq!(text.filtered_messages[0], text.messages[0]);
+    }
+
+    /// Vanilla only writes `allow_op_features` when it is set and reads it back
+    /// from NBT; the flag gates sign click-command execution.
+    #[test]
+    fn allow_op_features_round_trips_through_nbt() {
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world("sign_allow_op_features");
+        let world = &world_fixture.world;
+        let sign = SignBlockEntity::new(
+            Arc::downgrade(world),
+            BlockPos::new(4, 64, 4),
+            vanilla_blocks::OAK_SIGN.default_state(),
+        );
+        assert!(!sign.allows_op_features());
+
+        let mut nbt = NbtCompound::new();
+        nbt.insert("allow_op_features", 1_i8);
+        let mut bytes = Vec::new();
+        nbt.write(&mut bytes);
+        let borrowed = simdnbt::borrow::read_compound(&mut Cursor::new(bytes.as_slice()))
+            .expect("allow_op_features NBT should reborrow");
+        sign.load_additional(&borrowed);
+        assert!(sign.allows_op_features());
+
+        let mut saved = NbtCompound::new();
+        sign.save_additional(&mut saved);
+        assert_eq!(saved.get("allow_op_features"), Some(&NbtTag::Byte(1)));
     }
 }
