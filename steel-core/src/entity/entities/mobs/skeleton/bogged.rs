@@ -367,7 +367,7 @@ impl AbstractSkeleton for BoggedEntity {
         let arrow = SkeletonArrow::base(power);
         SkeletonArrow {
             effect: Some(MobEffectInstance::with_duration(
-                &vanilla_mob_effects::POISON,
+                vanilla_mob_effects::POISON,
                 BOGGED_POISON_DURATION,
                 0,
             )),

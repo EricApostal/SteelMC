@@ -8,6 +8,7 @@
 //! because Steel has no client.
 
 use std::array;
+use std::f32::consts::PI;
 use std::fmt;
 use std::mem;
 use std::sync::Arc;
@@ -35,9 +36,9 @@ use crate::world::{LevelReader, World};
 use super::ender_dragon::{DragonPath, EnderDragonEntity, normalize_vec};
 
 /// Degrees-to-radians factor used throughout the vanilla dragon.
-const DEG_TO_RAD: f32 = f32::consts::PI / 180.0;
+const DEG_TO_RAD: f32 = PI / 180.0;
 /// Radians-to-degrees factor used throughout the vanilla dragon.
-const RAD_TO_DEG: f32 = 180.0 / f32::consts::PI;
+const RAD_TO_DEG: f32 = 180.0 / PI;
 /// Vanilla `DragonChargePlayerPhase.CHARGE_RECOVERY_TIME`.
 const CHARGE_RECOVERY_TIME: i32 = 10;
 /// Vanilla `DragonStrafePlayerPhase.FIREBALL_CHARGE_AMOUNT`.
@@ -341,7 +342,7 @@ impl DragonHoldingPatternPhase {
                 && (dragon.random_i32_bounded(dist_sqr as i32 + 2) == 0
                     || dragon.random_i32_bounded(crystals + 2) == 0)
             {
-                self.strafe_player(dragon, player);
+                Self::strafe_player(dragon, player);
                 return;
             }
         }
@@ -362,17 +363,13 @@ impl DragonHoldingPatternPhase {
 
             if dragon.dragon_fight_present() && dragon.alive_crystals() >= 0 {
                 target_node_index %= 12;
-                if target_node_index < 0 {
-                    target_node_index += 12;
-                }
             } else {
                 target_node_index -= 12;
                 target_node_index &= 7;
                 target_node_index += 12;
             }
 
-            self.current_path =
-                dragon.find_path(current_node_index, target_node_index.max(0) as usize, None);
+            self.current_path = dragon.find_path(current_node_index, target_node_index, None);
             if let Some(path) = self.current_path.as_mut() {
                 path.advance();
             }
@@ -383,7 +380,7 @@ impl DragonHoldingPatternPhase {
         }
     }
 
-    fn strafe_player(&self, dragon: &EnderDragonEntity, player: Arc<Player>) {
+    fn strafe_player(dragon: &EnderDragonEntity, player: Arc<Player>) {
         dragon.set_phase(EnderDragonPhase::StrafePlayer);
         let player: SharedEntity = player;
         dragon
@@ -494,17 +491,13 @@ impl DragonStrafePlayerPhase {
 
             if dragon.dragon_fight_present() && dragon.alive_crystals() > 0 {
                 target_node_index %= 12;
-                if target_node_index < 0 {
-                    target_node_index += 12;
-                }
             } else {
                 target_node_index -= 12;
                 target_node_index &= 7;
                 target_node_index += 12;
             }
 
-            self.current_path =
-                dragon.find_path(current_node_index, target_node_index.max(0) as usize, None);
+            self.current_path = dragon.find_path(current_node_index, target_node_index, None);
             if let Some(path) = self.current_path.as_mut() {
                 path.advance();
             }
@@ -515,12 +508,7 @@ impl DragonStrafePlayerPhase {
         }
     }
 
-    fn spawn_fireball(
-        &self,
-        dragon: &EnderDragonEntity,
-        world: &Arc<World>,
-        target: &SharedEntity,
-    ) {
+    fn spawn_fireball(dragon: &EnderDragonEntity, world: &Arc<World>, target: &SharedEntity) {
         let Some(owner) = dragon.shared_handle() else {
             return;
         };
@@ -619,7 +607,8 @@ impl DragonPhaseInstance for DragonStrafePlayerPhase {
                     target_position.z - position.z,
                 ));
                 let yaw = dragon.rotation().0 * DEG_TO_RAD;
-                let dir = normalize_vec(DVec3::new(yaw.sin() as f64, 0.0, -(yaw.cos() as f64)));
+                let dir =
+                    normalize_vec(DVec3::new(f64::from(yaw.sin()), 0.0, -f64::from(yaw.cos())));
                 let dot = dir.dot(aim) as f32;
                 let mut angle_degrees = dot.acos() * RAD_TO_DEG;
                 angle_degrees += 0.5;
@@ -627,7 +616,7 @@ impl DragonPhaseInstance for DragonStrafePlayerPhase {
                 if self.fireball_charge >= FIREBALL_CHARGE_AMOUNT
                     && (0.0..10.0).contains(&angle_degrees)
                 {
-                    self.spawn_fireball(dragon, world, &attack_target);
+                    Self::spawn_fireball(dragon, world, &attack_target);
                     self.fireball_charge = 0;
                     if let Some(path) = self.current_path.as_mut() {
                         while !path.is_done() {
@@ -901,16 +890,16 @@ impl DragonTakeoffPhase {
             dragon.find_path(current_node_index, target_node_index.max(0) as usize, None);
         if let Some(path) = self.current_path.as_mut() {
             path.advance();
-            if !path.is_done() {
-                if let Some(current) = path.next_node_pos() {
-                    path.advance();
-                    let y_target = f64::from(current.y()) + f64::from(dragon.random_f32()) * 20.0;
-                    self.target_location = Some(DVec3::new(
-                        f64::from(current.x()),
-                        y_target,
-                        f64::from(current.z()),
-                    ));
-                }
+            if !path.is_done()
+                && let Some(current) = path.next_node_pos()
+            {
+                path.advance();
+                let y_target = f64::from(current.y()) + f64::from(dragon.random_f32()) * 20.0;
+                self.target_location = Some(DVec3::new(
+                    f64::from(current.x()),
+                    y_target,
+                    f64::from(current.z()),
+                ));
             }
         }
     }
@@ -969,7 +958,7 @@ impl DragonSittingFlamingPhase {
     }
 
     /// Vanilla `resetFlameCount`.
-    fn reset_flame_count(&mut self) {
+    const fn reset_flame_count(&mut self) {
         self.flame_count = 0;
     }
 
@@ -1119,7 +1108,8 @@ impl DragonPhaseInstance for DragonSittingScanningPhase {
                     target_position.z - position.z,
                 ));
                 let yaw = dragon.rotation().0 * DEG_TO_RAD;
-                let dir = normalize_vec(DVec3::new(yaw.sin() as f64, 0.0, -(yaw.cos() as f64)));
+                let dir =
+                    normalize_vec(DVec3::new(f64::from(yaw.sin()), 0.0, -f64::from(yaw.cos())));
                 let dot = dir.dot(aim) as f32;
                 let angle = dot.acos() * RAD_TO_DEG + 0.5;
                 if !(0.0..10.0).contains(&angle) {
@@ -1233,7 +1223,7 @@ impl DragonChargePlayerPhase {
     }
 
     /// Vanilla `setTarget`.
-    fn set_target(&mut self, target: DVec3) {
+    const fn set_target(&mut self, target: DVec3) {
         self.target_location = Some(target);
     }
 }
@@ -1342,8 +1332,7 @@ impl DragonPhaseInstance for DragonDeathPhase {
         let distance = (target.x - position.x) * (target.x - position.x)
             + (target.y - position.y) * (target.y - position.y)
             + (target.z - position.z) * (target.z - position.z);
-        if distance >= RETARGET_MIN_DISTANCE_SQR
-            && distance <= RETARGET_MAX_DISTANCE_SQR
+        if (RETARGET_MIN_DISTANCE_SQR..=RETARGET_MAX_DISTANCE_SQR).contains(&distance)
             && !dragon.horizontal_collision()
             && !dragon.vertical_collision()
         {

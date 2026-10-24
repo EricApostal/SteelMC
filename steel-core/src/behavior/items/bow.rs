@@ -296,13 +296,7 @@ fn shoot_arrows(
         let angle = angle_offset + direction * ((index + 1) / 2) as f32 * angle_step;
         direction = -direction;
 
-        let arrow = create_arrow(
-            world,
-            shooter.position(),
-            projectile,
-            Some(owner),
-            Some(weapon),
-        );
+        let arrow = create_arrow(world, projectile, owner, Some(weapon));
         if is_crit && let Some(arrow) = arrow.downcast_ref::<ArrowEntity>() {
             arrow.set_crit_arrow(true);
         }
@@ -322,6 +316,94 @@ fn shoot_arrows(
         weapon.hurt_and_break(1, has_infinite_materials);
         if weapon.is_empty() {
             break;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use glam::DVec3;
+    use steel_registry::{init_vanilla_registry, vanilla_entities, vanilla_items};
+    use steel_utils::{ChunkPos, WorldAabb};
+
+    use super::*;
+    use crate::behavior::ITEM_BEHAVIORS;
+    use crate::behavior::init_behaviors;
+    use crate::test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk};
+
+    /// A full-draw bow shot spawns the arrow at the shooter's eyes minus the
+    /// vanilla `AbstractArrow` spawn offset, launches it at `power * 3` along
+    /// the look direction, and advances it by that velocity each tick
+    /// (`AbstractArrow.tick` moves a clean miss to the clip's end point).
+    /// Spawning at the feet drops the arrow at the shooter's feet, and
+    /// skipping the miss advance freezes it there.
+    #[test]
+    fn full_draw_shot_launches_from_the_eye_and_flies_forward() {
+        init_vanilla_registry();
+        init_behaviors();
+        let fixture = fresh_test_world("bow_full_draw_flight");
+        let world = &fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+
+        let player = TestPlayerBuilder::new(Arc::clone(world), "Shooter", 7).build();
+        let player_entity: SharedEntity = Arc::<Player>::clone(&player);
+        player.try_set_position(DVec3::new(0.5, 65.0, 0.5)).unwrap();
+        player.set_rotation((0.0, 0.0));
+        world
+            .try_add_entity(Arc::clone(&player_entity))
+            .expect("shooter joins the world");
+        {
+            let mut inventory = player.inventory.lock();
+            inventory.set_selected_item(ItemStack::new(&vanilla_items::BOW));
+            inventory.set_item(1, ItemStack::with_count(&vanilla_items::ARROW, 16));
+        }
+
+        // A 20-tick hold is a full draw in vanilla (`power == 1.0`).
+        let mut bow = ItemStack::new(&vanilla_items::BOW);
+        let behavior = ITEM_BEHAVIORS.get_behavior(&vanilla_items::BOW);
+        assert!(behavior.release_using(&mut bow, world, player.as_ref(), USE_DURATION - 20));
+
+        let arrows = world.get_entities_in_aabb_matching(
+            &WorldAabb::new(-8.0, 60.0, -8.0, 8.0, 70.0, 8.0),
+            |entity| entity.entity_type() == &vanilla_entities::ARROW,
+        );
+        assert_eq!(arrows.len(), 1);
+        let arrow = &arrows[0];
+
+        // Vanilla `AbstractArrow(LivingEntity, …)` spawns at `getEyeY() - 0.1`.
+        let expected_spawn = DVec3::new(0.5, player.get_eye_y() - 0.1, 0.5);
+        assert!(
+            (arrow.position() - expected_spawn).length() < 1e-9,
+            "arrow spawns at the eyes, not the feet: {:?} (eyes {:?})",
+            arrow.position(),
+            expected_spawn,
+        );
+
+        // Vanilla `power * 3.0` along the look vector, with spread `1.0`.
+        let velocity = arrow.velocity();
+        assert!(
+            (velocity.length() - 3.0).abs() < 0.1,
+            "full-draw arrow flies at speed 3: {velocity:?}"
+        );
+        assert!(
+            velocity.x.abs() < 0.06 && velocity.y.abs() < 0.06 && velocity.z > 2.9,
+            "arrow leaves along the shooter's look direction: {velocity:?}"
+        );
+
+        // Each tick must move the arrow forward; gravity only bends the arc
+        // downward (the `1.0` spread may tilt the first step slightly upward).
+        for _ in 0..4 {
+            let from = arrow.position();
+            Arc::clone(arrow).tick();
+            let step = arrow.position() - from;
+            assert!(
+                step.z > 2.5,
+                "arrow advances along its launch direction: {step:?}"
+            );
+            assert!(
+                (-0.2..=0.06).contains(&step.y),
+                "arrow keeps its arc instead of dropping: {step:?}"
+            );
         }
     }
 }

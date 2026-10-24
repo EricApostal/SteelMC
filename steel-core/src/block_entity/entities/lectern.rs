@@ -132,8 +132,8 @@ impl LecternContainer {
     /// Mirrors vanilla `setBook`, including recomputing the page count.
     pub fn set_book(&mut self, book: ItemStack) {
         self.page_count = page_count_for_book(&book);
-        let has_book = book.get(WRITABLE_BOOK_CONTENT).is_some()
-            || book.get(WRITTEN_BOOK_CONTENT).is_some();
+        let has_book =
+            book.get(WRITABLE_BOOK_CONTENT).is_some() || book.get(WRITTEN_BOOK_CONTENT).is_some();
         self.book = book;
         self.page = 0;
         self.pending_book_state = Some(has_book);

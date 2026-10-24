@@ -161,10 +161,10 @@ impl FeatureDecorationRunner {
                         .get_value_2d(f64::from(pos.x()) * 0.2, f64::from(pos.z()) * 0.2),
                 );
                 if large + edge < 0.3 {
-                    let small = f64::from(BIOME_INFO_NOISE.get_value_2d(
-                        f64::from(pos.x()) * 0.09,
-                        f64::from(pos.z()) * 0.09,
-                    ));
+                    let small = f64::from(
+                        BIOME_INFO_NOISE
+                            .get_value_2d(f64::from(pos.x()) * 0.09, f64::from(pos.z()) * 0.09),
+                    );
                     if small < 0.8 { 0.2 } else { base_temp }
                 } else {
                     base_temp

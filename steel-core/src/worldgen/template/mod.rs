@@ -127,7 +127,7 @@ mod placement;
 mod processors;
 mod state_transforms;
 
-pub(crate) use level_access::{LiveLevel, TemplateLevelAccess};
+pub(crate) use level_access::TemplateLevelAccess;
 
 #[cfg(test)]
 mod tests;

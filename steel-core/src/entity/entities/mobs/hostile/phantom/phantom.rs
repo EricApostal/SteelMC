@@ -4,6 +4,7 @@
 //! navigation; Steel has neither, so the phantom drives its own velocity toward the vanilla
 //! `moveTargetPoint` (documented deviation: no obstacle avoidance while swooping).
 
+use std::f32::consts::PI;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -404,7 +405,7 @@ impl PhantomCircleAroundAnchorGoal {
         if phantom.anchor_point().is_none() {
             phantom.set_anchor_point(Some(phantom.block_position()));
         }
-        self.angle += self.clockwise * 15.0 * (f32::consts::PI / 180.0);
+        self.angle += self.clockwise * 15.0 * (PI / 180.0);
         let anchor = phantom.anchor_or_block();
         phantom.set_move_target_point(DVec3::new(
             f64::from(anchor.x()) + f64::from(self.distance * self.angle.cos()),
@@ -452,7 +453,7 @@ impl Goal for PhantomCircleAroundAnchorGoal {
             }
         }
         if rand::random_range(0..225) == 0 {
-            self.angle = rand::random::<f32>() * 2.0 * f32::consts::PI;
+            self.angle = rand::random::<f32>() * 2.0 * PI;
             self.select_next(phantom);
         }
         if mob.position().distance_squared(phantom.move_target_point()) < 1.0 {
@@ -569,7 +570,7 @@ impl Goal for PhantomSweepAttackGoal {
         phantom.set_move_target_point(target_position);
 
         if mob.bounding_box().intersects(target.bounding_box()) {
-            Mob::do_hurt_target(phantom, entity, &world, &target);
+            let _ = Mob::do_hurt_target(phantom, entity, &world, &target);
             phantom.set_attack_phase(AttackPhase::Circle);
         }
     }
@@ -762,7 +763,9 @@ impl PathfinderMob for PhantomEntity {}
 
 #[cfg(test)]
 mod tests {
+    use simdnbt::owned::NbtCompound;
     use std::sync::Weak;
+    use steel_registry::vanilla_attributes;
 
     use glam::DVec3;
     use steel_registry::{init_vanilla_registry, vanilla_entities};
@@ -784,11 +787,11 @@ mod tests {
             phantom
                 .attributes()
                 .lock()
-                .get_value(steel_registry::vanilla_attributes::ATTACK_DAMAGE),
+                .get_value(vanilla_attributes::ATTACK_DAMAGE),
             Some(10.0)
         );
 
-        let mut nbt = simdnbt::owned::NbtCompound::new();
+        let mut nbt = NbtCompound::new();
         phantom.save_additional(&mut nbt);
         assert_eq!(nbt.int("size"), Some(4));
         assert_eq!(phantom.entity_type(), &vanilla_entities::PHANTOM);

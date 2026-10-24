@@ -13,6 +13,7 @@ use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::{MemoryModuleTypeRef, MemoryStatus, module_type as mem};
 use crate::entity::ai::brain::tracker::{BlockPosTracker, WalkTarget};
+use crate::entity::leash::Leashable;
 
 /// Vanilla `TransportItemsBetweenContainers.TARGET_INTERACTION_TIME`.
 pub const TARGET_INTERACTION_TIME: i32 = 60;
@@ -28,6 +29,10 @@ const IDLE_COOLDOWN: i32 = 140;
 const CLOSE_ENOUGH_TO_START_INTERACTING_DISTANCE: f64 = 0.5;
 
 /// Vanilla `TransportItemsBetweenContainers.ContainerInteractionState`.
+#[expect(
+    clippy::enum_variant_names,
+    reason = "Variant names mirror vanilla `ContainerInteractionState`"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContainerInteractionState {
     PickupItem,
@@ -179,6 +184,10 @@ impl TransportItemsBetweenContainers {
 
     /// Vanilla `isAnotherMobInteractingWithTarget` / chest search: no container IO
     /// on the behavior layer, so no target is ever valid here.
+    #[expect(
+        clippy::unused_self,
+        reason = "kept as a method to mirror vanilla `TransportItemsBetweenContainers`"
+    )]
     fn transport_target(&self, _body: &SharedEntity) -> Option<TransportItemTarget> {
         None
     }
@@ -194,18 +203,13 @@ impl Behavior for TransportItemsBetweenContainers {
     }
 
     fn check_extra_start_conditions(&self, ctx: &mut BehaviorContext<'_>) -> bool {
-        !ctx.body
-            .as_leashable()
-            .is_some_and(|leashable| leashable.is_leashed())
+        !ctx.body.as_leashable().is_some_and(Leashable::is_leashed)
     }
 
     fn can_still_use(&self, ctx: &mut BehaviorContext<'_>) -> bool {
         !ctx.has_memory_value(&mem::TRANSPORT_ITEMS_COOLDOWN_TICKS)
             && !ctx.has_memory_value(&mem::IS_PANICKING)
-            && !ctx
-                .body
-                .as_leashable()
-                .is_some_and(|leashable| leashable.is_leashed())
+            && !ctx.body.as_leashable().is_some_and(Leashable::is_leashed)
     }
 
     fn start(&mut self, ctx: &mut BehaviorContext<'_>) {

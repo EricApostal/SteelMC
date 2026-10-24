@@ -7,7 +7,6 @@ use super::utils;
 use crate::behavior::{BLOCK_BEHAVIORS, BlockCollisionContext};
 use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
 use crate::entity::ai::brain::memory::module_type as mem;
-use crate::world::LevelReader as _;
 
 /// Vanilla `TryFindLandNearLiquid` cooldown between accepted searches.
 const COOLDOWN_TICKS: i64 = 40;

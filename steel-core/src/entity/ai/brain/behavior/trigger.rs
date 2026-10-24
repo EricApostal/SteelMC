@@ -1,7 +1,7 @@
 //! Vanilla declarative `Trigger` and `OneShot`, plus the `BehaviorBuilder`
 //! combinators that translate to plain Rust.
 //!
-//! Vanilla's `BehaviorBuilder` is built on DataFixerUpper higher-kinded types,
+//! Vanilla's `BehaviorBuilder` is built on `DataFixerUpper` higher-kinded types,
 //! which have no Rust equivalent. The observable behavior is preserved by
 //! composing [`Trigger`]s instead: `BehaviorBuilder.sequence`/`triggerIf` and
 //! `TriggerGate` are covered by [`TriggerSequence`], [`TriggerIf`] and
@@ -111,7 +111,7 @@ where
     F: Fn(&mut BehaviorContext<'_>) -> bool + Send + Sync,
 {
     #[must_use]
-    pub fn new(predicate: F) -> Self {
+    pub const fn new(predicate: F) -> Self {
         Self { predicate }
     }
 }

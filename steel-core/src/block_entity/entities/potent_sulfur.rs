@@ -398,8 +398,10 @@ impl BlockEntity for PotentSulfurBlockEntity {
 
         // Vanilla ticker selection: `SERVER_NAUSEA_EFFECT_TICKER` runs for `WET` and `DORMANT`
         // only (`DORMANT` = `SERVER_WAITING_COUNTDOWN_TICKER.andThen(SERVER_NAUSEA_EFFECT_TICKER)`).
-        if matches!(&current, PotentSulfurState::Wet | PotentSulfurState::Dormant)
-            && game_time % EFFECT_APPLICATION_FREQUENCY_TICKS == 0
+        if matches!(
+            &current,
+            PotentSulfurState::Wet | PotentSulfurState::Dormant
+        ) && game_time % EFFECT_APPLICATION_FREQUENCY_TICKS == 0
         {
             Self::tick_nausea(world, pos);
         }

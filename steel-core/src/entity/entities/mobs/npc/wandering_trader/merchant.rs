@@ -5,6 +5,7 @@
 //! all reach the same state, and the entity can hand the menu an owned
 //! `Arc<dyn Merchant>` (it cannot recover an `Arc<Self>` from `&self`).
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use glam::DVec3;
@@ -65,7 +66,7 @@ impl TraderState {
     pub(crate) fn bind_entity(&self, entity: &SharedEntity) {
         let mut stored = self.entity.lock();
         if stored.is_none() {
-            *stored = Some(std::sync::Arc::downgrade(entity));
+            *stored = Some(Arc::downgrade(entity));
         }
     }
 
@@ -74,7 +75,7 @@ impl TraderState {
         self.entity.lock().as_ref().and_then(WeakEntity::upgrade)
     }
 
-    pub(crate) fn inventory(&self) -> &SyncMutex<InventoryCarrier> {
+    pub(crate) const fn inventory(&self) -> &SyncMutex<InventoryCarrier> {
         &self.inventory
     }
 
@@ -135,14 +136,14 @@ impl TraderState {
             return self.offers_initialized.load(Ordering::Acquire);
         };
 
-        let offers = self.update_trades(entity, world.as_ref());
+        let offers = Self::update_trades(entity, world.as_ref());
         *self.offers.lock() = offers;
         self.offers_initialized.store(true, Ordering::Release);
         true
     }
 
     /// Vanilla `WanderingTrader.updateTrades`: buying, uncommon, then common.
-    fn update_trades(&self, entity: &dyn Entity, world: &World) -> MerchantOffers {
+    fn update_trades(entity: &dyn Entity, world: &World) -> MerchantOffers {
         let mut offers = MerchantOffers::new();
         let position = entity.position();
         let equipment = entity.as_living_entity().map(living_loot_equipment);
@@ -165,7 +166,7 @@ impl TraderState {
     }
 
     /// Vanilla `WanderingTrader.rewardTradeXp`.
-    fn reward_trade_xp(&self, entity: &dyn Entity, offer: &MerchantOffer) {
+    fn reward_trade_xp(entity: &dyn Entity, offer: &MerchantOffer) {
         if !offer.should_reward_exp() {
             return;
         }
@@ -205,7 +206,7 @@ impl Merchant for TraderState {
         if let Some(mob) = entity.as_mob() {
             mob.reset_ambient_sound_time();
         }
-        self.reward_trade_xp(&*entity, offer);
+        Self::reward_trade_xp(&*entity, offer);
     }
 
     /// Vanilla `AbstractVillager.notifyTradeUpdated`.

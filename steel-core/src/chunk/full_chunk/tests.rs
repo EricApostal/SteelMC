@@ -630,7 +630,9 @@ fn stale_no_entity_promotion_cannot_consume_a_replacement_marker() {
         pending_after_replacement
     );
     assert_eq!(
-        chunk.get_block_entity(pos).map(|entity| entity.get_block_pos()),
+        chunk
+            .get_block_entity(pos)
+            .map(|entity| entity.get_block_pos()),
         replacement.map(|entity| entity.get_block_pos())
     );
 }

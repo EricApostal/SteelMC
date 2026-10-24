@@ -30,15 +30,19 @@ use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
+use steel_registry::blocks::Block;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::data_components::vanilla_components::CUSTOM_NAME;
 use steel_registry::dye_color::DyeColor;
 use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::item_stack::ItemStack;
+use steel_registry::items::Item;
 use steel_registry::particle_type::{BlockParticleOption, ParticleData};
 use steel_registry::vanilla_entity_data::CushionEntityData;
 use steel_registry::vanilla_game_rules::ENTITY_DROPS;
-use steel_registry::{self, sound_events, vanilla_block_tags, vanilla_particle_types};
+use steel_registry::{
+    sound_events, vanilla_block_tags, vanilla_damage_types, vanilla_particle_types,
+};
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, DowncastType, DowncastTypeKey, WorldAabb};
@@ -253,7 +257,7 @@ impl CushionEntity {
         if in_fire {
             self.hurt(
                 world.as_ref(),
-                &DamageSource::environment(&steel_registry::vanilla_damage_types::IN_FIRE),
+                &DamageSource::environment(&vanilla_damage_types::IN_FIRE),
                 1.0,
             );
         }
@@ -288,15 +292,13 @@ fn next_down(value: f64) -> f64 {
         value
     } else if value == 0.0 {
         -f64::from_bits(1)
-    } else if value > 0.0 {
-        f64::from_bits(value.to_bits() - 1)
     } else {
         f64::from_bits(value.to_bits() - 1)
     }
 }
 
 /// Registry lookup for the cushion item matching `color`.
-fn cushion_item(color: DyeColor) -> &'static steel_registry::items::Item {
+fn cushion_item(color: DyeColor) -> &'static Item {
     use steel_registry::vanilla_items;
     match color {
         DyeColor::White => &vanilla_items::WHITE_CUSHION,
@@ -319,7 +321,7 @@ fn cushion_item(color: DyeColor) -> &'static steel_registry::items::Item {
 }
 
 /// Registry lookup for the wool block matching `color` (breaking particles).
-fn wool_block(color: DyeColor) -> &'static steel_registry::blocks::Block {
+fn wool_block(color: DyeColor) -> &'static Block {
     use steel_registry::vanilla_blocks;
     match color {
         DyeColor::White => &vanilla_blocks::WHITE_WOOL,
@@ -474,7 +476,7 @@ impl BlockAttachedEntity for CushionEntity {
         }
         let infinite = caused_by
             .and_then(|entity| entity.as_player())
-            .is_some_and(|player| player.has_infinite_materials());
+            .is_some_and(Player::has_infinite_materials);
         if infinite {
             return;
         }
@@ -493,20 +495,21 @@ impl BlockAttachedEntity for CushionEntity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use simdnbt::owned::NbtCompound;
     use std::io::Cursor;
     use steel_registry::vanilla_entities;
 
     /// Re-borrows owned NBT the way entity loading does from disk.
     fn with_reborrow<R>(
-        nbt: &simdnbt::owned::NbtCompound,
-        visitor: impl FnOnce(simdnbt::borrow::NbtCompound<'_, '_>) -> R,
+        nbt: &NbtCompound,
+        visitor: impl FnOnce(BorrowedNbtCompoundView<'_, '_>) -> R,
     ) -> R {
         use simdnbt::borrow::read_compound;
         let mut bytes = Vec::new();
         nbt.write(&mut bytes);
         let mut cursor = Cursor::new(bytes.as_slice());
         let base = read_compound(&mut cursor).expect("entity NBT should reborrow");
-        let borrowed: simdnbt::borrow::NbtCompound<'_, '_> = (&base).into();
+        let borrowed: BorrowedNbtCompoundView<'_, '_> = (&base).into();
         visitor(borrowed)
     }
 
@@ -564,7 +567,7 @@ mod tests {
         assert!(next_down(1.0) < 1.0);
         assert_eq!(next_down(0.0), -f64::from_bits(1));
         assert!(next_down(-1.0) > -1.0);
-        assert_eq!(next_down(f64::NAN).is_nan(), true);
+        assert!(next_down(f64::NAN).is_nan());
         assert_eq!(next_down(f64::NEG_INFINITY), f64::NEG_INFINITY);
     }
 }

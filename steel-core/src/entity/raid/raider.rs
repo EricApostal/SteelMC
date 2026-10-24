@@ -10,11 +10,16 @@ use std::sync::Arc;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::{NbtCompound, NbtTag};
 use steel_protocol::packets::game::CTakeItemEntity;
+use steel_registry::enchantment::provider::{
+    EnchantmentProvider, raid_pillager_post_wave_3, raid_pillager_post_wave_5, raid_vindicator,
+    raid_vindicator_post_wave_5,
+};
 use steel_registry::equipment::EquipmentSlot;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entities;
 use steel_utils::locks::SyncMutex;
+use steel_utils::types::Difficulty;
 use steel_utils::{BlockPos, ChunkPos};
 use uuid::Uuid;
 
@@ -378,9 +383,8 @@ pub trait Raider: Mob {
             None,
         );
 
-        if let (Some(raid_id), Some(entity)) =
-            (self.raider_base().state().raid_id, self.raider_entity())
-        {
+        let raid_id = self.raider_base().state().raid_id;
+        if let (Some(raid_id), Some(entity)) = (raid_id, self.raider_entity()) {
             world.raids().lock().set_leader(raid_id, wave, &entity);
         }
         true
@@ -427,16 +431,14 @@ pub fn raider_uuid_of(entity: &SharedEntity) -> Uuid {
 /// Vanilla compares the wave against `Raid.getNumGroups(NORMAL)` (5) and
 /// `Raid.getNumGroups(EASY)` (3); below both, vanilla leaves the crossbow unbuffed.
 #[must_use]
-pub fn pillager_raid_enchant_provider(
-    wave: i32,
-) -> Option<&'static steel_registry::enchantment::provider::EnchantmentProvider> {
-    let normal_groups = Raid::num_groups(steel_utils::types::Difficulty::Normal);
-    let easy_groups = Raid::num_groups(steel_utils::types::Difficulty::Easy);
+pub fn pillager_raid_enchant_provider(wave: i32) -> Option<&'static EnchantmentProvider> {
+    let normal_groups = Raid::num_groups(Difficulty::Normal);
+    let easy_groups = Raid::num_groups(Difficulty::Easy);
 
     if wave > normal_groups {
-        Some(steel_registry::enchantment::provider::raid_pillager_post_wave_5())
+        Some(raid_pillager_post_wave_5())
     } else if wave > easy_groups {
-        Some(steel_registry::enchantment::provider::raid_pillager_post_wave_3())
+        Some(raid_pillager_post_wave_3())
     } else {
         None
     }
@@ -447,12 +449,10 @@ pub fn pillager_raid_enchant_provider(
 /// Vanilla always enchants the iron axe: post-wave-5 past `Raid.getNumGroups(NORMAL)`,
 /// otherwise the base `RAID_VINDICATOR` provider.
 #[must_use]
-pub fn vindicator_raid_enchant_provider(
-    wave: i32,
-) -> &'static steel_registry::enchantment::provider::EnchantmentProvider {
-    if wave > Raid::num_groups(steel_utils::types::Difficulty::Normal) {
-        steel_registry::enchantment::provider::raid_vindicator_post_wave_5()
+pub fn vindicator_raid_enchant_provider(wave: i32) -> &'static EnchantmentProvider {
+    if wave > Raid::num_groups(Difficulty::Normal) {
+        raid_vindicator_post_wave_5()
     } else {
-        steel_registry::enchantment::provider::raid_vindicator()
+        raid_vindicator()
     }
 }

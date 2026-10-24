@@ -93,7 +93,7 @@ impl WardenSpawnTracker {
     }
 
     /// Vanilla `WardenSpawnTracker.reset`.
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.ticks_since_last_warning = 0;
         self.warning_level = 0;
         self.cooldown_ticks = 0;
@@ -125,7 +125,7 @@ impl WardenSpawnTracker {
     }
 
     /// Vanilla `WardenSpawnTracker.copyData`.
-    pub fn copy_data(&mut self, from: Self) {
+    pub const fn copy_data(&mut self, from: Self) {
         self.warning_level = from.warning_level;
         self.cooldown_ticks = from.cooldown_ticks;
         self.ticks_since_last_warning = from.ticks_since_last_warning;

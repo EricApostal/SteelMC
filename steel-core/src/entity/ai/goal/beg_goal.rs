@@ -58,8 +58,8 @@ impl BegGoal {
         let holds_interesting = |slot: EquipmentSlot| {
             let mut holds = false;
             player.with_equipment_slot(slot, &mut |item_stack| {
-                holds =
-                    (self.is_food)(item_stack) || ptr::eq(item_stack.item(), &*vanilla_items::BONE);
+                holds = (self.is_food)(item_stack)
+                    || ptr::eq(item_stack.item(), &raw const *vanilla_items::BONE);
             });
             holds
         };

@@ -3,9 +3,13 @@
 //! The `SpearStatus` enum lives at the top of this file (per the integrator
 //! contract) and is imported by `ai::brain::memory::module_type`.
 
+use std::f64::consts::TAU;
 use std::sync::Arc;
 
 use glam::DVec3;
+use steel_registry::data_components::components::KineticWeapon;
+use steel_registry::data_components::vanilla_components;
+use steel_utils::types::InteractionHand;
 
 use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
@@ -67,6 +71,10 @@ impl SpearAttack {
     /// The main-hand kinetic-weapon check reads the `KINETIC_WEAPON` typed component
     /// when the registry bridges it; `has_component` on the component key covers the
     /// same ground through the item's data map.
+    #[expect(
+        clippy::unused_self,
+        reason = "kept as a method to mirror vanilla `SpearAttack.ableToAttack`"
+    )]
     fn able_to_attack(&self, ctx: &BehaviorContext<'_>) -> bool {
         Self::attack_target(ctx).is_some() && ctx.body.with_weapon_item_has_kinetic_weapon()
     }
@@ -77,8 +85,8 @@ impl SpearAttack {
         body.with_weapon_item(&mut |item| {
             if let Some(item) = item {
                 duration = item
-                    .get(steel_registry::data_components::vanilla_components::KINETIC_WEAPON)
-                    .map_or(0, steel_registry::data_components::components::KineticWeapon::compute_damage_use_duration);
+                    .get(vanilla_components::KINETIC_WEAPON)
+                    .map_or(0, KineticWeapon::compute_damage_use_duration);
             }
         });
         duration
@@ -95,9 +103,7 @@ impl WeaponItemKineticProbe for SharedEntity {
     fn with_weapon_item_has_kinetic_weapon(&self) -> bool {
         let mut has = false;
         self.with_weapon_item(&mut |item| {
-            has = item.is_some_and(|item| {
-                item.has(steel_registry::data_components::vanilla_components::KINETIC_WEAPON)
-            });
+            has = item.is_some_and(|item| item.has(vanilla_components::KINETIC_WEAPON));
         });
         has
     }
@@ -130,7 +136,7 @@ impl Behavior for SpearAttack {
         ctx.set_memory(&mem::SPEAR_ENGAGE_TIME, duration);
         ctx.erase_memory(&mem::SPEAR_CHARGE_POSITION);
         if let Some(living) = ctx.body.as_living_entity() {
-            living.start_using_item(steel_utils::types::InteractionHand::MainHand);
+            living.start_using_item(InteractionHand::MainHand);
         }
     }
 
@@ -148,7 +154,7 @@ impl Behavior for SpearAttack {
 
         ctx.set_memory(
             &mem::LOOK_TARGET,
-            Arc::new(EntityTracker::new(target.clone(), true)),
+            Arc::new(EntityTracker::new(SharedEntity::clone(&target), true)),
         );
 
         let engage = ctx.get_memory(&mem::SPEAR_ENGAGE_TIME).unwrap_or(0);
@@ -188,9 +194,7 @@ impl Behavior for SpearAttack {
                 let dxz = (f64::from(MIN_REPOSITION_DISTANCE) + mount_distance - distance).max(0.0);
                 let range = f64::from(MAX_REPOSITION_DISTANCE) + mount_distance - distance;
                 let away_pos = random_pos_away(ctx, dxz, range.max(1.0), target.position());
-                if let Some(away_pos) = away_pos {
-                    ctx.set_memory(&mem::SPEAR_CHARGE_POSITION, away_pos);
-                }
+                ctx.set_memory(&mem::SPEAR_CHARGE_POSITION, away_pos);
             }
         }
     }
@@ -218,12 +222,12 @@ fn random_pos_away(
     min_dxz: f64,
     max_dxz: f64,
     target_pos: DVec3,
-) -> Option<DVec3> {
-    let angle = rand::random_range(0.0..f64::consts::TAU);
+) -> DVec3 {
+    let angle = rand::random_range(0.0..TAU);
     let radius = rand::random_range(min_dxz..max_dxz.max(min_dxz + 0.01));
-    Some(DVec3::new(
+    DVec3::new(
         target_pos.x + angle.cos() * radius,
         target_pos.y + f64::from(rand::random_range(-3..=3)),
         target_pos.z + angle.sin() * radius,
-    ))
+    )
 }

@@ -425,7 +425,7 @@ impl LivingEntity for SpiderEntity {
 
     /// Vanilla `Spider.canBeAffected` rejects poison.
     fn can_be_affected(&self, effect: &MobEffectInstance) -> bool {
-        if ptr::eq(effect.effect(), &*vanilla_mob_effects::POISON) {
+        if ptr::eq(effect.effect(), &raw const *vanilla_mob_effects::POISON) {
             return false;
         }
         LivingEntity::default_can_be_affected(self, effect)

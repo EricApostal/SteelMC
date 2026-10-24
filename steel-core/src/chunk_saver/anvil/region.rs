@@ -80,7 +80,12 @@ impl AnvilHeader {
             }
             header.locations[index] = u32::from_be_bytes(*chunk);
         }
-        for (index, chunk) in bytes[SECTOR_INTS * 4..].as_chunks::<4>().0.iter().enumerate() {
+        for (index, chunk) in bytes[SECTOR_INTS * 4..]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .enumerate()
+        {
             if index >= SECTOR_INTS {
                 break;
             }
@@ -143,15 +148,19 @@ impl AnvilHeader {
     }
 
     /// Finds a free sector run of `needed` sectors using first-fit allocation.
-    fn allocate(&self, needed: u32, file_sectors: u32) -> u32 {
+    ///
+    /// `exclude` names the slot being rewritten, so its previous allocation counts as free —
+    /// mirroring vanilla's `RegionBitmap.free` of the old run.
+    fn allocate(&self, needed: u32, file_sectors: u32, exclude: Option<usize>) -> u32 {
         if needed == 0 {
             return FIRST_DATA_SECTOR;
         }
         let mut used: Vec<(u32, u32)> = self
             .locations
             .iter()
-            .filter(|location| **location != 0)
-            .map(|location| {
+            .enumerate()
+            .filter(|(slot, location)| **location != 0 && Some(*slot) != exclude)
+            .map(|(_, location)| {
                 let start = Self::sector_start(*location);
                 (start, start + Self::sector_count(*location))
             })
@@ -171,7 +180,6 @@ impl AnvilHeader {
 
 /// One open Anvil region container.
 pub struct AnvilRegionFile {
-    path: PathBuf,
     external_dir: PathBuf,
     chunk_x: i32,
     chunk_z: i32,
@@ -227,12 +235,11 @@ impl AnvilRegionFile {
             header = AnvilHeader::from_bytes(&bytes);
         }
 
-        let file_sectors = ((file_len as usize).div_ceil(SECTOR_SIZE)).max(FIRST_DATA_SECTOR as usize)
-            as u32;
+        let file_sectors =
+            ((file_len as usize).div_ceil(SECTOR_SIZE)).max(FIRST_DATA_SECTOR as usize) as u32;
         header.sanitize(file_sectors);
 
         Ok(Some(Self {
-            path,
             external_dir: directory.to_path_buf(),
             chunk_x: region_x * REGION_SIZE as i32,
             chunk_z: region_z * REGION_SIZE as i32,
@@ -379,12 +386,16 @@ impl AnvilRegionFile {
                 &[codec.id() | EXTERNAL_STREAM_FLAG],
             ]
             .concat();
-            (self.header.allocate(1, self.file_sectors), 1, stub)
+            (
+                self.header.allocate(1, self.file_sectors, Some(slot)),
+                1,
+                stub,
+            )
         } else {
             let sector = if previous != 0 && AnvilHeader::sector_count(previous) >= needed {
                 AnvilHeader::sector_start(previous)
             } else {
-                self.header.allocate(needed, self.file_sectors)
+                self.header.allocate(needed, self.file_sectors, Some(slot))
             };
             (sector, needed, record)
         };
@@ -447,12 +458,6 @@ impl AnvilRegionFile {
     /// Propagates filesystem errors.
     pub async fn close(mut self) -> io::Result<()> {
         self.flush().await
-    }
-
-    /// Returns the container path, for diagnostics.
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
     }
 }
 

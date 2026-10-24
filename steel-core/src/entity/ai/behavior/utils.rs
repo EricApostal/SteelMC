@@ -19,7 +19,7 @@ use crate::entity::{PathfinderMob, SharedEntity};
 
 /// Vanilla `BehaviorUtils.lookAtEntity`.
 pub fn look_at_entity(ctx: &mut BehaviorContext<'_>, target: &SharedEntity) {
-    set_look_target(ctx, Arc::new(EntityTracker::new(target.clone(), true)));
+    set_look_target(ctx, Arc::new(EntityTracker::new(Arc::clone(target), true)));
 }
 
 /// Vanilla `Brain.setMemory(LOOK_TARGET, tracker)`.
@@ -47,7 +47,7 @@ pub fn set_walk_and_look_target(
     speed_modifier: f32,
     close_enough_dist: i32,
 ) {
-    ctx.set_memory(&mem::LOOK_TARGET, target.clone());
+    ctx.set_memory(&mem::LOOK_TARGET, Arc::clone(&target));
     set_walk_target(ctx, target, speed_modifier, close_enough_dist);
 }
 
@@ -75,7 +75,7 @@ pub fn set_walk_and_look_target_to_entity(
 ) {
     set_walk_and_look_target(
         ctx,
-        Arc::new(EntityTracker::new(entity.clone(), true)),
+        Arc::new(EntityTracker::new(Arc::clone(entity), true)),
         speed_modifier,
         close_enough_dist,
     );
@@ -135,7 +135,7 @@ pub fn can_reach(ctx: &BehaviorContext<'_>, pos: BlockPos, reach_range: i32) -> 
 
 /// Manhattan distance between two block positions, vanilla `BlockPos.distManhattan`.
 #[must_use]
-pub fn manhattan_distance(a: BlockPos, b: BlockPos) -> i32 {
+pub const fn manhattan_distance(a: BlockPos, b: BlockPos) -> i32 {
     (a.0.x - b.0.x).abs() + (a.0.y - b.0.y).abs() + (a.0.z - b.0.z).abs()
 }
 

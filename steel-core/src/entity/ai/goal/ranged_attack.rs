@@ -141,7 +141,7 @@ impl Goal for RangedAttackGoal {
             self.see_time = 0;
         }
 
-        if !(target_distance_sqr > f64::from(self.attack_radius_sqr))
+        if target_distance_sqr <= f64::from(self.attack_radius_sqr)
             && self.see_time >= SEE_TIME_THRESHOLD
         {
             mob.mob_base().navigation().lock().stop();

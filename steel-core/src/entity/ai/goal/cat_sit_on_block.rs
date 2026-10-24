@@ -52,7 +52,7 @@ fn is_valid_target(level: &dyn LevelReader, pos: BlockPos) -> bool {
         return false;
     }
 
-    if ptr::eq(block, &vanilla_blocks::CHEST) {
+    if ptr::eq(block, &raw const vanilla_blocks::CHEST) {
         let Some(block_entity) = level.get_block_entity(pos) else {
             return true;
         };
@@ -61,7 +61,7 @@ fn is_valid_target(level: &dyn LevelReader, pos: BlockPos) -> bool {
             .is_none_or(|viewers| viewers.open_count() < 1);
     }
 
-    if ptr::eq(block, &vanilla_blocks::FURNACE) {
+    if ptr::eq(block, &raw const vanilla_blocks::FURNACE) {
         return block_state.get_value(&BlockStateProperties::LIT);
     }
 

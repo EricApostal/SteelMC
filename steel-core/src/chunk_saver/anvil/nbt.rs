@@ -6,10 +6,27 @@
 
 use std::io::{self, Cursor, Read, Write};
 
+use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use flate2::Compression;
+use simdnbt::borrow::{NbtCompound as BorrowedNbtCompound, NbtList as BorrowedNbtList};
 use simdnbt::owned::NbtCompound;
+
+/// Collects the compounds of a borrowed list tag into an indexable `Vec`.
+///
+/// `simdnbt`'s borrowed compound list is not an `Iterator`, so every reader in this module
+/// goes through this helper.
+#[must_use]
+pub(crate) fn compound_list<'a, 'tape>(
+    list: BorrowedNbtList<'a, 'tape>,
+) -> Vec<BorrowedNbtCompound<'a, 'tape>> {
+    match list.compounds() {
+        Some(compounds) => (0..compounds.len())
+            .filter_map(|index| compounds.get(index))
+            .collect(),
+        None => Vec::new(),
+    }
+}
 
 /// Reads NBT bytes, transparently decompressing a gzip stream.
 ///

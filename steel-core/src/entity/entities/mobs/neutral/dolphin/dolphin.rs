@@ -12,6 +12,7 @@
 //! Deviation: vanilla `getSwimSplashSound` has no Steel hook; only `getSwimSound`
 //! (`ENTITY_DOLPHIN_SWIM`) is reachable, so water-entry splashes use the generic sound.
 
+use std::f32::consts::TAU;
 use std::ptr;
 use std::sync::{Arc, Weak};
 
@@ -20,6 +21,7 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::entity_type::{
     EntityAttachmentPoint, EntityAttachments, EntityDimensions, EntityTypeRef,
 };
@@ -29,8 +31,10 @@ use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::DolphinEntityData;
 use steel_registry::vanilla_mob_effects;
 use steel_registry::{
-    sound_events, vanilla_attributes, vanilla_blocks, vanilla_entities, vanilla_item_tags,
+    sound_events, vanilla_attributes, vanilla_blocks, vanilla_damage_types, vanilla_entities,
+    vanilla_item_tags,
 };
+use steel_utils::Downcast as _;
 use steel_utils::locks::SyncMutex;
 use steel_utils::random::RandomSource;
 use steel_utils::types::InteractionHand;
@@ -264,7 +268,7 @@ impl DolphinEntity {
     /// Vanilla `Dolphin.tick` moistness and dry-out damage.
     fn tick_moistness(&self, entity: &SharedEntity) {
         if self.is_no_ai() {
-            self.set_air_supply(self.max_air_supply());
+            self.set_air_supply(Self::max_air_supply());
             return;
         }
 
@@ -275,12 +279,11 @@ impl DolphinEntity {
         }
 
         self.set_moistness_level(self.moistness_level() - 1);
-        if self.moistness_level() <= 0 {
-            if let Some(world) = self.level() {
-                let source =
-                    DamageSource::environment(&steel_registry::vanilla_damage_types::DRY_OUT);
-                let _ = entity.hurt(&world, &source, DRY_OUT_DAMAGE);
-            }
+        if self.moistness_level() <= 0
+            && let Some(world) = self.level()
+        {
+            let source = DamageSource::environment(&vanilla_damage_types::DRY_OUT);
+            let _ = entity.hurt(&world, &source, DRY_OUT_DAMAGE);
         }
 
         // Vanilla `Dolphin.tick`: drying-out dolphins bounce on the ground.
@@ -314,7 +317,7 @@ impl DolphinEntity {
 
     /// Vanilla `Dolphin.getMaxAirSupply`.
     #[must_use]
-    pub fn max_air_supply(&self) -> i32 {
+    pub const fn max_air_supply() -> i32 {
         MAX_AIR_SUPPLY
     }
 
@@ -334,7 +337,7 @@ impl DolphinEntity {
     ) -> bool {
         let min_spawn_level = level.sea_level() - 13;
         pos.y() >= min_spawn_level
-            && pos.y() <= level.sea_level()
+            && pos.y() <= level.sea_level
             && level
                 .get_block_state(pos.below())
                 .get_fluid_state()
@@ -495,7 +498,7 @@ impl LivingEntity for DolphinEntity {
         _old_y: f64,
     ) -> Option<MoveResult> {
         // Vanilla `Dolphin.travelInWater`.
-        self.move_relative(f64::from(self.get_speed()), input);
+        self.move_relative(self.get_speed(), input);
         let result = Arc::clone(entity).move_entity(MoverType::SelfMovement, self.velocity())?;
         self.set_velocity(self.velocity() * 0.9);
         if self.target().is_none() {
@@ -555,7 +558,10 @@ impl Mob for DolphinEntity {
 
     /// Vanilla `Dolphin.canAttack`: babies never attack.
     fn can_attack(&self, target: &dyn LivingEntity) -> bool {
-        !AgeableMob::is_baby(self) && Mob::can_attack(self, target)
+        // Vanilla `Mob.canAttack`: ghasts are never targeted directly.
+        !AgeableMob::is_baby(self)
+            && target.entity_type() != &vanilla_entities::GHAST
+            && LivingEntity::can_attack(self, target)
     }
 
     /// Vanilla `Dolphin.playAttackSound`.
@@ -593,7 +599,7 @@ impl Mob for DolphinEntity {
         spawn_reason: EntitySpawnReason,
         group_data: Option<SpawnGroupData>,
     ) -> Option<SpawnGroupData> {
-        self.set_air_supply(self.max_air_supply());
+        self.set_air_supply(Self::max_air_supply());
         let (yaw, _) = self.rotation();
         self.set_rotation((yaw, 0.0));
 
@@ -683,8 +689,8 @@ fn is_boat_type(entity_type: EntityTypeRef) -> bool {
 
 /// Vanilla `FollowPlayerRiddenEntityGoal(AbstractNautilus)`.
 fn is_nautilus_type(entity_type: EntityTypeRef) -> bool {
-    ptr::eq(entity_type, &vanilla_entities::NAUTILUS)
-        || ptr::eq(entity_type, &vanilla_entities::ZOMBIE_NAUTILUS)
+    ptr::eq(entity_type, &raw const vanilla_entities::NAUTILUS)
+        || ptr::eq(entity_type, &raw const vanilla_entities::ZOMBIE_NAUTILUS)
 }
 
 /// Vanilla `Dolphin.DolphinSwimWithPlayerGoal`: an unridden dolphin escorts a
@@ -712,7 +718,7 @@ impl DolphinSwimWithPlayerGoal {
             return;
         };
         living.add_mob_effect(MobEffectInstance::with_duration(
-            &vanilla_mob_effects::DOLPHINS_GRACE,
+            vanilla_mob_effects::DOLPHINS_GRACE,
             DOLPHINS_GRACE_DURATION,
             0,
         ));
@@ -827,7 +833,7 @@ fn dolphin_drop_held_item(dolphin: &DolphinEntity) -> bool {
     let (yaw, pitch) = dolphin.rotation();
     let yaw_rad = f64::from(yaw.to_radians());
     let pitch_rad = f64::from(pitch.to_radians());
-    let direction = rand::random::<f32>() * f32::consts::TAU;
+    let direction = rand::random::<f32>() * TAU;
     let jitter = ITEM_DROP_JITTER * f64::from(rand::random::<f32>());
     let velocity = DVec3::new(
         ITEM_DROP_IMPULSE * -yaw_rad.sin() * pitch_rad.cos() + f64::from(direction.cos()) * jitter,
@@ -835,12 +841,8 @@ fn dolphin_drop_held_item(dolphin: &DolphinEntity) -> bool {
         ITEM_DROP_IMPULSE * yaw_rad.cos() * pitch_rad.cos() + f64::from(direction.sin()) * jitter,
     );
 
-    let eye_position = dolphin.position()
-        + DVec3::new(
-            0.0,
-            f64::from(dolphin.eye_height()) - ITEM_DROP_EYE_OFFSET,
-            0.0,
-        );
+    let eye_position =
+        dolphin.position() + DVec3::new(0.0, dolphin.get_eye_height() - ITEM_DROP_EYE_OFFSET, 0.0);
     if let Some(item_entity) = world.spawn_item_with_velocity(eye_position, stack, velocity) {
         item_entity.set_pickup_delay(ITEM_DROP_PICKUP_DELAY);
         item_entity.set_thrower(dolphin.uuid());
@@ -969,6 +971,7 @@ impl Goal for PlayWithItemsGoal {
 
 #[cfg(test)]
 mod tests {
+    use simdnbt::owned::NbtCompound;
     use std::sync::Weak;
 
     use glam::DVec3;
@@ -987,7 +990,7 @@ mod tests {
         dolphin.set_got_fish(true);
         dolphin.set_moistness_level(100);
 
-        let mut nbt = simdnbt::owned::NbtCompound::new();
+        let mut nbt = NbtCompound::new();
         dolphin.save_additional(&mut nbt);
         assert_eq!(nbt.int("Moistness"), Some(100));
         assert_eq!(nbt.byte("GotFish"), Some(1));

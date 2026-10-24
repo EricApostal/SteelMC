@@ -61,11 +61,11 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["steel:disk", "steel:ram"]
+          "enum": ["steel:disk", "steel:ram", "steel:anvil"]
         },
         "config": {
           "type": "object",
-          "description": "Storage-specific config. steel:disk supports optional relative path; steel:ram accepts no keys.",
+          "description": "Storage-specific config. steel:disk supports an optional relative path; steel:anvil supports an optional relative path and an optional dimension key (default minecraft:overworld) and writes a vanilla-readable world; steel:ram accepts no keys.",
           "additionalProperties": true
         }
       },

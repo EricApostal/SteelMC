@@ -7,8 +7,11 @@
 
 use std::ptr;
 
+use steel_registry::vanilla_entities::{LEASH_KNOT, LLAMA, TRADER_LLAMA};
+
 use super::reduced_tick_delay;
 use super::selector::{Goal, GoalControls};
+use crate::entity::leash::Leashable;
 use crate::entity::{Entity, PathfinderMob, SharedEntity};
 
 /// Vanilla `LlamaFollowCaravanGoal.CARAVAN_LIMIT`.
@@ -43,8 +46,7 @@ impl LlamaFollowCaravanGoal {
     /// `e.is(EntityTypes.LLAMA) || e.is(EntityTypes.TRADER_LLAMA)`.
     fn is_llama(entity: &dyn Entity) -> bool {
         let entity_type = entity.entity_type();
-        ptr::eq(entity_type, &steel_registry::vanilla_entities::LLAMA)
-            || ptr::eq(entity_type, &steel_registry::vanilla_entities::TRADER_LLAMA)
+        ptr::eq(entity_type, &raw const LLAMA) || ptr::eq(entity_type, &raw const TRADER_LLAMA)
     }
 
     /// The closest candidate matching `predicate` by squared distance to `mob`.
@@ -66,9 +68,7 @@ impl LlamaFollowCaravanGoal {
 
     /// Vanilla `Entity.isLeashed` for a shared entity handle.
     fn is_leashed(entity: &SharedEntity) -> bool {
-        entity
-            .as_leashable()
-            .is_some_and(|leashable| leashable.is_leashed())
+        entity.as_leashable().is_some_and(Leashable::is_leashed)
     }
 
     /// Vanilla `LlamaFollowCaravanGoal.firstIsLeashed(currentMob, counter)`.
@@ -204,12 +204,9 @@ impl Goal for LlamaFollowCaravanGoal {
         // (`this.llama.getLeashHolder() instanceof LeashFenceKnotEntity`): a llama tied to a
         // fence knot stays put instead of chasing the caravan head.
         let tied_to_fence_knot = mob.as_leashable().is_some_and(|leashable| {
-            leashable.leash_holder().is_some_and(|holder| {
-                ptr::eq(
-                    holder.entity_type(),
-                    &steel_registry::vanilla_entities::LEASH_KNOT,
-                )
-            })
+            leashable
+                .leash_holder()
+                .is_some_and(|holder| ptr::eq(holder.entity_type(), &raw const LEASH_KNOT))
         });
         if tied_to_fence_knot {
             return;

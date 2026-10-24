@@ -53,11 +53,11 @@ impl JitteredLinearRetry {
         self.next_scheduled_attempt_timestamp = timestamp + i64::from(self.current_delay);
     }
 
-    fn is_still_valid(&self, timestamp: i64) -> bool {
+    const fn is_still_valid(&self, timestamp: i64) -> bool {
         timestamp - self.previous_attempt_timestamp < 400
     }
 
-    fn should_retry(&self, timestamp: i64) -> bool {
+    const fn should_retry(&self, timestamp: i64) -> bool {
         timestamp >= self.next_scheduled_attempt_timestamp
     }
 }
@@ -212,7 +212,7 @@ impl Trigger for AcquirePoi {
 
 /// Vanilla broadcasts the raw acquisition byte through `ServerLevel.broadcastEntityEvent`;
 /// Steel's entity-event API is typed, so the two events villagers use are mapped.
-fn acquisition_event_status(event: u8) -> Option<EntityStatus> {
+const fn acquisition_event_status(event: u8) -> Option<EntityStatus> {
     match event {
         13 => Some(EntityStatus::VillagerAngry),
         14 => Some(EntityStatus::VillagerHappy),

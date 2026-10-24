@@ -30,13 +30,13 @@ use steel_utils::axis::Axis;
 use steel_utils::block_util::FoundRectangle;
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::InteractionHand;
-use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
+use steel_utils::{BlockStateId, DowncastType, DowncastTypeKey};
 
 use crate::behavior::InteractionResult;
 use crate::entity::damage::DamageSource;
 use crate::entity::{Entity, EntityBase, EntityBaseLoad, EntitySyncedData};
 use crate::player::Player;
-use crate::world::{LevelReader as _, World};
+use crate::world::World;
 
 use super::minecart_base::{self, Minecart, MinecartState, base_natural_slowdown};
 
@@ -172,10 +172,17 @@ impl FurnaceMinecartEntity {
     }
 
     /// Vanilla `MinecartFurnace.calculateNewPushAlong`.
+    ///
+    /// Vanilla aligns the stored push to the current movement direction while
+    /// keeping its magnitude: `push.projectedOn(movement).normalize().scale(push.length())`.
+    /// Both guards use `horizontalDistanceSqr`.
     fn push_along(&self, movement: DVec3) -> DVec3 {
         let push = self.push_force();
-        if push.length_squared() > 1.0e-4 && movement.length_squared() > 0.001 {
-            push.project_onto_normalized(movement.normalize_or_zero()) * push.length()
+        // Vanilla `Vec3.horizontalDistanceSqr`: the squared length ignoring Y.
+        let push_horizontal_sqr = push.x * push.x + push.z * push.z;
+        let movement_horizontal_sqr = movement.x * movement.x + movement.z * movement.z;
+        if push_horizontal_sqr > 1.0e-4 && movement_horizontal_sqr > 0.001 {
+            push.project_onto(movement).normalize() * push.length()
         } else {
             push
         }
@@ -335,5 +342,49 @@ impl Entity for FurnaceMinecartEntity {
         let mut state = self.furnace.lock();
         state.push = DVec3::new(push_x, 0.0, push_z);
         state.fuel = i32::from(nbt.short("Fuel").unwrap_or(0));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use steel_registry::vanilla_entities;
+
+    use super::*;
+
+    fn furnace_cart() -> FurnaceMinecartEntity {
+        FurnaceMinecartEntity::new(
+            &vanilla_entities::FURNACE_MINECART,
+            1,
+            DVec3::new(8.5, 64.0, 8.5),
+            Weak::new(),
+        )
+    }
+
+    #[test]
+    fn push_along_keeps_magnitude_and_alignment_like_vanilla() {
+        let cart = furnace_cart();
+        cart.furnace.lock().push = DVec3::new(1.0, 0.0, 0.0);
+
+        // `push.projectedOn(movement).normalize().scale(push.length())`: the push
+        // keeps its length and is turned to face the movement direction, instead
+        // of being shortened by the cosine of the angle between them.
+        let aligned = cart.push_along(DVec3::new(1.0, 0.0, 1.0));
+        assert!((aligned.length() - 1.0).abs() < 1.0e-12);
+        assert!((aligned.x - aligned.z).abs() < 1.0e-12);
+        assert!(aligned.x > 0.0);
+
+        // Both guards test horizontal distance, so a purely vertical movement
+        // leaves the push untouched.
+        assert_eq!(
+            cart.push_along(DVec3::new(0.0, 1.0, 0.0)),
+            DVec3::new(1.0, 0.0, 0.0)
+        );
+
+        // A push below `1.0E-4` horizontal distance is returned verbatim.
+        cart.furnace.lock().push = DVec3::new(0.005, 0.0, 0.0);
+        assert_eq!(
+            cart.push_along(DVec3::new(0.0, 0.0, 1.0)),
+            DVec3::new(0.005, 0.0, 0.0)
+        );
     }
 }

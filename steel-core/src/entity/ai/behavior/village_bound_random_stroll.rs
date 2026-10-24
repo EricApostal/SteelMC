@@ -65,11 +65,11 @@ impl VillageBoundRandomStroll {
         let section_pos = SectionPos::from_block_pos(body_pos);
         let optimal_section_pos =
             find_section_closest_to_village(ctx.level, section_pos, SECTION_SEARCH_RADIUS);
-        if optimal_section_pos != section_pos {
+        if optimal_section_pos == section_pos {
+            random_pos::land_random_pos(mob, max_xz_dist, max_y_dist)
+        } else {
             let towards = utils::block_bottom_center(section_center(optimal_section_pos));
             random_pos::default_random_pos_towards(mob, max_xz_dist, max_y_dist, towards, FRAC_PI_2)
-        } else {
-            random_pos::land_random_pos(mob, max_xz_dist, max_y_dist)
         }
     }
 }

@@ -24,11 +24,12 @@ use steel_macros::entity_behavior;
 use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::items::ItemRef;
 use steel_registry::vanilla_entity_data::{AbstractMinecartEntityData, SpawnerMinecartEntityData};
+use steel_registry::vanilla_game_rules::SPAWNER_BLOCKS_WORK;
 use steel_registry::{vanilla_blocks, vanilla_items};
 use steel_utils::axis::Axis;
 use steel_utils::block_util::FoundRectangle;
 use steel_utils::locks::SyncMutex;
-use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
+use steel_utils::{BlockStateId, DowncastType, DowncastTypeKey};
 
 use crate::entity::damage::DamageSource;
 use crate::entity::{Entity, EntityBase, EntityBaseLoad, EntitySyncedData};
@@ -213,7 +214,7 @@ impl Entity for SpawnerMinecartEntity {
 
         // Vanilla `BaseSpawner.serverTick` (used by `MinecartSpawner`): no
         // attempts while the `spawner_blocks_work` game rule is disabled.
-        if !world.get_game_rule(&steel_registry::vanilla_game_rules::SPAWNER_BLOCKS_WORK) {
+        if !world.get_game_rule(&SPAWNER_BLOCKS_WORK) {
             return;
         }
 

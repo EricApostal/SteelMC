@@ -310,6 +310,7 @@ impl Entity for OminousItemSpawnerEntity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use simdnbt::borrow::read_compound;
 
     use steel_registry::{vanilla_entities, vanilla_items};
 
@@ -372,8 +373,7 @@ mod tests {
         );
         let mut bytes = Vec::new();
         nbt.write(&mut bytes);
-        let Ok(borrowed) = simdnbt::borrow::read_compound(&mut Cursor::new(bytes.as_slice()))
-        else {
+        let Ok(borrowed) = read_compound(&mut Cursor::new(bytes.as_slice())) else {
             panic!("saved ominous item spawner NBT should reborrow");
         };
         loaded.load_additional((&borrowed).into());

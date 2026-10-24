@@ -11,7 +11,6 @@ use steel_registry::blocks::properties::{
 };
 use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_block_entity_types;
-use steel_registry::vanilla_blocks;
 use steel_utils::{BlockPos, BlockStateId, Downcast as _};
 
 use crate::behavior::{
@@ -150,7 +149,7 @@ impl BlockBehavior for MovingPistonBlock {
 
 #[cfg(test)]
 mod tests {
-    use steel_registry::init_vanilla_registry;
+    use steel_registry::{init_vanilla_registry, vanilla_blocks};
 
     use super::*;
     use crate::test_support::fresh_test_world;

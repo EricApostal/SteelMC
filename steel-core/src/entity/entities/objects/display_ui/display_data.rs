@@ -217,18 +217,18 @@ pub(super) fn load(data: &mut DisplayEntityData, nbt: BorrowedNbtCompoundView<'_
             .unwrap_or(*defaults.glow_color_override.get()),
     );
 
-    data.brightness_override.set(
-        nbt.compound(TAG_BRIGHTNESS)
-            .map(|brightness| {
-                let block = brightness
-                    .int(TAG_BRIGHTNESS_BLOCK)
-                    .unwrap_or(0)
-                    .clamp(0, 15);
-                let sky = brightness.int(TAG_BRIGHTNESS_SKY).unwrap_or(0).clamp(0, 15);
-                block << 4 | sky << 20
-            })
-            .unwrap_or(NO_BRIGHTNESS_OVERRIDE),
-    );
+    data.brightness_override
+        .set(
+            nbt.compound(TAG_BRIGHTNESS)
+                .map_or(NO_BRIGHTNESS_OVERRIDE, |brightness| {
+                    let block = brightness
+                        .int(TAG_BRIGHTNESS_BLOCK)
+                        .unwrap_or(0)
+                        .clamp(0, 15);
+                    let sky = brightness.int(TAG_BRIGHTNESS_SKY).unwrap_or(0).clamp(0, 15);
+                    block << 4 | sky << 20
+                }),
+        );
 }
 
 fn float_list(values: &[f32]) -> NbtTag {

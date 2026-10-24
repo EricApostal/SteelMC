@@ -20,11 +20,11 @@ use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entity_type_tags::EntityTypeTag;
 use steel_registry::{
-    REGISTRY, RegistryExt as _, TaggedRegistryExt as _, level_events, sound_events,
-    vanilla_entities, vanilla_game_events, vanilla_game_rules, vanilla_items,
+    REGISTRY, TaggedRegistryExt as _, level_events, sound_events, vanilla_entities,
+    vanilla_game_events, vanilla_game_rules, vanilla_items,
 };
 use steel_utils::types::UpdateFlags;
-use steel_utils::{BlockPos, BlockStateId, WorldAabb};
+use steel_utils::{BlockPos, BlockStateId};
 
 use super::eyeblossom_block::float_attribute;
 use crate::behavior::block::{
@@ -290,7 +290,7 @@ impl BlockBehavior for TurtleEggBlock {
                     level_events::encode_block_state_data(u32::from(state.0)),
                     None,
                 );
-                Self::spawn_hatchling(world, pos, index);
+                Self::spawn_hatchling(world, pos, i32::from(index));
             }
         }
     }
@@ -339,7 +339,7 @@ impl BlockBehavior for TurtleEggBlock {
 #[cfg(test)]
 mod tests {
     use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_world_clocks};
-    use steel_utils::ChunkPos;
+    use steel_utils::{ChunkPos, Downcast as _, WorldAabb};
 
     use super::*;
     use crate::behavior::{BLOCK_BEHAVIORS, init_behaviors};
@@ -393,7 +393,7 @@ mod tests {
         assert_eq!(turtles.len(), 1);
         assert!(
             turtles[0]
-                .as_living_entity()
+                .downcast_ref::<TurtleEntity>()
                 .is_some_and(|turtle| turtle.get_age() < 0)
         );
     }

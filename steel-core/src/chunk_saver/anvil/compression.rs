@@ -10,9 +10,9 @@
 
 use std::io::{self, Read, Write};
 
+use flate2::Compression as FlateLevel;
 use flate2::read::{GzDecoder, ZlibDecoder};
 use flate2::write::{GzEncoder, ZlibEncoder};
-use flate2::Compression as FlateLevel;
 
 /// Vanilla region-file compression id for gzip streams (`VERSION_GZIP`).
 pub const ID_GZIP: u8 = 1;

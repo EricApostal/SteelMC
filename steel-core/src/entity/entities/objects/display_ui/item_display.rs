@@ -332,7 +332,7 @@ mod tests {
         restored.load_additional((&borrowed).into());
         assert_eq!(restored.item_display_context(), ItemDisplayContext::Head);
         assert!(!restored.item_stack().is_empty());
-        assert!(restored.item_stack().item == &*vanilla_items::ELYTRA);
+        assert_eq!(restored.item_stack().item, &*vanilla_items::ELYTRA);
     }
 
     #[test]

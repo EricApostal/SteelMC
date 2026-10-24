@@ -119,113 +119,116 @@ impl VillagerDataExt for VillagerData {
 ///
 /// Biome entries are `LazyLock` statics, so the table is built on first use and the
 /// borrowed keys stay `'static`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "vanilla `VillagerType.byBiome` is one flat biome-to-type table"
+)]
 fn by_biome() -> &'static [(&'static Identifier, VillagerTypeRef)] {
-    static BY_BIOME: LazyLock<Vec<(&'static Identifier, VillagerTypeRef)>> =
-        LazyLock::new(|| {
-            vec![
-                (
-                    &vanilla_biomes::BADLANDS.key,
-                    &vanilla_villager_types::DESERT,
-                ),
-                (&vanilla_biomes::DESERT.key, &vanilla_villager_types::DESERT),
-                (
-                    &vanilla_biomes::ERODED_BADLANDS.key,
-                    &vanilla_villager_types::DESERT,
-                ),
-                (
-                    &vanilla_biomes::WOODED_BADLANDS.key,
-                    &vanilla_villager_types::DESERT,
-                ),
-                (
-                    &vanilla_biomes::BAMBOO_JUNGLE.key,
-                    &vanilla_villager_types::JUNGLE,
-                ),
-                (&vanilla_biomes::JUNGLE.key, &vanilla_villager_types::JUNGLE),
-                (
-                    &vanilla_biomes::SPARSE_JUNGLE.key,
-                    &vanilla_villager_types::JUNGLE,
-                ),
-                (
-                    &vanilla_biomes::SAVANNA_PLATEAU.key,
-                    &vanilla_villager_types::SAVANNA,
-                ),
-                (
-                    &vanilla_biomes::SAVANNA.key,
-                    &vanilla_villager_types::SAVANNA,
-                ),
-                (
-                    &vanilla_biomes::WINDSWEPT_SAVANNA.key,
-                    &vanilla_villager_types::SAVANNA,
-                ),
-                (
-                    &vanilla_biomes::DEEP_FROZEN_OCEAN.key,
-                    &vanilla_villager_types::SNOW,
-                ),
-                (
-                    &vanilla_biomes::FROZEN_OCEAN.key,
-                    &vanilla_villager_types::SNOW,
-                ),
-                (
-                    &vanilla_biomes::FROZEN_RIVER.key,
-                    &vanilla_villager_types::SNOW,
-                ),
-                (
-                    &vanilla_biomes::ICE_SPIKES.key,
-                    &vanilla_villager_types::SNOW,
-                ),
-                (
-                    &vanilla_biomes::SNOWY_BEACH.key,
-                    &vanilla_villager_types::SNOW,
-                ),
-                (
-                    &vanilla_biomes::SNOWY_TAIGA.key,
-                    &vanilla_villager_types::SNOW,
-                ),
-                (
-                    &vanilla_biomes::SNOWY_PLAINS.key,
-                    &vanilla_villager_types::SNOW,
-                ),
-                (&vanilla_biomes::GROVE.key, &vanilla_villager_types::SNOW),
-                (
-                    &vanilla_biomes::SNOWY_SLOPES.key,
-                    &vanilla_villager_types::SNOW,
-                ),
-                (
-                    &vanilla_biomes::FROZEN_PEAKS.key,
-                    &vanilla_villager_types::SNOW,
-                ),
-                (
-                    &vanilla_biomes::JAGGED_PEAKS.key,
-                    &vanilla_villager_types::SNOW,
-                ),
-                (&vanilla_biomes::SWAMP.key, &vanilla_villager_types::SWAMP),
-                (
-                    &vanilla_biomes::MANGROVE_SWAMP.key,
-                    &vanilla_villager_types::SWAMP,
-                ),
-                (
-                    &vanilla_biomes::OLD_GROWTH_SPRUCE_TAIGA.key,
-                    &vanilla_villager_types::TAIGA,
-                ),
-                (
-                    &vanilla_biomes::OLD_GROWTH_PINE_TAIGA.key,
-                    &vanilla_villager_types::TAIGA,
-                ),
-                (
-                    &vanilla_biomes::WINDSWEPT_GRAVELLY_HILLS.key,
-                    &vanilla_villager_types::TAIGA,
-                ),
-                (
-                    &vanilla_biomes::WINDSWEPT_HILLS.key,
-                    &vanilla_villager_types::TAIGA,
-                ),
-                (&vanilla_biomes::TAIGA.key, &vanilla_villager_types::TAIGA),
-                (
-                    &vanilla_biomes::WINDSWEPT_FOREST.key,
-                    &vanilla_villager_types::TAIGA,
-                ),
-            ]
-        });
+    static BY_BIOME: LazyLock<Vec<(&'static Identifier, VillagerTypeRef)>> = LazyLock::new(|| {
+        vec![
+            (
+                &vanilla_biomes::BADLANDS.key,
+                &vanilla_villager_types::DESERT,
+            ),
+            (&vanilla_biomes::DESERT.key, &vanilla_villager_types::DESERT),
+            (
+                &vanilla_biomes::ERODED_BADLANDS.key,
+                &vanilla_villager_types::DESERT,
+            ),
+            (
+                &vanilla_biomes::WOODED_BADLANDS.key,
+                &vanilla_villager_types::DESERT,
+            ),
+            (
+                &vanilla_biomes::BAMBOO_JUNGLE.key,
+                &vanilla_villager_types::JUNGLE,
+            ),
+            (&vanilla_biomes::JUNGLE.key, &vanilla_villager_types::JUNGLE),
+            (
+                &vanilla_biomes::SPARSE_JUNGLE.key,
+                &vanilla_villager_types::JUNGLE,
+            ),
+            (
+                &vanilla_biomes::SAVANNA_PLATEAU.key,
+                &vanilla_villager_types::SAVANNA,
+            ),
+            (
+                &vanilla_biomes::SAVANNA.key,
+                &vanilla_villager_types::SAVANNA,
+            ),
+            (
+                &vanilla_biomes::WINDSWEPT_SAVANNA.key,
+                &vanilla_villager_types::SAVANNA,
+            ),
+            (
+                &vanilla_biomes::DEEP_FROZEN_OCEAN.key,
+                &vanilla_villager_types::SNOW,
+            ),
+            (
+                &vanilla_biomes::FROZEN_OCEAN.key,
+                &vanilla_villager_types::SNOW,
+            ),
+            (
+                &vanilla_biomes::FROZEN_RIVER.key,
+                &vanilla_villager_types::SNOW,
+            ),
+            (
+                &vanilla_biomes::ICE_SPIKES.key,
+                &vanilla_villager_types::SNOW,
+            ),
+            (
+                &vanilla_biomes::SNOWY_BEACH.key,
+                &vanilla_villager_types::SNOW,
+            ),
+            (
+                &vanilla_biomes::SNOWY_TAIGA.key,
+                &vanilla_villager_types::SNOW,
+            ),
+            (
+                &vanilla_biomes::SNOWY_PLAINS.key,
+                &vanilla_villager_types::SNOW,
+            ),
+            (&vanilla_biomes::GROVE.key, &vanilla_villager_types::SNOW),
+            (
+                &vanilla_biomes::SNOWY_SLOPES.key,
+                &vanilla_villager_types::SNOW,
+            ),
+            (
+                &vanilla_biomes::FROZEN_PEAKS.key,
+                &vanilla_villager_types::SNOW,
+            ),
+            (
+                &vanilla_biomes::JAGGED_PEAKS.key,
+                &vanilla_villager_types::SNOW,
+            ),
+            (&vanilla_biomes::SWAMP.key, &vanilla_villager_types::SWAMP),
+            (
+                &vanilla_biomes::MANGROVE_SWAMP.key,
+                &vanilla_villager_types::SWAMP,
+            ),
+            (
+                &vanilla_biomes::OLD_GROWTH_SPRUCE_TAIGA.key,
+                &vanilla_villager_types::TAIGA,
+            ),
+            (
+                &vanilla_biomes::OLD_GROWTH_PINE_TAIGA.key,
+                &vanilla_villager_types::TAIGA,
+            ),
+            (
+                &vanilla_biomes::WINDSWEPT_GRAVELLY_HILLS.key,
+                &vanilla_villager_types::TAIGA,
+            ),
+            (
+                &vanilla_biomes::WINDSWEPT_HILLS.key,
+                &vanilla_villager_types::TAIGA,
+            ),
+            (&vanilla_biomes::TAIGA.key, &vanilla_villager_types::TAIGA),
+            (
+                &vanilla_biomes::WINDSWEPT_FOREST.key,
+                &vanilla_villager_types::TAIGA,
+            ),
+        ]
+    });
 
     &BY_BIOME
 }

@@ -47,7 +47,7 @@ impl StructurePiecePlacer {
 }
 
 fn place_child_piece<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     child: &OceanMonumentChildPiece,
     random: &mut WorldgenRandom,
 ) {

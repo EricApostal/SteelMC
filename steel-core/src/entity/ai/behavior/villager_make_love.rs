@@ -63,6 +63,10 @@ impl VillagerMakeLove {
     }
 
     /// Vanilla `VillagerMakeLove.tryToGiveBirth`.
+    #[expect(
+        clippy::unused_self,
+        reason = "kept as a method to mirror vanilla `VillagerMakeLove.tryToGiveBirth`"
+    )]
     fn try_to_give_birth(
         &self,
         ctx: &mut BehaviorContext<'_>,

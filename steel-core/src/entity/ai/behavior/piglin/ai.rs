@@ -20,7 +20,9 @@ use steel_registry::loot_table::{EntityEquipmentRef, EntityRef, EntityRefFlags, 
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_game_rules::UNIVERSAL_ANGER;
 use steel_registry::vanilla_item_tags::ItemTag;
-use steel_registry::{sound_events, vanilla_entities, vanilla_items, vanilla_loot_tables};
+use steel_registry::{
+    sound_events, vanilla_attributes, vanilla_entities, vanilla_items, vanilla_loot_tables,
+};
 use steel_utils::random::Random as _;
 use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::types::InteractionHand;
@@ -32,9 +34,8 @@ use crate::entity::ai::behavior::random_pos::land_random_pos;
 use crate::entity::ai::brain::Brain;
 use crate::entity::ai::brain::activity::Activity;
 use crate::entity::ai::brain::behavior::BehaviorContext;
+use crate::entity::ai::brain::memory::MemoryStore;
 use crate::entity::ai::brain::memory::module_type as mem;
-use crate::entity::ai::brain::memory::{MemoryModuleTypeRef, MemoryStore};
-use crate::entity::ai::sensing::villager::follow_range;
 use crate::entity::ai::targeting::TargetingConditions;
 use crate::entity::entities::ItemEntity;
 use crate::entity::entities::mobs::hostile::hoglin::HoglinEntity;
@@ -261,7 +262,11 @@ pub(crate) fn is_entity_attackable_ignoring_line_of_sight(
     else {
         return false;
     };
-    let Some(range) = follow_range(body) else {
+    let Some(range) = body_living
+        .attributes()
+        .lock()
+        .get_value(vanilla_attributes::FOLLOW_RANGE)
+    else {
         return false;
     };
     TargetingConditions::for_combat()
@@ -323,9 +328,11 @@ pub(crate) fn hold_in_off_hand(body: &dyn Entity, item_stack: ItemStack) {
 
 /// Vanilla `PiglinAi.putInInventory`: store what fits, throw the remainder.
 pub(crate) fn put_in_inventory(world: &World, body: &dyn Entity, item_stack: ItemStack) {
-    let remainder = body
-        .downcast_ref::<PiglinEntity>()
-        .map_or(item_stack, |piglin| piglin.add_to_inventory(item_stack));
+    let remainder = if let Some(piglin) = body.downcast_ref::<PiglinEntity>() {
+        piglin.add_to_inventory(item_stack)
+    } else {
+        item_stack
+    };
     throw_items_toward_random_pos(world, body, vec![remainder]);
 }
 
@@ -448,7 +455,7 @@ pub(crate) fn get_barter_response_items(body: &dyn Entity) -> Vec<ItemStack> {
     };
 
     let position = body.position();
-    let mut rng = LegacyRandom::from_seed(rand::random());
+    let mut rng = rand::rng();
     let mut context = LootContext::new(&mut rng)
         .with_origin(position.x, position.y, position.z)
         .with_this_entity(entity_ref);
@@ -589,7 +596,7 @@ pub(crate) fn cancel_admiring(body: &dyn Entity) {
 
 /// Vanilla `PiglinAi.wantsToDance`.
 #[must_use]
-pub(crate) fn wants_to_dance(body: &dyn Entity, killed_target: &dyn Entity) -> bool {
+pub(crate) fn wants_to_dance(body: &SharedEntity, killed_target: &SharedEntity) -> bool {
     if killed_target.entity_type().key != vanilla_entities::HOGLIN.key {
         return false;
     }
@@ -639,20 +646,23 @@ pub(crate) fn wants_to_pickup(body: &dyn Entity, item_stack: &ItemStack) -> bool
     if is_food(item_stack) {
         return !has_eaten_recently_locked(body) && has_space;
     }
-    if !is_loved_item(item_stack) {
+    if is_loved_item(item_stack) {
+        is_not_holding_loved_item_in_off_hand(body) && has_space
+    } else {
         body.as_mob().is_some_and(|mob| {
             let slot = mob.get_equipment_slot_for_item(item_stack);
             let current = mob.equipment_in_slot(slot);
             mob.can_replace_current_item(item_stack, &current, slot)
         })
-    } else {
-        is_not_holding_loved_item_in_off_hand(body) && has_space
     }
 }
 
 /// Vanilla `PiglinAi.wantsToStopRiding`.
 #[must_use]
-pub(crate) fn wants_to_stop_riding(body: &dyn Entity, entity_being_ridden: &SharedEntity) -> bool {
+pub(crate) fn wants_to_stop_riding(
+    body: &SharedEntity,
+    entity_being_ridden: &SharedEntity,
+) -> bool {
     if entity_being_ridden.as_mob().is_none() {
         return false;
     }
@@ -662,8 +672,8 @@ pub(crate) fn wants_to_stop_riding(body: &dyn Entity, entity_being_ridden: &Shar
 
     !ridden_is_baby
         || !entity_being_ridden.is_alive()
-        || was_hurt_recently_locked(body)
-        || was_hurt_recently_locked(entity_being_ridden)
+        || was_hurt_recently_locked(body.as_entity_event_source())
+        || was_hurt_recently_locked(entity_being_ridden.as_entity_event_source())
         || (entity_being_ridden.downcast_ref::<PiglinEntity>().is_some()
             && entity_being_ridden.vehicle().is_none())
 }
@@ -695,7 +705,11 @@ pub(crate) fn find_nearest_valid_attack_target(
     }
 
     if let Some(angry_at) = angry_at(ctx)
-        && is_entity_attackable_ignoring_line_of_sight(ctx.level, body, &angry_at)
+        && is_entity_attackable_ignoring_line_of_sight(
+            ctx.level,
+            body.as_entity_event_source(),
+            &angry_at,
+        )
     {
         return Some(angry_at);
     }
@@ -711,7 +725,13 @@ pub(crate) fn find_nearest_valid_attack_target(
     }
 
     ctx.get_memory(&mem::NEAREST_TARGETABLE_PLAYER_NOT_WEARING_GOLD)
-        .filter(|player| is_entity_attackable_ignoring_line_of_sight(ctx.level, body, player))
+        .filter(|player| {
+            is_entity_attackable_ignoring_line_of_sight(
+                ctx.level,
+                body.as_entity_event_source(),
+                player,
+            )
+        })
 }
 
 /// Vanilla `PiglinBruteAi.findNearestValidAttackTarget`.
@@ -720,7 +740,11 @@ pub(crate) fn find_nearest_valid_attack_target_brute(
     body: &SharedEntity,
 ) -> Option<SharedEntity> {
     if let Some(angry_at) = angry_at(ctx)
-        && is_entity_attackable_ignoring_line_of_sight(ctx.level, body, &angry_at)
+        && is_entity_attackable_ignoring_line_of_sight(
+            ctx.level,
+            body.as_entity_event_source(),
+            &angry_at,
+        )
     {
         return Some(angry_at);
     }
@@ -762,8 +786,10 @@ pub(crate) fn mob_interact(
     player: &Player,
     hand: InteractionHand,
 ) -> InteractionResult {
-    let player_held_item = player.inventory.lock().get_item_in_hand(hand);
-    if !can_admire(body, &player_held_item) {
+    let _ = world;
+    let inventory = player.inventory.lock();
+    let player_held_item = inventory.get_item_in_hand(hand);
+    if !can_admire(body, player_held_item) {
         return InteractionResult::Pass;
     }
 
@@ -780,7 +806,7 @@ pub(crate) fn mob_interact(
 /// Vanilla `PiglinAi.wasHurtBy`.
 ///
 /// Runs from `hurt_server` outside the brain tick, so it locks the brain itself.
-pub(crate) fn was_hurt_by(level: &World, body: &dyn Entity, attacker: &dyn Entity) {
+pub(crate) fn was_hurt_by(level: &World, body: &dyn Entity, attacker: &SharedEntity) {
     if attacker.downcast_ref::<PiglinEntity>().is_some() {
         return;
     }
@@ -816,7 +842,7 @@ pub(crate) fn was_hurt_by(level: &World, body: &dyn Entity, attacker: &dyn Entit
         if is_baby {
             brain.set_memory_with_expiry(
                 &mem::AVOID_TARGET,
-                attacker.clone(),
+                SharedEntity::clone(attacker),
                 BABY_FLEE_DURATION_AFTER_GETTING_HIT,
             );
         }
@@ -843,7 +869,7 @@ pub(crate) fn was_hurt_by(level: &World, body: &dyn Entity, attacker: &dyn Entit
 }
 
 /// Vanilla `PiglinAi.maybeRetaliate`.
-pub(crate) fn maybe_retaliate(level: &World, body: &dyn Entity, attacker: &dyn Entity) {
+pub(crate) fn maybe_retaliate(level: &World, body: &dyn Entity, attacker: &SharedEntity) {
     let Some(brain) = body.as_mob().and_then(Mob::brain) else {
         return;
     };
@@ -864,7 +890,7 @@ pub(crate) fn maybe_retaliate(level: &World, body: &dyn Entity, attacker: &dyn E
     let mut brain = brain.lock();
     if is_player && universal_anger {
         let target = get_nearest_visible_targetable_player(brain.memories())
-            .unwrap_or_else(|| attacker.clone());
+            .unwrap_or_else(|| SharedEntity::clone(attacker));
         set_anger_target(level, body, &target, brain.memories_mut());
         broadcast_universal_anger(level, body, brain.memories());
     } else {
@@ -993,11 +1019,11 @@ pub(crate) fn broadcast_anger_target(
             let hoglin_huntable = target
                 .downcast_ref::<HoglinEntity>()
                 .is_some_and(|hoglin| !hoglin.cannot_be_hunted());
-            if !can_hunt(&piglin) || !hoglin_huntable {
+            if !can_hunt(piglin.as_entity_event_source()) || !hoglin_huntable {
                 continue;
             }
         }
-        set_anger_target_if_closer_than_current(level, &piglin, target);
+        set_anger_target_if_closer_than_current(level, piglin.as_entity_event_source(), target);
     }
 }
 
@@ -1008,7 +1034,12 @@ pub(crate) fn broadcast_universal_anger(level: &World, body: &dyn Entity, memori
         if let Some(brain) = piglin.as_mob().and_then(Mob::brain) {
             let mut brain = brain.lock();
             if let Some(player) = get_nearest_visible_targetable_player(brain.memories()) {
-                set_anger_target(level, &piglin, &player, brain.memories_mut());
+                set_anger_target(
+                    level,
+                    piglin.as_entity_event_source(),
+                    &player,
+                    brain.memories_mut(),
+                );
             }
         }
     }
@@ -1051,12 +1082,12 @@ fn set_anger_target_if_closer_than_current(
     let current = get_anger_target(level, &brain);
     let nearest = match current {
         Some(current) => get_nearest_target(body, &current, new_target),
-        None => new_target.clone(),
+        None => SharedEntity::clone(new_target),
     };
 
-    if !brain
+    if brain
         .get_memory(&mem::ANGRY_AT)
-        .is_some_and(|uuid| uuid == nearest.uuid())
+        .is_none_or(|uuid| uuid != nearest.uuid())
     {
         set_anger_target(level, body, &nearest, brain.memories_mut());
     }
@@ -1072,16 +1103,16 @@ fn get_anger_target(level: &World, brain: &Brain) -> Option<SharedEntity> {
 
 /// Vanilla `BehaviorUtils.getNearestTarget`.
 fn get_nearest_target(
-    body: &SharedEntity,
+    body: &dyn Entity,
     target1: &SharedEntity,
     target2: &SharedEntity,
 ) -> SharedEntity {
     let distance1 = body.position().distance_squared(target1.position());
     let distance2 = body.position().distance_squared(target2.position());
     if distance1 < distance2 {
-        target1.clone()
+        SharedEntity::clone(target1)
     } else {
-        target2.clone()
+        SharedEntity::clone(target2)
     }
 }
 
@@ -1090,19 +1121,19 @@ pub(crate) fn broadcast_retreat(body: &dyn Entity, target: &SharedEntity, memori
     let _ = body;
     for piglin in get_visible_adult_piglins(memories) {
         if piglin.downcast_ref::<PiglinEntity>().is_some() {
-            retreat_from_nearest_target(&piglin, target);
+            retreat_from_nearest_target(piglin.as_entity_event_source(), target);
         }
     }
 }
 
 /// Vanilla `PiglinAi.retreatFromNearestTarget`.
-fn retreat_from_nearest_target(body: &SharedEntity, new_avoid_target: &SharedEntity) {
+fn retreat_from_nearest_target(body: &dyn Entity, new_avoid_target: &SharedEntity) {
     let Some(brain) = body.as_mob().and_then(Mob::brain) else {
         return;
     };
     let mut brain = brain.lock();
 
-    let mut nearest = new_avoid_target.clone();
+    let mut nearest = SharedEntity::clone(new_avoid_target);
     if let Some(avoid) = brain.get_memory(&mem::AVOID_TARGET) {
         nearest = get_nearest_target(body, &avoid, &nearest);
     }
@@ -1124,9 +1155,9 @@ pub(crate) fn wants_to_stop_fleeing(memories: &MemoryStore, body: &dyn Entity) -
     }
 
     if is_zombified(&avoided) {
-        return !memories
+        return memories
             .get(&mem::NEAREST_VISIBLE_ZOMBIFIED)
-            .is_some_and(|zombified| zombified.id() == avoided.id());
+            .is_none_or(|zombified| zombified.id() != avoided.id());
     }
 
     false
@@ -1159,11 +1190,12 @@ pub(crate) fn set_avoid_target_and_dont_hunt_for_a_while(
     body: &dyn Entity,
     target: &SharedEntity,
 ) {
+    let _ = body;
     brain.erase_memory(&mem::ANGRY_AT);
     brain.erase_memory(&mem::ATTACK_TARGET);
     brain.erase_memory(&mem::WALK_TARGET);
     let duration = i64::from(sample(RETREAT_DURATION));
-    brain.set_memory_with_expiry(&mem::AVOID_TARGET, target.clone(), duration);
+    brain.set_memory_with_expiry(&mem::AVOID_TARGET, SharedEntity::clone(target), duration);
     dont_kill_any_more_hoglins_for_a_while(brain.memories_mut());
 }
 
@@ -1183,8 +1215,3 @@ pub(crate) fn sample(provider: UniformIntProvider) -> i32 {
 
 /// Vanilla `PiglinAi.isPlayerHoldingLovedItem`, re-exported from the piglin sensor.
 pub(crate) use crate::entity::ai::sensing::piglin_specific::is_player_holding_loved_item;
-/// Vanilla `PiglinAi.isWearingSafeArmor`, re-exported from the piglin sensor.
-pub(crate) use crate::entity::ai::sensing::piglin_specific::is_wearing_safe_armor;
-
-/// Vanilla `PiglinAi.findNearbyAdultPiglins`, re-exported from the piglin sensor.
-pub(crate) use crate::entity::ai::sensing::piglin_specific::find_nearby_adult_piglins;

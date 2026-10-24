@@ -122,7 +122,7 @@ impl CamelHuskEntity {
 
     /// The shared `Camel` body carrying the camel husk's state.
     #[must_use]
-    pub fn camel(&self) -> &CamelEntity {
+    pub const fn camel(&self) -> &CamelEntity {
         &self.camel
     }
 

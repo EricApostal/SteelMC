@@ -7,7 +7,6 @@ use steel_utils::Identifier;
 use super::utils;
 use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
 use crate::entity::ai::brain::memory::module_type as mem;
-use crate::world::LevelReader as _;
 
 /// Vanilla `TryFindLiquid`'s shorter re-check delay (`timestamp + 20L + 2L`).
 const SHORT_COOLDOWN_TICKS: i64 = 22;

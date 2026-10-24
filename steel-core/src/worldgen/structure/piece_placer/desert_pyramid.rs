@@ -11,7 +11,7 @@ use steel_utils::{BlockPos, BlockStateId, BoundingBox, Direction, types::UpdateF
 
 use super::StructurePiecePlacer;
 use crate::chunk::heightmap::HeightmapType;
-use crate::world::{LevelAccessor as _, LevelReader as _};
+
 use crate::worldgen::template::{StructureTemplate, TemplateLevelAccess};
 use steel_worldgen::structure::desert_pyramid::DesertPyramidPieceData;
 use steel_worldgen::structure::{

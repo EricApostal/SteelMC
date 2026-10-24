@@ -4,6 +4,7 @@
 //! [`Tameable`] capability trait the owner/beg/sit goals consume, and the wolf owns the
 //! vanilla state behind it (owner, sitting pose, collar color, interest, anger, variants).
 
+use std::f32::consts::PI;
 use std::iter::empty;
 use std::sync::{Arc, Weak};
 
@@ -12,6 +13,7 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::data_components::vanilla_components::DYE;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::item_stack::ItemStack;
@@ -38,8 +40,8 @@ use crate::entity::damage::DamageSource;
 use crate::entity::neutral_mob::{NeutralMob, PersistentAnger};
 use crate::entity::{
     AgeableMob, AgeableMobBase, Animal, AnimalBase, Entity, EntityBase, EntityBaseLoad,
-    EntityEventSource as _, EntityPose, EntitySyncedData, LivingEntity, LivingEntityBase, Mob,
-    MobBase, PathfinderMob, SharedEntity,
+    EntityEventSource, EntityPose, EntitySpawnReason, EntitySyncedData, LivingEntity,
+    LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity,
 };
 use crate::physics::MoveResult;
 use crate::player::Player;
@@ -59,11 +61,9 @@ const FEED_HEAL: f32 = 2.0;
 /// Vanilla `Wolf.getTailAngle` thresholds.
 const TAIL_ANGLE_MAX_HEALTH: f32 = 20.0;
 const TAIL_ANGLE_MAX: f32 = 1.5;
-const TAIL_ANGLE_MIN: f32 = 0.4;
 /// Vanilla `Wolf` shake animation length.
 const SHAKE_ANIMATION_TICKS: f32 = 2.0;
 /// Vanilla `Wolf` wet-shake start conditions.
-const WET_SHAKE_WATER_HEIGHT: f64 = 0.4;
 const WET_SHAKE_RANDOM_BOUND: i32 = 40;
 
 /// Vanilla `Wolf`.
@@ -220,11 +220,11 @@ impl WolfEntity {
     #[must_use]
     pub fn tail_angle(&self) -> f32 {
         if self.is_angry() {
-            TAIL_ANGLE_MAX * (f32::consts::PI / 5.0).sin()
+            TAIL_ANGLE_MAX * (PI / 5.0).sin()
         } else {
             let health = self.get_health();
             let ratio = (TAIL_ANGLE_MAX_HEALTH - health) / TAIL_ANGLE_MAX_HEALTH;
-            TAIL_ANGLE_MAX * (ratio * f32::consts::PI).sin()
+            TAIL_ANGLE_MAX * (ratio * PI).sin()
         }
     }
 
@@ -237,10 +237,10 @@ impl WolfEntity {
     /// Vanilla `Wolf.getHeadRollAngle` (wet fur factor).
     #[must_use]
     pub fn head_roll_angle(&self) -> f32 {
-        if !self.is_wet() {
-            1.0
-        } else {
+        if self.is_wet() {
             (0.75 + self.shake_anim() / 2.0 * 0.25).min(1.0)
+        } else {
+            1.0
         }
     }
 
@@ -325,7 +325,7 @@ impl Tameable for WolfEntity {
         world
             .players
             .get_by_uuid(&uuid)
-            .map(|player| player.into_shared_entity())
+            .map(EntityEventSource::into_shared_entity)
     }
 
     fn is_tame(&self) -> bool {
@@ -467,7 +467,8 @@ impl Entity for WolfEntity {
         self.save_ageable_mob(nbt);
         self.save_animal(nbt);
         nbt.insert("CollarColor", self.collar_color() as i8);
-        if let Some(owner) = *self.owner_uuid.lock() {
+        let owner_uuid = *self.owner_uuid.lock();
+        if let Some(owner) = owner_uuid {
             nbt.insert("Owner", owner.to_string());
         }
         self.add_persistent_anger_save_data(nbt);
@@ -479,8 +480,7 @@ impl Entity for WolfEntity {
         self.load_animal(nbt);
         self.set_collar_color(
             nbt.byte("CollarColor")
-                .map(i32::from)
-                .unwrap_or(DEFAULT_COLLAR_COLOR),
+                .map_or(DEFAULT_COLLAR_COLOR, i32::from),
         );
         if let Some(owner) = nbt.string("Owner")
             && let Ok(uuid) = owner.to_str().parse::<Uuid>()
@@ -616,7 +616,7 @@ impl Mob for WolfEntity {
                 if color_id != self.collar_color() {
                     self.set_collar_color(color_id);
                     player.inventory.lock().mutate_item_in_hand(hand, |stack| {
-                        stack.consume(1, has_infinite_materials)
+                        stack.consume(1, has_infinite_materials);
                     });
                     return InteractionResult::Success;
                 }
@@ -706,6 +706,7 @@ impl PathfinderMob for WolfEntity {}
 
 #[cfg(test)]
 mod tests {
+    use simdnbt::owned::NbtCompound;
     use std::sync::Weak;
 
     use glam::DVec3;
@@ -729,7 +730,7 @@ mod tests {
         assert!(Tameable::is_ordered_to_sit(&wolf));
         assert!(Tameable::is_in_sitting_pose(&wolf));
 
-        let mut nbt = simdnbt::owned::NbtCompound::new();
+        let mut nbt = NbtCompound::new();
         wolf.save_additional(&mut nbt);
         assert_eq!(nbt.byte("CollarColor"), Some(3));
         assert_eq!(wolf.entity_type(), &vanilla_entities::WOLF);

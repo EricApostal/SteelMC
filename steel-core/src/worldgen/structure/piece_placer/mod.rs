@@ -45,7 +45,7 @@ use steel_utils::{
 
 use crate::entity::{ENTITIES, SharedEntity, next_entity_id};
 use crate::world::World;
-use crate::world::{LevelAccessor as _, LevelReader as _};
+
 use crate::worldgen::template::TemplateLevelAccess;
 use steel_worldgen::structure::{
     ProceduralPieceData, StructureMirror, StructurePiece, StructurePiecePayload,

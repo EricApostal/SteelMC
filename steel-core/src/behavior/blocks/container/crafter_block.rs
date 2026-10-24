@@ -28,6 +28,7 @@ use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionRes
 use crate::behavior::{InventoryAccess, PlacementSource};
 use crate::block_entity::entities::{CrafterBlockEntity, hopper_add_item, hopper_container_at};
 use crate::block_entity::{BLOCK_ENTITIES, BlockEntityTicker};
+use crate::entity::Entity as _;
 use crate::entity::living_loot_equipment;
 use crate::entity::projectile::triangle_random;
 use crate::inventory::lock::{ContainerLockGuard, ContainerRef};

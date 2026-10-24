@@ -58,7 +58,7 @@ struct CommandState {
 }
 
 impl CommandState {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             command: String::new(),
             last_output: None,
@@ -117,7 +117,7 @@ impl CommandBlockMinecartEntity {
     /// Sets the command and mirrors it into synced data, vanilla `setCommand` +
     /// `MinecartCommandBase.onUpdated`.
     pub fn set_command(&self, command: String) {
-        self.command.lock().command = command.clone();
+        self.command.lock().command.clone_from(&command);
         self.entity_data.lock().id_command_name.set(command);
     }
 
@@ -141,7 +141,7 @@ impl CommandBlockMinecartEntity {
     /// Sets the last output and mirrors it into synced data, vanilla
     /// `setLastOutput` + `MinecartCommandBase.onUpdated`.
     pub fn set_last_output(&self, last_output: Option<TextComponent>) {
-        self.command.lock().last_output = last_output.clone();
+        self.command.lock().last_output.clone_from(&last_output);
         self.entity_data
             .lock()
             .id_last_output
@@ -279,10 +279,7 @@ impl Entity for CommandBlockMinecartEntity {
 
     fn load_additional(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
         self.load_minecart_data(nbt);
-        let command = nbt
-            .string("Command")
-            .map(|value| value.to_string())
-            .unwrap_or_default();
+        let command = nbt.string("Command").map_or_default(ToString::to_string);
         let last_output = nbt
             .get("LastOutput")
             .and_then(|tag| TextComponent::from_nbt(&tag.to_owned()));
@@ -290,8 +287,8 @@ impl Entity for CommandBlockMinecartEntity {
 
         {
             let mut state = self.command.lock();
-            state.command = command.clone();
-            state.last_output = last_output.clone();
+            state.command.clone_from(&command);
+            state.last_output.clone_from(&last_output);
             state.track_output = track_output;
         }
 

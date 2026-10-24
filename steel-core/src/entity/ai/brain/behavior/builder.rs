@@ -1,6 +1,6 @@
 //! Vanilla `BehaviorBuilder` facade.
 //!
-//! Vanilla builds behaviors from DataFixerUpper higher-kinded applicatives; Rust
+//! Vanilla builds behaviors from `DataFixerUpper` higher-kinded applicatives; Rust
 //! has no equivalent, so the same compositions are expressed as concrete
 //! [`Trigger`] combinators. The static methods keep vanilla's names so Wave 2
 //! behavior code reads like its Java counterpart.
@@ -31,7 +31,7 @@ impl BehaviorBuilder {
 
     /// Vanilla `BehaviorBuilder.triggerIf(predicate)`.
     #[must_use]
-    pub fn trigger_if<F>(predicate: F) -> TriggerIf<F>
+    pub const fn trigger_if<F>(predicate: F) -> TriggerIf<F>
     where
         F: Fn(&mut super::BehaviorContext<'_>) -> bool + Send + Sync,
     {

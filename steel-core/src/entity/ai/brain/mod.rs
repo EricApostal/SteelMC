@@ -106,11 +106,11 @@ impl Brain {
     }
 
     #[must_use]
-    pub fn memories(&self) -> &MemoryStore {
+    pub const fn memories(&self) -> &MemoryStore {
         &self.memories
     }
 
-    pub fn memories_mut(&mut self) -> &mut MemoryStore {
+    pub const fn memories_mut(&mut self) -> &mut MemoryStore {
         &mut self.memories
     }
 
@@ -175,7 +175,7 @@ impl Brain {
         self.memories.forget_outdated();
     }
 
-    pub fn set_schedule(&mut self, schedule: Schedule) {
+    pub const fn set_schedule(&mut self, schedule: Schedule) {
         self.schedule = Some(schedule);
     }
 
@@ -253,7 +253,7 @@ impl Brain {
         }
     }
 
-    pub fn set_default_activity(&mut self, activity: Activity) {
+    pub const fn set_default_activity(&mut self, activity: Activity) {
         self.default_activity = activity;
     }
 
@@ -576,7 +576,9 @@ impl Provider {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex, Weak};
+    use std::sync::{Arc, Weak};
+    use steel_registry::vanilla_damage_types;
+    use steel_utils::locks::SyncMutex;
 
     use glam::DVec3;
     use steel_registry::{init_vanilla_registry, vanilla_entities};
@@ -717,7 +719,7 @@ mod tests {
         brain.set_active_activity_if_possible(Activity::Panic);
         assert_eq!(brain.get_active_non_core_activity(), Some(Activity::Idle));
 
-        let source = DamageSource::environment(&steel_registry::vanilla_damage_types::GENERIC);
+        let source = DamageSource::environment(&vanilla_damage_types::GENERIC);
         brain.set_memory(&module_type::HURT_BY, Some(source));
         brain.set_active_activity_if_possible(Activity::Panic);
         assert_eq!(brain.get_active_non_core_activity(), Some(Activity::Panic));
@@ -749,11 +751,11 @@ mod tests {
     struct RecordingBehavior {
         state: BehaviorState,
         id: u32,
-        log: Arc<Mutex<Vec<u32>>>,
+        log: Arc<SyncMutex<Vec<u32>>>,
     }
 
     impl RecordingBehavior {
-        fn new(id: u32, log: &Arc<Mutex<Vec<u32>>>) -> Self {
+        fn new(id: u32, log: &Arc<SyncMutex<Vec<u32>>>) -> Self {
             Self {
                 state: BehaviorState::with_entry_condition(Vec::new()),
                 id,
@@ -772,7 +774,7 @@ mod tests {
         }
 
         fn start(&mut self, _ctx: &mut BehaviorContext<'_>) {
-            self.log.lock().unwrap().push(self.id);
+            self.log.lock().push(self.id);
         }
 
         fn can_still_use(&self, _ctx: &mut BehaviorContext<'_>) -> bool {
@@ -780,7 +782,7 @@ mod tests {
         }
 
         fn tick(&mut self, _ctx: &mut BehaviorContext<'_>) {
-            self.log.lock().unwrap().push(self.id);
+            self.log.lock().push(self.id);
         }
     }
 
@@ -795,7 +797,7 @@ mod tests {
             Weak::new(),
         ));
 
-        let log = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::new(SyncMutex::new(Vec::new()));
         let mut gate = GateBehavior::new(
             Vec::new(),
             Vec::new(),
@@ -811,7 +813,7 @@ mod tests {
         let mut ctx = BehaviorContext::new(&mut memories, &world.world, &body, 0);
         assert!(gate.try_start(&mut ctx));
 
-        assert_eq!(&*log.lock().unwrap(), &[1]);
+        assert_eq!(&*log.lock(), &[1]);
         assert_eq!(gate.status(), BehaviorStatus::Running);
     }
 
@@ -826,7 +828,7 @@ mod tests {
             Weak::new(),
         ));
 
-        let log = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::new(SyncMutex::new(Vec::new()));
         let mut gate = GateBehavior::new(
             Vec::new(),
             Vec::new(),
@@ -842,7 +844,7 @@ mod tests {
         let mut ctx = BehaviorContext::new(&mut memories, &world.world, &body, 0);
         assert!(gate.try_start(&mut ctx));
 
-        assert_eq!(&*log.lock().unwrap(), &[1, 2]);
+        assert_eq!(&*log.lock(), &[1, 2]);
     }
 
     #[test]
@@ -856,7 +858,7 @@ mod tests {
             Weak::new(),
         ));
 
-        let log = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::new(SyncMutex::new(Vec::new()));
         let mut gate = RunOne::new(vec![
             (Box::new(RecordingBehavior::new(1, &log)), 1),
             (Box::new(RecordingBehavior::new(2, &log)), 1),
@@ -867,7 +869,7 @@ mod tests {
         let mut ctx = BehaviorContext::new(&mut memories, &world.world, &body, 0);
         assert!(gate.try_start(&mut ctx));
 
-        assert_eq!(log.lock().unwrap().len(), 1);
+        assert_eq!(log.lock().len(), 1);
     }
 
     #[test]
@@ -881,7 +883,7 @@ mod tests {
             Weak::new(),
         ));
 
-        let log = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::new(SyncMutex::new(Vec::new()));
         let mut gate = GateBehavior::new(
             Vec::new(),
             vec![erased(&module_type::WALK_TARGET)],

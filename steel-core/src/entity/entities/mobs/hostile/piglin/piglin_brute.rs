@@ -15,7 +15,11 @@ use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::PiglinBruteEntityData;
-use steel_registry::{sound_events, vanilla_attributes, vanilla_entities, vanilla_items};
+use steel_registry::vanilla_item_tags::ItemTag;
+use steel_registry::{
+    sound_events, vanilla_attributes, vanilla_entities, vanilla_items, vanilla_mob_effects,
+};
+use steel_utils::Downcast as _;
 use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
@@ -26,9 +30,9 @@ use crate::entity::ai::path::PathType;
 use crate::entity::conversion::ConversionParams;
 use crate::entity::damage::DamageSource;
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
-    LivingEntity, LivingEntityBase, Mob, MobBase, MobEffectInstance, Monster, PathfinderMob,
-    SharedEntity, SpawnGroupData,
+    Entity, EntityBase, EntityBaseLoad, EntityEventSource as _, EntityPose, EntitySpawnReason,
+    EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase, MobEffectInstance, Monster,
+    PathfinderMob, SharedEntity, SpawnGroupData,
 };
 use crate::inventory::equipment::EquipmentSlot;
 use crate::physics::MoveResult;
@@ -85,7 +89,7 @@ impl PiglinBruteEntity {
         mob_base.set_xp_reward(XP_REWARD);
 
         // Vanilla `AbstractPiglin` constructor.
-        mob_base.set_can_pick_up_loot(true);
+        *mob_base.can_pick_up_loot().lock() = true;
         mob_base.navigation().lock().set_can_open_doors(true);
         {
             let mut malus = mob_base.pathfinding_malus().lock();
@@ -127,12 +131,21 @@ impl PiglinBruteEntity {
     /// Vanilla `AbstractPiglin.isImmuneToZombification`.
     #[must_use]
     pub fn is_immune_to_zombification(&self) -> bool {
-        *self.entity_data.lock().immune_to_zombification.get()
+        *self
+            .entity_data
+            .lock()
+            .abstract_piglin
+            .immune_to_zombification
+            .get()
     }
 
     /// Vanilla `AbstractPiglin.setImmuneToZombification`.
     pub fn set_immune_to_zombification(&self, immune: bool) {
-        self.entity_data.lock().immune_to_zombification.set(immune);
+        self.entity_data
+            .lock()
+            .abstract_piglin
+            .immune_to_zombification
+            .set(immune);
     }
 
     /// Vanilla `AbstractPiglin.isConverting`.
@@ -164,7 +177,7 @@ impl PiglinBruteEntity {
             ConversionParams::single(true, true),
             Some(&|zombified| {
                 zombified.add_mob_effect(MobEffectInstance::with_duration(
-                    &steel_registry::vanilla_mob_effects::NAUSEA,
+                    vanilla_mob_effects::NAUSEA,
                     200,
                     0,
                 ));
@@ -399,9 +412,12 @@ impl Mob for PiglinBruteEntity {
         self.finalize_spawn_mob_base(world, spawn_reason, group_data)
     }
 
-    /// Vanilla `PiglinBrute.wantsToPickUp`: golden axes only.
+    /// Vanilla `PiglinBrute.wantsToPickUp`: golden axes only, then
+    /// `AbstractPiglin.wantsToPickUp`'s repellent veto and `Mob.canHoldItem`.
     fn wants_to_pick_up(&self, item_stack: &ItemStack) -> bool {
-        item_stack.is(&vanilla_items::GOLDEN_AXE) && Mob::wants_to_pick_up(self, item_stack)
+        item_stack.is(&vanilla_items::GOLDEN_AXE)
+            && !item_stack.item().has_tag(&ItemTag::PIGLIN_REPELLENTS)
+            && self.can_hold_item(item_stack)
     }
 
     /// Vanilla `PiglinBrute.getBaseExperienceReward`.
@@ -420,6 +436,7 @@ impl PathfinderMob for PiglinBruteEntity {}
 
 #[cfg(test)]
 mod tests {
+    use simdnbt::owned::NbtCompound;
     use std::sync::Weak;
 
     use glam::DVec3;
@@ -448,7 +465,7 @@ mod tests {
             PiglinBruteEntity::new(&vanilla_entities::PIGLIN_BRUTE, 1, DVec3::ZERO, Weak::new());
 
         brute.set_immune_to_zombification(true);
-        let mut nbt = simdnbt::owned::NbtCompound::new();
+        let mut nbt = NbtCompound::new();
         brute.save_additional(&mut nbt);
         assert_eq!(nbt.byte("IsImmuneToZombification"), Some(1));
     }

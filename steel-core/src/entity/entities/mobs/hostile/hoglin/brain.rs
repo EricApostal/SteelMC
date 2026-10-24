@@ -441,9 +441,7 @@ fn zoglin_nearest_valid_attack_target(
     ctx: &BehaviorContext<'_>,
     body: &SharedEntity,
 ) -> Option<SharedEntity> {
-    let Some(follow_range) = follow_range(body) else {
-        return None;
-    };
+    let follow_range = follow_range(body)?;
     let attack_target = ctx.get_memory(&mem::ATTACK_TARGET);
     let visible = ctx.get_memory(&mem::NEAREST_VISIBLE_LIVING_ENTITIES)?;
     visible.find_closest(|entity| {

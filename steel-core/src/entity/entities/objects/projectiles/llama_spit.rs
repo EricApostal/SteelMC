@@ -13,16 +13,16 @@ use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::entity_type::EntityTypeRef;
+use steel_registry::vanilla_damage_types;
 use steel_registry::vanilla_entity_data::LlamaSpitEntityData;
-use steel_registry::{vanilla_damage_types, vanilla_entities};
 use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, DowncastType, DowncastTypeKey, axis::Axis};
 
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::objects::projectiles::hurting::do_post_attack_effects;
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntitySyncedData, LivingEntity as _, Projectile,
-    ProjectileBase, ProjectileHit, RemovalReason, SharedEntity,
+    Entity, EntityBase, EntityBaseLoad, EntitySyncedData, Projectile, ProjectileBase,
+    RemovalReason, SharedEntity,
 };
 use crate::world::{ClipHitResult, World};
 
@@ -83,7 +83,7 @@ impl LlamaSpitEntity {
             + DVec3::new(
                 -(width + SPAWN_FORWARD_OFFSET) * 0.5 * yaw.sin(),
                 owner.get_eye_y() - owner.position().y - 0.1,
-                (width + SPAWN_FORWARD_OFFSET) * 0.5 * yaw.cos(),
+                f64::midpoint(width, SPAWN_FORWARD_OFFSET) * yaw.cos(),
             );
         let spit = Self::new(entity_type, id, position, world);
         spit.set_owner_entity(Some(owner));

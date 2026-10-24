@@ -2,13 +2,14 @@
 
 use std::sync::Arc;
 
+use steel_registry::data_components::vanilla_components;
+
+use super::spear_attack::SpearStatus;
 use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::{MemoryModuleTypeRef, MemoryStatus, module_type as mem};
 use crate::entity::ai::brain::tracker::EntityTracker;
-use crate::entity::mob::Mob as _;
-
-use super::spear_attack::SpearStatus;
+use crate::entity::mob::Mob;
 
 /// Vanilla `SpearApproach(speedModifierWhenRepositioning, approachDistance)`.
 pub struct SpearApproach {
@@ -40,6 +41,10 @@ impl SpearApproach {
     }
 
     /// Vanilla `ableToAttack`.
+    #[expect(
+        clippy::unused_self,
+        reason = "kept as a method to mirror vanilla `SpearApproach.ableToAttack`"
+    )]
     fn able_to_attack(&self, ctx: &BehaviorContext<'_>) -> bool {
         Self::attack_target(ctx).is_some() && ctx.body.with_weapon_item_has_kinetic_weapon()
     }
@@ -64,9 +69,7 @@ impl WeaponItemKineticProbe for SharedEntity {
     fn with_weapon_item_has_kinetic_weapon(&self) -> bool {
         let mut has = false;
         self.with_weapon_item(&mut |item| {
-            has = item.is_some_and(|item| {
-                item.has(steel_registry::data_components::vanilla_components::KINETIC_WEAPON)
-            });
+            has = item.is_some_and(|item| item.has(vanilla_components::KINETIC_WEAPON));
         });
         has
     }
@@ -106,18 +109,16 @@ impl Behavior for SpearApproach {
         };
         ctx.set_memory(
             &mem::LOOK_TARGET,
-            Arc::new(EntityTracker::new(target.clone(), true)),
+            Arc::new(EntityTracker::new(SharedEntity::clone(&target), true)),
         );
 
         let vehicle_boost = ctx.body.controlled_vehicle().map_or(1.0, |vehicle| {
-            vehicle
-                .as_mob()
-                .map_or(1.0, |mob| mob.charge_speed_modifier())
+            vehicle.as_mob().map_or(1.0, Mob::charge_speed_modifier)
         });
         if let Some(mob) = ctx.body.as_pathfinder_mob() {
             mob.move_to_pos(
                 target.position(),
-                f64::from(vehicle_boost) * f64::from(self.speed_modifier_when_repositioning),
+                f64::from(vehicle_boost) * self.speed_modifier_when_repositioning,
             );
         }
     }

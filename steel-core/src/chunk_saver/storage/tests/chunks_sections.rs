@@ -235,6 +235,7 @@ fn full_chunk_postprocessing_roundtrips_through_persistent_chunk() {
         vec![vec![packed]],
         Vec::new(),
         Vec::new(),
+        0,
         Vec::new(),
         pos,
     );

@@ -13,6 +13,7 @@ use steel_registry::entity_type::{
 };
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
+use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entity_data::OcelotEntityData;
 use steel_registry::vanilla_item_tags::ItemTag;
 use steel_registry::{
@@ -195,7 +196,7 @@ impl OcelotEntity {
     /// Vanilla `Ocelot.spawnTrustingParticles`.
     ///
     /// GAP: particles are client-side in Steel; the heart/smoke burst is not emitted here.
-    fn spawn_trusting_particles(&self, _success: bool) {}
+    const fn spawn_trusting_particles(_success: bool) {}
 
     fn update_dirty_mob_effect_entity_data(&self) {
         if !self.living_base.take_effects_dirty() {
@@ -234,10 +235,10 @@ impl OcelotEntity {
         Mob::use_player_item(self, player, hand);
         if rand::random_range(0..3) == 0 {
             self.set_trusting(true);
-            self.spawn_trusting_particles(true);
+            Self::spawn_trusting_particles(true);
             self.broadcast_entity_event(EntityStatus::TrustingSucceeded);
         } else {
-            self.spawn_trusting_particles(false);
+            Self::spawn_trusting_particles(false);
             self.broadcast_entity_event(EntityStatus::TrustingFailed);
         }
         true
@@ -486,8 +487,7 @@ impl Mob for OcelotEntity {
         }
 
         let below = world.get_block_state(pos.below()).get_block();
-        below == &vanilla_blocks::GRASS_BLOCK
-            || below.has_tag(&steel_registry::vanilla_block_tags::BlockTag::LEAVES)
+        below == &vanilla_blocks::GRASS_BLOCK || below.has_tag(&BlockTag::LEAVES)
     }
 
     fn finalize_spawn(

@@ -7,6 +7,7 @@ use steel_macros::item_behavior;
 use steel_registry::{blocks::block_state_ext::BlockStateExt, sound_events, vanilla_game_events};
 use steel_utils::{BlockPos, BlockStateId, types::UpdateFlags};
 
+use crate::behavior::advancement_hooks::raise_item_used_on_block;
 use crate::behavior::blocks::vegetation::GrowingPlantHeadBehavior;
 use crate::behavior::{BLOCK_BEHAVIORS, InteractionResult, ItemBehavior, UseOnContext};
 use crate::entity::Entity;
@@ -48,7 +49,14 @@ impl ItemBehavior for ShearsItem {
             return InteractionResult::Pass;
         }
 
-        // TODO: Trigger ITEM_USED_ON_BLOCK once advancement criteria dispatch is implemented.
+        // Vanilla `ShearsItem.useOn` raises `item_used_on_block` with the
+        // clicked position and the shears, before cropping the plant head.
+        raise_item_used_on_block(
+            context.player,
+            context.world,
+            pos,
+            &context.inv.with_item(|item| item.clone()),
+        );
         context.world.play_block_sound(
             &sound_events::BLOCK_GROWING_PLANT_CROP,
             pos,

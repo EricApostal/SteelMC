@@ -26,7 +26,6 @@ use steel_utils::{BlockPos, BlockStateId};
 
 use crate::behavior::InventoryAccess;
 use crate::behavior::{BlockBehavior, BlockHitResult, BlockPlaceContext, InteractionResult};
-use crate::block_entity::BlockEntity as _;
 use crate::entity::entities::objects::explosives::PrimedTntEntity;
 use crate::entity::projectile::Projectile;
 use crate::entity::{ENTITIES, Entity, SharedEntity, next_entity_id};

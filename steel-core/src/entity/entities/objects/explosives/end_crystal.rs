@@ -18,9 +18,7 @@ use steel_utils::{DowncastType, DowncastTypeKey};
 
 use crate::behavior::blocks::FireBlock;
 use crate::entity::damage::DamageSource;
-use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntitySyncedData, RemovalReason, SharedEntity,
-};
+use crate::entity::{Entity, EntityBase, EntityBaseLoad, EntitySyncedData, RemovalReason};
 use crate::world::World;
 use crate::world::explosion::ExplosionInteraction;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;

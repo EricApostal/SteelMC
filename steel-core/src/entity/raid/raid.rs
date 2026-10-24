@@ -1,18 +1,20 @@
 //! Vanilla `Raid`: wave scheduling, raid-omen absorption, spawn placement and
 //! victory/defeat resolution.
 //!
-//! Vanilla pushes client-visible state into a `ServerBossEvent`. Steel keeps the same state
-//! in [`RaidBar`] (exposed through [`Raid::bar`]) and pushes it to the tracking players with
-//! [`Raid::sync_bar`], which diffs the bar once per tick instead of broadcasting from each
-//! setter.
+//! Vanilla pushes client-visible state into `Raid.raidEvent`, a `ServerBossEvent`. Steel keeps
+//! the same field ([`Raid::raid_event`]) and drives it through the shared foundation's setters,
+//! which record the vanilla wire operations; the raids manager flushes them once per tick with
+//! [`Raid::broadcast_pending`].
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::f32::consts::{PI, TAU};
 use std::sync::Arc;
 
 use glam::DVec3;
-use steel_protocol::packets::game::{BossBarColor, BossBarOverlay, BossEventOperation, CBossEvent};
+use steel_protocol::packets::game::{BossBarColor, BossBarOverlay, CSound, SoundSource};
 use steel_registry::DyeColor;
 use steel_registry::RegistryHolder;
+use steel_registry::banner_pattern::BannerPattern;
 use steel_registry::data_components::components::{Rarity, TooltipDisplay};
 use steel_registry::data_components::vanilla_components::{
     BANNER_PATTERNS, ITEM_NAME, RARITY, TOOLTIP_DISPLAY,
@@ -21,20 +23,24 @@ use steel_registry::data_components::{BannerPatternLayer, BannerPatternLayers};
 use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::equipment::EquipmentSlot;
 use steel_registry::item_stack::ItemStack;
+use steel_registry::sound_events::EVENT_RAID_HORN;
 use steel_registry::vanilla_banner_patterns;
+use steel_registry::vanilla_blocks::SNOW;
+use steel_registry::vanilla_custom_stats::{RAID_TRIGGER, RAID_WIN};
 use steel_registry::vanilla_entities;
 use steel_registry::vanilla_items;
 use steel_registry::vanilla_mob_effects;
 use steel_utils::random::Random;
 use steel_utils::random::legacy_random::LegacyRandom;
+use steel_utils::translations;
 use steel_utils::types::Difficulty;
 use steel_utils::{BlockPos, SectionPos};
-use text_components::translation::TranslatedMessage;
 use text_components::{Modifier as _, TextComponent};
 use uuid::Uuid;
 
 use crate::behavior::BLOCK_BEHAVIORS;
 use crate::chunk::heightmap::HeightmapType;
+use crate::entity::boss::event::ServerBossEvent;
 use crate::entity::spawn::create_entity_instance;
 use crate::entity::{
     Entity, EntitySpawnReason, LivingEntity, MobEffectInstance, Player, SharedEntity,
@@ -49,6 +55,7 @@ use crate::world::SignalQueryContext;
 use crate::world::World;
 use crate::world::village::{find_section_closest_to_village, poi::is_village_poi, section_center};
 
+use super::raider::Raider;
 use super::raids::RaidSnapshot;
 
 /// Vanilla `Raid.ALLOW_SPAWNING_WITHIN_VILLAGE_SECONDS_THRESHOLD`.
@@ -173,34 +180,11 @@ impl RaiderType {
     }
 }
 
-/// Vanilla `Raid.raidEvent` (`ServerBossEvent`) state.
-#[derive(Debug, Clone, PartialEq)]
-pub struct RaidBar {
-    /// Vanilla `BossEvent.getProgress`.
-    pub progress: f32,
-    /// Vanilla `BossEvent.getName`.
-    pub name: TextComponent,
-    /// Vanilla `BossEvent.isVisible`.
-    pub visible: bool,
-    /// Vanilla `BossEvent.getPlayers`.
-    pub players: BTreeSet<Uuid>,
-}
-
-/// Bar state last pushed to clients, used to diff the next [`Raid::sync_bar`].
-#[derive(Debug, Clone, PartialEq)]
-struct BarWireState {
-    progress: f32,
-    name: TextComponent,
-    visible: bool,
-    players: BTreeSet<Uuid>,
-}
-
 /// Vanilla `BossEvent.BossBarColor.RED`, the raid boss bar color.
 const RAID_BAR_COLOR: BossBarColor = BossBarColor::Red;
 /// Vanilla `BossEvent.BossBarOverlay.NOTCHED_10`, the raid boss bar overlay.
 const RAID_BAR_OVERLAY: BossBarOverlay = BossBarOverlay::Notched10;
 
-/// Vanilla `Raid`.
 /// Vanilla `Raid`.
 #[expect(
     missing_debug_implementations,
@@ -224,11 +208,8 @@ pub struct Raid {
     status: RaidStatus,
     celebration_ticks: i32,
     wave_spawn_pos: Option<BlockPos>,
-    bar: RaidBar,
-    /// Vanilla `Raid.raidEvent` id (`Mth.createInsecureUUID(this.random)`).
-    bar_id: Uuid,
-    /// Bar state already sent to clients; `None` before the first client ever saw it.
-    bar_sent: Option<BarWireState>,
+    /// Vanilla `Raid.raidEvent`: the boss bar of the players tracking this raid.
+    raid_event: ServerBossEvent,
 }
 
 impl Raid {
@@ -236,7 +217,7 @@ impl Raid {
     #[must_use]
     pub fn new(center: BlockPos, difficulty: Difficulty) -> Self {
         let mut random = LegacyRandom::from_seed(rand::random());
-        let bar_id = raid_event_id(&mut random);
+        let raid_event = Self::new_raid_event(&mut random);
         Self {
             group_to_leader_map: BTreeMap::new(),
             group_raider_map: BTreeMap::new(),
@@ -255,14 +236,7 @@ impl Raid {
             status: RaidStatus::Ongoing,
             celebration_ticks: 0,
             wave_spawn_pos: None,
-            bar: RaidBar {
-                progress: 0.0,
-                name: raid_name_component(),
-                visible: true,
-                players: BTreeSet::new(),
-            },
-            bar_id,
-            bar_sent: None,
+            raid_event,
         }
     }
 
@@ -287,7 +261,7 @@ impl Raid {
         heroes_of_the_village: BTreeSet<Uuid>,
     ) -> Self {
         let mut random = LegacyRandom::from_seed(rand::random());
-        let bar_id = raid_event_id(&mut random);
+        let raid_event = Self::new_raid_event(&mut random);
         Self {
             group_to_leader_map: BTreeMap::new(),
             group_raider_map: BTreeMap::new(),
@@ -306,15 +280,22 @@ impl Raid {
             status,
             celebration_ticks: 0,
             wave_spawn_pos: None,
-            bar: RaidBar {
-                progress: 0.0,
-                name: raid_name_component(),
-                visible: active,
-                players: BTreeSet::new(),
-            },
-            bar_id,
-            bar_sent: None,
+            // Vanilla's saved-data constructor builds a fresh `ServerBossEvent`, whose
+            // visibility always starts true; only the first tick hides it for an unloaded
+            // raid center.
+            raid_event,
         }
+    }
+
+    /// Vanilla `Raid.raidEvent` construction: `Mth.createInsecureUUID(this.random)` with
+    /// the raid's red / notched-10 bar style.
+    fn new_raid_event(random: &mut LegacyRandom) -> ServerBossEvent {
+        ServerBossEvent::new(
+            raid_event_id(random),
+            raid_name_component(),
+            RAID_BAR_COLOR,
+            RAID_BAR_OVERLAY,
+        )
     }
 
     /// Vanilla `Raid.getCenter`.
@@ -324,7 +305,7 @@ impl Raid {
     }
 
     /// Vanilla `Raid.setCenter`.
-    pub fn set_center(&mut self, center: BlockPos) {
+    pub const fn set_center(&mut self, center: BlockPos) {
         self.center = center;
     }
 
@@ -364,11 +345,15 @@ impl Raid {
     }
 
     /// Vanilla `Raid.setRaidOmenLevel`.
-    pub fn set_raid_omen_level(&mut self, raid_omen_level: i32) {
+    pub const fn set_raid_omen_level(&mut self, raid_omen_level: i32) {
         self.raid_omen_level = raid_omen_level;
     }
 
     /// Vanilla `Raid.getMaxRaidOmenLevel`.
+    #[expect(
+        clippy::unused_self,
+        reason = "vanilla `Raid.getMaxRaidOmenLevel` is an instance method returning a constant, and its callers live outside this slice"
+    )]
     #[must_use]
     pub const fn max_raid_omen_level(&self) -> i32 {
         DEFAULT_MAX_RAID_OMEN_LEVEL
@@ -466,7 +451,7 @@ impl Raid {
 
     /// Vanilla `Raid.getEnchantOdds`.
     #[must_use]
-    pub fn enchant_odds(&self) -> f32 {
+    pub const fn enchant_odds(&self) -> f32 {
         match self.raid_omen_level {
             2 => 0.1,
             3 => 0.25,
@@ -479,8 +464,7 @@ impl Raid {
     /// Vanilla `Raid.getOminousBannerInstance`.
     #[must_use]
     pub fn ominous_banner_instance() -> ItemStack {
-        let layer = |pattern: &'static steel_registry::banner_pattern::BannerPattern,
-                     color: DyeColor| {
+        let layer = |pattern: &'static BannerPattern, color: DyeColor| {
             BannerPatternLayer::new(RegistryHolder::reference(pattern), color)
         };
         let patterns = BannerPatternLayers::new(vec![
@@ -505,10 +489,7 @@ impl Raid {
         );
         stack.set(
             ITEM_NAME,
-            TextComponent::translated(TranslatedMessage::new(
-                "block.minecraft.ominous_banner",
-                None,
-            )),
+            TextComponent::translated(translations::BLOCK_MINECRAFT_OMINOUS_BANNER.msg()),
         );
         stack.set(RARITY, Rarity::Uncommon);
         stack
@@ -544,94 +525,29 @@ impl Raid {
         self.group_to_leader_map.contains_key(&wave)
     }
 
-    /// Vanilla `Raid.getBossBar` state.
-    #[must_use]
-    pub const fn bar(&self) -> &RaidBar {
-        &self.bar
-    }
-
-    /// Vanilla `Raid.raidEvent.getId`: the boss bar UUID clients key the bar by.
+    /// Vanilla `Raid.raidEvent`: the raid's live boss bar.
     ///
-    /// Vanilla does not persist the boss UUID, so a reloaded raid gets a fresh one; Steel
+    /// Vanilla does not persist the bar's UUID, so a reloaded raid gets a fresh one; Steel
     /// mirrors that by deriving it from the raid's random in [`Raid::new`]/[`Raid::from_saved`].
     #[must_use]
-    pub const fn bar_id(&self) -> Uuid {
-        self.bar_id
+    pub const fn raid_event(&self) -> &ServerBossEvent {
+        &self.raid_event
     }
 
-    /// Pushes the [`RaidBar`] state to the players tracking it.
+    /// The raid's live boss bar, for inspecting or draining its queued operations.
+    pub const fn raid_event_mut(&mut self) -> &mut ServerBossEvent {
+        &mut self.raid_event
+    }
+
+    /// Delivers the boss-bar operations recorded since the last flush.
     ///
-    /// Vanilla `ServerBossEvent` broadcasts from inside each setter (`setProgress`,
-    /// `setName`, `setVisible`, `addPlayer`, `removePlayer`). Steel keeps the same wire
-    /// packets but diffs the bar once per tick instead, so the operations can arrive in a
-    /// different order within the tick while the resulting client state is identical.
-    pub fn sync_bar(&mut self, world: &Arc<World>) {
-        let current = BarWireState {
-            progress: self.bar.progress,
-            name: self.bar.name.clone(),
-            visible: self.bar.visible,
-            players: self.bar.players.clone(),
-        };
-        let previous = self.bar_sent.take();
-        let bar_id = self.bar_id;
-
-        let send = |uuid: &Uuid, operation| {
-            if let Some(player) = world.players.get_by_uuid(uuid) {
-                player.send_packet(CBossEvent::new(bar_id, operation));
-            }
-        };
-
-        match previous {
-            // Vanilla never sends an `Add` for a bar nobody was tracking.
-            None => {
-                if current.visible {
-                    for uuid in &current.players {
-                        send(uuid, add_operation(&current));
-                    }
-                }
-            }
-            Some(previous) => {
-                let hide = previous.visible && !current.visible;
-                for uuid in &previous.players {
-                    if hide || !current.players.contains(uuid) {
-                        send(uuid, BossEventOperation::Remove);
-                    }
-                }
-
-                if current.visible {
-                    let show = !previous.visible;
-                    for uuid in &current.players {
-                        if show || !previous.players.contains(uuid) {
-                            send(uuid, add_operation(&current));
-                        }
-                    }
-
-                    if previous.progress != current.progress {
-                        for uuid in &current.players {
-                            send(
-                                uuid,
-                                BossEventOperation::UpdateProgress {
-                                    progress: current.progress,
-                                },
-                            );
-                        }
-                    }
-
-                    if previous.name != current.name {
-                        for uuid in &current.players {
-                            send(
-                                uuid,
-                                BossEventOperation::UpdateName {
-                                    name: current.name.clone(),
-                                },
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        self.bar_sent = Some(current);
+    /// Vanilla `ServerBossEvent` sends from inside each setter (`setProgress`, `setName`,
+    /// `setVisible`, `addPlayer`, `removePlayer`). Steel's shared foundation records the same
+    /// operations instead, and the raids manager hands them to the tracked players once per
+    /// tick, so they can arrive in a different order within the tick while the resulting
+    /// client state is identical.
+    pub fn broadcast_pending(&mut self) {
+        self.raid_event.broadcast_pending();
     }
 
     /// Vanilla `Raid.hasBonusWave`.
@@ -660,7 +576,7 @@ impl Raid {
 
     /// Vanilla `Raid.hasMoreWaves`.
     #[must_use]
-    pub fn has_more_waves(&self) -> bool {
+    pub const fn has_more_waves(&self) -> bool {
         if self.has_bonus_wave() {
             !self.has_spawned_bonus_wave()
         } else {
@@ -720,13 +636,7 @@ impl Raid {
                 }
                 1
             }
-            RaiderType::Ravager => {
-                if !is_easy && is_bonus_wave {
-                    1
-                } else {
-                    0
-                }
-            }
+            RaiderType::Ravager => i32::from(!is_easy && is_bonus_wave),
         };
 
         if bonus_spawns > 0 {
@@ -759,7 +669,7 @@ impl Raid {
             (self.raid_omen_level + effect.amplifier() + 1).clamp(0, self.max_raid_omen_level());
 
         if !self.has_first_wave_spawned() {
-            player.award_custom_stat(&steel_registry::vanilla_custom_stats::RAID_TRIGGER);
+            player.award_custom_stat(&RAID_TRIGGER);
             // Vanilla `Raid.absorbRaidOmen`: `CriteriaTriggers.RAID_OMEN.trigger(player)`.
             let origin = player.block_position();
             if let Some(world) = player.level() {
@@ -778,8 +688,9 @@ impl Raid {
     /// Vanilla `Raid.stop`.
     pub fn stop(&mut self) {
         self.active = false;
-        self.bar.players.clear();
-        self.bar.visible = false;
+        // Vanilla `Raid.stop` calls `raidEvent.removeAllPlayers()` and leaves the bar
+        // visible, so the queued `Remove` operations still reach the tracking players.
+        self.raid_event.clear_players();
         self.status = RaidStatus::Stopped;
     }
 
@@ -813,23 +724,20 @@ impl Raid {
             self.celebration_ticks += 1;
             if self.celebration_ticks >= MAX_CELEBRATION_TICKS {
                 self.stop();
-                self.sync_bar(world);
                 return;
             }
 
             if self.celebration_ticks % 20 == 0 {
                 self.update_players(world);
-                self.bar.visible = true;
+                self.raid_event.set_visible(true);
                 if self.is_victory() {
-                    self.bar.progress = 0.0;
-                    self.bar.name = victory_bar_component();
+                    self.raid_event.set_progress(0.0);
+                    self.raid_event.set_name(victory_bar_component());
                 } else {
-                    self.bar.name = defeat_bar_component();
+                    self.raid_event.set_name(defeat_bar_component());
                 }
             }
         }
-
-        self.sync_bar(world);
     }
 
     fn tick_ongoing(&mut self, world: &Arc<World>, raid_id: i32) {
@@ -842,7 +750,7 @@ impl Raid {
         }
 
         if old_active != self.active {
-            self.bar.visible = self.active;
+            self.raid_event.set_visible(self.active);
         }
 
         if !self.active {
@@ -872,7 +780,7 @@ impl Raid {
             if self.raid_cooldown_ticks <= 0 {
                 if self.raid_cooldown_ticks == 0 && self.groups_spawned > 0 {
                     self.raid_cooldown_ticks = DEFAULT_PRE_RAID_TICKS;
-                    self.bar.name = raid_name_component();
+                    self.raid_event.set_name(raid_name_component());
                     return;
                 }
             } else {
@@ -897,9 +805,11 @@ impl Raid {
                 }
 
                 self.raid_cooldown_ticks -= 1;
-                self.bar.progress = ((DEFAULT_PRE_RAID_TICKS - self.raid_cooldown_ticks) as f32
-                    / DEFAULT_PRE_RAID_TICKS as f32)
-                    .clamp(0.0, 1.0);
+                self.raid_event.set_progress(
+                    ((DEFAULT_PRE_RAID_TICKS - self.raid_cooldown_ticks) as f32
+                        / DEFAULT_PRE_RAID_TICKS as f32)
+                        .clamp(0.0, 1.0),
+                );
             }
         }
 
@@ -907,9 +817,10 @@ impl Raid {
             self.update_players(world);
             self.update_raiders(world);
             if raiders_alive > 0 && raiders_alive <= LOW_MOB_THRESHOLD {
-                self.bar.name = low_raider_count_component(raiders_alive);
+                self.raid_event
+                    .set_name(low_raider_count_component(raiders_alive));
             } else {
-                self.bar.name = raid_name_component();
+                self.raid_event.set_name(raid_name_component());
             }
         }
 
@@ -924,7 +835,6 @@ impl Raid {
                 attempt += 1;
                 if attempt > NUM_SPAWN_ATTEMPTS {
                     self.stop();
-                    self.sync_bar(world);
                     break;
                 }
                 continue;
@@ -951,18 +861,34 @@ impl Raid {
     /// Vanilla `Raid.updatePlayers`: the players the boss bar tracks.
     fn update_players(&mut self, world: &Arc<World>) {
         // Vanilla asks `level.getRaidAt(pos) == this`; the raid manager lock is already
-        // held here, so the same membership test is expressed as the raid radius check.
+        // held here, so the same membership test is expressed as the raid radius check
+        // (`Raids.getNearbyRaid` keeps positions strictly closer than 96 blocks).
+        let previous: BTreeSet<Uuid> = self.raid_event.player_uuids().copied().collect();
         let center = self.center;
         let mut current = BTreeSet::new();
         world.players.iter_players(|uuid, player| {
             if LivingEntity::is_alive(&**player)
-                && block_distance_sqr(center, player.block_position()) <= VALID_RAID_RADIUS_SQR
+                && block_distance_sqr(center, player.block_position()) < VALID_RAID_RADIUS_SQR
             {
                 current.insert(*uuid);
             }
             true
         });
-        self.bar.players = current;
+
+        for uuid in &current {
+            if previous.contains(uuid) {
+                continue;
+            }
+            if let Some(player) = world.players.get_by_uuid(uuid) {
+                self.raid_event.add_player(player);
+            }
+        }
+
+        for uuid in &previous {
+            if !current.contains(uuid) {
+                self.raid_event.remove_player(uuid);
+            }
+        }
     }
 
     /// Vanilla `Raid.moveRaidCenterToNearbyVillageSection`.
@@ -1063,7 +989,7 @@ impl Raid {
                     break;
                 };
 
-                if !leader_set && raider.as_raider().is_some_and(|mob| mob.can_be_leader()) {
+                if !leader_set && raider.as_raider().is_some_and(Raider::can_be_leader) {
                     if let Some(raider_mob) = raider.as_raider() {
                         raider_mob.set_patrol_leader(true);
                     }
@@ -1163,6 +1089,9 @@ impl Raid {
 
         if update_health && let Some(living) = raider.as_living_entity() {
             self.total_health += living.get_health();
+            // Vanilla `Raid.addWaveMob` refreshes the boss bar as soon as the health total
+            // changes; `spawnGroup` calls `updateBossbar` again after the whole wave.
+            self.update_bossbar(world);
         }
         world.mark_raids_dirty();
         true
@@ -1225,11 +1154,11 @@ impl Raid {
     /// Vanilla `Raid.updateBossbar`.
     pub fn update_bossbar(&mut self, world: &Arc<World>) {
         let health = self.health_of_living_raiders(world);
-        self.bar.progress = if self.total_health <= 0.0 {
+        self.raid_event.set_progress(if self.total_health <= 0.0 {
             0.0
         } else {
             (health / self.total_health).clamp(0.0, 1.0)
-        };
+        });
     }
 
     /// Vanilla `Raid.playSound`: the raid horn is offset 13 blocks from each player
@@ -1241,7 +1170,7 @@ impl Raid {
             f64::from(sound_origin.z()) + 0.5,
         );
         let seed = rand::random::<i64>();
-        let players_in_raid = self.bar.players.clone();
+        let players_in_raid: BTreeSet<Uuid> = self.raid_event.player_uuids().copied().collect();
 
         world.players.iter_players(|uuid, player| {
             let player_loc = player.position();
@@ -1259,9 +1188,9 @@ impl Raid {
             };
 
             if distance <= 64.0 || players_in_raid.contains(uuid) {
-                player.send_packet(steel_protocol::packets::game::CSound::new(
-                    &steel_registry::sound_events::EVENT_RAID_HORN,
-                    steel_protocol::packets::game::SoundSource::Neutral,
+                player.send_packet(CSound::new(
+                    &EVENT_RAID_HORN,
+                    SoundSource::Neutral,
                     DVec3::new(x, player_loc.y, z),
                     64.0,
                     1.0,
@@ -1276,10 +1205,10 @@ impl Raid {
     fn find_random_spawn_pos(&mut self, world: &Arc<World>, max_tries: i32) -> Option<BlockPos> {
         let seconds_remaining = self.raid_cooldown_ticks / 20;
         let how_far = 0.22 * seconds_remaining as f32 - 0.24;
-        let start_angle = self.random.next_f32() * f32::consts::TAU;
+        let start_angle = self.random.next_f32() * TAU;
 
         for i in 0..max_tries {
-            let angle = start_angle + f32::consts::PI * i as f32 / 8.0;
+            let angle = start_angle + PI * i as f32 / 8.0;
             let spawn_x = self.center.x()
                 + (angle.cos() * 32.0 * how_far).floor() as i32
                 + self.random.next_i32_bounded(3) * how_far.floor() as i32;
@@ -1313,8 +1242,7 @@ impl Raid {
             }
 
             if ravager_spawn_position_ok(world, spawn_pos)
-                || (world.get_block_state(spawn_pos.below()).get_block()
-                    == &steel_registry::vanilla_blocks::SNOW
+                || (world.get_block_state(spawn_pos.below()).get_block() == &SNOW
                     && world.get_block_state(spawn_pos).is_air())
             {
                 return Some(spawn_pos);
@@ -1344,7 +1272,7 @@ impl Raid {
                 amplifier,
             ));
             if let Some(player) = hero.as_player() {
-                player.award_custom_stat(&steel_registry::vanilla_custom_stats::RAID_WIN);
+                player.award_custom_stat(&RAID_WIN);
                 // Vanilla `Raid`: `CriteriaTriggers.RAID_WIN.trigger(playerHero)`.
                 let origin = player.block_position();
                 let level = WorldLevelView::new(world, origin);
@@ -1354,29 +1282,15 @@ impl Raid {
     }
 
     /// The raid's random source, for deterministic raid tests.
-    pub fn random_mut(&mut self) -> &mut LegacyRandom {
+    pub const fn random_mut(&mut self) -> &mut LegacyRandom {
         &mut self.random
-    }
-}
-
-/// Vanilla `ClientboundBossEventPacket.createAddPacket` for the raid bar.
-fn add_operation(state: &BarWireState) -> BossEventOperation {
-    BossEventOperation::Add {
-        name: state.name.clone(),
-        progress: state.progress,
-        color: RAID_BAR_COLOR,
-        overlay: RAID_BAR_OVERLAY,
-        // Vanilla's `BossEvent` defaults: no screen darkening, no boss music, no fog.
-        darken_screen: false,
-        play_music: false,
-        create_world_fog: false,
     }
 }
 
 /// Vanilla `Mth.createInsecureUUID` for the raid's `ServerBossEvent`.
 fn raid_event_id(random: &mut LegacyRandom) -> Uuid {
-    let most = (random.next_i64() & -61441) | 16384;
-    let least = (random.next_i64() & 4_611_686_018_427_387_903) | i64::MIN;
+    let most = (random.next_i64() & -0xF001) | 16384;
+    let least = (random.next_i64() & 0x3FFF_FFFF_FFFF_FFFF) | i64::MIN;
     Uuid::from_u64_pair(most as u64, least as u64)
 }
 
@@ -1388,7 +1302,7 @@ fn block_spawn_position(pos: BlockPos) -> DVec3 {
     )
 }
 
-fn block_distance_sqr(a: BlockPos, b: BlockPos) -> i32 {
+const fn block_distance_sqr(a: BlockPos, b: BlockPos) -> i32 {
     let dx = a.x() - b.x();
     let dy = a.y() - b.y();
     let dz = a.z() - b.z();
@@ -1396,22 +1310,22 @@ fn block_distance_sqr(a: BlockPos, b: BlockPos) -> i32 {
 }
 
 fn raid_name_component() -> TextComponent {
-    TextComponent::translated(steel_utils::translations::EVENT_MINECRAFT_RAID.msg())
+    TextComponent::translated(translations::EVENT_MINECRAFT_RAID.msg())
 }
 
 fn victory_bar_component() -> TextComponent {
-    TextComponent::translated(steel_utils::translations::EVENT_MINECRAFT_RAID_VICTORY_FULL.msg())
+    TextComponent::translated(translations::EVENT_MINECRAFT_RAID_VICTORY_FULL.msg())
 }
 
 fn defeat_bar_component() -> TextComponent {
-    TextComponent::translated(steel_utils::translations::EVENT_MINECRAFT_RAID_DEFEAT_FULL.msg())
+    TextComponent::translated(translations::EVENT_MINECRAFT_RAID_DEFEAT_FULL.msg())
 }
 
 fn low_raider_count_component(raiders: i32) -> TextComponent {
     raid_name_component()
         .add_child(TextComponent::plain(" - "))
         .add_child(TextComponent::translated(
-            steel_utils::translations::EVENT_MINECRAFT_RAID_RAIDERS_REMAINING
+            translations::EVENT_MINECRAFT_RAID_RAIDERS_REMAINING
                 .message([TextComponent::plain(raiders.to_string())]),
         ))
 }

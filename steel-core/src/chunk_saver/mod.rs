@@ -37,6 +37,9 @@ mod region_manager;
 pub mod registry;
 mod storage;
 
+pub mod anvil;
+
+pub use anvil::{AnvilConversionReport, AnvilStorage, Compression, export_world, import_world};
 pub use format::*;
 pub use ram_only::*;
 pub use region_manager::*;

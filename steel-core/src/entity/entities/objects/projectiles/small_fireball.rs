@@ -16,7 +16,7 @@ use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_entity_data::SmallFireballEntityData;
 use steel_registry::vanilla_game_rules::MOB_GRIEFING;
-use steel_registry::{vanilla_damage_types, vanilla_entities, vanilla_items};
+use steel_registry::{vanilla_damage_types, vanilla_items};
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::UpdateFlags;
 use steel_utils::{DowncastType, DowncastTypeKey};

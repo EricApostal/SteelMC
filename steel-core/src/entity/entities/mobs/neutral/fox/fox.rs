@@ -7,6 +7,7 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
@@ -540,6 +541,7 @@ impl PathfinderMob for FoxEntity {}
 
 #[cfg(test)]
 mod tests {
+    use simdnbt::owned::NbtCompound;
     use std::sync::Weak;
 
     use glam::DVec3;
@@ -563,7 +565,7 @@ mod tests {
         fox.set_sleeping(false);
         assert!(!fox.is_sleeping());
 
-        let mut nbt = simdnbt::owned::NbtCompound::new();
+        let mut nbt = NbtCompound::new();
         fox.save_additional(&mut nbt);
         assert!(nbt.string("Type").is_some());
         assert_eq!(fox.entity_type(), &vanilla_entities::FOX);

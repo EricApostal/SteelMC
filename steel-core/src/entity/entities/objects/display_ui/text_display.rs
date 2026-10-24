@@ -99,7 +99,7 @@ impl TextDisplayAlign {
 
     /// Extracts the alignment from the synced style flags.
     #[must_use]
-    pub fn from_flags(flags: TextDisplayFlags) -> Self {
+    pub const fn from_flags(flags: TextDisplayFlags) -> Self {
         if flags.contains(TextDisplayFlags::ALIGN_LEFT) {
             Self::Left
         } else if flags.contains(TextDisplayFlags::ALIGN_RIGHT) {
@@ -401,7 +401,7 @@ mod tests {
         display.set_text(TextComponent::plain("hello"));
         display.set_line_width(80);
         display.set_text_opacity(120);
-        display.set_background_color(0x11223344u32 as i32);
+        display.set_background_color(0x1122_3344_u32 as i32);
         display.set_align(TextDisplayAlign::Left);
         display.set_style_flags(display.style_flags() | TextDisplayFlags::SHADOW);
 
@@ -409,7 +409,7 @@ mod tests {
         display.save_additional(&mut nbt);
 
         assert_eq!(nbt.byte("text_opacity"), Some(120));
-        assert_eq!(nbt.int("background"), Some(0x11223344u32 as i32));
+        assert_eq!(nbt.int("background"), Some(0x1122_3344_u32 as i32));
         assert_eq!(nbt.int("line_width"), Some(80));
         assert_eq!(nbt.byte("shadow"), Some(1));
         assert_eq!(nbt.byte("see_through"), Some(0));
@@ -432,7 +432,7 @@ mod tests {
         restored.load_additional((&borrowed).into());
         assert_eq!(restored.line_width(), 80);
         assert_eq!(restored.text_opacity(), 120);
-        assert_eq!(restored.background_color(), 0x11223344u32 as i32);
+        assert_eq!(restored.background_color(), 0x1122_3344_u32 as i32);
         assert_eq!(restored.align(), TextDisplayAlign::Left);
         assert!(restored.style_flags().contains(TextDisplayFlags::SHADOW));
         assert_eq!(restored.text().to_string(), "hello");

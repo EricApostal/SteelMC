@@ -50,6 +50,7 @@ use crate::behavior::InteractionResult;
 use crate::entity::ai::brain::Brain;
 use crate::entity::ai::path::PathType;
 use crate::entity::damage::DamageSource;
+use crate::entity::leash::Leashable;
 use crate::entity::{AgeableMobBase, ConversionParams};
 use crate::entity::{
     AnimalBase, Entity, EntityBase, EntityBaseLoad, EntitySpawnReason, EntitySyncedData,
@@ -224,6 +225,10 @@ impl TadpoleEntity {
 
     /// Vanilla `AbstractFish.fromBucket`.
     #[must_use]
+    #[expect(
+        clippy::wrong_self_convention,
+        reason = "vanilla `AbstractFish.fromBucket` getter; the name is shared with the other bucketable fish entities"
+    )]
     pub fn from_bucket(&self) -> bool {
         *self.entity_data.lock().abstract_fish.from_bucket.get()
     }
@@ -239,20 +244,20 @@ impl TadpoleEntity {
 
     /// Vanilla `Tadpole.getBucketItemStack`.
     #[must_use]
-    pub fn bucket_item_stack(&self) -> ItemStack {
+    pub fn bucket_item_stack() -> ItemStack {
         ItemStack::new(&vanilla_items::TADPOLE_BUCKET)
     }
 
     /// Vanilla `Tadpole.getPickupSound`.
     #[must_use]
-    pub fn pickup_sound(&self) -> SoundEventRef {
+    pub fn pickup_sound() -> SoundEventRef {
         &sound_events::ITEM_BUCKET_FILL_TADPOLE
     }
 
     /// Vanilla `Tadpole.saveToBucketTag` (`Bucketable.saveDefaultDataToBucketTag` plus
     /// the tadpole's `Age`/`AgeLocked`).
     fn create_bucket_stack(&self) -> ItemStack {
-        let mut stack = self.bucket_item_stack();
+        let mut stack = Self::bucket_item_stack();
 
         let mut tag = NbtCompound::new();
         if self.is_no_ai() {
@@ -331,7 +336,11 @@ impl TadpoleEntity {
             return false;
         }
 
-        self.play_sound(self.pickup_sound(), BUCKET_SOUND_VOLUME, BUCKET_SOUND_PITCH);
+        self.play_sound(
+            Self::pickup_sound(),
+            BUCKET_SOUND_VOLUME,
+            BUCKET_SOUND_PITCH,
+        );
         let bucket = self.create_bucket_stack();
         let overflow = {
             let mut inventory = player.inventory.lock();
@@ -525,9 +534,9 @@ impl TadpoleEntity {
 
         let velocity = self.velocity();
         self.set_velocity(DVec3::new(
-            velocity.x + (rand::random::<f32>() * 2.0 - 1.0) as f64 * FLOP_HORIZONTAL_IMPULSE,
+            velocity.x + f64::from(rand::random::<f32>() * 2.0 - 1.0) * FLOP_HORIZONTAL_IMPULSE,
             FLOP_VERTICAL_IMPULSE,
-            velocity.z + (rand::random::<f32>() * 2.0 - 1.0) as f64 * FLOP_HORIZONTAL_IMPULSE,
+            velocity.z + f64::from(rand::random::<f32>() * 2.0 - 1.0) * FLOP_HORIZONTAL_IMPULSE,
         ));
         self.set_on_ground(false);
         self.play_sound(&sound_events::ENTITY_TADPOLE_FLOP, 0.4, 1.0);
@@ -606,10 +615,7 @@ impl Mob for TadpoleEntity {
     }
 
     fn requires_custom_persistence(&self) -> bool {
-        (self.is_passenger()
-            || self
-                .as_leashable()
-                .is_some_and(|leashable| leashable.is_leashed()))
+        (self.is_passenger() || self.as_leashable().is_some_and(Leashable::is_leashed))
             || self.from_bucket()
     }
 

@@ -11,7 +11,10 @@ use steel_protocol::packets::game::SoundSource;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::CreeperEntityData;
-use steel_registry::{sound_events, vanilla_attributes, vanilla_entities, vanilla_item_tags};
+use steel_registry::{
+    sound_events, vanilla_attributes, vanilla_entities, vanilla_game_events, vanilla_item_tags,
+    vanilla_items,
+};
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
@@ -61,7 +64,6 @@ pub struct CreeperEntity {
     old_swell: SyncMutex<i32>,
     max_swell: SyncMutex<i32>,
     explosion_radius: SyncMutex<i32>,
-    dropped_skulls: SyncMutex<bool>,
 }
 
 // SAFETY: This key is owned by Steel and uniquely identifies `CreeperEntity`.
@@ -138,7 +140,6 @@ impl CreeperEntity {
             old_swell: SyncMutex::new(0),
             max_swell: SyncMutex::new(DEFAULT_MAX_SWELL),
             explosion_radius: SyncMutex::new(DEFAULT_EXPLOSION_RADIUS),
-            dropped_skulls: SyncMutex::new(false),
         }
     }
 
@@ -248,7 +249,7 @@ impl CreeperEntity {
                 drop(swell);
                 // Vanilla plays the primed sound locally and fires the `prime_fuse` game event.
                 self.play_sound(&sound_events::ENTITY_CREEPER_PRIMED, 1.0, 0.5);
-                self.game_event(&steel_registry::vanilla_game_events::PRIME_FUSE);
+                self.game_event(&vanilla_game_events::PRIME_FUSE);
                 swell = self.swell.lock();
             }
 
@@ -531,7 +532,7 @@ impl Mob for CreeperEntity {
             let inventory = player.inventory.lock();
             inventory
                 .get_item_in_hand(hand)
-                .is(&steel_registry::vanilla_items::FIRE_CHARGE)
+                .is(&vanilla_items::FIRE_CHARGE)
         };
         if let Some(world) = self.level() {
             let sound = if is_fire_charge {

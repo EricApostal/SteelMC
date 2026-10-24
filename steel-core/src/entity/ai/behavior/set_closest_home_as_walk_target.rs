@@ -1,9 +1,10 @@
 //! Vanilla `SetClosestHomeAsWalkTarget`.
 
 use std::cell::{Cell, RefCell};
-use std::mem;
+use std::mem::take;
 
 use rustc_hash::FxHashMap;
+use steel_registry::vanilla_poi_types;
 use steel_utils::BlockPos;
 
 use super::poi::{self, Occupancy, PoiPredicate};
@@ -59,7 +60,7 @@ impl Trigger for SetClosestHomeAsWalkTarget {
         let center = ctx.body.block_position();
         let closest = poi::find_all_closest_first_with_type(
             ctx.level,
-            PoiPredicate::Type(&steel_registry::vanilla_poi_types::HOME),
+            PoiPredicate::Type(&vanilla_poi_types::HOME),
             |_| true,
             center,
             SCAN_RANGE,
@@ -79,12 +80,12 @@ impl Trigger for SetClosestHomeAsWalkTarget {
         self.last_update = ctx.level.game_time() + i64::from(rand::random_range(0..RATE as i32));
         let deadline = self.last_update + CACHE_TIMEOUT;
 
-        let mut cache = mem::take(&mut self.batch_cache);
+        let mut cache = take(&mut self.batch_cache);
         let pois = {
             let cache_cell = RefCell::new(cache);
             let found = poi::find_all_closest_first_with_type(
                 ctx.level,
-                PoiPredicate::Type(&steel_registry::vanilla_poi_types::HOME),
+                PoiPredicate::Type(&vanilla_poi_types::HOME),
                 |pos| {
                     let mut cache = cache_cell.borrow_mut();
                     if cache.contains_key(&pos) {

@@ -415,7 +415,7 @@ impl Entity for FallingBlockEntity {
         // Vanilla `FallingBlockEntity.tick` tail: while colliding, the falling
         // block is tracked with absolute position syncs so the client's delta
         // base cannot drift away from the server.
-        self.set_requires_precise_position(
+        self.base().set_requires_precise_position(
             self.horizontal_collision() || self.vertical_collision(),
         );
     }

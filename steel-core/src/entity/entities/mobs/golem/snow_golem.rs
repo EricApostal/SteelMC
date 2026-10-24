@@ -175,7 +175,7 @@ impl SnowGolemEntity {
     /// `LivingEntity` has no capability hook for this yet; thrown water potions resolve it by
     /// entity type in [`crate::entity::entities::objects::projectiles::thrown_potion`].
     #[must_use]
-    pub const fn is_sensitive_to_water(&self) -> bool {
+    pub const fn is_sensitive_to_water() -> bool {
         true
     }
 

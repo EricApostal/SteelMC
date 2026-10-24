@@ -60,7 +60,7 @@ impl EnderDragonPartKind {
 
     /// Vanilla `EntityDimensions.scalable(width, height)` for this part.
     #[must_use]
-    pub fn dimensions(self) -> EntityDimensions {
+    pub const fn dimensions(self) -> EntityDimensions {
         let (width, height) = match self {
             Self::Head => (1.0, 1.0),
             Self::Neck => (3.0, 3.0),
@@ -179,6 +179,8 @@ impl Entity for EnderDragonPartEntity {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Weak;
+
     use super::{EnderDragonPartEntity, EnderDragonPartKind};
     use crate::entity::Entity;
 

@@ -14,11 +14,14 @@ use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::EndermanEntityData;
 use steel_registry::{
-    sound_events, vanilla_attributes, vanilla_block_tags, vanilla_entities, vanilla_game_rules,
-    vanilla_items,
+    sound_events, vanilla_attributes, vanilla_block_tags, vanilla_blocks, vanilla_entities,
+    vanilla_game_events, vanilla_game_rules, vanilla_items,
 };
 use steel_utils::locks::SyncMutex;
-use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier};
+use steel_utils::types::UpdateFlags;
+use steel_utils::{
+    BlockPos, BlockStateId, Downcast as _, DowncastType, DowncastTypeKey, Identifier,
+};
 
 use crate::behavior::BLOCK_BEHAVIORS;
 use crate::behavior::BlockLootContext;
@@ -47,8 +50,6 @@ const XP_REWARD: i32 = 5;
 const SPEED_MODIFIER_ATTACKING_ID: Identifier = Identifier::vanilla_static("attacking");
 /// Vanilla `Enderman.SPEED_MODIFIER_ATTACKING` amount.
 const SPEED_MODIFIER_ATTACKING_AMOUNT: f64 = 0.15;
-/// Vanilla `Enderman.MAX_TELEPORT_RADIUS`.
-const MAX_TELEPORT_RADIUS: f64 = 32.0;
 /// Vanilla `Enderman.MIN_DEAGGRESSION_TIME`.
 const MIN_DEAGGRESSION_TIME: i32 = 600;
 /// Vanilla `Enderman.PERSISTENT_ANGER_TIME` bounds (`rangeOfSeconds(20, 39)`).
@@ -268,7 +269,7 @@ impl EndermanEntity {
 
         let result = self.random_teleport(&world, x, y, z, true);
         if result {
-            self.game_event(&steel_registry::vanilla_game_events::TELEPORT);
+            self.game_event(&vanilla_game_events::TELEPORT);
             if !self.is_silent() {
                 let old_block_pos = BlockPos::containing(old_pos.x, old_pos.y, old_pos.z);
                 world.level_event(2018, old_block_pos, 0, None);
@@ -652,10 +653,10 @@ impl Goal for EndermanTakeBlockGoal {
         enderman.set_carried_block(Some(state));
         world.set_block(
             pos,
-            steel_registry::vanilla_blocks::AIR.default_state(),
-            steel_utils::types::UpdateFlags::UPDATE_ALL,
+            vanilla_blocks::AIR.default_state(),
+            UpdateFlags::UPDATE_ALL,
         );
-        enderman.game_event(&steel_registry::vanilla_game_events::ENTITY_ACTION);
+        enderman.game_event(&vanilla_game_events::ENTITY_ACTION);
     }
 }
 
@@ -728,14 +729,11 @@ impl Goal for EndermanLeaveBlockGoal {
             return;
         }
 
-        world.set_block(pos, carried, steel_utils::types::UpdateFlags::UPDATE_ALL);
-        enderman.game_event(&steel_registry::vanilla_game_events::BLOCK_PLACE);
+        world.set_block(pos, carried, UpdateFlags::UPDATE_ALL);
+        enderman.game_event(&vanilla_game_events::BLOCK_PLACE);
         enderman.set_carried_block(None);
     }
 }
-
-use steel_registry::vanilla_blocks;
-use steel_utils::Downcast as _;
 
 impl Entity for EndermanEntity {
     fn base(&self) -> &EntityBase {
@@ -981,7 +979,9 @@ impl PathfinderMob for EndermanEntity {
 
 #[cfg(test)]
 mod tests {
+    use simdnbt::owned::NbtCompound;
     use std::sync::Weak;
+    use steel_registry::vanilla_blocks;
 
     use glam::DVec3;
     use steel_registry::{init_vanilla_registry, vanilla_entities};
@@ -998,12 +998,12 @@ mod tests {
         assert!(enderman.carried_block().is_none());
         assert!(!enderman.is_creepy());
 
-        let stone = steel_registry::vanilla_blocks::STONE.default_state();
+        let stone = vanilla_blocks::STONE.default_state();
         enderman.set_carried_block(Some(stone));
         assert_eq!(enderman.carried_block(), Some(stone));
         assert!(enderman.requires_custom_persistence());
 
-        let mut nbt = simdnbt::owned::NbtCompound::new();
+        let mut nbt = NbtCompound::new();
         enderman.save_additional(&mut nbt);
         assert!(nbt.int("carriedBlockState").is_some());
         assert_eq!(enderman.entity_type(), &vanilla_entities::ENDERMAN);

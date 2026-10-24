@@ -677,7 +677,7 @@ impl Entity for ArmadilloEntity {
         self.load_ageable_mob(nbt);
         self.load_animal(nbt);
 
-        let state = match nbt.string("state").map(|state| state.to_string()) {
+        let state = match nbt.string("state").map(ToString::to_string) {
             Some(state) if state == "rolling" => ArmadilloState::RollingUp,
             Some(state) if state == "scared" => ArmadilloState::Scared,
             Some(state) if state == "unrolling" => ArmadilloState::Unrolling,

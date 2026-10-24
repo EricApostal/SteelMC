@@ -3,8 +3,8 @@ use super::{
     LootCondition, LootContext, LootContextEntity, LootEntry, NumberProvider, REGISTRY,
     RegistryExt, RngExt, TaggedRegistryExt, context::math_round,
 };
-use crate::data_components::vanilla_components::{DYED_COLOR, POTION_CONTENTS};
-use crate::data_components::{DyedItemColor, PotionContents};
+use crate::data_components::vanilla_components::{CUSTOM_MODEL_DATA, DYED_COLOR, POTION_CONTENTS};
+use crate::data_components::{CustomModelData, DyedItemColor, PotionContents};
 use crate::potion::PotionRef;
 
 /// Options for selecting enchantments - either a tag reference or explicit list.
@@ -156,6 +156,18 @@ pub enum LootFunction {
     SetRandomPotion { options: Option<PotionOptions> },
     /// Vanilla `SetRandomDyesFunction`: blend random dyes into `dyed_color`.
     SetRandomDyes { number_of_dyes: NumberProvider },
+    /// Vanilla `SetCustomModelDataFunction`: edit the lists of the
+    /// `custom_model_data` component, one optional list edit per list.
+    SetCustomModelData {
+        /// `custom_model_data.floats` edit; `None` keeps the existing list.
+        floats: Option<StandaloneListOperation<NumberProvider>>,
+        /// `custom_model_data.flags` edit; `None` keeps the existing list.
+        flags: Option<StandaloneListOperation<bool>>,
+        /// `custom_model_data.strings` edit; `None` keeps the existing list.
+        strings: Option<StandaloneListOperation<&'static str>>,
+        /// `custom_model_data.colors` edit; `None` keeps the existing list.
+        colors: Option<StandaloneListOperation<NumberProvider>>,
+    },
     /// Set the suspicious stew effects.
     SetStewEffect { effects: &'static [StewEffect] },
     /// Set the instrument for goat horns.
@@ -321,6 +333,42 @@ impl ListOperation {
                 result
             }
         }
+    }
+}
+
+/// Vanilla `ListOperation.StandAlone`: replacement values plus the
+/// [`ListOperation`] that folds them into an existing list (used by
+/// `minecraft:set_custom_model_data`).
+#[derive(Debug, Clone, Copy)]
+pub struct StandaloneListOperation<T: 'static> {
+    /// Replacement values (vanilla `value`).
+    pub value: &'static [T],
+    /// How `value` is combined with the existing list (vanilla `operation`).
+    pub operation: ListOperation,
+}
+
+impl<T: Clone + 'static> StandaloneListOperation<T> {
+    /// Vanilla `ListOperation.StandAlone.apply(original)`.
+    ///
+    /// The custom-model-data lists are decoded with
+    /// `ListOperation.StandAlone.codec(codec, MAX_VALUE)`, so the size guard of
+    /// [`ListOperation::apply`] never rejects a result here.
+    #[must_use]
+    pub fn apply(&self, original: &[T]) -> Vec<T> {
+        self.operation.apply(original, self.value, usize::MAX)
+    }
+
+    /// Vanilla `SetCustomModelDataFunction.apply(Optional.StandAlone, List,
+    /// Function)`: every stored value is converted (e.g. a number provider
+    /// evaluated against the loot context) before the operation runs.
+    #[must_use]
+    pub fn apply_mapped<E: Clone>(
+        &self,
+        original: &[E],
+        mut convert: impl FnMut(&T) -> E,
+    ) -> Vec<E> {
+        let replacement: Vec<E> = self.value.iter().map(&mut convert).collect();
+        self.operation.apply(original, &replacement, usize::MAX)
     }
 }
 
@@ -597,6 +645,53 @@ impl LootFunction {
                     item.set(DYED_COLOR, DyedItemColor::apply_dyes(current, &dyes));
                 }
             }
+            LootFunction::SetCustomModelData {
+                floats,
+                flags,
+                strings,
+                colors,
+            } => {
+                // Vanilla `SetCustomModelDataFunction.run`: read the current
+                // component (or `CustomModelData.EMPTY`), apply each list edit to
+                // its own list, then write the rebuilt component back. A list
+                // without an edit keeps every existing entry.
+                let current = item
+                    .get(CUSTOM_MODEL_DATA)
+                    .cloned()
+                    .unwrap_or_else(CustomModelData::default);
+                let current_floats = current.floats();
+                let current_flags = current.flags();
+                let current_strings = current.strings();
+                let current_colors = current.colors();
+                let floats = floats.as_ref().map_or_else(
+                    || current_floats.to_vec(),
+                    |operation| {
+                        operation.apply_mapped(current_floats, |provider| provider.get_float(ctx))
+                    },
+                );
+                let flags = flags.as_ref().map_or_else(
+                    || current_flags.to_vec(),
+                    |operation| operation.apply(current_flags),
+                );
+                let strings = strings.as_ref().map_or_else(
+                    || current_strings.to_vec(),
+                    |operation| {
+                        operation.apply_mapped(current_strings, |value| (*value).to_owned())
+                    },
+                );
+                let colors = colors.as_ref().map_or_else(
+                    || current_colors.to_vec(),
+                    |operation| {
+                        operation.apply_mapped(current_colors, |provider| {
+                            provider.get_int_with_context(ctx)
+                        })
+                    },
+                );
+                item.set(
+                    CUSTOM_MODEL_DATA,
+                    CustomModelData::new(floats, flags, strings, colors),
+                );
+            }
             LootFunction::SetStewEffect { effects } => {
                 item.set_stew_effects(effects, ctx.rng);
             }
@@ -682,7 +777,9 @@ impl LootFunction {
                 item.count = 0;
             }
             LootFunction::Reference(_name) => {
-                // TODO: Implement function registry lookup
+                // Steel inlines `minecraft:<path>` function references at build
+                // time, so generated tables never contain this variant; an
+                // unresolved reference leaves the stack untouched.
             }
             LootFunction::Sequence { functions } => {
                 for cond_func in *functions {

@@ -1,6 +1,7 @@
 //! Vanilla `ChargeAttack`: rush the attack target and knock back whatever it hits.
 
 use glam::DVec3;
+use steel_registry::vanilla_attributes;
 
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::{MemoryModuleTypeRef, MemoryStatus, module_type as mem};
@@ -66,9 +67,13 @@ impl ChargeAttack {
     }
 
     /// Vanilla `dealDamageToTarget`.
+    #[expect(
+        clippy::unused_self,
+        reason = "kept as a method to mirror the vanilla `ChargeAttack` instance call site"
+    )]
     fn deal_damage_to_target(&self, ctx: &mut BehaviorContext<'_>, target: &SharedEntity) {
         if let Some(mob) = ctx.body.as_mob() {
-            mob.do_hurt_target(ctx.body, ctx.level, target);
+            let _ = mob.do_hurt_target(ctx.body, ctx.level, target);
         }
     }
 
@@ -82,8 +87,7 @@ impl ChargeAttack {
             living
                 .attributes()
                 .lock()
-                .required_value(steel_registry::vanilla_attributes::MOVEMENT_SPEED)
-                as f32
+                .required_value(vanilla_attributes::MOVEMENT_SPEED) as f32
         });
         let speed_factor = (self.speed * movement_speed).clamp(0.2, 2.0) + speed_boost_power;
         if let Some(living) = target.as_living_entity() {

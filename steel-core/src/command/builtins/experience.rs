@@ -1,4 +1,5 @@
-//! Vanilla experience command plus Steel's existing clear extension.
+//! Vanilla experience command (`ExperienceCommand`): `add`, `set` and `query`
+//! with their `points`/`levels` forms, plus the `xp` alias.
 
 use std::sync::Arc;
 
@@ -35,11 +36,6 @@ fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
                     .then(literal("points").executes(query_points))
                     .then(literal("levels").executes(query_levels)),
             ),
-        )
-        .then(
-            literal("clear")
-                .executes(clear_source)
-                .then(argument("target", SteelArgumentType::players()).executes(clear_targets)),
         )
 }
 
@@ -218,25 +214,6 @@ fn send_mutation_success(
     context.source().send_success(&message, true);
 }
 
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "Command executors use a shared fallible callback signature."
-)]
-fn clear_source(context: &SteelCommandContext<CommandSource>) -> Result<i32, CommandSyntaxError> {
-    if let Some(player) = context.source().player() {
-        player.experience.lock().clear();
-    }
-    Ok(1)
-}
-
-fn clear_targets(context: &SteelCommandContext<CommandSource>) -> Result<i32, CommandSyntaxError> {
-    let players = context.players("target")?;
-    for player in &players {
-        player.experience.lock().clear();
-    }
-    player_count_result(&players)
-}
-
 fn required_amount(
     context: &SteelCommandContext<CommandSource>,
 ) -> Result<i32, CommandSyntaxError> {
@@ -389,24 +366,20 @@ mod tests {
                 );
             }
 
-            let clear = child(&dispatcher, root, "clear");
-            assert!(
-                dispatcher
-                    .node(clear)
-                    .is_some_and(|node| node.is_executable())
-            );
-            let clear_target = child(&dispatcher, clear, "target");
-            assert_eq!(
-                dispatcher
-                    .node(clear_target)
-                    .and_then(|node| node.argument_type()),
-                Some(&SteelArgumentType::players())
-            );
-            assert!(
-                dispatcher
-                    .node(clear_target)
-                    .is_some_and(|node| node.is_executable())
-            );
+            let Some(children) = dispatcher.children(root) else {
+                panic!("`{root_name}` children should exist");
+            };
+            let mut names = children
+                .iter()
+                .map(|child| {
+                    let Some(node) = dispatcher.node(*child) else {
+                        panic!("registered child should exist");
+                    };
+                    node.name()
+                })
+                .collect::<Vec<_>>();
+            names.sort_unstable();
+            assert_eq!(names, ["add", "query", "set"]);
         }
     }
 }

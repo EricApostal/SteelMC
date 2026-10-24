@@ -105,8 +105,7 @@ impl StructureBlockEntity {
     /// Creates a structure-block entity.
     #[must_use]
     pub fn new(level: Weak<World>, pos: BlockPos, state: BlockStateId) -> Self {
-        let mode =
-            structure_mode_name(state.get_value(&BlockStateProperties::STRUCTUREBLOCK_MODE));
+        let mode = structure_mode_name(state.get_value(&BlockStateProperties::STRUCTUREBLOCK_MODE));
         Self {
             base: BlockEntityBase::new(
                 &vanilla_block_entity_types::STRUCTURE_BLOCK,
@@ -471,7 +470,13 @@ impl BlockEntity for JigsawBlockEntity {
                 let orientation = self
                     .get_block_state()
                     .get_value(&BlockStateProperties::ORIENTATION);
-                if matches!(orientation, FrontAndTop::WestUp | FrontAndTop::EastUp | FrontAndTop::NorthUp | FrontAndTop::SouthUp) {
+                if matches!(
+                    orientation,
+                    FrontAndTop::WestUp
+                        | FrontAndTop::EastUp
+                        | FrontAndTop::NorthUp
+                        | FrontAndTop::SouthUp
+                ) {
                     "aligned".into()
                 } else {
                     "rollable".into()
@@ -593,14 +598,14 @@ impl BlockEntity for TestBlockEntity {
         let mut state = self.state.lock();
         // Vanilla `TestBlockEntity.loadAdditional`: `mode` (default `FAIL`),
         // `message` (default empty) and `powered` (default false).
-        state.mode = view
-            .string("mode")
-            .map_or(TestBlockMode::Fail, |v| match v.to_str().as_ref() {
-                "start" => TestBlockMode::Start,
-                "log" => TestBlockMode::Log,
-                "accept" => TestBlockMode::Accept,
-                _ => TestBlockMode::Fail,
-            });
+        state.mode =
+            view.string("mode")
+                .map_or(TestBlockMode::Fail, |v| match v.to_str().as_ref() {
+                    "start" => TestBlockMode::Start,
+                    "log" => TestBlockMode::Log,
+                    "accept" => TestBlockMode::Accept,
+                    _ => TestBlockMode::Fail,
+                });
         state.message = view
             .string("message")
             .map_or_else(String::new, |v| v.to_string());
@@ -736,14 +741,14 @@ impl BlockEntity for TestInstanceBlockEntity {
                     state.size = (size[0], size[1], size[2]);
                 }
             }
-            state.rotation = data.string("rotation").map_or(0, |v| {
-                match v.to_str().as_ref() {
+            state.rotation = data
+                .string("rotation")
+                .map_or(0, |v| match v.to_str().as_ref() {
                     "clockwise_90" => 1,
                     "180" => 2,
                     "counterclockwise_90" => 3,
                     _ => 0,
-                }
-            });
+                });
             state.ignore_entities = data.byte("ignore_entities").unwrap_or(0) != 0;
             state.status = data
                 .string("status")
@@ -817,7 +822,7 @@ impl BlockEntity for TestInstanceBlockEntity {
 
     fn set_changed(&self) {
         // Vanilla `TestInstanceBlockEntity.setChanged` also re-sends the block entity.
-        BlockEntity::set_changed(self);
+        self.base.set_changed();
         let Some(world) = self.get_level() else {
             return;
         };

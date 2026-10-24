@@ -1,4 +1,7 @@
-use crate::data_components::vanilla_components::{ENCHANTMENTS, INSTRUMENT, ItemEnchantments};
+use crate::data_components::vanilla_components::{
+    BLOCK_STATE, CUSTOM_MODEL_DATA, DAMAGE, ENCHANTMENTS, INSTRUMENT, ItemEnchantments, REPAIR_COST,
+};
+use crate::data_components::{CustomModelData, DataComponentMap};
 use crate::equipment::EquipmentSlot;
 use crate::items::ItemRef;
 use crate::vanilla_instrument_tags::InstrumentTag;
@@ -7,6 +10,7 @@ use crate::{init_vanilla_registry, vanilla_loot_tables};
 
 use super::*;
 use rand::SeedableRng;
+use steel_utils::BlockPos;
 
 fn test_rng() -> rand::rngs::StdRng {
     rand::rngs::StdRng::seed_from_u64(12345)
@@ -824,4 +828,418 @@ fn tall_grass_loot_table_encodes_the_double_block_location_check() {
             "the location check names the tall grass block"
         );
     }
+}
+
+/// [`LootItemSourceHooks`] with a distinct component map per source, for the
+/// `minecraft:copy_components` tests.
+struct FakeItemSourceHooks {
+    entity: DataComponentMap,
+    block_entity: DataComponentMap,
+}
+
+impl LootItemSourceHooks for FakeItemSourceHooks {
+    fn entity_components(&self, _target: LootContextEntity) -> Option<&DataComponentMap> {
+        Some(&self.entity)
+    }
+
+    fn block_entity_components(&self) -> Option<&DataComponentMap> {
+        Some(&self.block_entity)
+    }
+}
+
+/// [`ScoreboardValueLookup`] holding one score for one objective and one target.
+struct FakeScoreboard {
+    objective: &'static str,
+    score: i32,
+    expected_target: LootContextEntity,
+}
+
+impl ScoreboardValueLookup for FakeScoreboard {
+    fn get_score(
+        &self,
+        _ctx: &LootContextRef<'_>,
+        target: &ScoreboardTarget,
+        objective: &str,
+    ) -> Option<i32> {
+        // Vanilla `Scoreboard.getPlayerScoreInfo` resolves the entity of the
+        // condition's `entity` field, so the target must be that context entity.
+        let ScoreboardTarget::Context(entity) = target else {
+            return None;
+        };
+        (objective == self.objective && *entity == self.expected_target).then_some(self.score)
+    }
+}
+
+/// [`EnvironmentAttributeLookup`] exposing a single attribute value.
+struct FakeEnvironmentAttributes {
+    attribute: Identifier,
+    value: f32,
+}
+
+impl EnvironmentAttributeLookup for FakeEnvironmentAttributes {
+    fn get_attribute(
+        &self,
+        attribute: &Identifier,
+        _origin: Option<(f64, f64, f64)>,
+    ) -> Option<f32> {
+        (attribute == &self.attribute).then_some(self.value)
+    }
+}
+
+/// The `repair_cost`-only filter of the `minecraft:copy_components` test.
+static REPAIR_COST_ONLY: [Identifier; 1] = [Identifier::vanilla_static("repair_cost")];
+
+/// The `kills` objective range (`5..=10`) of the `minecraft:entity_scores`
+/// tests; a `static` is required because [`NumberProvider`] is not `Copy`.
+static KILLS_RANGE: [(&str, NumberProviderRange); 1] = [(
+    "kills",
+    NumberProviderRange {
+        min: Some(NumberProvider::Constant(5.0)),
+        max: Some(NumberProvider::Constant(10.0)),
+    },
+)];
+
+/// A one-element [`NumberProvider`] list; a `static` is required because
+/// `NumberProvider` is not `Copy`, so an array literal cannot be promoted.
+static FLOAT_APPEND: [NumberProvider; 1] = [NumberProvider::Constant(3.5)];
+
+/// The ARGB colour `0x112233`, as the int provider vanilla evaluates.
+static COLOR_APPEND: [NumberProvider; 1] = [NumberProvider::Constant(0x11_22_33 as f32)];
+
+fn test_entity(entity_type: &Identifier) -> EntityRef<'_> {
+    EntityRef {
+        entity_type: Some(entity_type),
+        flags: EntityRefFlags::default(),
+        equipment: None,
+        custom_name: None,
+        sheep_color: None,
+        sheep_sheared: None,
+        chicken_variant: None,
+    }
+}
+
+fn copy_source_hooks() -> FakeItemSourceHooks {
+    let mut entity = DataComponentMap::new();
+    entity.set(DAMAGE, Some(5));
+    let mut block_entity = DataComponentMap::new();
+    block_entity.set(REPAIR_COST, Some(7));
+    FakeItemSourceHooks {
+        entity,
+        block_entity,
+    }
+}
+
+#[test]
+fn copy_components_function_copies_only_the_listed_components() {
+    init_test_registries();
+    let mut rng = test_rng();
+    let hooks = copy_source_hooks();
+    let mut ctx = LootContext::new(&mut rng).with_item_source(&hooks);
+    let mut stack = ItemStack::new(&vanilla_items::STONE);
+    assert!(stack.get(DAMAGE).is_none() && stack.get(REPAIR_COST).is_none());
+
+    // `include` restricts the copy to the named components (vanilla
+    // `CopyComponentsFunction.bakedPredicate`).
+    LootFunction::CopyComponents {
+        source: CopySource::BlockEntity,
+        include: &REPAIR_COST_ONLY,
+    }
+    .apply(&mut stack, &mut ctx);
+    assert_eq!(stack.get(REPAIR_COST), Some(&7));
+    assert!(stack.get(DAMAGE).is_none());
+
+    // The entity source reads the attacker's `DataComponentGetter` instead.
+    LootFunction::CopyComponents {
+        source: CopySource::Attacker,
+        include: &[],
+    }
+    .apply(&mut stack, &mut ctx);
+    assert_eq!(stack.get(DAMAGE), Some(&5));
+    assert_eq!(stack.get(REPAIR_COST), Some(&7));
+}
+
+#[test]
+fn copy_components_function_without_a_source_hook_leaves_the_stack_untouched() {
+    init_test_registries();
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng);
+    let mut stack = ItemStack::new(&vanilla_items::STONE);
+
+    // Vanilla `CopyComponentsFunction.run` returns the stack unchanged when the
+    // referenced `DataComponentGetter` is absent.
+    LootFunction::CopyComponents {
+        source: CopySource::BlockEntity,
+        include: &[],
+    }
+    .apply(&mut stack, &mut ctx);
+
+    assert!(stack.get(REPAIR_COST).is_none() && stack.get(DAMAGE).is_none());
+}
+
+#[test]
+fn copy_state_function_copies_only_properties_the_block_declares() {
+    init_test_registries();
+    let mut rng = test_rng();
+    let block = Identifier::vanilla_static("bee_nest");
+    let state = REGISTRY
+        .blocks
+        .state_id_from_properties(&block, &[("honey_level", "3")])
+        .expect("bee_nest has honey_level");
+    let mut ctx = LootContext::new(&mut rng).with_block_state(state);
+    let mut stack = ItemStack::new(&vanilla_items::BEE_NEST);
+
+    // Vanilla `CopyBlockState.run`: only properties in the function's resolved
+    // set (i.e. declared by `block`) that the looted state carries are written;
+    // `bee_count` is not a `bee_nest` property, so it is dropped.
+    LootFunction::CopyState {
+        block: block.clone(),
+        properties: &["honey_level", "bee_count"],
+    }
+    .apply(&mut stack, &mut ctx);
+
+    let properties = stack
+        .get(BLOCK_STATE)
+        .expect("copy_state writes the block_state component");
+    assert_eq!(properties.get("honey_level"), Some("3"));
+    assert_eq!(properties.get("bee_count"), None);
+}
+
+#[test]
+fn set_custom_model_data_edits_each_list_independently() {
+    init_test_registries();
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng);
+    let mut stack = ItemStack::new(&vanilla_items::STONE);
+    stack.set(
+        CUSTOM_MODEL_DATA,
+        CustomModelData::new(
+            vec![1.0, 2.0],
+            vec![true],
+            vec!["base".to_owned()],
+            vec![0x11],
+        ),
+    );
+
+    // Vanilla `SetCustomModelDataFunction.run`: each list is edited on its own
+    // (floats appended, strings replaced wholesale) and the lists without an edit
+    // keep their entries.
+    LootFunction::SetCustomModelData {
+        floats: Some(StandaloneListOperation {
+            value: &FLOAT_APPEND,
+            operation: ListOperation::Append,
+        }),
+        flags: None,
+        strings: Some(StandaloneListOperation {
+            value: &["replaced"],
+            operation: ListOperation::ReplaceAll,
+        }),
+        colors: None,
+    }
+    .apply(&mut stack, &mut ctx);
+
+    let data = stack
+        .get(CUSTOM_MODEL_DATA)
+        .expect("set_custom_model_data writes the component");
+    assert_eq!(data.floats(), [1.0, 2.0, 3.5]);
+    assert_eq!(data.flags(), [true]);
+    assert_eq!(data.strings(), ["replaced"]);
+    assert_eq!(data.colors(), [0x11]);
+}
+
+#[test]
+fn set_custom_model_data_starts_from_an_empty_component() {
+    init_test_registries();
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng);
+    let mut stack = ItemStack::new(&vanilla_items::STONE);
+    assert!(stack.get(CUSTOM_MODEL_DATA).is_none());
+
+    // With no existing component vanilla reads `CustomModelData.EMPTY`, so the
+    // untouched lists stay empty.
+    LootFunction::SetCustomModelData {
+        floats: None,
+        flags: Some(StandaloneListOperation {
+            value: &[true, false],
+            operation: ListOperation::Append,
+        }),
+        strings: None,
+        colors: Some(StandaloneListOperation {
+            value: &COLOR_APPEND,
+            operation: ListOperation::Append,
+        }),
+    }
+    .apply(&mut stack, &mut ctx);
+
+    let data = stack
+        .get(CUSTOM_MODEL_DATA)
+        .expect("set_custom_model_data writes the component");
+    assert!(data.floats().is_empty());
+    assert_eq!(data.flags(), [true, false]);
+    assert!(data.strings().is_empty());
+    assert_eq!(data.colors(), [0x11_22_33]);
+}
+
+#[test]
+fn entity_scores_requires_a_live_score_inside_the_range() {
+    init_test_registries();
+    let pig_key = Identifier::vanilla_static("pig");
+    let condition = LootCondition::EntityScores {
+        entity: LootContextEntity::This,
+        scores: &[
+            (
+                "kills",
+                NumberProviderRange {
+                    min: Some(NumberProvider::Constant(5.0)),
+                    max: Some(NumberProvider::Constant(10.0)),
+                },
+            ),
+            (
+                "deaths",
+                NumberProviderRange {
+                    min: None,
+                    max: None,
+                },
+            ),
+        ],
+    };
+    let scoreboard = FakeScoreboard {
+        objective: "kills",
+        score: 7,
+        expected_target: LootContextEntity::This,
+    };
+
+    // Both objectives must resolve: an unknown objective fails the condition.
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng)
+        .with_this_entity(test_entity(&pig_key))
+        .with_scoreboard(&scoreboard);
+    assert!(!condition.test(&mut ctx));
+
+    // The range is inclusive on both ends (vanilla `IntRangePredicate`).
+    let condition = LootCondition::EntityScores {
+        entity: LootContextEntity::This,
+        scores: &[(
+            "kills",
+            NumberProviderRange {
+                min: Some(NumberProvider::Constant(5.0)),
+                max: Some(NumberProvider::Constant(10.0)),
+            },
+        )],
+    };
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng)
+        .with_this_entity(test_entity(&pig_key))
+        .with_scoreboard(&scoreboard);
+    assert!(condition.test(&mut ctx));
+}
+
+#[test]
+fn entity_scores_fails_without_the_entity_score_or_hook() {
+    init_test_registries();
+    let pig_key = Identifier::vanilla_static("pig");
+    let condition = LootCondition::EntityScores {
+        entity: LootContextEntity::This,
+        scores: &KILLS_RANGE,
+    };
+    let scoreboard = FakeScoreboard {
+        objective: "kills",
+        score: 7,
+        expected_target: LootContextEntity::This,
+    };
+
+    // No entity in the context: vanilla `EntityHasScoreCondition.test` returns
+    // false before touching the scoreboard.
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng).with_scoreboard(&scoreboard);
+    assert!(!condition.test(&mut ctx));
+
+    // Score outside the range.
+    let low = FakeScoreboard {
+        objective: "kills",
+        score: 4,
+        expected_target: LootContextEntity::This,
+    };
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng)
+        .with_this_entity(test_entity(&pig_key))
+        .with_scoreboard(&low);
+    assert!(!condition.test(&mut ctx));
+
+    // The entity is present but the condition reads a different target.
+    let other = FakeScoreboard {
+        objective: "kills",
+        score: 7,
+        expected_target: LootContextEntity::Killer,
+    };
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng)
+        .with_this_entity(test_entity(&pig_key))
+        .with_scoreboard(&other);
+    assert!(!condition.test(&mut ctx));
+
+    // No scoreboard hook installed.
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng).with_this_entity(test_entity(&pig_key));
+    assert!(!condition.test(&mut ctx));
+}
+
+#[test]
+fn environment_attribute_check_compares_the_attribute_at_the_origin() {
+    init_test_registries();
+    let attribute = Identifier::vanilla_static("gameplay/sky_light_level");
+    let hook = FakeEnvironmentAttributes {
+        attribute: attribute.clone(),
+        value: 1.0,
+    };
+    let condition = LootCondition::EnvironmentAttributeCheck {
+        attribute: attribute.clone(),
+        value: 1.0,
+    };
+
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng)
+        .with_origin(0.5, 64.0, 0.5)
+        .with_environment_attributes(&hook);
+    assert!(condition.test(&mut ctx));
+
+    // Vanilla `EnvironmentAttributeCheck.test` compares for equality, so a
+    // different configured value fails.
+    let mismatched = LootCondition::EnvironmentAttributeCheck {
+        attribute: attribute.clone(),
+        value: 2.0,
+    };
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng)
+        .with_origin(0.5, 64.0, 0.5)
+        .with_environment_attributes(&hook);
+    assert!(!mismatched.test(&mut ctx));
+
+    // An attribute the environment does not carry fails, as does a context with
+    // no attribute source installed.
+    let unknown = LootCondition::EnvironmentAttributeCheck {
+        attribute: Identifier::vanilla_static("gameplay/unknown_attribute"),
+        value: 1.0,
+    };
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng)
+        .with_origin(0.5, 64.0, 0.5)
+        .with_environment_attributes(&hook);
+    assert!(!unknown.test(&mut ctx));
+
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng).with_origin(0.5, 64.0, 0.5);
+    assert!(!condition.test(&mut ctx));
+}
+
+#[test]
+fn unresolved_condition_references_fail_closed() {
+    init_test_registries();
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng);
+
+    // Steel inlines `minecraft:<path>` condition references at build time, so an
+    // unresolved reference must not silently pass.
+    assert!(
+        !LootCondition::Reference(Identifier::vanilla_static("tool/can_silk_touch")).test(&mut ctx)
+    );
 }

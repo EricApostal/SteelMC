@@ -10,6 +10,9 @@
 //! for; both casters are bridged by [`caster_of`].
 
 use steel_registry::sound_event::SoundEventRef;
+use steel_registry::sound_events::{
+    ENTITY_ILLUSIONER_PREPARE_BLINDNESS, ENTITY_ILLUSIONER_PREPARE_MIRROR,
+};
 use steel_registry::vanilla_mob_effects;
 use steel_utils::Downcast as _;
 use steel_utils::types::Difficulty;
@@ -17,7 +20,7 @@ use steel_utils::types::Difficulty;
 use super::reduced_tick_delay;
 use super::selector::{Goal, GoalControls};
 use crate::entity::entities::mobs::illager::{EvokerEntity, IllagerSpell, IllusionerEntity};
-use crate::entity::{Entity, LivingEntity, Mob, MobEffectInstance, PathfinderMob, SharedEntity};
+use crate::entity::{LivingEntity, MobEffectInstance, PathfinderMob, SharedEntity};
 
 /// Vanilla `SpellcasterIllager.SpellcasterUseSpellGoal.getCastWarmupTime`.
 const DEFAULT_CAST_WARMUP_TIME: i32 = 20;
@@ -316,14 +319,14 @@ impl SpellcasterSpell for IllusionerMirrorSpell {
     }
 
     fn spell_prepare_sound(&self) -> Option<SoundEventRef> {
-        Some(&steel_registry::sound_events::ENTITY_ILLUSIONER_PREPARE_MIRROR)
+        Some(&ENTITY_ILLUSIONER_PREPARE_MIRROR)
     }
 
     fn can_use_extra(&mut self, mob: &dyn PathfinderMob) -> bool {
         let Some(caster) = mob.downcast_ref::<IllusionerEntity>() else {
             return false;
         };
-        !caster.has_mob_effect(&vanilla_mob_effects::INVISIBILITY)
+        !caster.has_mob_effect(vanilla_mob_effects::INVISIBILITY)
     }
 
     fn perform_spell_casting(&mut self, mob: &dyn PathfinderMob) {
@@ -331,7 +334,7 @@ impl SpellcasterSpell for IllusionerMirrorSpell {
             return;
         };
         caster.add_mob_effect(MobEffectInstance::with_duration(
-            &vanilla_mob_effects::INVISIBILITY,
+            vanilla_mob_effects::INVISIBILITY,
             MIRROR_INVISIBILITY_DURATION,
             0,
         ));
@@ -361,7 +364,7 @@ impl SpellcasterSpell for IllusionerBlindnessSpell {
     }
 
     fn spell_prepare_sound(&self) -> Option<SoundEventRef> {
-        Some(&steel_registry::sound_events::ENTITY_ILLUSIONER_PREPARE_BLINDNESS)
+        Some(&ENTITY_ILLUSIONER_PREPARE_BLINDNESS)
     }
 
     fn can_use_extra(&mut self, mob: &dyn PathfinderMob) -> bool {
@@ -394,7 +397,7 @@ impl SpellcasterSpell for IllusionerBlindnessSpell {
             return;
         };
         target.add_mob_effect(MobEffectInstance::with_duration(
-            &vanilla_mob_effects::BLINDNESS,
+            vanilla_mob_effects::BLINDNESS,
             BLINDNESS_DURATION,
             0,
         ));

@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use super::utils;
+use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
 use crate::entity::ai::brain::memory::MemoryStatus;
 use crate::entity::ai::brain::memory::module_type as mem;
@@ -49,7 +50,7 @@ impl Trigger for Mount {
         } else {
             ctx.set_memory(
                 &mem::LOOK_TARGET,
-                Arc::new(EntityTracker::new(ridable.clone(), true)),
+                Arc::new(EntityTracker::new(SharedEntity::clone(&ridable), true)),
             );
             ctx.set_memory(
                 &mem::WALK_TARGET,

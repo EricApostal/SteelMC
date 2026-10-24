@@ -1,7 +1,7 @@
 //! Vanilla Frog entity with variant, tongue-target and brain parity.
 //!
 //! Mirrors `net.minecraft.world.entity.animal.frog.Frog`. Vanilla drives frogs from
-//! `FrogAi`; the brain package lives in `frog/brain.rs` (owned by the BrainMobs
+//! `FrogAi`; the brain package lives in `frog/brain.rs` (owned by the `BrainMobs`
 //! lane) and is wired here exactly like vanilla `Frog.makeBrain`/
 //! `Frog.customServerAiStep`. This module owns the entity, its synched data and the
 //! [`ShootTongue`] behavior the brain's `TONGUE` activity needs.
@@ -23,6 +23,7 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::data_components::vanilla_components::FROG_VARIANT;
 use steel_registry::entity_data::EntityPose;
 use steel_registry::entity_type::{
@@ -94,7 +95,7 @@ pub struct FrogEntity {
     mob_base: MobBase,
     ageable_base: AgeableMobBase,
     animal_base: AnimalBase,
-    /// Vanilla `LivingEntity.brain`; `frog/brain.rs` (BrainMobs) builds the real
+    /// Vanilla `LivingEntity.brain`; `frog/brain.rs` (`BrainMobs`) builds the real
     /// contents through the `FrogBrainProvider` package and owns the activities.
     brain: SyncMutex<Brain>,
     entity_data: SyncMutex<FrogEntityData>,
@@ -229,7 +230,7 @@ impl FrogEntity {
     /// mobs (`mob/hostile/cube`) expose no size accessor yet, so only the
     /// `FROG_FOOD` entity-type tag is tested.
     #[must_use]
-    pub fn can_eat(&self, entity: &dyn LivingEntity) -> bool {
+    pub fn can_eat(entity: &dyn LivingEntity) -> bool {
         REGISTRY
             .entity_types
             .is_in_tag(entity.entity_type(), &EntityTypeTag::FROG_FOOD)

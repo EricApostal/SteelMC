@@ -344,9 +344,7 @@ impl SnifferEntity {
     /// Vanilla `Sniffer.calculateDigPosition`: five expanding land searches.
     #[must_use]
     pub fn calculate_dig_position(&self) -> Option<BlockPos> {
-        let Some(world) = self.level() else {
-            return None;
-        };
+        let world = self.level()?;
         for index in 0..DIG_POSITION_ATTEMPTS {
             let horizontal = 10 + 2 * index;
             let Some(candidate) =
@@ -913,7 +911,7 @@ impl SnifferSniffGoal {
         }
     }
 
-    fn sniffer<'a>(&self, mob: &'a dyn PathfinderMob) -> Option<&'a SnifferEntity> {
+    fn sniffer(mob: &dyn PathfinderMob) -> Option<&SnifferEntity> {
         mob.as_entity_event_source().downcast_ref::<SnifferEntity>()
     }
 }
@@ -924,7 +922,7 @@ impl Goal for SnifferSniffGoal {
     }
 
     fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
-        let Some(sniffer) = self.sniffer(mob) else {
+        let Some(sniffer) = Self::sniffer(mob) else {
             return false;
         };
         self.phase == SniffPhase::Idle
@@ -934,7 +932,7 @@ impl Goal for SnifferSniffGoal {
     }
 
     fn can_continue_to_use(&mut self, mob: &dyn PathfinderMob) -> bool {
-        let Some(sniffer) = self.sniffer(mob) else {
+        let Some(sniffer) = Self::sniffer(mob) else {
             return false;
         };
         if self.phase == SniffPhase::Idle {
@@ -950,7 +948,7 @@ impl Goal for SnifferSniffGoal {
     }
 
     fn start(&mut self, mob: &dyn PathfinderMob) {
-        let Some(sniffer) = self.sniffer(mob) else {
+        let Some(sniffer) = Self::sniffer(mob) else {
             return;
         };
         self.phase = SniffPhase::Scenting;
@@ -959,7 +957,7 @@ impl Goal for SnifferSniffGoal {
     }
 
     fn stop(&mut self, mob: &dyn PathfinderMob) {
-        let Some(sniffer) = self.sniffer(mob) else {
+        let Some(sniffer) = Self::sniffer(mob) else {
             self.phase = SniffPhase::Idle;
             return;
         };
@@ -976,7 +974,7 @@ impl Goal for SnifferSniffGoal {
     }
 
     fn tick(&mut self, mob: &dyn PathfinderMob, _entity: &SharedEntity) {
-        let Some(sniffer) = self.sniffer(mob) else {
+        let Some(sniffer) = Self::sniffer(mob) else {
             return;
         };
 

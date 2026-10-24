@@ -98,7 +98,7 @@ impl RangedBowAttackGoal {
 
     /// Vanilla `RangedBowAttackGoal.isHoldingBow`.
     fn is_holding_bow(mob: &dyn PathfinderMob) -> bool {
-        mob.is_holding(&mut |stack| ptr::eq(stack.item(), &*vanilla_items::BOW))
+        mob.is_holding(&mut |stack| ptr::eq(stack.item(), &raw const *vanilla_items::BOW))
     }
 
     /// Vanilla `ProjectileUtil.getWeaponHoldingHand`: the main hand when it holds the bow,
@@ -150,12 +150,12 @@ impl Goal for RangedBowAttackGoal {
         };
 
         let distance_sqr = mob.position().distance_squared(target.position());
-        let has_line_of_sight = mob.has_line_of_sight_cached(target.as_ref());
-        let had_line_of_sight = self.see_time > 0;
-        if has_line_of_sight != had_line_of_sight {
+        let sees_target = mob.has_line_of_sight_cached(target.as_ref());
+        let saw_target = self.see_time > 0;
+        if sees_target != saw_target {
             self.see_time = 0;
         }
-        if has_line_of_sight {
+        if sees_target {
             self.see_time += 1;
         } else {
             self.see_time -= 1;
@@ -202,9 +202,9 @@ impl Goal for RangedBowAttackGoal {
         }
 
         if mob.is_using_item() {
-            if !has_line_of_sight && self.see_time < -60 {
+            if !sees_target && self.see_time < -60 {
                 mob.stop_using_item();
-            } else if has_line_of_sight {
+            } else if sees_target {
                 let pull_time = mob.get_tick_count_using_item();
                 if pull_time >= FULL_DRAW_TICKS {
                     mob.stop_using_item();

@@ -14,7 +14,7 @@ use steel_registry::vanilla_items;
 use steel_utils::random::Random;
 use steel_utils::types::Difficulty;
 
-use crate::entity::{LivingEntity as _, Mob};
+use crate::entity::Mob;
 use crate::inventory::equipment::EquipmentSlot;
 
 /// Vanilla `Mob.MAX_WEARING_ARMOR_CHANCE`.

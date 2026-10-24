@@ -15,18 +15,19 @@
 //!   only, no explosion damage/particles).
 
 use std::collections::BTreeSet;
+use std::f64::consts::PI;
 use std::sync::{Arc, LazyLock};
 
 use glam::DVec3;
 use serde::{Deserialize, Serialize};
 use steel_registry::REGISTRY;
-use steel_registry::RegistryExt as _;
 use steel_registry::level_events::{ANIMATION_DRAGON_SUMMON_ROAR, ANIMATION_END_GATEWAY_SPAWN};
 use steel_registry::vanilla_blocks;
 use steel_registry::vanilla_entities;
 use steel_utils::random::Random as _;
 use steel_utils::random::legacy_random::LegacyRandom;
-use steel_utils::{BlockPos, BlockStateId, WorldAabb};
+use steel_utils::translations;
+use steel_utils::{BlockPos, BlockStateId, Direction, WorldAabb};
 use text_components::TextComponent;
 use uuid::Uuid;
 
@@ -37,9 +38,10 @@ use crate::chunk::heightmap::HeightmapType;
 use crate::entity::entities::EndCrystalEntity;
 use crate::entity::spawn::create_entity_instance;
 use crate::entity::{Entity, RemovalReason, SharedEntity};
-use crate::world::World;
 use crate::world::explosion::ExplosionInteraction;
+use crate::world::{LevelReader, World};
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+use steel_registry::blocks::properties::BlockStateProperties;
 use steel_utils::Downcast as _;
 use steel_utils::types::UpdateFlags;
 
@@ -57,6 +59,8 @@ pub const GATEWAY_COUNT: usize = 20;
 pub const GATEWAY_DISTANCE: f64 = 96.0;
 /// Vanilla `EnderDragonFight.DRAGON_SPAWN_Y`.
 pub const DRAGON_SPAWN_Y: i32 = 128;
+/// Vanilla `EnderDragonFight.spawnNewGateway` ring height.
+pub const GATEWAY_Y: i32 = 75;
 /// Vanilla `EnderDragonFight.validPlayer` listen radius (192 blocks).
 pub const DRAGON_LISTEN_RADIUS: f64 = 192.0;
 /// Vanilla `EndPodiumFeature.PODIUM_RADIUS`.
@@ -68,7 +72,7 @@ pub const PODIUM_PILLAR_HEIGHT: i32 = 4;
 const SUMMONING_PILLARS_INTERVAL: i32 = 40;
 
 fn dragon_display_name() -> TextComponent {
-    TextComponent::translated(steel_utils::translations::ENTITY_MINECRAFT_ENDER_DRAGON.msg())
+    TextComponent::translated(translations::ENTITY_MINECRAFT_ENDER_DRAGON.msg())
 }
 
 /// Vanilla `DragonRespawnStage` (`world.level.dimension.end`).
@@ -204,7 +208,7 @@ impl EnderDragonFight {
     }
 
     /// Vanilla `SavedData.setDirty`.
-    pub fn set_dirty(&mut self) {
+    pub const fn set_dirty(&mut self) {
         self.dirty = true;
         self.dragon_event.set_dirty();
     }
@@ -216,7 +220,7 @@ impl EnderDragonFight {
     }
 
     /// Vanilla `SavedData.save` completion.
-    pub fn mark_saved(&mut self) {
+    pub const fn mark_saved(&mut self) {
         self.dirty = false;
         self.dragon_event.mark_saved();
     }
@@ -379,7 +383,7 @@ impl EnderDragonFight {
         )
     }
 
-    fn pool_block(&self) -> BlockPos {
+    const fn pool_block(&self) -> BlockPos {
         BlockPos::new(
             self.origin.x(),
             DRAGON_SPAWN_Y + self.origin.y(),
@@ -397,8 +401,7 @@ impl EnderDragonFight {
         } else {
             self.previously_killed = false;
             if self.find_exit_portal(world).is_none() {
-                let location = self.exit_portal_location;
-                self.spawn_exit_portal(world, false, location);
+                self.spawn_exit_portal(world, false);
             }
         }
 
@@ -410,11 +413,11 @@ impl EnderDragonFight {
         } else if let Some(dragon) = dragons.first() {
             self.dragon_uuid = Some(dragon.uuid());
             self.dragon_killed = false;
-            if !active_portal_exists {
+            if active_portal_exists {
+                Self::bind_dragon(dragon, self.origin);
+            } else {
                 dragon.set_removed(RemovalReason::Discarded);
                 self.dragon_uuid = None;
-            } else {
-                Self::bind_dragon(dragon, self.origin);
             }
         }
 
@@ -459,11 +462,10 @@ impl EnderDragonFight {
     /// origin column, minus three (vanilla finds it through the bedrock
     /// `BlockPattern`; Steel uses the known `EndPodiumFeature` geometry).
     fn find_exit_portal_ring_y(&self, world: &Arc<World>) -> Option<i32> {
-        let x = self.origin.x();
-        let z = self.origin.z();
-        let top = world
-            .height_at(HeightmapType::MotionBlockingNoLeaves, x, z)
-            .unwrap_or(world.get_max_y());
+        let podium = Self::podium_location(self.origin);
+        let x = podium.x();
+        let z = podium.z();
+        let top = LevelReader::height_at(world, HeightmapType::MotionBlockingNoLeaves, x, z);
         let bedrock = PODIUM_STATES.bedrock;
         for y in (world.get_min_y() + 1..=top).rev() {
             if world.get_block_state(BlockPos::new(x, y, z)) == bedrock {
@@ -592,7 +594,7 @@ impl EnderDragonFight {
             DragonRespawnStage::SummoningDragon => {
                 if time >= 100 {
                     self.set_respawn_stage(world, DragonRespawnStage::End);
-                    self.reset_spike_crystals(world);
+                    Self::reset_spike_crystals(world);
                     for crystal in self.live_respawn_crystals(world) {
                         set_crystal_beam(&crystal, None);
                         // Vanilla `level.explode(crystal, x, y, z, 6, NONE)`:
@@ -615,7 +617,7 @@ impl EnderDragonFight {
                             set_crystal_beam(&crystal, Some(target));
                         }
                     }
-                    if time < 5 || time >= 80 {
+                    if !(5..80).contains(&time) {
                         self.summon_roar(world);
                     }
                     self.respawn_time += 1;
@@ -649,13 +651,23 @@ impl EnderDragonFight {
         self.dragon_event.set_progress(0.0);
         self.dragon_event.set_visible(false);
         self.players.clear();
-        let podium = self
-            .find_exit_portal(world)
-            .unwrap_or_else(|| BlockPos::new(self.origin.x(), self.origin.y(), self.origin.z()));
-        self.spawn_exit_portal(world, true, Some(podium));
+        self.spawn_exit_portal(world, true);
         self.spawn_new_gateway(world);
         if !self.previously_killed {
-            let egg_pos = BlockPos::new(podium.x(), podium.y() + 1, podium.z());
+            // Vanilla places the egg on the `MOTION_BLOCKING` heightmap of the
+            // podium column, i.e. on top of the four-block bedrock pillar,
+            // rather than on the portal ring the fight cached.
+            let podium = Self::podium_location(self.origin);
+            let egg_pos = BlockPos::new(
+                podium.x(),
+                LevelReader::height_at(
+                    world,
+                    HeightmapType::MotionBlocking,
+                    podium.x(),
+                    podium.z(),
+                ),
+                podium.z(),
+            );
             world.set_block(egg_pos, PODIUM_STATES.dragon_egg, UpdateFlags::UPDATE_ALL);
         }
         self.previously_killed = true;
@@ -669,9 +681,17 @@ impl EnderDragonFight {
         if !self.dragon_killed || self.respawn_stage.is_some() {
             return;
         }
-        let Some(location) = self.find_exit_portal(world) else {
-            self.spawn_exit_portal(world, true, self.exit_portal_location);
-            return;
+        let location = match self.exit_portal_location {
+            Some(location) => location,
+            None => {
+                if self.find_exit_portal(world).is_none() {
+                    self.spawn_exit_portal(world, true);
+                }
+                let Some(location) = self.exit_portal_location else {
+                    return;
+                };
+                location
+            }
         };
         let center = location.above_n(1);
         let mut crystals = Vec::new();
@@ -722,7 +742,7 @@ impl EnderDragonFight {
         }
         self.respawn_stage = Some(DragonRespawnStage::Start);
         self.respawn_time = 0;
-        self.spawn_exit_portal(world, false, self.exit_portal_location);
+        self.spawn_exit_portal(world, false);
         self.respawn_crystals = crystals.iter().map(|entity| entity.uuid()).collect();
         self.set_dirty();
     }
@@ -740,14 +760,14 @@ impl EnderDragonFight {
     fn abort_respawn_sequence(&mut self, world: &Arc<World>) {
         self.respawn_stage = None;
         self.respawn_time = 0;
-        self.reset_spike_crystals(world);
-        self.spawn_exit_portal(world, true, self.exit_portal_location);
+        Self::reset_spike_crystals(world);
+        self.spawn_exit_portal(world, true);
         self.set_dirty();
     }
 
     /// Vanilla `EnderDragonFight.resetSpikeCrystals`.
-    pub fn reset_spike_crystals(&mut self, world: &Arc<World>) {
-        for crystal in self.spike_crystals(world) {
+    pub fn reset_spike_crystals(world: &Arc<World>) {
+        for crystal in Self::spike_crystals(world) {
             if let Some(crystal) = crystal.downcast_ref::<EndCrystalEntity>() {
                 crystal.set_invulnerable(false);
                 crystal.set_beam_target(None);
@@ -758,12 +778,12 @@ impl EnderDragonFight {
     /// Vanilla `EnderDragonFight.updateCrystalCount`.
     fn update_crystal_count(&mut self, world: &Arc<World>) {
         self.ticks_since_crystals_scanned = 0;
-        self.alive_crystals = self.spike_crystals(world).len() as i32;
+        self.alive_crystals = Self::spike_crystals(world).len() as i32;
         self.set_dirty();
     }
 
     /// Live crystals standing on the arena spikes.
-    fn spike_crystals(&self, world: &Arc<World>) -> Vec<SharedEntity> {
+    fn spike_crystals(world: &Arc<World>) -> Vec<SharedEntity> {
         let mut crystals = Vec::new();
         for spike in end_spikes_for_seed(world.seed()) {
             let box_ = WorldAabb::from_min_max(
@@ -785,26 +805,63 @@ impl EnderDragonFight {
         crystals
     }
 
-    /// Vanilla `EnderDragonFight.spawnExitPortal`.
-    fn spawn_exit_portal(
-        &mut self,
-        world: &Arc<World>,
-        activated: bool,
-        location: Option<BlockPos>,
-    ) {
-        let location = location.unwrap_or_else(|| {
-            BlockPos::new(
-                self.origin.x(),
-                self.find_exit_portal_ring_y(world)
-                    .unwrap_or(self.origin.y()),
-                self.origin.z(),
-            )
-        });
-        if self.exit_portal_location.is_none() {
-            self.exit_portal_location = Some(location);
-        }
+    /// Vanilla `EnderDragonFight.getPodiumLocation`.
+    ///
+    /// Vanilla's `END_PODIUM_LOCATION` is `BlockPos.ZERO`, so the podium column
+    /// is the fight origin itself. The perch the dragon lands on is the
+    /// `MOTION_BLOCKING_NO_LEAVES` first-available block of this column, which
+    /// `EnderDragonEntity::podium_heightmap_pos` resolves for the phases.
+    #[must_use]
+    pub const fn podium_location(origin: BlockPos) -> BlockPos {
+        // `END_PODIUM_LOCATION.offset(origin)`: `BlockPos.ZERO` is the identity
+        // offset, so vanilla's constant collapses to the origin.
+        origin
+    }
+
+    /// Vanilla `EnderDragonFight.spawnExitPortal`: build the fountain at the
+    /// cached exit-portal location, deriving one when the fight never resolved
+    /// it (fresh or legacy worlds).
+    fn spawn_exit_portal(&mut self, world: &Arc<World>, activated: bool) {
+        let location = match self.exit_portal_location {
+            Some(location) => location,
+            None => {
+                let location = self.derive_exit_portal_location(world);
+                self.exit_portal_location = Some(location);
+                location
+            }
+        };
         place_end_podium(world, location, activated);
         self.set_dirty();
+    }
+
+    /// Vanilla `EnderDragonFight.spawnExitPortal` location derivation.
+    ///
+    /// Starts one below the podium column's `MOTION_BLOCKING_NO_LEAVES`
+    /// heightmap (the island surface on a fresh world) and walks down over any
+    /// existing bedrock blob, so an already-built fountain is re-centred on its
+    /// lowest bedrock block. The result is clamped to `minY + 1`.
+    fn derive_exit_portal_location(&self, world: &Arc<World>) -> BlockPos {
+        /// Vanilla's bedrock walk-down floor (`while (... && y > 63)`).
+        const BEDROCK_WALK_FLOOR: i32 = 63;
+
+        let podium = Self::podium_location(self.origin);
+        let mut location = BlockPos::new(
+            podium.x(),
+            LevelReader::height_at(
+                world,
+                HeightmapType::MotionBlockingNoLeaves,
+                podium.x(),
+                podium.z(),
+            ),
+            podium.z(),
+        )
+        .below();
+        while world.get_block_state(location).get_block() == &vanilla_blocks::BEDROCK
+            && location.y() > BEDROCK_WALK_FLOOR
+        {
+            location = location.below();
+        }
+        location.at_y((world.get_min_y() + 1).max(location.y()))
     }
 
     /// Vanilla `EnderDragonFight.spawnNewGateway`.
@@ -813,13 +870,24 @@ impl EnderDragonFight {
             self.set_dirty();
             return;
         };
-        let angle = -f64::consts::PI + f64::consts::PI / 20.0 * f64::from(gateway);
-        let x = (GATEWAY_DISTANCE * angle.cos()).floor() as i32 + self.origin.x();
-        let z = (GATEWAY_DISTANCE * angle.sin()).floor() as i32 + self.origin.z();
-        let pos = BlockPos::new(x, 75, z);
+        let pos = Self::gateway_position(self.origin, gateway);
         place_end_gateway(world, pos);
         world.level_event(ANIMATION_END_GATEWAY_SPAWN, pos, 0, None);
         self.set_dirty();
+    }
+
+    /// Vanilla `spawnNewGateway` ring position for a shuffled gateway index:
+    /// `Mth.floor(96.0 * cos/sin(2.0 * (-PI + PI / 20 * index)))` at y = 75.
+    ///
+    /// The doubling is vanilla's: twenty gateways sit 18° apart on the ring.
+    #[must_use]
+    fn gateway_position(origin: BlockPos, index: i32) -> BlockPos {
+        let angle = 2.0 * (-PI + PI / 20.0 * f64::from(index));
+        BlockPos::new(
+            (GATEWAY_DISTANCE * angle.cos()).floor() as i32 + origin.x(),
+            GATEWAY_Y,
+            (GATEWAY_DISTANCE * angle.sin()).floor() as i32 + origin.z(),
+        )
     }
 
     /// Serializes the fight to saved data.
@@ -951,7 +1019,7 @@ struct EndSpike {
 fn end_spikes_for_seed(seed: i64) -> Vec<EndSpike> {
     const COUNT: usize = 10;
     const DISTANCE: f64 = 42.0;
-    const ANGLE_STEP: f64 = f64::consts::PI / 10.0;
+    const ANGLE_STEP: f64 = PI / 10.0;
     let mut seed_random = LegacyRandom::from_seed(seed as u64);
     let cache_key = seed_random.next_i64() & 65_535;
     let mut random = LegacyRandom::from_seed(cache_key as u64);
@@ -967,7 +1035,7 @@ fn end_spikes_for_seed(seed: i64) -> Vec<EndSpike> {
         .iter()
         .enumerate()
         .map(|(index, size)| {
-            let angle = 2.0 * (-f64::consts::PI + ANGLE_STEP * index as f64);
+            let angle = 2.0 * (-PI + ANGLE_STEP * index as f64);
             EndSpike {
                 center_x: (DISTANCE * angle.cos()).floor() as i32,
                 center_z: (DISTANCE * angle.sin()).floor() as i32,
@@ -990,9 +1058,9 @@ fn set_crystal_beam(crystal: &SharedEntity, target: Option<BlockPos>) {
 fn rebuild_spike(world: &Arc<World>, spike: EndSpike) {
     world.explode(
         None,
-        spike.center_x as f64 + 0.5,
-        spike.height as f64,
-        spike.center_z as f64 + 0.5,
+        f64::from(spike.center_x) + 0.5,
+        f64::from(spike.height),
+        f64::from(spike.center_z) + 0.5,
         5.0,
         ExplosionInteraction::Block,
     );
@@ -1076,9 +1144,21 @@ fn place_end_podium(world: &Arc<World>, origin: BlockPos, activated: bool) {
         );
     }
 
-    for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-        let pos = BlockPos::new(origin.x() + dx, origin.y() + 2, origin.z() + dz);
-        world.set_block(pos, PODIUM_STATES.wall_torch, UpdateFlags::UPDATE_ALL);
+    for direction in [
+        Direction::North,
+        Direction::East,
+        Direction::South,
+        Direction::West,
+    ] {
+        // Vanilla `WALL_TORCH.defaultBlockState().setValue(FACING, direction)`.
+        let torch = PODIUM_STATES
+            .wall_torch
+            .set_value(&BlockStateProperties::HORIZONTAL_FACING, direction);
+        world.set_block(
+            origin.above_n(2).relative(direction),
+            torch,
+            UpdateFlags::UPDATE_ALL,
+        );
     }
 }
 
@@ -1135,3 +1215,101 @@ impl PodiumStates {
 }
 
 static PODIUM_STATES: LazyLock<PodiumStates> = LazyLock::new(PodiumStates::load);
+
+#[cfg(test)]
+mod tests {
+    use steel_registry::blocks::block_state_ext::BlockStateExt;
+    use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_dimension_types};
+    use steel_utils::ChunkPos;
+
+    use super::*;
+    use crate::behavior::init_behaviors;
+    use crate::test_support::{
+        TestWorld, fresh_test_world_with_dimension_type, insert_ready_full_chunk,
+    };
+
+    /// Island surface used by the fixtures. Above vanilla `spawnExitPortal`'s
+    /// bedrock walk-down floor (y = 63), so a fresh-world derivation must stop
+    /// here instead of descending.
+    const ISLAND_SURFACE_Y: i32 = 64;
+
+    /// A fresh End world whose origin column is a single end-stone island block
+    /// at [`ISLAND_SURFACE_Y`], like the central island before the fight builds
+    /// the fountain.
+    fn end_world_with_island(key: &'static str) -> TestWorld {
+        init_vanilla_registry();
+        init_behaviors();
+        let fixture =
+            fresh_test_world_with_dimension_type("steel", key, &vanilla_dimension_types::THE_END);
+        let world = &fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+        assert!(world.set_block(
+            BlockPos::new(0, ISLAND_SURFACE_Y, 0),
+            vanilla_blocks::END_STONE.default_state(),
+            UpdateFlags::UPDATE_ALL,
+        ));
+        fixture
+    }
+
+    /// Vanilla `spawnExitPortal` derives a missing exit-portal location from the
+    /// podium column's `MOTION_BLOCKING_NO_LEAVES` heightmap, so the fountain is
+    /// built on the island surface on a fresh End world rather than at the fight
+    /// origin's y (which is 0 and leaves the perch in the void).
+    #[test]
+    fn fresh_world_podium_lands_on_the_island_surface() {
+        let fixture = end_world_with_island("end_fresh_podium");
+        let world = &fixture.world;
+
+        let mut fight = EnderDragonFight::new(BlockPos::ZERO);
+        fight.spawn_exit_portal(world, false);
+
+        let podium = BlockPos::new(0, ISLAND_SURFACE_Y, 0);
+        assert_eq!(fight.exit_portal_location(), Some(podium));
+        // The four-block bedrock pillar stands on the surface: its base is the
+        // portal ring and its top is the perch the dragon lands on.
+        let bedrock = PODIUM_STATES.bedrock;
+        assert_eq!(world.get_block_state(podium), bedrock);
+        assert_eq!(world.get_block_state(podium.above_n(3)), bedrock);
+        // Vanilla lights the pillar with four faced wall torches.
+        let east_torch = world.get_block_state(BlockPos::new(1, ISLAND_SURFACE_Y + 2, 0));
+        assert_eq!(east_torch.get_block(), &vanilla_blocks::WALL_TORCH);
+        assert_eq!(
+            east_torch.get_value(&BlockStateProperties::HORIZONTAL_FACING),
+            Direction::East
+        );
+    }
+
+    /// Vanilla places the dragon egg on the `MOTION_BLOCKING` heightmap of the
+    /// podium column, i.e. on top of the pillar, not on the portal ring.
+    #[test]
+    fn first_kill_places_the_dragon_egg_on_the_pillar_top() {
+        let fixture = end_world_with_island("end_dragon_egg");
+        let world = &fixture.world;
+
+        let mut fight = EnderDragonFight::new(BlockPos::ZERO);
+        let dragon_uuid = Uuid::new_v4();
+        fight.dragon_uuid = Some(dragon_uuid);
+        fight.set_dragon_killed(world, dragon_uuid);
+
+        let egg = BlockPos::new(0, ISLAND_SURFACE_Y + 4, 0);
+        assert_eq!(world.get_block_state(egg), PODIUM_STATES.dragon_egg);
+        // The pillar is intact below the egg.
+        assert_eq!(
+            world.get_block_state(BlockPos::new(0, ISLAND_SURFACE_Y + 3, 0)),
+            PODIUM_STATES.bedrock
+        );
+    }
+
+    /// Vanilla spreads the twenty gateways 18° apart on a 96 block ring at
+    /// y = 75: `floor(96.0 * cos(2.0 * (-PI + PI / 20 * index)))`.
+    #[test]
+    fn gateway_ring_positions_match_vanilla() {
+        let first = EnderDragonFight::gateway_position(BlockPos::ZERO, 0);
+        assert_eq!(first.x(), 96);
+        assert_eq!(first.y(), GATEWAY_Y);
+        assert_eq!(
+            EnderDragonFight::gateway_position(BlockPos::ZERO, 19),
+            BlockPos::new(91, GATEWAY_Y, -30)
+        );
+    }
+}

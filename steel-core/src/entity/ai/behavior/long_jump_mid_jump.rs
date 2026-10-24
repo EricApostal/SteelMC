@@ -2,6 +2,7 @@
 
 use glam::DVec3;
 use steel_registry::entity_data::EntityPose;
+use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::value_providers::UniformIntProvider;
 
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
@@ -44,8 +45,7 @@ impl LongJumpMidJump {
 
     /// Vanilla `timeBetweenLongJumps.sample(level.getRandom())`.
     fn sample_time_between_long_jumps(&self) -> i32 {
-        let mut random =
-            steel_utils::random::legacy_random::LegacyRandom::from_seed(rand::random());
+        let mut random = LegacyRandom::from_seed(rand::random());
         self.time_between_long_jumps.sample(&mut random)
     }
 }

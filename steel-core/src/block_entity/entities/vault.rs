@@ -8,22 +8,27 @@
 
 use std::sync::{Arc, Weak};
 
+use rand::RngExt as _;
 use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
 use simdnbt::owned::{NbtCompound, NbtList};
 use steel_protocol::packets::game::SoundSource;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{BlockStateProperties, VaultState};
 use steel_registry::item_stack::ItemStack;
+use steel_registry::level_events;
 use steel_registry::loot_table::LootContext;
 use steel_registry::sound_events;
 use steel_registry::stat::vanilla_stat_types;
-use steel_registry::vanilla_level_events;
 use steel_registry::{REGISTRY, RegistryExt as _, vanilla_block_entity_types, vanilla_items};
+use steel_utils::nbt::NbtNumeric as _;
 use steel_utils::uuid_ext::UuidExt as _;
-use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier, locks::SyncMutex};
+use steel_utils::{
+    BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier, locks::SyncMutex,
+};
 
 use crate::behavior::InventoryAccess;
 use crate::block_entity::{BlockEntity, BlockEntityBase};
+use crate::entity::Entity as _;
 use crate::player::Player;
 use crate::world::World;
 
@@ -321,12 +326,7 @@ impl VaultBlockEntity {
     }
 
     /// Vanilla `VaultBlockEntity.Server.playInsertFailSound`.
-    fn play_insert_fail_sound(
-        &self,
-        world: &Arc<World>,
-        pos: BlockPos,
-        rewarded: bool,
-    ) {
+    fn play_insert_fail_sound(&self, world: &Arc<World>, pos: BlockPos, rewarded: bool) {
         let mut state = self.state.lock();
         if world.game_time() < state.last_insert_fail_timestamp + INSERT_FAIL_SOUND_BUFFER_TICKS {
             return;
@@ -349,12 +349,7 @@ impl VaultBlockEntity {
 
     /// Vanilla `VaultSharedData.updateConnectedPlayersWithinRange` (vaults detect all
     /// non-spectator players, excluding already-rewarded ones).
-    fn update_connected_players_within_range(
-        &self,
-        world: &Arc<World>,
-        pos: BlockPos,
-        limit: f64,
-    ) {
+    fn update_connected_players_within_range(&self, world: &Arc<World>, pos: BlockPos, limit: f64) {
         let rewarded = self.state.lock().rewarded_players.clone();
         let mut connected = Vec::new();
         world.players.iter_players(|uuid, player| {
@@ -386,12 +381,15 @@ impl VaultBlockEntity {
     ) -> VaultState {
         self.update_connected_players_within_range(world, pos, range);
         let mut state = self.state.lock();
-        state.state_updating_resumes_at =
-            world.game_time() + CONNECTED_PLAYERS_PAUSE_TICKS;
+        state.state_updating_resumes_at = world.game_time() + CONNECTED_PLAYERS_PAUSE_TICKS;
         let active = !state.connected_players.is_empty();
         state.server_dirty = true;
         drop(state);
-        if active { VaultState::Active } else { VaultState::Inactive }
+        if active {
+            VaultState::Active
+        } else {
+            VaultState::Inactive
+        }
     }
 
     /// Vanilla `VaultBlockEntity.Server.setVaultState` (`VaultState.onTransition`).
@@ -403,11 +401,7 @@ impl VaultBlockEntity {
         next: VaultState,
     ) {
         let next_state = current_state.set_value(&BlockStateProperties::VAULT_STATE, next);
-        world.set_block(
-            pos,
-            next_state,
-            steel_utils::types::UpdateFlags::UPDATE_ALL,
-        );
+        world.set_block(pos, next_state, steel_utils::types::UpdateFlags::UPDATE_ALL);
         let is_ominous = current_state.get_value(&BlockStateProperties::OMINOUS);
         let ominous_param = i32::from(is_ominous);
         let current = current_state.get_value(&BlockStateProperties::VAULT_STATE);
@@ -431,7 +425,7 @@ impl VaultBlockEntity {
                 state.set_display_item(ItemStack::empty());
                 drop(state);
                 world.level_event(
-                    vanilla_level_events::ANIMATION_VAULT_DEACTIVATE,
+                    level_events::ANIMATION_VAULT_DEACTIVATE,
                     pos,
                     ominous_param,
                     None,
@@ -442,7 +436,7 @@ impl VaultBlockEntity {
                     self.cycle_display_item_from_loot_table(world, pos);
                 }
                 world.level_event(
-                    vanilla_level_events::ANIMATION_VAULT_ACTIVATE,
+                    level_events::ANIMATION_VAULT_ACTIVATE,
                     pos,
                     ominous_param,
                     None,
@@ -479,11 +473,8 @@ impl VaultBlockEntity {
 }
 
 /// Vanilla `VaultBlockEntity.Server.getRandomDisplayItemFromLootTable`.
-fn random_display_item(
-    world: &Arc<World>,
-    pos: BlockPos,
-    loot_table_id: &Identifier,
-) -> ItemStack {
+fn random_display_item(world: &Arc<World>, pos: BlockPos, loot_table_id: &Identifier) -> ItemStack {
+    let _ = (world, pos);
     let Some(table) = REGISTRY.loot_tables.by_key(loot_table_id) else {
         return ItemStack::empty();
     };
@@ -517,7 +508,11 @@ fn resolve_items_to_eject(
     };
     let mut rng = rand::rng();
     let mut ctx = LootContext::new(&mut rng)
-        .with_origin(f64::from(pos.x()) + 0.5, f64::from(pos.y()), f64::from(pos.z()) + 0.5)
+        .with_origin(
+            f64::from(pos.x()) + 0.5,
+            f64::from(pos.y()),
+            f64::from(pos.z()) + 0.5,
+        )
         .with_tool(inserted);
     let _ = (world, player);
     table.get_random_items(&mut ctx)
@@ -532,12 +527,7 @@ fn eject_result_item(world: &Arc<World>, pos: BlockPos, item: ItemStack) {
         f64::from(pos.z()) + 0.5,
     );
     world.spawn_item_with_velocity(spawn_pos, item, DVec3::new(0.0, 0.2, 0.0));
-    world.level_event(
-        vanilla_level_events::ANIMATION_VAULT_EJECT_ITEM,
-        pos,
-        0,
-        None,
-    );
+    world.level_event(level_events::ANIMATION_VAULT_EJECT_ITEM, pos, 0, None);
     world.play_sound(
         &sound_events::BLOCK_VAULT_EJECT_ITEM,
         SoundSource::Blocks,
@@ -584,8 +574,7 @@ impl BlockEntity for VaultBlockEntity {
                     }
                 }
             }
-            state.total_ejections_needed =
-                read_int_or(&server_data, "total_ejections_needed", 0);
+            state.total_ejections_needed = read_int_or(&server_data, "total_ejections_needed", 0);
         }
 
         if let Some(shared_data) = view.compound("shared_data") {
@@ -612,10 +601,7 @@ impl BlockEntity for VaultBlockEntity {
 
         let mut server_data = NbtCompound::new();
         server_data.insert("rewarded_players", write_uuid_list(&state.rewarded_players));
-        server_data.insert(
-            "state_updating_resumes_at",
-            state.state_updating_resumes_at,
-        );
+        server_data.insert("state_updating_resumes_at", state.state_updating_resumes_at);
         let items: Vec<NbtCompound> = state
             .items_to_eject
             .iter()
@@ -633,11 +619,11 @@ impl BlockEntity for VaultBlockEntity {
         if !state.display_item.is_empty() {
             shared_data.insert("display_item", state.display_item.to_nbt_tag_ref());
         }
-        shared_data.insert("connected_players", write_uuid_list(&state.connected_players));
         shared_data.insert(
-            "connected_particles_range",
-            state.connected_particles_range,
+            "connected_players",
+            write_uuid_list(&state.connected_players),
         );
+        shared_data.insert("connected_particles_range", state.connected_particles_range);
         nbt.insert("shared_data", shared_data);
     }
 
@@ -648,11 +634,11 @@ impl BlockEntity for VaultBlockEntity {
         if !state.display_item.is_empty() {
             shared_data.insert("display_item", state.display_item.to_nbt_tag_ref());
         }
-        shared_data.insert("connected_players", write_uuid_list(&state.connected_players));
         shared_data.insert(
-            "connected_particles_range",
-            state.connected_particles_range,
+            "connected_players",
+            write_uuid_list(&state.connected_players),
         );
+        shared_data.insert("connected_particles_range", state.connected_particles_range);
         let mut nbt = NbtCompound::new();
         nbt.insert("shared_data", shared_data);
         Some(nbt)
@@ -665,9 +651,7 @@ impl BlockEntity for VaultBlockEntity {
 
         // Vanilla `VaultBlockEntity.Server.shouldCycleDisplayItem`.
         if world.game_time() % DISPLAY_CYCLE_TICK_RATE == 0 && current == VaultState::Active {
-            let can_eject = {
-                !self.state.lock().config.key_item.is_empty()
-            };
+            let can_eject = { !self.state.lock().config.key_item.is_empty() };
             if can_eject {
                 self.cycle_display_item_from_loot_table(world, pos);
             } else {
@@ -706,10 +690,7 @@ impl BlockEntity for VaultBlockEntity {
                     } else {
                         let (item, sound_progress) = {
                             let mut data = self.state.lock();
-                            let item = data
-                                .items_to_eject
-                                .pop()
-                                .unwrap_or_else(ItemStack::empty);
+                            let item = data.items_to_eject.pop().unwrap_or_else(ItemStack::empty);
                             let remaining = data.items_to_eject.len().max(1) as f32;
                             let total = (data.total_ejections_needed.max(1)) as f32;
                             let progress = 1.0 - total.recip() * (remaining - 1.0);
@@ -738,10 +719,10 @@ impl BlockEntity for VaultBlockEntity {
         // Vanilla `Server.tick` dirty flush: `setChanged`, plus a block update for shared data.
         let (server_dirty, shared_dirty) = {
             let mut data = self.state.lock();
-            (std::mem::replace(&mut data.server_dirty, false), std::mem::replace(
-                &mut data.shared_dirty,
-                false,
-            ))
+            (
+                std::mem::replace(&mut data.server_dirty, false),
+                std::mem::replace(&mut data.shared_dirty, false),
+            )
         };
         if server_dirty || shared_dirty {
             BlockEntity::set_changed(self);

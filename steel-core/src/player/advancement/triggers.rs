@@ -10,16 +10,18 @@
 
 use std::sync::Arc;
 
-use crate::entity::{Entity, entity_loot_ref, living_loot_equipment};
+use crate::entity::{Entity, entity_loot_ref, living_loot_equipment, loot_equipment};
 use crate::player::Player;
-use crate::world::World;
+use crate::world::{LevelReader as _, World};
+use steel_registry::REGISTRY;
 use steel_registry::advancement::predicates::{
     DamageView, EffectInstanceView, EntityComponentsPredicate, EntityView, EntityViewFlags,
     LevelView, PlayerView,
 };
 use steel_registry::advancement::triggers::{EventBase, TriggerEvent};
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+use steel_registry::equipment::EquipmentSlot;
 use steel_registry::item_stack::ItemStack;
-use steel_registry::{REGISTRY, RegistryExt};
 use steel_utils::{BlockPos, BlockStateId, Identifier};
 
 /// [`LevelView`] over a live [`World`] at one position.
@@ -65,11 +67,14 @@ impl LevelView for WorldLevelView<'_> {
 
     fn fluid_at(&self, position: (f64, f64, f64)) -> Option<&Identifier> {
         let state = crate::fluid::state::get_fluid_state(self.world, block_pos(position));
-        Some(&state.fluid_type().key)
+        Some(&state.fluid_id.key)
     }
 
     fn light_at(&self, position: (f64, f64, f64)) -> i32 {
-        i32::from(self.world.get_max_local_raw_brightness(block_pos(position)))
+        i32::from(
+            self.world
+                .max_local_raw_brightness(block_pos(position), self.world.sky_darkening()),
+        )
     }
 
     fn is_smokey_at(&self, position: (f64, f64, f64)) -> bool {
@@ -112,11 +117,11 @@ pub fn entity_view<'a>(
                 .active_mob_effects()
                 .into_iter()
                 .map(|effect| EffectInstanceView {
-                    effect: &effect.effect.key,
-                    amplifier: effect.amplifier,
-                    duration: effect.duration,
-                    ambient: effect.ambient,
-                    visible: effect.visible,
+                    effect: &effect.effect().key,
+                    amplifier: effect.amplifier(),
+                    duration: effect.duration(),
+                    ambient: effect.is_ambient(),
+                    visible: effect.is_visible(),
                 })
                 .collect()
         })
@@ -139,7 +144,7 @@ pub fn entity_view<'a>(
             is_flying,
             is_baby: loot_ref.flags.is_baby,
         },
-        equipment: loot_ref.equipment,
+        equipment,
         effects,
         components: EntityComponentsPredicate {
             cat_variant: None,
@@ -147,15 +152,15 @@ pub fn entity_view<'a>(
             wolf_variant: None,
             sheep_color: loot_ref.sheep_color,
             sheep_sheared: loot_ref.sheep_sheared,
-            chicken_variant: loot_ref.chicken_variant,
+            chicken_variant: loot_ref.chicken_variant.cloned(),
         },
         vehicle: None,
         passenger: None,
         player: None,
         lightning: None,
-        held_item: entity
-            .as_living_entity()
-            .map(|living| living.main_hand_item()),
+        held_item: loot_ref
+            .equipment
+            .map(|equipment| equipment.get(EquipmentSlot::MainHand)),
     }
 }
 
@@ -260,8 +265,8 @@ pub fn raise_villager_trade(player: &Player, villager: &dyn Entity, result: &Ite
     let known = player.recipe_book().unlocked_identifiers().to_vec();
     let player_entity = player_view(player, &level, Some(&equipment), &known);
     let base = event_base(&player_entity, &level, origin);
-    let villager_equipment = living_loot_equipment(villager);
-    let villager_view = entity_view(villager, &level, Some(&villager_equipment));
+    let villager_equipment = loot_equipment(villager);
+    let villager_view = entity_view(villager, &level, villager_equipment.as_ref());
     raise(
         player,
         &Identifier::vanilla_static("villager_trade"),
@@ -291,10 +296,10 @@ pub fn raise_cured_zombie_villager(
     let known = player.recipe_book().unlocked_identifiers().to_vec();
     let player_entity = player_view(player, &level, Some(&equipment), &known);
     let base = event_base(&player_entity, &level, origin);
-    let zombie_equipment = living_loot_equipment(zombie);
-    let zombie_view = entity_view(zombie, &level, Some(&zombie_equipment));
-    let villager_equipment = living_loot_equipment(villager);
-    let villager_view = entity_view(villager, &level, Some(&villager_equipment));
+    let zombie_equipment = loot_equipment(zombie);
+    let zombie_view = entity_view(zombie, &level, zombie_equipment.as_ref());
+    let villager_equipment = loot_equipment(villager);
+    let villager_view = entity_view(villager, &level, villager_equipment.as_ref());
     raise(
         player,
         &Identifier::vanilla_static("cured_zombie_villager"),
@@ -344,7 +349,6 @@ pub fn raise_hero_of_the_village(
 /// zero.
 fn damage_view<'a>(
     source: &'a crate::entity::damage::DamageSource,
-    level: &'a dyn LevelView,
     source_view: &'a Option<EntityView<'a>>,
     direct_view: &'a Option<EntityView<'a>>,
 ) -> DamageView<'a> {
@@ -377,23 +381,23 @@ pub fn raise_player_killed_entity(
     let known = player.recipe_book().unlocked_identifiers().to_vec();
     let player_entity = player_view(player, &level, Some(&equipment), &known);
     let base = event_base(&player_entity, &level, origin);
-    let victim_equipment = living_loot_equipment(victim);
-    let victim_view = entity_view(victim, &level, Some(&victim_equipment));
+    let victim_equipment = loot_equipment(victim);
+    let victim_view = entity_view(victim, &level, victim_equipment.as_ref());
 
     let source_equipment = killing_blow
         .causing_entity()
-        .map(|entity| living_loot_equipment(&**entity));
+        .and_then(|entity| loot_equipment(&**entity));
     let source_view = killing_blow
         .causing_entity()
         .map(|entity| entity_view(&**entity, &level, source_equipment.as_ref()));
     let direct_equipment = killing_blow
         .direct_entity()
-        .map(|entity| living_loot_equipment(&**entity));
+        .and_then(|entity| loot_equipment(&**entity));
     let direct_view = killing_blow
         .direct_entity()
         .map(|entity| entity_view(&**entity, &level, direct_equipment.as_ref()));
 
-    let damage = damage_view(killing_blow, &level, &source_view, &direct_view);
+    let damage = damage_view(killing_blow, &source_view, &direct_view);
     raise(
         player,
         &Identifier::vanilla_static("player_killed_entity"),

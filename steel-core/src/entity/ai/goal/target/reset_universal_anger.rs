@@ -35,7 +35,7 @@ impl ResetUniversalAngerTargetGoal {
     }
 
     /// Vanilla `ResetUniversalAngerTargetGoal.getNearbyMobsOfSameType` alert pass.
-    fn alert_others(&self, mob: &dyn PathfinderMob) {
+    fn alert_others(mob: &dyn PathfinderMob) {
         let Some(world) = mob.level() else {
             return;
         };
@@ -94,7 +94,7 @@ impl Goal for ResetUniversalAngerTargetGoal {
         neutral.forget_current_target_and_refresh_universal_anger();
 
         if self.alert_others_of_same_type {
-            self.alert_others(mob);
+            Self::alert_others(mob);
         }
     }
 }

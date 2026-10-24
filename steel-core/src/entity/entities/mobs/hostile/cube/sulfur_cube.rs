@@ -43,6 +43,7 @@
 //!   when `getPortalCooldown() > 0`; Steel's [`World::explode_full`] accepts a damage calculator but
 //!   has no nether-portal-exempt implementation yet.
 
+use std::f32::consts::TAU;
 use std::mem;
 use std::sync::{Arc, Weak};
 
@@ -61,6 +62,7 @@ use steel_registry::entity_type::{EntityAttachment, EntityDimensions, EntityType
 use steel_registry::item_stack::ItemStack;
 use steel_registry::particle_type::ParticleData;
 use steel_registry::sound_event::SoundEventRef;
+use steel_registry::stat::vanilla_stat_types;
 use steel_registry::sulfur_cube_archetype::{
     SulfurContactDamage, SulfurCubeArchetype, SulfurExplosionData, SulfurKnockbackModifiers,
     SulfurSoundSettings,
@@ -71,9 +73,10 @@ use steel_registry::vanilla_game_rules::{MOB_GRIEFING, TNT_EXPLODES};
 use steel_registry::vanilla_item_tags::ItemTag;
 use steel_registry::{
     ItemStackTemplate, REGISTRY, RegistryExt, sound_events, vanilla_attributes,
-    vanilla_game_events, vanilla_items, vanilla_particle_types,
+    vanilla_game_events, vanilla_items, vanilla_mob_effects, vanilla_particle_types,
 };
 use steel_utils::locks::SyncMutex;
+use steel_utils::translations::BLOCK_MINECRAFT_TNT_DISABLED;
 use steel_utils::types::InteractionHand;
 use steel_utils::{
     BlockPos, BlockStateId, ChunkPos, Downcast as _, DowncastType, DowncastTypeKey, Identifier,
@@ -91,7 +94,7 @@ use crate::entity::entities::objects::explosives::PrimedTntEntity;
 use crate::entity::entities::objects::items::ItemEntity;
 use crate::entity::leash::Leashable;
 use crate::entity::{
-    AgeableMob, Animal, ENTITIES, Entity, EntityBase, EntityBaseLoad, EntityPose,
+    AgeableMob, ENTITIES, Entity, EntityBase, EntityBaseLoad, EntityEventSource as _, EntityPose,
     EntitySpawnReason, EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase,
     PathfinderMob, RemovalReason, SharedEntity, SpawnGroupData, next_entity_id,
 };
@@ -530,6 +533,10 @@ impl SulfurCubeEntity {
 
     /// Vanilla `SulfurCube.fromBucket`.
     #[must_use]
+    #[expect(
+        clippy::wrong_self_convention,
+        reason = "vanilla `SulfurCube.fromBucket` getter; the name is shared with the other bucketable entities"
+    )]
     pub fn from_bucket(&self) -> bool {
         *self.entity_data.lock().from_bucket.get()
     }
@@ -582,7 +589,7 @@ impl SulfurCubeEntity {
 
     /// Vanilla `SulfurCube.matchingArchetypes`.
     #[must_use]
-    pub fn matching_archetypes(&self, stack: &ItemStack) -> Vec<&'static SulfurCubeArchetype> {
+    pub fn matching_archetypes(stack: &ItemStack) -> Vec<&'static SulfurCubeArchetype> {
         if stack.is_empty() {
             return Vec::new();
         }
@@ -610,14 +617,14 @@ impl SulfurCubeEntity {
             mem::replace(&mut state.last_body_item, current.clone())
         };
 
-        if !current.is_empty() {
+        if current.is_empty() {
+            self.register_goals();
+        } else {
             PathfinderMob::remove_all_goals(self, |_| true);
             self.set_mob_speed(0.0);
-        } else {
-            self.register_goals();
         }
 
-        for archetype in self.matching_archetypes(&previous) {
+        for archetype in Self::matching_archetypes(&previous) {
             for entry in &archetype.attribute_modifiers {
                 let Some(attribute) = REGISTRY.attributes.by_key(&entry.attribute) else {
                     continue;
@@ -634,7 +641,7 @@ impl SulfurCubeEntity {
         let mut knockback_modifiers = None;
         let mut sound_settings = None;
 
-        for archetype in self.matching_archetypes(&current) {
+        for archetype in Self::matching_archetypes(&current) {
             if archetype.buoyant {
                 floats_in_liquids = true;
             }
@@ -782,7 +789,7 @@ impl SulfurCubeEntity {
                 let count = (size * 16.0) as i32;
                 let position = self.position();
                 for _ in 0..count {
-                    let dir = rand::random::<f32>() * f32::consts::TAU;
+                    let dir = rand::random::<f32>() * TAU;
                     let d = rand::random::<f32>() * 0.5 + 0.5;
                     let xd = f64::from(dir.sin() * radius * d);
                     let zd = f64::from(dir.cos() * radius * d);
@@ -878,13 +885,13 @@ impl SulfurCubeEntity {
 
     /// Vanilla `SulfurCube.getAbsorbSound`.
     #[must_use]
-    pub fn absorb_sound(&self) -> SoundEventRef {
+    pub fn absorb_sound() -> SoundEventRef {
         &sound_events::ENTITY_SULFUR_CUBE_ABSORB
     }
 
     /// Vanilla `SulfurCube.getEjectSound`.
     #[must_use]
-    pub fn eject_sound(&self) -> SoundEventRef {
+    pub fn eject_sound() -> SoundEventRef {
         &sound_events::ENTITY_SULFUR_CUBE_EJECT
     }
 
@@ -1164,7 +1171,7 @@ impl SulfurCubeEntity {
 
         self.set_body_item(held_item.copy_with_count(1));
         self.sync_archetype_from_body();
-        self.play_sound(self.absorb_sound(), 1.0, 1.0);
+        self.play_sound(Self::absorb_sound(), 1.0, 1.0);
         true
     }
 
@@ -1196,7 +1203,7 @@ impl SulfurCubeEntity {
             .lock()
             .set(EquipmentSlot::Body, ItemStack::empty());
         let _ = self.spawn_at_location_with_offset(item_stack_to_shear, offset);
-        self.play_sound(self.eject_sound(), 1.0, 1.0);
+        self.play_sound(Self::eject_sound(), 1.0, 1.0);
         self.state.lock().pickup_timer = PICKUP_TIMER_DURATION;
         self.sync_archetype_from_body();
     }
@@ -1212,20 +1219,20 @@ impl SulfurCubeEntity {
 
     /// Vanilla `SulfurCube.getBucketItemStack`.
     #[must_use]
-    pub fn bucket_item_stack(&self) -> ItemStack {
+    pub fn bucket_item_stack() -> ItemStack {
         ItemStack::new(&vanilla_items::SULFUR_CUBE_BUCKET)
     }
 
     /// Vanilla `SulfurCube.getPickupSound`.
     #[must_use]
-    pub fn pickup_sound(&self) -> SoundEventRef {
+    pub fn pickup_sound() -> SoundEventRef {
         &sound_events::ITEM_BUCKET_FILL_SULFUR_CUBE
     }
 
     /// Vanilla `SulfurCube.saveToBucketTag` (`Bucketable.saveDefaultDataToBucketTag` plus
     /// the sulfur-cube content and age payload).
     fn create_bucket_stack(&self) -> ItemStack {
-        let mut stack = self.bucket_item_stack();
+        let mut stack = Self::bucket_item_stack();
 
         let mut tag = NbtCompound::new();
         if self.is_no_ai() {
@@ -1307,7 +1314,7 @@ impl SulfurCubeEntity {
             return false;
         }
 
-        self.play_sound(self.pickup_sound(), 1.0, 1.0);
+        self.play_sound(Self::pickup_sound(), 1.0, 1.0);
         let bucket = self.create_bucket_stack();
         let overflow = {
             let mut inventory = player.inventory.lock();
@@ -1416,7 +1423,7 @@ impl Goal for SulfurCubeRandomDirectionGoal {
             && (mob.on_ground()
                 || mob.is_in_water()
                 || mob.is_in_lava()
-                || mob.has_mob_effect(&steel_registry::vanilla_mob_effects::LEVITATION))
+                || mob.has_mob_effect(vanilla_mob_effects::LEVITATION))
     }
 
     fn tick(&mut self, mob: &dyn PathfinderMob, _entity: &SharedEntity) {
@@ -2025,7 +2032,7 @@ impl Mob for SulfurCubeEntity {
         }
 
         self.set_body_item(item_stack.copy_with_count(1));
-        self.play_sound(self.absorb_sound(), 1.0, 1.0);
+        self.play_sound(Self::absorb_sound(), 1.0, 1.0);
         self.sync_archetype_from_body();
 
         let chunk_pos = ChunkPos::from_entity_pos(item_entity.position());
@@ -2119,7 +2126,7 @@ impl Mob for SulfurCubeEntity {
         };
         if !world.get_game_rule(&TNT_EXPLODES) {
             player.send_overlay_message(&TextComponent::translated(
-                steel_utils::translations::BLOCK_MINECRAFT_TNT_DISABLED.msg(),
+                BLOCK_MINECRAFT_TNT_DISABLED.msg(),
             ));
             return InteractionResult::Pass;
         }
@@ -2135,10 +2142,7 @@ impl Mob for SulfurCubeEntity {
             }
         }
 
-        player.award_stat(
-            &steel_registry::stat::vanilla_stat_types::ITEM_USED,
-            held_item.item(),
-        );
+        player.award_stat(&vanilla_stat_types::ITEM_USED, held_item.item());
         InteractionResult::SuccessServer
     }
 

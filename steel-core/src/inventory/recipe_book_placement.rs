@@ -6,6 +6,7 @@
 //! patterns), and report whether the client should be shown a ghost preview
 //! because the ingredients are missing.
 
+use steel_registry::data_components::vanilla_components::MAX_STACK_SIZE;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::ItemRef;
 use steel_registry::recipe::{
@@ -425,9 +426,9 @@ fn calculate_amount_to_craft(
 
 /// Vanilla `ServerPlaceRecipe.clampToMaxStackSize`.
 fn clamp_to_max_stack_size(value: i32, items: &[ItemRef]) -> i32 {
-    items
-        .iter()
-        .fold(value, |value, item| value.min(item.max_stack_size()))
+    items.iter().fold(value, |value, item| {
+        value.min(item.components.get(MAX_STACK_SIZE).unwrap_or(1))
+    })
 }
 
 /// Vanilla `ServerPlaceRecipe.moveItemToGrid`.

@@ -17,6 +17,7 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::{CTakeItemEntity, SoundSource};
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::data_components::vanilla_components::POTION_CONTENTS;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::equipment::EquipmentSlot;
@@ -25,8 +26,8 @@ use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::AllayEntityData;
 use steel_registry::vanilla_item_tags::ItemTag;
 use steel_registry::{
-    REGISTRY, TaggedRegistryExt as _, sound_events, vanilla_attributes, vanilla_entities,
-    vanilla_game_rules,
+    REGISTRY, TaggedRegistryExt as _, sound_events, vanilla_attributes, vanilla_blocks,
+    vanilla_entities, vanilla_game_rules,
 };
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::InteractionHand;
@@ -142,13 +143,13 @@ impl AllayEntity {
 
     /// Vanilla `Allay.getInventory`.
     #[must_use]
-    pub fn get_inventory(&self) -> &SyncMutex<InventoryCarrier> {
+    pub const fn get_inventory(&self) -> &SyncMutex<InventoryCarrier> {
         &self.inventory
     }
 
     /// Returns the carried items (vanilla `InventoryCarrier`).
     #[must_use]
-    pub fn carried_items(&self) -> &SyncMutex<InventoryCarrier> {
+    pub const fn carried_items(&self) -> &SyncMutex<InventoryCarrier> {
         &self.inventory
     }
 
@@ -227,9 +228,9 @@ impl AllayEntity {
     #[must_use]
     pub fn is_close_enough_to_noteblock(&self, pos: BlockPos) -> bool {
         let me = self.block_position();
-        let dx = (pos.x() - me.x()) as f64;
-        let dy = (pos.y() - me.y()) as f64;
-        let dz = (pos.z() - me.z()) as f64;
+        let dx = f64::from(pos.x() - me.x());
+        let dy = f64::from(pos.y() - me.y());
+        let dz = f64::from(pos.z() - me.z());
         dx * dx + dy * dy + dz * dz <= MAX_NOTEBLOCK_DISTANCE * MAX_NOTEBLOCK_DISTANCE
     }
 
@@ -243,11 +244,10 @@ impl AllayEntity {
             return true;
         }
 
-        use steel_registry::blocks::block_state_ext::BlockStateExt as _;
         let Some(world) = self.level() else {
             return true;
         };
-        world.get_block_state(jukebox_pos).get_block() != &steel_registry::vanilla_blocks::JUKEBOX
+        world.get_block_state(jukebox_pos).get_block() != &vanilla_blocks::JUKEBOX
     }
 
     /// Vanilla `Allay.isOnPickupCooldown`: `ITEM_PICKUP_COOLDOWN_TICKS` present.
@@ -303,7 +303,7 @@ impl AllayEntity {
     }
 
     /// Vanilla `Allay.removeInteractionItem`: consume one of the player's held items.
-    fn remove_interaction_item(&self, player: &Player, hand: InteractionHand) {
+    fn remove_interaction_item(player: &Player, hand: InteractionHand) {
         player
             .inventory
             .lock()
@@ -319,40 +319,6 @@ impl AllayEntity {
         }
 
         item1.get(POTION_CONTENTS) == item2.get(POTION_CONTENTS)
-    }
-
-    /// Vanilla `BehaviorUtils.throwItem` from this allay toward `target_pos`.
-    fn throw_item_from_here(&self, item: ItemStack, target_pos: DVec3) {
-        /// Vanilla `BehaviorUtils.throwItem`'s `throwVelocity`.
-        const THROW_VELOCITY: f64 = 0.3;
-        /// Vanilla `BehaviorUtils.throwItem`'s `handYDistanceFromEye`.
-        const HAND_Y_DISTANCE_FROM_EYE: f64 = 0.3;
-
-        if item.is_empty() {
-            return;
-        }
-        let Some(world) = self.level() else {
-            return;
-        };
-
-        let mut velocity = target_pos - self.position();
-        velocity = if velocity.length_squared() < 1.0e-5 {
-            DVec3::ZERO
-        } else {
-            velocity.normalize() * THROW_VELOCITY
-        };
-
-        let position = DVec3::new(
-            self.position().x,
-            self.get_eye_y() - HAND_Y_DISTANCE_FROM_EYE,
-            self.position().z,
-        );
-
-        let Some(item_entity) = world.spawn_item_with_velocity(position, item, velocity) else {
-            return;
-        };
-        item_entity.set_thrower(self.uuid());
-        item_entity.set_default_pickup_delay();
     }
 
     fn update_dirty_mob_effect_entity_data(&self) {
@@ -666,7 +632,7 @@ impl Mob for AllayEntity {
         };
         if duplicates_allays {
             self.duplicate_allay();
-            self.remove_interaction_item(player, hand);
+            Self::remove_interaction_item(player, hand);
             return InteractionResult::Success;
         }
 
@@ -676,7 +642,7 @@ impl Mob for AllayEntity {
                 InteractionHand::MainHand,
                 interaction_item.copy_with_count(1),
             );
-            self.remove_interaction_item(player, hand);
+            Self::remove_interaction_item(player, hand);
             if let Some(world) = self.level() {
                 world.play_sound(
                     &sound_events::ENTITY_ALLAY_ITEM_GIVEN,

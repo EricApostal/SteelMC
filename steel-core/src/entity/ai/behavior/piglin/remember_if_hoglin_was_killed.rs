@@ -3,7 +3,7 @@
 use steel_registry::vanilla_entities;
 
 use super::ai;
-use crate::entity::LivingEntity as _;
+use crate::entity::LivingEntity;
 use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
 use crate::entity::ai::brain::memory::MemoryStatus;
 use crate::entity::ai::brain::memory::module_type as mem;

@@ -12,11 +12,15 @@ use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
-use steel_registry::particle_type::ParticleData;
+use steel_registry::particle_type::{BlockParticleOption, ParticleData};
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::CreakingEntityData;
-use steel_registry::{sound_events, vanilla_attributes, vanilla_blocks, vanilla_particle_types};
+use steel_registry::{
+    sound_events, vanilla_attributes, vanilla_blocks, vanilla_entities, vanilla_game_events,
+    vanilla_items, vanilla_particle_types,
+};
 use steel_utils::Downcast as _;
+use steel_utils::entity_events::EntityStatus;
 use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
@@ -192,9 +196,9 @@ impl CreakingEntity {
     pub fn activate(&self, player: &SharedEntity) {
         {
             let mut brain = self.brain.lock();
-            brain.set_memory(&module_type::ATTACK_TARGET, Some(player.clone()));
+            brain.set_memory(&module_type::ATTACK_TARGET, Some(Arc::clone(player)));
         }
-        self.game_event(&steel_registry::vanilla_game_events::ENTITY_ACTION);
+        self.game_event(&vanilla_game_events::ENTITY_ACTION);
         self.play_sound(&sound_events::ENTITY_CREAKING_ACTIVATE, 1.0, 1.0);
         self.set_active(true);
     }
@@ -205,7 +209,7 @@ impl CreakingEntity {
             let mut brain = self.brain.lock();
             brain.erase_memory(&module_type::ATTACK_TARGET);
         }
-        self.game_event(&steel_registry::vanilla_game_events::ENTITY_ACTION);
+        self.game_event(&vanilla_game_events::ENTITY_ACTION);
         self.play_sound(&sound_events::ENTITY_CREAKING_DEACTIVATE, 1.0, 1.0);
         self.set_active(false);
     }
@@ -239,7 +243,7 @@ impl CreakingEntity {
 
             let mut disguised = false;
             player_living.with_equipment_slot(EquipmentSlot::Head, &mut |stack| {
-                disguised = stack.is(&steel_registry::vanilla_items::CARVED_PUMPKIN);
+                disguised = stack.is(&vanilla_items::CARVED_PUMPKIN);
             });
             if (!active || !disguised) && self.is_looking_at_me(player, GAZE_TOLERANCE) {
                 if active {
@@ -310,9 +314,7 @@ impl CreakingEntity {
             world.send_particles(
                 ParticleData::new(
                     &vanilla_particle_types::BLOCK_CRUMBLE,
-                    steel_registry::particle_type::BlockParticleOption::new(
-                        vanilla_blocks::PALE_OAK_WOOD.default_state(),
-                    ),
+                    BlockParticleOption::new(vanilla_blocks::PALE_OAK_WOOD.default_state()),
                 ),
                 center,
                 100,
@@ -322,9 +324,7 @@ impl CreakingEntity {
             world.send_particles(
                 ParticleData::new(
                     &vanilla_particle_types::BLOCK_CRUMBLE,
-                    steel_registry::particle_type::BlockParticleOption::new(
-                        vanilla_blocks::CREAKING_HEART.default_state(),
-                    ),
+                    BlockParticleOption::new(vanilla_blocks::CREAKING_HEART.default_state()),
                 ),
                 center,
                 10,
@@ -333,11 +333,11 @@ impl CreakingEntity {
             );
         }
 
-        self.play_sound(self.death_sound_ref(), 1.0, 1.0);
+        self.play_sound(Self::death_sound_ref(), 1.0, 1.0);
         self.set_removed(RemovalReason::Discarded);
     }
 
-    fn death_sound_ref(&self) -> SoundEventRef {
+    fn death_sound_ref() -> SoundEventRef {
         &sound_events::ENTITY_CREAKING_DEATH
     }
 }
@@ -364,7 +364,7 @@ impl Entity for CreakingEntity {
         let can_move = self.can_move();
         let now_can_move = self.check_can_move();
         if now_can_move != can_move {
-            self.game_event(&steel_registry::vanilla_game_events::ENTITY_ACTION);
+            self.game_event(&vanilla_game_events::ENTITY_ACTION);
             if now_can_move {
                 self.play_sound(&sound_events::ENTITY_CREAKING_UNFREEZE, 1.0, 1.0);
             } else {
@@ -443,14 +443,21 @@ impl Entity for CreakingEntity {
         self.play_sound(&sound_events::ENTITY_CREAKING_STEP, 0.15, 1.0);
     }
 
-    /// Vanilla `Creaking.isPushable` requires `canMove`.
+    /// Vanilla `Creaking.isPushable` requires `canMove` over the inherited `Entity.isPushable`.
     fn is_pushable(&self) -> bool {
-        self.can_move() && Entity::is_pushable(self)
+        // `Entity::is_pushable` (the inherited default) cannot be reached from an override: a
+        // UFCS call on `self` re-enters this method, so its body is inlined. `Entity::is_alive`
+        // is Steel's `LivingEntity.isAlive` (not removed and health above zero), which is what
+        // vanilla's `isAlive()` dispatches to.
+        self.can_move() && Entity::is_alive(self) && !self.is_spectator() && !self.on_climbable()
     }
 
-    /// Vanilla `Creaking.fireImmune` is true while heart-bound.
+    /// Vanilla `Creaking.fireImmune` is true while heart-bound, else the inherited
+    /// `Entity.fireImmune` (`EntityType.fireImmune`).
     fn fire_immune(&self) -> bool {
-        self.is_heart_bound() || Entity::fire_immune(self)
+        // `Entity::fire_immune` cannot be reached from an override; its default body
+        // (`self.entity_type().fire_immune`) is inlined here.
+        self.is_heart_bound() || self.entity_type().fire_immune
     }
 
     fn save_additional(&self, nbt: &mut NbtCompound) {
@@ -491,15 +498,14 @@ impl Entity for CreakingEntity {
             .direct_entity()
             .is_some_and(|direct| direct.as_living_entity().is_some());
         let direct_is_projectile = source.direct_entity().is_some_and(|direct| {
-            direct.as_projectile().is_some()
-                || direct.entity_type() == &steel_registry::vanilla_entities::ARROW
+            direct.as_projectile().is_some() || direct.entity_type() == &vanilla_entities::ARROW
         });
         if !direct_is_living && !direct_is_projectile && responsible_player.is_none() {
             return false;
         }
 
         *self.invulnerability_animation_remaining_ticks.lock() = INVULNERABILITY_ANIMATION_DURATION;
-        self.game_event(&steel_registry::vanilla_game_events::ENTITY_ACTION);
+        self.game_event(&vanilla_game_events::ENTITY_ACTION);
 
         if let Some(heart_entity) = world.get_block_entity(home_pos)
             && let Some(heart) = heart_entity.downcast_ref::<CreakingHeartBlockEntity>()
@@ -616,7 +622,7 @@ impl Mob for CreakingEntity {
             return;
         }
         *self.attack_animation_remaining_ticks.lock() = ATTACK_ANIMATION_DURATION;
-        self.broadcast_entity_event(steel_utils::entity_events::EntityStatus::StartAttacking);
+        self.broadcast_entity_event(EntityStatus::StartAttacking);
     }
 }
 
@@ -631,6 +637,7 @@ impl PathfinderMob for CreakingEntity {
 
 #[cfg(test)]
 mod tests {
+    use simdnbt::owned::NbtCompound;
     use std::sync::Weak;
 
     use glam::DVec3;
@@ -656,9 +663,34 @@ mod tests {
             Some(steel_utils::BlockPos::new(1, 64, 2))
         );
 
-        let mut nbt = simdnbt::owned::NbtCompound::new();
+        let mut nbt = NbtCompound::new();
         creaking.save_additional(&mut nbt);
         assert_eq!(nbt.int("home_pos_y"), Some(64));
         assert_eq!(creaking.entity_type(), &vanilla_entities::CREAKING);
+    }
+
+    #[test]
+    fn creaking_pushable_and_fire_immune_use_the_inherited_defaults() {
+        init_vanilla_registry();
+        let creaking =
+            CreakingEntity::new(&vanilla_entities::CREAKING, 1, DVec3::ZERO, Weak::new());
+
+        // `is_pushable` = `can_move() && <inherited Entity::is_pushable>`. Before the fix the
+        // UFCS fallback re-entered `is_pushable` and stack-overflowed.
+        assert!(creaking.can_move());
+        assert!(creaking.is_pushable());
+
+        // Vanilla `Creaking.isPushable` is false whenever `canMove` is false.
+        creaking.entity_data.lock().can_move.set(false);
+        assert!(!creaking.is_pushable());
+
+        // `fire_immune` = `is_heart_bound() || <inherited Entity::fire_immune>`; the CREAKING
+        // entity type is not fire-immune, so only the heart bound makes it immune.
+        assert!(!creaking.is_heart_bound());
+        assert!(!creaking.fire_immune());
+
+        creaking.set_transient(steel_utils::BlockPos::new(1, 64, 2));
+        assert!(creaking.is_heart_bound());
+        assert!(creaking.fire_immune());
     }
 }

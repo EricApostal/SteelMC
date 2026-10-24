@@ -477,7 +477,7 @@ fn write_snbt_list(list: &simdnbt::owned::NbtList, out: &mut String) {
 
     out.push('[');
     let mut first = true;
-    let mut separator = |out: &mut String, first: &mut bool| {
+    let separator = |out: &mut String, first: &mut bool| {
         if *first {
             *first = false;
         } else {
@@ -712,7 +712,7 @@ impl PreparableReloadListener for FunctionLoader {
         let mut functions: HashMap<Identifier, Arc<Function>> = HashMap::new();
         let mut problems = Vec::new();
 
-        for (key, stack) in manager.list_resources(PackType::Server, "minecraft", "function") {
+        for (key, stack) in manager.list_resources(PackType::Server, "function") {
             let location: Identifier = key.parse().map_err(|error| PackError::Decode {
                 path: key.clone(),
                 message: format!("{error}"),
@@ -766,7 +766,7 @@ fn read_function_tags(
     problems: &mut Vec<String>,
 ) -> Result<HashMap<Identifier, Vec<Identifier>>, PackError> {
     let mut raw: HashMap<Identifier, Vec<String>> = HashMap::new();
-    for (key, stack) in manager.list_resources(PackType::Server, "minecraft", "tags/function") {
+    for (key, stack) in manager.list_resources(PackType::Server, "tags/function") {
         let Some(resource) = stack.first() else {
             continue;
         };

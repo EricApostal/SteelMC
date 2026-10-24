@@ -7,6 +7,9 @@ use steel_utils::types::InteractionHand;
 use crate::entity::PathfinderMob;
 use crate::entity::ai::goal::selector::{Goal, GoalControls};
 
+/// Vanilla `UseItemGoal.canUseSelector`: `Predicate<Mob>` over Steel's erased goal mob.
+type CanUseSelector = Box<dyn Fn(&dyn PathfinderMob) -> bool + Send>;
+
 /// Port of vanilla `UseItemGoal`.
 ///
 /// Equips `item` in the main hand and starts using it while `can_use_selector`
@@ -16,7 +19,7 @@ use crate::entity::ai::goal::selector::{Goal, GoalControls};
 pub struct UseItemGoal {
     item: ItemStack,
     finish_using_sound: Option<SoundEventRef>,
-    can_use_selector: Box<dyn Fn(&dyn PathfinderMob) -> bool + Send>,
+    can_use_selector: CanUseSelector,
 }
 
 impl UseItemGoal {

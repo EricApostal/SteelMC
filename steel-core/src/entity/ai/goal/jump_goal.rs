@@ -5,6 +5,8 @@
 //! `DolphinJumpGoal` adds the water-clear, surface-clear, breach and rotation logic, driven
 //! through the mob's navigation/velocity/rotation accessors.
 
+use std::cmp::Ordering;
+use std::f64::consts::PI;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::fluid::FluidStateExt as _;
 use steel_registry::{sound_events, vanilla_block_tags::BlockTag};
@@ -123,7 +125,7 @@ impl Goal for DolphinJumpGoal {
         let velocity = mob.velocity();
         let y = velocity.y as f32;
         let pitch = mob.rotation().1;
-        (!(y * y < PITCH_DAMP_LIMIT_SQR)
+        ((y * y).partial_cmp(&PITCH_DAMP_LIMIT_SQR) != Some(Ordering::Less)
             || pitch != 0.0
             || pitch.abs() >= PITCH_LATCH_LIMIT_DEGREES
             || !mob.is_in_water())
@@ -149,16 +151,16 @@ impl Goal for DolphinJumpGoal {
     }
 
     fn tick(&mut self, mob: &dyn PathfinderMob, _entity: &SharedEntity) {
-        if !self.breached {
-            if let Some(world) = mob.level() {
-                let in_water = world
-                    .get_block_state(mob.block_position())
-                    .get_fluid_state()
-                    .is_water();
-                self.breached = in_water;
-                if in_water {
-                    mob.play_sound(&sound_events::ENTITY_DOLPHIN_JUMP, 1.0, 1.0);
-                }
+        if !self.breached
+            && let Some(world) = mob.level()
+        {
+            let in_water = world
+                .get_block_state(mob.block_position())
+                .get_fluid_state()
+                .is_water();
+            self.breached = in_water;
+            if in_water {
+                mob.play_sound(&sound_events::ENTITY_DOLPHIN_JUMP, 1.0, 1.0);
             }
         }
 
@@ -169,7 +171,7 @@ impl Goal for DolphinJumpGoal {
             mob.set_rotation((yaw, rot_lerp(ROTATION_LERP_RATE, pitch, 0.0)));
         } else if velocity.length() > 1.0e-5 {
             let horizontal = (velocity.x * velocity.x + velocity.z * velocity.z).sqrt();
-            let rotation = (-velocity.y / horizontal).atan() * 180.0 / f64::consts::PI;
+            let rotation = (-velocity.y / horizontal).atan() * 180.0 / PI;
             mob.set_rotation((yaw, rotation as f32));
         }
     }

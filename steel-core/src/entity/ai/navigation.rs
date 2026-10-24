@@ -13,7 +13,7 @@ use crate::entity::ai::path::{Path, PathType, PathTypeCache, PathfindingContext}
 use crate::entity::ai::pathfinder::{PathFinder, PathRequest};
 use crate::entity::ai::walk::{NodeEvaluator, WalkNodeCollision, WalkNodeEvaluator};
 use crate::world::LevelReader;
-use crate::world::raycast::{ClipBlockShape, ClipFluid};
+use crate::world::{ClipBlockShape, ClipFluid};
 
 const DIRECT_TARGET_REACHED_DISTANCE_SQR: f64 = 2.500_000_3e-7;
 const DEFAULT_REQUIRED_PATH_LENGTH: f32 = 16.0;
@@ -893,10 +893,10 @@ impl PathNavigation {
                     mob,
                 )
         });
-        if is_close_enough_to_current_node || should_cut_corner {
-            if let Some(path) = self.path.as_mut() {
-                path.advance();
-            }
+        if (is_close_enough_to_current_node || should_cut_corner)
+            && let Some(path) = self.path.as_mut()
+        {
+            path.advance();
         }
 
         if self.path.as_ref().is_none_or(Path::is_done) {
@@ -1097,8 +1097,11 @@ impl Default for PathNavigation {
 
 #[cfg(test)]
 mod tests {
+    use crate::entity::entities::PigEntity;
+    use std::sync::Weak;
+
     use glam::DVec3;
-    use steel_registry::{REGISTRY, init_vanilla_registry, vanilla_blocks};
+    use steel_registry::{REGISTRY, init_vanilla_registry, vanilla_blocks, vanilla_entities};
     use steel_utils::{BlockPos, BlockStateId, WorldAabb};
     use steel_worldgen::density_functions::overworld::OverworldNoiseSettings;
 
@@ -1221,6 +1224,14 @@ mod tests {
     ) -> bool {
         let level = empty_level();
         navigation.move_to(&level, path, speed_modifier, mob_position)
+    }
+
+    /// A real but world-less mob for the navigation entry points that now take the
+    /// mob. The default `NavigationKind::Ground` only consults it through
+    /// `can_move_directly`, which returns false for ground navigation.
+    fn test_mob() -> PigEntity {
+        init_vanilla_registry();
+        PigEntity::new(&vanilla_entities::PIG, 1, DVec3::ZERO, Weak::new())
     }
 
     #[test]
@@ -1378,7 +1389,10 @@ mod tests {
 
         assert!(move_to(&mut navigation, path, 1.0, standing_in_water));
 
-        let target = navigation.next_move_target(tick_context_standing_in_water(standing_in_water));
+        let target = navigation.next_move_target(
+            tick_context_standing_in_water(standing_in_water),
+            &test_mob(),
+        );
 
         let Some((target, _)) = target else {
             panic!("navigation should target the next path node");
@@ -1407,7 +1421,8 @@ mod tests {
             DVec3::new(0.5, 64.0, 0.5)
         ));
 
-        let target = navigation.next_move_target(tick_context(DVec3::new(0.5, 64.0, 0.5)));
+        let target =
+            navigation.next_move_target(tick_context(DVec3::new(0.5, 64.0, 0.5)), &test_mob());
 
         let Some((target, speed)) = target else {
             panic!("navigation should target the next path node");
@@ -1431,7 +1446,7 @@ mod tests {
 
         assert!(
             navigation
-                .next_move_target(tick_context(DVec3::new(0.5, 64.0, 0.5)))
+                .next_move_target(tick_context(DVec3::new(0.5, 64.0, 0.5)), &test_mob())
                 .is_none()
         );
         assert!(navigation.is_done());
@@ -1459,7 +1474,8 @@ mod tests {
             DVec3::new(0.0, 64.0, 0.5)
         ));
 
-        let target = navigation.next_move_target(tick_context(DVec3::new(1.1, 64.0, 0.5)));
+        let target =
+            navigation.next_move_target(tick_context(DVec3::new(1.1, 64.0, 0.5)), &test_mob());
 
         let Some((target, _speed)) = target else {
             panic!("navigation should target a path node");
@@ -1487,7 +1503,8 @@ mod tests {
             DVec3::new(0.0, 64.0, 0.5)
         ));
 
-        let target = navigation.next_move_target(tick_context(DVec3::new(1.1, 64.0, 0.5)));
+        let target =
+            navigation.next_move_target(tick_context(DVec3::new(1.1, 64.0, 0.5)), &test_mob());
 
         let Some((target, _speed)) = target else {
             panic!("navigation should target the current path node");
@@ -1554,11 +1571,12 @@ mod tests {
         let mut navigation = PathNavigation::new();
         let mob_position = DVec3::new(0.0, 64.0, 0.5);
 
+        let mob = test_mob();
         assert!(move_to(&mut navigation, path, 1.0, mob_position));
         for game_time in 1..=101 {
             navigation.tick();
-            let _ =
-                navigation.next_move_target(tick_context_with_time(mob_position, 0.25, game_time));
+            let _ = navigation
+                .next_move_target(tick_context_with_time(mob_position, 0.25, game_time), &mob);
         }
 
         assert!(navigation.is_stuck());
@@ -1571,11 +1589,12 @@ mod tests {
         let mut navigation = PathNavigation::new();
         let mob_position = DVec3::new(1.0, 64.0, 0.5);
 
+        let mob = test_mob();
         assert!(move_to(&mut navigation, path, 1.0, mob_position));
         for game_time in 1..=92 {
             navigation.tick();
-            let _ =
-                navigation.next_move_target(tick_context_with_time(mob_position, 1.0, game_time));
+            let _ = navigation
+                .next_move_target(tick_context_with_time(mob_position, 1.0, game_time), &mob);
         }
 
         assert!(!navigation.is_stuck());
@@ -1727,7 +1746,7 @@ mod tests {
         ));
         assert!(
             navigation
-                .next_move_target(tick_context(DVec3::new(0.5, 64.0, 0.5)))
+                .next_move_target(tick_context(DVec3::new(0.5, 64.0, 0.5)), &test_mob())
                 .is_some()
         );
         assert_eq!(navigation.path().map(Path::next_node_index), Some(1));
@@ -1864,7 +1883,7 @@ mod tests {
 
         assert!(
             navigation
-                .next_move_target(tick_context(DVec3::new(1.0, 64.0, 1.0)))
+                .next_move_target(tick_context(DVec3::new(1.0, 64.0, 1.0)), &test_mob())
                 .is_none()
         );
         assert!(navigation.is_done());

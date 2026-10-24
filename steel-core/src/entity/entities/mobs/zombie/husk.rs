@@ -21,8 +21,8 @@ use crate::entity::entities::mobs::zombie::zombie::{ZombieVariant, zombie_effect
 use crate::entity::registry::ENTITIES;
 use crate::entity::{
     Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
-    LivingEntity, LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, SharedEntity,
-    SpawnGroupData, next_entity_id,
+    LivingEntity, LivingEntityBase, Mob, MobBase, MobEffectInstance, Monster, PathfinderMob,
+    SharedEntity, SpawnGroupData, next_entity_id,
 };
 use crate::inventory::equipment::EquipmentSlot;
 use crate::physics::MoveResult;
@@ -77,7 +77,7 @@ impl HuskEntity {
 
     /// The shared `Zombie` body carrying the husk's state.
     #[must_use]
-    pub fn zombie(&self) -> &ZombieEntity {
+    pub const fn zombie(&self) -> &ZombieEntity {
         &self.zombie
     }
 
@@ -95,7 +95,7 @@ impl HuskEntity {
             return;
         };
         let difficulty = zombie_effective_difficulty(world) as i32;
-        living.add_mob_effect(crate::entity::MobEffectInstance::with_duration(
+        living.add_mob_effect(MobEffectInstance::with_duration(
             vanilla_mob_effects::HUNGER,
             HUSK_HUNGER_BASE_TICKS * difficulty,
             0,
@@ -338,9 +338,9 @@ impl Monster for HuskEntity {}
 
 impl PathfinderMob for HuskEntity {}
 
-/// Vanilla `Husk.HuskGroupData` only carries `ZombieGroupData`'s fields plus the
-/// camel-husk attempt flag; Steel's [`SpawnGroupData`] has no zombie variant, so
-/// the flag is unnecessary while the spawner finalizes one mob at a time.
+// Vanilla `Husk.HuskGroupData` only carries `ZombieGroupData`'s fields plus the
+// camel-husk attempt flag; Steel's [`SpawnGroupData`] has no zombie variant, so
+// the flag is unnecessary while the spawner finalizes one mob at a time.
 
 #[cfg(test)]
 mod tests {
@@ -350,7 +350,7 @@ mod tests {
     use steel_registry::{init_vanilla_registry, vanilla_entities};
 
     use super::HuskEntity;
-    use crate::entity::Entity;
+    use crate::entity::{Entity, EntityPose};
 
     #[test]
     fn husk_uses_zombie_conversion_target_and_its_own_baby_dimensions() {
@@ -373,7 +373,7 @@ mod tests {
         );
 
         husk.zombie().set_baby(true);
-        let dimensions = husk.dimensions_for_pose(crate::entity::EntityPose::Standing);
+        let dimensions = husk.dimensions_for_pose(EntityPose::Standing);
         assert!((dimensions.eye_height - 0.825).abs() < f32::EPSILON);
     }
 }

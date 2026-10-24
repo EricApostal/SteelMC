@@ -118,7 +118,7 @@ fn fence_we() -> BlockStateId {
     fence(FENCE_EAST | FENCE_WEST)
 }
 
-fn place_bridge_crossing<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, '_, L>) {
+fn place_bridge_crossing<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, L>) {
     let bricks = nether_bricks();
     let air = air();
     placer.generate_box(7, 3, 0, 11, 4, 18, bricks, bricks, false);
@@ -159,7 +159,7 @@ fn place_bridge_crossing<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePl
 }
 
 fn place_bridge_end_filler<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     self_seed: i32,
 ) {
     let mut self_random = LegacyRandom::from_seed(i64::from(self_seed) as u64);
@@ -194,7 +194,7 @@ fn place_bridge_end_filler<L: TemplateLevelAccess>(
     clippy::too_many_lines,
     reason = "straight transcription of vanilla NetherFortressPieces.BridgeStraight"
 )]
-fn place_bridge_straight<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, '_, L>) {
+fn place_bridge_straight<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, L>) {
     let bricks = nether_bricks();
     let air = air();
     placer.generate_box(0, 3, 0, 4, 4, 18, bricks, bricks, false);
@@ -306,7 +306,7 @@ fn place_bridge_straight<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePl
 }
 
 fn place_castle_corridor_stairs<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
 ) {
     let bricks = nether_bricks();
     let air = air();
@@ -359,7 +359,7 @@ fn place_castle_corridor_stairs<L: TemplateLevelAccess>(
 }
 
 fn place_castle_corridor_t_balcony<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
 ) {
     let bricks = nether_bricks();
     let air = air();
@@ -394,7 +394,7 @@ fn place_castle_corridor_t_balcony<L: TemplateLevelAccess>(
     }
 }
 
-fn place_castle_entrance<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, '_, L>) {
+fn place_castle_entrance<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, L>) {
     let bricks = nether_bricks();
     let air = air();
     let we_fence = fence_we();
@@ -467,7 +467,7 @@ fn place_castle_entrance<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePl
 }
 
 fn place_castle_small_corridor_crossing<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
 ) {
     let bricks = nether_bricks();
     let air = air();
@@ -482,7 +482,7 @@ fn place_castle_small_corridor_crossing<L: TemplateLevelAccess>(
 }
 
 fn place_castle_small_corridor_left_turn<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     random: &mut WorldgenRandom,
     is_needing_chest: &mut bool,
 ) {
@@ -507,9 +507,7 @@ fn place_castle_small_corridor_left_turn<L: TemplateLevelAccess>(
     fill_down_square(placer, 4, 4);
 }
 
-fn place_castle_small_corridor<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
-) {
+fn place_castle_small_corridor<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, L>) {
     let bricks = nether_bricks();
     let air = air();
     let ns_fence = fence_ns();
@@ -526,7 +524,7 @@ fn place_castle_small_corridor<L: TemplateLevelAccess>(
 }
 
 fn place_castle_small_corridor_right_turn<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     random: &mut WorldgenRandom,
     is_needing_chest: &mut bool,
 ) {
@@ -555,7 +553,7 @@ fn place_castle_small_corridor_right_turn<L: TemplateLevelAccess>(
     clippy::too_many_lines,
     reason = "straight transcription of vanilla NetherFortressPieces.CastleStalkRoom"
 )]
-fn place_castle_stalk_room<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, '_, L>) {
+fn place_castle_stalk_room<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, L>) {
     let bricks = nether_bricks();
     let air = air();
     let we_fence = fence_we();
@@ -690,7 +688,7 @@ fn place_castle_stalk_room<L: TemplateLevelAccess>(placer: &mut ScatteredFeature
 }
 
 fn place_monster_throne<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     has_placed_spawner: &mut bool,
 ) {
     let bricks = nether_bricks();
@@ -736,7 +734,7 @@ fn place_monster_throne<L: TemplateLevelAccess>(
     }
 }
 
-fn place_room_crossing<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, '_, L>) {
+fn place_room_crossing<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, L>) {
     let bricks = nether_bricks();
     let air = air();
     let we_fence = fence_we();
@@ -762,7 +760,7 @@ fn place_room_crossing<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlac
     fill_down_square(placer, 6, 6);
 }
 
-fn place_stairs_room<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, '_, L>) {
+fn place_stairs_room<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, L>) {
     let bricks = nether_bricks();
     let air = air();
     let we_fence = fence_we();
@@ -790,7 +788,7 @@ fn place_stairs_room<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer
 }
 
 fn place_castle_cross_foundation<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
 ) {
     let bricks = nether_bricks();
     placer.generate_box(4, 2, 0, 8, 2, 12, bricks, bricks, false);
@@ -816,7 +814,7 @@ fn place_castle_cross_foundation<L: TemplateLevelAccess>(
 }
 
 fn fill_down_square<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     max_x: i32,
     max_z: i32,
 ) {

@@ -48,6 +48,8 @@
 //!   `EntitySelector.pushableBy` cannot be evaluated; the spectator and pushable filters
 //!   are applied.
 
+use std::f32::consts::{FRAC_PI_4, PI, TAU};
+use std::f64::consts as f64_consts;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -69,6 +71,7 @@ use steel_registry::vanilla_particle_types::SPLASH;
 use steel_registry::{
     RegistryExt as _, TaggedRegistryExt as _, sound_events, vanilla_blocks, vanilla_game_events,
 };
+use steel_utils::entity_events::EntityStatus;
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier, WorldAabb};
@@ -93,7 +96,7 @@ use crate::world::World;
 const TIME_TO_EJECT: f32 = 60.0;
 
 /// Paddle animation advance per tick, vanilla `PADDLE_SPEED`.
-const PADDLE_SPEED: f32 = f32::consts::PI / 8.0;
+const PADDLE_SPEED: f32 = PI / 8.0;
 
 /// Bubble-column wobble duration in ticks, vanilla `BUBBLE_TIME`.
 const BUBBLE_TIME: i32 = 60;
@@ -149,7 +152,7 @@ struct BoatState {
 }
 
 impl BoatState {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             paddle_positions: [0.0; 2],
             out_of_control_ticks: 0.0,
@@ -224,7 +227,7 @@ impl ChestBoatStorage {
 
     /// Returns the deferred loot table, if this chest has not been generated yet.
     #[must_use]
-    pub fn loot_table(&self) -> Option<&Identifier> {
+    pub const fn loot_table(&self) -> Option<&Identifier> {
         self.loot_table.as_ref()
     }
 
@@ -358,9 +361,9 @@ trait AbstractBoat: Entity + Leashable {
 
         self.default_tick();
 
-        if !self
+        if self
             .first_passenger()
-            .is_some_and(|passenger| passenger.as_player().is_some())
+            .is_none_or(|passenger| passenger.as_player().is_none())
         {
             self.set_paddle_state(false, false);
         }
@@ -426,7 +429,7 @@ trait AbstractBoat: Entity + Leashable {
             acceleration -= 0.005;
         }
 
-        let yaw = f64::from(self.rotation().0) * f64::consts::PI / 180.0;
+        let yaw = f64::from(self.rotation().0) * f64_consts::PI / 180.0;
         let velocity = self.velocity();
         self.set_velocity(
             velocity
@@ -632,7 +635,7 @@ trait AbstractBoat: Entity + Leashable {
     fn float_boat(&self) {
         let mut vertical_speed = -self.get_gravity();
         let mut buoyancy = 0.0_f64;
-        let mut inverse_friction = 0.05_f32;
+        let inverse_friction;
         let (old_status, status) = {
             let state = self.boat_state().lock();
             (state.old_status, state.status)
@@ -727,9 +730,9 @@ trait AbstractBoat: Entity + Leashable {
             let drag_down = self.boat_state().lock().bubble_column_direction_is_down;
             if drag_down {
                 self.eject_passengers();
-                self.broadcast_entity_event(steel_utils::entity_events::EntityStatus::BoatSink);
+                self.broadcast_entity_event(EntityStatus::BoatSink);
             } else {
-                self.broadcast_entity_event(steel_utils::entity_events::EntityStatus::BoatLaunch);
+                self.broadcast_entity_event(EntityStatus::BoatLaunch);
             }
             self.handle_bubble_column_effect(drag_down);
         }
@@ -810,8 +813,8 @@ trait AbstractBoat: Entity + Leashable {
                 (previous, next)
             };
 
-            let full_turn = f32::consts::TAU;
-            let quarter = f32::consts::FRAC_PI_4;
+            let full_turn = TAU;
+            let quarter = FRAC_PI_4;
             if previous % full_turn <= quarter
                 && next % full_turn >= quarter
                 && let Some(sound) = self.paddle_sound()
@@ -858,9 +861,9 @@ trait AbstractBoat: Entity + Leashable {
             return;
         }
 
-        let can_board = !self
+        let can_board = self
             .controlling_passenger()
-            .is_some_and(|passenger| passenger.as_player().is_some());
+            .is_none_or(|passenger| passenger.as_player().is_none());
         let own_box = self.bounding_box();
         let own_width = own_box.max_x() - own_box.min_x();
 
@@ -921,7 +924,7 @@ trait AbstractBoat: Entity + Leashable {
             }
         }
 
-        let angle = -f64::from(self.rotation().0) * f64::consts::PI / 180.0;
+        let angle = -f64::from(self.rotation().0) * f64_consts::PI / 180.0;
         DVec3::new(
             offset * angle.sin(),
             self.ride_height(dimensions),
@@ -1283,7 +1286,7 @@ macro_rules! impl_chest_boat {
         impl $struct_name {
             /// Returns the chest storage and deferred loot state.
             #[must_use]
-            pub fn chest(&self) -> &SyncMutex<ChestBoatStorage> {
+            pub const fn chest(&self) -> &SyncMutex<ChestBoatStorage> {
                 &self.chest
             }
 

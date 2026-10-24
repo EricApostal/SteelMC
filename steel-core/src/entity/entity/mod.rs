@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 use std::io::Cursor;
 
+use simdnbt::borrow::read_compound;
+
 use super::*;
 use crate::entity::ai::goal::{
     AbstractHorse, CaravanLlama, CreeperLike, Feline, RangedAttackMob, SchoolingFish,
@@ -3766,7 +3768,7 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
     fn load_with_owned_components(&self, nbt: &NbtCompound) -> Result<(), simdnbt::Error> {
         let mut encoded = Vec::new();
         nbt.write(&mut encoded);
-        let borrowed = simdnbt::borrow::read_compound(&mut Cursor::new(encoded.as_slice()))?;
+        let borrowed = read_compound(&mut Cursor::new(encoded.as_slice()))?;
         let view: BorrowedNbtCompoundView<'_, '_> = (&borrowed).into();
         self.apply_spawn_data(view);
         self.load_additional(view);

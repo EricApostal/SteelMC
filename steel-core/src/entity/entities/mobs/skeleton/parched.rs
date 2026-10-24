@@ -15,6 +15,8 @@ use steel_registry::{sound_events, vanilla_attributes, vanilla_mob_effects};
 use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier};
 
+use std::ptr;
+
 use crate::entity::ai::goal::RangedAttackMob;
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::mobs::skeleton::abstract_skeleton::{
@@ -199,7 +201,7 @@ impl LivingEntity for ParchedEntity {
     }
 
     fn can_be_affected(&self, effect: &MobEffectInstance) -> bool {
-        if std::ptr::eq(effect.effect(), &*vanilla_mob_effects::WEAKNESS) {
+        if ptr::eq(effect.effect(), vanilla_mob_effects::WEAKNESS) {
             return false;
         }
         LivingEntity::default_can_be_affected(self, effect)
@@ -295,7 +297,7 @@ impl AbstractSkeleton for ParchedEntity {
         let arrow = SkeletonArrow::base(power);
         SkeletonArrow {
             effect: Some(MobEffectInstance::with_duration(
-                &vanilla_mob_effects::WEAKNESS,
+                vanilla_mob_effects::WEAKNESS,
                 PARCHED_WEAKNESS_DURATION,
                 0,
             )),
@@ -312,14 +314,14 @@ impl RangedAttackMob for ParchedEntity {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Weak};
+    use std::sync::Weak;
 
     use glam::DVec3;
     use steel_registry::{init_vanilla_registry, vanilla_entities, vanilla_mob_effects};
 
     use super::ParchedEntity;
-    use crate::entity::LivingEntity;
     use crate::entity::entities::mobs::skeleton::abstract_skeleton::AbstractSkeleton;
+    use crate::entity::{LivingEntity, MobEffectInstance};
 
     #[test]
     fn parched_rejects_weakness_and_reports_increased_intervals() {
@@ -327,8 +329,7 @@ mod tests {
 
         let parched = ParchedEntity::new(&vanilla_entities::PARCHED, 1, DVec3::ZERO, Weak::new());
 
-        let weakness =
-            crate::entity::MobEffectInstance::with_duration(&vanilla_mob_effects::WEAKNESS, 600, 0);
+        let weakness = MobEffectInstance::with_duration(vanilla_mob_effects::WEAKNESS, 600, 0);
         assert!(!parched.can_be_affected(&weakness));
 
         assert_eq!(parched.get_hard_attack_interval(), 50);

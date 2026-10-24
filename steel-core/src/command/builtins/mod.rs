@@ -13,6 +13,7 @@ mod datapack;
 mod debug;
 mod defaultgamemode;
 mod difficulty;
+mod dialog;
 mod domain;
 mod effect;
 mod enchant;
@@ -125,6 +126,7 @@ pub(crate) fn create_registered_dispatcher(
     builder.register(debug::registration())?;
     builder.register(defaultgamemode::registration())?;
     builder.register(difficulty::registration())?;
+    builder.register(dialog::registration())?;
     builder.register(domain::registration())?;
     builder.register(effect::registration())?;
     builder.register(enchant::registration())?;
@@ -251,6 +253,7 @@ mod tests {
                 "debug",
                 "defaultgamemode",
                 "difficulty",
+                "dialog",
                 "domain",
                 "effect",
                 "enchant",

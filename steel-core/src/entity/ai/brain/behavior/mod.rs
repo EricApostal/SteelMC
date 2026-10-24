@@ -50,11 +50,11 @@ impl<'a> BehaviorContext<'a> {
     }
 
     #[must_use]
-    pub fn memories(&self) -> &MemoryStore {
+    pub const fn memories(&self) -> &MemoryStore {
         self.memories
     }
 
-    pub fn memories_mut(&mut self) -> &mut MemoryStore {
+    pub const fn memories_mut(&mut self) -> &mut MemoryStore {
         self.memories
     }
 
@@ -166,7 +166,7 @@ impl BehaviorState {
         self.status
     }
 
-    pub(super) fn set_status(&mut self, status: BehaviorStatus) {
+    pub(super) const fn set_status(&mut self, status: BehaviorStatus) {
         self.status = status;
     }
 

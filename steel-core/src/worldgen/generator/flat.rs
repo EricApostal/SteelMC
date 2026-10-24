@@ -7,7 +7,7 @@ use steel_registry::feature::data::{
     PlacedFeatureData,
 };
 use steel_registry::template_pool::{TemplateData, TemplatePoolData};
-use steel_registry::{REGISTRY, RegistryEntry, RegistryExt, vanilla_biomes, vanilla_blocks};
+use steel_registry::{REGISTRY, RegistryEntry, vanilla_biomes, vanilla_blocks};
 use steel_utils::random::RandomSource;
 use steel_utils::{BlockStateId, ChunkPos, Identifier};
 

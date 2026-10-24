@@ -435,7 +435,7 @@ pub fn is_full_container(container: &dyn Container, direction: Direction) -> boo
 /// Vanilla parity: `HopperBlockEntity.addItem`. Shared with other blocks that
 /// push single items through Vanilla's hopper transfer rules (droppers).
 pub fn add_item(
-    mut from: Option<&mut dyn Container>,
+    from: Option<&mut dyn Container>,
     container: &mut dyn Container,
     mut item_stack: ItemStack,
     direction: Option<Direction>,

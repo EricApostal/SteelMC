@@ -20,6 +20,7 @@ use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::ItemRef;
 use steel_registry::vanilla_entity_data::{AbstractMinecartEntityData, HopperMinecartEntityData};
+use steel_registry::vanilla_game_rules::ENTITY_DROPS;
 use steel_registry::{vanilla_blocks, vanilla_items};
 use steel_utils::Downcast as _;
 use steel_utils::axis::Axis;
@@ -126,7 +127,7 @@ impl HopperMinecartEntity {
             let Some(item_entity) = item_entity.downcast_ref::<ItemEntity>() else {
                 continue;
             };
-            let mut stack = item_entity.get_item();
+            let stack = item_entity.get_item();
             if stack.is_empty() {
                 continue;
             }
@@ -291,7 +292,7 @@ impl Minecart for HopperMinecartEntity {
         // Vanilla `ContainerEntity.chestVehicleDestroyed` drops the cart contents only while
         // the `entity_drops` game rule is enabled; the cart item itself is gated separately in
         // `Minecart::destroy_with_drop`.
-        if !world.get_game_rule(&steel_registry::vanilla_game_rules::ENTITY_DROPS) {
+        if !world.get_game_rule(&ENTITY_DROPS) {
             return;
         }
         let stacks: Vec<ItemStack> = self

@@ -19,12 +19,15 @@ use steel_registry::{
         behavior::PushReaction, block_state_ext::BlockStateExt, properties::BlockStateProperties,
     },
     data_components::{
-        DataComponentPatch, ItemContainerContents, components::SeededContainerLoot,
+        DataComponentPatch, ItemContainerContents,
+        components::SeededContainerLoot,
         vanilla_components::{CONTAINER, CONTAINER_LOOT},
     },
     item_stack::ItemStack,
     sound_event::SoundEventRef,
-    sound_events, vanilla_block_entity_types, vanilla_block_tags::BlockTag, vanilla_game_events,
+    sound_events, vanilla_block_entity_types,
+    vanilla_block_tags::BlockTag,
+    vanilla_game_events,
 };
 use steel_utils::{
     BlockLocalAabb, BlockPos, BlockStateId, Direction, DowncastType, DowncastTypeKey, Identifier,

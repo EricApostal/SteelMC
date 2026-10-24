@@ -93,6 +93,10 @@ impl SetWalkTargetAwayFrom {
 }
 
 impl Trigger for SetWalkTargetAwayFrom {
+    #[expect(
+        clippy::float_cmp,
+        reason = "Vanilla compares the walk target's speed modifier exactly."
+    )]
     fn trigger(&mut self, ctx: &mut BehaviorContext<'_>) -> bool {
         let target = ctx.get_memory(&mem::WALK_TARGET);
         if target.is_some() && !self.interrupt_current_walk {

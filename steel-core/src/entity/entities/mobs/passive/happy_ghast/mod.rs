@@ -72,6 +72,7 @@ use crate::entity::ai::control::{FlyingMoveControl, FlyingMoveControlInput, Move
 use crate::entity::ai::goal::{FloatGoal, Goal, GoalControls};
 use crate::entity::ai::targeting::TargetingConditions;
 use crate::entity::damage::DamageSource;
+use crate::entity::leash::Leashable;
 use crate::entity::{
     AgeableMob, AgeableMobBase, Animal, AnimalBase, ENTITIES, Entity, EntityBase, EntityBaseLoad,
     EntitySpawnReason, EntitySyncedData, LivingEntity, LivingEntityBase, LivingTravelInput, Mob,
@@ -171,7 +172,7 @@ const BLOCK_DIRECTIONS: [(i32, i32, i32); 6] = [
 ];
 
 /// Runtime state vanilla keeps in `HappyGhast` fields rather than synched data.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct HappyGhastState {
     leash_holder_time: i32,
     server_still_timeout: i32,
@@ -402,7 +403,7 @@ impl HappyGhastEntity {
 
     /// Vanilla `HappyGhast.checkRestriction`.
     fn check_restriction(&self) {
-        if self.is_leashed() || self.is_vehicle() {
+        if self.as_leashable().is_some_and(Leashable::is_leashed) || self.is_vehicle() {
             return;
         }
 
@@ -420,6 +421,10 @@ impl HappyGhastEntity {
     }
 
     /// Vanilla `HappyGhast.continuousHeal`.
+    #[expect(
+        clippy::float_cmp,
+        reason = "vanilla `HappyGhast.continuousHeal` gates on exactly full health; an epsilon would change when healing starts"
+    )]
     fn continuous_heal(&self) {
         let Some(world) = self.level() else {
             return;
@@ -582,7 +587,7 @@ impl HappyGhastEntity {
 
     /// Vanilla `HappyGhast.getRiddenRotation`.
     #[must_use]
-    pub fn get_ridden_rotation(&self, controller: &dyn LivingEntity) -> (f32, f32) {
+    pub fn get_ridden_rotation(controller: &dyn LivingEntity) -> (f32, f32) {
         let (yaw, pitch) = controller.rotation();
         (pitch * RIDDEN_PITCH_FACTOR, yaw)
     }
@@ -602,7 +607,7 @@ impl HappyGhastEntity {
     /// GAP(happy-ghast-leash-hooks): `Leashable` has no `support_quad_leash_as_holder`
     /// hook, so the leash spring still uses the single attachment point.
     #[must_use]
-    pub const fn support_quad_leash_as_holder(&self) -> bool {
+    pub const fn support_quad_leash_as_holder() -> bool {
         true
     }
 
@@ -653,19 +658,19 @@ impl HappyGhastEntity {
 
     /// Vanilla `HappyGhast.getLeashOffset`.
     #[must_use]
-    pub const fn leash_offset(&self) -> DVec3 {
+    pub const fn leash_offset() -> DVec3 {
         DVec3::ZERO
     }
 
     /// Vanilla `HappyGhast.leashElasticDistance`.
     #[must_use]
-    pub const fn leash_elastic_distance(&self) -> f64 {
+    pub const fn leash_elastic_distance() -> f64 {
         LEASH_ELASTIC_DISTANCE
     }
 
     /// Vanilla `HappyGhast.leashSnapDistance`.
     #[must_use]
-    pub const fn leash_snap_distance(&self) -> f64 {
+    pub const fn leash_snap_distance() -> f64 {
         LEASH_SNAP_DISTANCE
     }
 
@@ -681,7 +686,9 @@ impl HappyGhastEntity {
         self.set_mob_speed(0.0);
         self.set_travel_input(LivingTravelInput::ZERO);
         self.set_velocity(DVec3::ZERO);
-        if let Some(leash_data) = self.leash_data().lock().as_mut() {
+        if let Some(leashable) = self.as_leashable()
+            && let Some(leash_data) = leashable.leash_data().lock().as_mut()
+        {
             leash_data.angular_momentum = 0.0;
         }
     }
@@ -1506,7 +1513,7 @@ impl HappyGhastTemptGoal {
     }
 
     /// Vanilla `TemptGoal.targetingConditions`.
-    fn targeting_conditions(range: f64) -> TargetingConditions {
+    const fn targeting_conditions(range: f64) -> TargetingConditions {
         TargetingConditions::for_non_combat()
             .ignore_line_of_sight()
             .range(range)
@@ -1514,7 +1521,7 @@ impl HappyGhastTemptGoal {
 
     /// Vanilla `TemptGoal.canScare` for `ForNonPathfinders` (constructed with
     /// `canScare = false`).
-    const fn can_scare(&self) -> bool {
+    const fn can_scare() -> bool {
         false
     }
 
@@ -1576,7 +1583,7 @@ impl Goal for HappyGhastTemptGoal {
     }
 
     fn can_continue_to_use(&mut self, mob: &dyn PathfinderMob) -> bool {
-        if self.can_scare() && !self.update_player_scare_state(mob) {
+        if Self::can_scare() && !self.update_player_scare_state(mob) {
             return false;
         }
 
@@ -1618,9 +1625,7 @@ impl Goal for HappyGhastTemptGoal {
         }
 
         // Vanilla `ForNonPathfinders.navigateTowards`.
-        let target = (eye_position - mob.position())
-            .scale(rand::random::<f64>())
-            .add(mob.position());
+        let target = (eye_position - mob.position()) * rand::random::<f64>() + mob.position();
         mob.mob_base()
             .controls()
             .lock()

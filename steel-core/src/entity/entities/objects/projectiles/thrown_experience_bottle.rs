@@ -31,7 +31,7 @@ use crate::world::World;
 const EXPERIENCE_BOTTLE_GRAVITY: f64 = 0.07;
 
 /// Vanilla `ThrownExperienceBottle` break event color: the default potion color.
-const EXPERIENCE_BOTTLE_BREAK_COLOR: i32 = -13083194;
+const EXPERIENCE_BOTTLE_BREAK_COLOR: i32 = -13_083_194;
 
 /// Vanilla `ThrownExperienceBottle` base experience before the two rolls.
 const EXPERIENCE_BASE: i32 = 3;

@@ -351,7 +351,7 @@ mod tests {
         let mut brain = test_brain(profession, false);
         brain.set_schedule(Schedule::villager());
 
-        brain.set_memory(&mem::NEAREST_HOSTILE, Some(body.clone()));
+        brain.set_memory(&mem::NEAREST_HOSTILE, Some(SharedEntity::clone(&body)));
         apply_activity_transitions(&mut brain, &world.world, &body);
         assert!(brain.is_active(Activity::Panic));
 

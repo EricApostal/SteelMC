@@ -4,6 +4,10 @@
 pub mod abstract_skeleton;
 pub mod bogged;
 pub mod parched;
+#[expect(
+    clippy::module_inception,
+    reason = "vanilla mirrors one class per directory (skeleton); renaming would churn every consumer"
+)]
 pub mod skeleton;
 pub mod stray;
 pub mod wither_skeleton;

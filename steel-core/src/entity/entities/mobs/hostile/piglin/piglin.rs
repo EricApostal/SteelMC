@@ -13,15 +13,24 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
+use steel_registry::data_components::vanilla_components;
+use steel_registry::enchantment_effect::EnchantmentEffectComponent;
 use steel_registry::entity_type::{
     EntityAttachmentPoint, EntityAttachments, EntityDimensions, EntityTypeRef,
 };
+use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::PiglinEntityData;
 use steel_registry::vanilla_game_rules::MOB_GRIEFING;
 use steel_registry::vanilla_item_tags::ItemTag;
-use steel_registry::{sound_events, vanilla_attributes, vanilla_entities, vanilla_items};
+use steel_registry::{
+    sound_events, vanilla_attributes, vanilla_blocks, vanilla_entities, vanilla_items,
+    vanilla_mob_effects,
+};
+use steel_utils::Downcast as _;
 use steel_utils::locks::SyncMutex;
+use steel_utils::random::Random as _;
+use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier};
 
@@ -36,10 +45,11 @@ use crate::entity::damage::DamageSource;
 use crate::entity::entities::{HoglinEntity, ItemEntity};
 use crate::entity::npc::inventory_carrier::InventoryCarrier;
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
-    LivingEntity, LivingEntityBase, Mob, MobBase, MobEffectInstance, Monster, PathfinderMob,
-    SharedEntity, SpawnGroupData,
+    Entity, EntityBase, EntityBaseLoad, EntityEventSource as _, EntityPose, EntitySpawnReason,
+    EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase, MobEffectInstance, Monster,
+    PathfinderMob, SharedEntity, SpawnGroupData, start_riding_entities,
 };
+use crate::inventory::container::Container as _;
 use crate::inventory::equipment::EquipmentSlot;
 use crate::physics::MoveResult;
 use crate::player::Player;
@@ -153,7 +163,7 @@ impl PiglinEntity {
 
         // Vanilla `AbstractPiglin` constructor: can pick up loot, opens doors, and
         // treats neighboring fire as very expensive but fire itself as impassable.
-        mob_base.set_can_pick_up_loot(true);
+        *mob_base.can_pick_up_loot().lock() = true;
         mob_base.navigation().lock().set_can_open_doors(true);
         {
             let mut malus = mob_base.pathfinding_malus().lock();
@@ -240,12 +250,21 @@ impl PiglinEntity {
     /// Vanilla `AbstractPiglin.isImmuneToZombification`.
     #[must_use]
     pub fn is_immune_to_zombification(&self) -> bool {
-        *self.entity_data.lock().immune_to_zombification.get()
+        *self
+            .entity_data
+            .lock()
+            .abstract_piglin
+            .immune_to_zombification
+            .get()
     }
 
     /// Vanilla `AbstractPiglin.setImmuneToZombification`.
     pub fn set_immune_to_zombification(&self, immune: bool) {
-        self.entity_data.lock().immune_to_zombification.set(immune);
+        self.entity_data
+            .lock()
+            .abstract_piglin
+            .immune_to_zombification
+            .set(immune);
     }
 
     /// Vanilla `AbstractPiglin.isConverting`: not immune, has AI, and the level's
@@ -287,7 +306,7 @@ impl PiglinEntity {
 
     /// Vanilla `Piglin.getInventory`.
     #[must_use]
-    pub fn get_inventory(&self) -> &SyncMutex<InventoryCarrier> {
+    pub const fn get_inventory(&self) -> &SyncMutex<InventoryCarrier> {
         &self.inventory
     }
 
@@ -362,9 +381,7 @@ impl PiglinEntity {
         let crossbow_charged = self.as_living_entity().is_some_and(|living| {
             living.is_holding(&mut |stack| stack.is(&vanilla_items::CROSSBOW))
         }) && self.as_living_entity().is_some_and(|living| {
-            living.is_holding(&mut |stack| {
-                stack.has(steel_registry::data_components::vanilla_components::CHARGED_PROJECTILES)
-            })
+            living.is_holding(&mut |stack| stack.has(vanilla_components::CHARGED_PROJECTILES))
         });
         if crossbow_charged {
             PiglinArmPose::CrossbowHold
@@ -377,13 +394,15 @@ impl PiglinEntity {
     #[must_use]
     fn is_holding_melee_weapon(&self) -> bool {
         self.as_living_entity().is_some_and(|living| {
-            living.is_holding(&mut |stack| {
-                stack.has_component(&steel_registry::data_components::vanilla_components::TOOL.key)
-            })
+            living.is_holding(&mut |stack| stack.has_component(vanilla_components::TOOL.key()))
         })
     }
 
     /// Vanilla `Piglin.createSpawnWeapon`: crossbow, else golden sword (10% spear).
+    #[expect(
+        clippy::unused_self,
+        reason = "vanilla `Piglin.createSpawnWeapon` is an instance method"
+    )]
     fn create_spawn_weapon(&self) -> ItemStack {
         if rand::random::<f32>() < PROBABILITY_OF_SPAWNING_WITH_CROSSBOW {
             return ItemStack::new(&vanilla_items::CROSSBOW);
@@ -424,7 +443,7 @@ impl PiglinEntity {
             ConversionParams::single(true, true),
             Some(&|zombified| {
                 zombified.add_mob_effect(MobEffectInstance::with_duration(
-                    &steel_registry::vanilla_mob_effects::NAUSEA,
+                    vanilla_mob_effects::NAUSEA,
                     200,
                     0,
                 ));
@@ -444,6 +463,24 @@ impl PiglinEntity {
 }
 
 impl Entity for PiglinEntity {
+    /// Vanilla `Piglin.startRiding`: a baby rides the top passenger of a hoglin stack.
+    fn start_riding(&self, entity_to_ride: &SharedEntity) -> bool {
+        let mut target = SharedEntity::clone(entity_to_ride);
+        if self.is_baby() && target.entity_type().key == vanilla_entities::HOGLIN.key {
+            target = top_passenger(&target, MAX_PASSENGERS_ON_ONE_HOGLIN);
+        }
+
+        // Vanilla `Entity.startRiding`: `super.startRiding(target)`, inlined so the
+        // override does not recurse into itself.
+        let Some(world) = self.level() else {
+            return false;
+        };
+        let Some(passenger) = world.get_entity_by_id(self.id()) else {
+            return false;
+        };
+        start_riding_entities(&passenger, &target)
+    }
+
     fn base(&self) -> &EntityBase {
         &self.base
     }
@@ -661,8 +698,11 @@ impl Mob for PiglinEntity {
         };
 
         if update.activity_changed
-            && let Some(sound) =
-                ai::get_sound_for_current_activity(&self.brain.lock(), &world, entity)
+            && let Some(sound) = ai::get_sound_for_current_activity(
+                &self.brain.lock(),
+                &world,
+                entity.as_entity_event_source(),
+            )
         {
             self.make_sound(Some(sound));
         }
@@ -693,9 +733,7 @@ impl Mob for PiglinEntity {
         spawn_reason: EntitySpawnReason,
         group_data: Option<SpawnGroupData>,
     ) -> Option<SpawnGroupData> {
-        let mut random =
-            steel_utils::random::legacy_random::LegacyRandom::from_seed(rand::random());
-        use steel_utils::random::Random as _;
+        let mut random = LegacyRandom::from_seed(rand::random());
 
         if spawn_reason != EntitySpawnReason::Structure {
             if random.next_f32() < PROBABILITY_OF_SPAWNING_AS_BABY {
@@ -737,9 +775,8 @@ impl Mob for PiglinEntity {
         current_item_stack: &ItemStack,
         slot: EquipmentSlot,
     ) -> bool {
-        if current_item_stack.has_enchantment_effect(
-            steel_registry::enchantment_effect::EnchantmentEffectComponent::PreventArmorChange,
-        ) {
+        if current_item_stack.has_enchantment_effect(EnchantmentEffectComponent::PreventArmorChange)
+        {
             return false;
         }
 
@@ -757,7 +794,17 @@ impl Mob for PiglinEntity {
             return new_wanted;
         }
 
-        Mob::can_replace_current_item(self, new_item_stack, current_item_stack, slot)
+        // Vanilla falls back to `Mob.canReplaceCurrentItem`; inlined so the
+        // override does not recurse into itself.
+        if current_item_stack.is_empty() {
+            true
+        } else if slot.is_armor() {
+            self.compare_armor(new_item_stack, current_item_stack, slot)
+        } else if slot == EquipmentSlot::MainHand {
+            self.compare_weapons(new_item_stack, current_item_stack, slot)
+        } else {
+            false
+        }
     }
 
     /// Vanilla `Piglin.getPreferredWeaponType`: adults prefer the piglin weapon tag.
@@ -784,15 +831,6 @@ impl Mob for PiglinEntity {
 
     fn mob_can_be_leashed(&self) -> bool {
         true
-    }
-
-    /// Vanilla `Piglin.startRiding`: a baby rides the top passenger of a hoglin stack.
-    fn start_riding(&self, entity_to_ride: &SharedEntity) -> bool {
-        let mut target = entity_to_ride.clone();
-        if self.is_baby() && target.entity_type().key == vanilla_entities::HOGLIN.key {
-            target = top_passenger(&target, MAX_PASSENGERS_ON_ONE_HOGLIN);
-        }
-        Entity::start_riding(self, &target)
     }
 
     /// Vanilla `Piglin.checkPiglinSpawnRules`: never above nether wart blocks.
@@ -858,15 +896,14 @@ impl PiglinEntity {
 /// Vanilla `Piglin.checkPiglinSpawnRules`.
 #[must_use]
 pub fn check_piglin_spawn_rules(level: &dyn LevelReader, pos: BlockPos) -> bool {
-    level.get_block_state(pos.below()).get_block()
-        != &steel_registry::vanilla_blocks::NETHER_WART_BLOCK
+    level.get_block_state(pos.below()).get_block() != &vanilla_blocks::NETHER_WART_BLOCK
 }
 
 /// Vanilla `Piglin.getTopPassenger`.
 fn top_passenger(vehicle: &SharedEntity, counter: i32) -> SharedEntity {
     let passengers = vehicle.passengers();
     if counter == 1 || passengers.is_empty() {
-        return vehicle.clone();
+        return SharedEntity::clone(vehicle);
     }
     top_passenger(&passengers[0], counter - 1)
 }
@@ -876,7 +913,9 @@ use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 
 #[cfg(test)]
 mod tests {
+    use simdnbt::owned::NbtCompound;
     use std::sync::Weak;
+    use steel_registry::vanilla_attributes;
 
     use glam::DVec3;
     use steel_registry::vanilla_item_tags::ItemTag;
@@ -884,7 +923,7 @@ mod tests {
 
     use super::PiglinEntity;
     use crate::entity::ai::behavior::piglin::ai;
-    use crate::entity::{Entity, LivingEntity, Mob};
+    use crate::entity::{Entity, EntityEventSource as _, LivingEntity, Mob};
     use crate::inventory::equipment::EquipmentSlot;
     use steel_registry::item_stack::ItemStack;
 
@@ -902,7 +941,7 @@ mod tests {
         assert!(!piglin.is_adult());
 
         let amount = piglin.attributes().lock().modifier_value(
-            steel_registry::vanilla_attributes::MOVEMENT_SPEED,
+            vanilla_attributes::MOVEMENT_SPEED,
             &super::SPEED_MODIFIER_BABY_ID,
         );
         assert_eq!(amount, Some(0.2));
@@ -952,7 +991,7 @@ mod tests {
         piglin.set_cannot_hunt(true);
         piglin.set_immune_to_zombification(true);
 
-        let mut nbt = simdnbt::owned::NbtCompound::new();
+        let mut nbt = NbtCompound::new();
         piglin.save_additional(&mut nbt);
         assert_eq!(nbt.byte("IsBaby"), Some(1));
         assert_eq!(nbt.byte("CannotHunt"), Some(1));

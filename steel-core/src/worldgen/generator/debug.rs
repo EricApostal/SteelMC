@@ -1,6 +1,6 @@
 use glam::IVec3;
 use steel_registry::biome::BiomeRef;
-use steel_registry::{REGISTRY, RegistryEntry, RegistryExt, vanilla_biomes, vanilla_blocks};
+use steel_registry::{REGISTRY, RegistryEntry, vanilla_biomes, vanilla_blocks};
 use steel_utils::random::RandomSource;
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId, ChunkPos};

@@ -23,10 +23,11 @@ use steel_utils::{
 };
 
 use crate::block_entity::{BlockEntity, BlockEntityBase};
+use crate::chunk::light::LightLayer;
 use crate::entity::{Entity as _, EntitySpawnReason, create_entity_instance};
+use crate::world::World;
 use crate::world::game_event::GameEventContext;
 use crate::world::spawn::SpawnPlacements;
-use crate::world::{LightLayer, World};
 
 /// Vanilla `BaseSpawner.DEFAULT_SPAWN_DELAY`.
 pub const SPAWNER_DEFAULT_SPAWN_DELAY: i32 = 20;
@@ -63,11 +64,10 @@ impl CustomSpawnRules {
     /// Vanilla `SpawnData.CustomSpawnRules.isValidPosition`.
     #[must_use]
     pub fn is_valid_position(self, world: &World, pos: BlockPos) -> bool {
-        Self::contains(self.block_light_limit, world.light_value_at(LightLayer::Block, pos))
-            && Self::contains(
-                self.sky_light_limit,
-                world.effective_sky_brightness(pos),
-            )
+        Self::contains(
+            self.block_light_limit,
+            world.light_value_at(LightLayer::Block, pos),
+        ) && Self::contains(self.sky_light_limit, world.effective_sky_brightness(pos))
     }
 
     fn contains((min, max): (i32, i32), value: u8) -> bool {
@@ -115,12 +115,12 @@ impl SpawnData {
     pub(super) fn from_view(view: &NbtCompoundView<'_, '_>) -> Option<Self> {
         let mut entity_to_spawn = view.compound("entity")?.to_owned();
         normalize_entity_id(&mut entity_to_spawn);
-        let custom_spawn_rules = view
-            .compound("custom_spawn_rules")
-            .map(|rules| CustomSpawnRules {
-                block_light_limit: CustomSpawnRules::read(&rules, "block_light_limit"),
-                sky_light_limit: CustomSpawnRules::read(&rules, "sky_light_limit"),
-            });
+        let custom_spawn_rules =
+            view.compound("custom_spawn_rules")
+                .map(|rules| CustomSpawnRules {
+                    block_light_limit: CustomSpawnRules::read(&rules, "block_light_limit"),
+                    sky_light_limit: CustomSpawnRules::read(&rules, "sky_light_limit"),
+                });
         Some(Self {
             entity_to_spawn,
             custom_spawn_rules,
@@ -145,7 +145,11 @@ impl SpawnData {
         nbt.insert("entity", self.entity_to_spawn.clone());
         if let Some(rules) = self.custom_spawn_rules {
             let mut compound = NbtCompound::new();
-            CustomSpawnRules::write_range(&mut compound, "block_light_limit", rules.block_light_limit);
+            CustomSpawnRules::write_range(
+                &mut compound,
+                "block_light_limit",
+                rules.block_light_limit,
+            );
             CustomSpawnRules::write_range(&mut compound, "sky_light_limit", rules.sky_light_limit);
             nbt.insert("custom_spawn_rules", compound);
         }
@@ -411,7 +415,9 @@ impl SpawnerBlockEntity {
                 }
             } else {
                 let mut random = steel_utils::random::RandomSource::Legacy(
-                    steel_utils::random::legacy_random::LegacyRandom::from_seed(rng.random::<u64>()),
+                    steel_utils::random::legacy_random::LegacyRandom::from_seed(
+                        rng.random::<u64>(),
+                    ),
                 );
                 if !SpawnPlacements::check_spawn_rules(
                     entity_type,
@@ -454,7 +460,7 @@ impl SpawnerBlockEntity {
                 .get_entities_in_aabb(&nearby_aabb)
                 .into_iter()
                 .filter(|other| {
-                    other.entity_type().id() == entity_type.id() && !other.is_spectator()
+                    std::ptr::eq(other.entity_type(), entity_type) && !other.is_spectator()
                 })
                 .count();
             if i32::try_from(nearby).unwrap_or(i32::MAX) >= max_nearby {

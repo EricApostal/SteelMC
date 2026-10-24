@@ -47,6 +47,7 @@ use steel_utils::{BlockPos, Downcast as _};
 
 use crate::entity::ai::goal::{
     AvoidEntityGoal, FollowFlockLeaderGoal, Goal, GoalControls, PanicGoal, RandomSwimmingGoal,
+    SchoolingFish,
 };
 use crate::entity::ai::path::PathType;
 use crate::entity::damage::DamageSource;
@@ -105,9 +106,9 @@ pub(crate) fn check_surface_water_animal_spawn_rules(
     pos: BlockPos,
     _random: &mut RandomSource,
 ) -> bool {
-    let min_spawn_level = level.sea_level() - SURFACE_SPAWN_DEPTH;
+    let min_spawn_level = level.sea_level - SURFACE_SPAWN_DEPTH;
     pos.y() >= min_spawn_level
-        && pos.y() <= level.sea_level()
+        && pos.y() <= level.sea_level
         && level
             .get_block_state(pos.below())
             .get_fluid_state()
@@ -216,7 +217,7 @@ impl FishSwimGoal {
     /// `AbstractSchoolingFish.canRandomSwim` (`!isFollower()`).
     fn can_random_swim(mob: &dyn PathfinderMob) -> bool {
         !mob.as_schooling_fish()
-            .is_some_and(|fish| fish.is_follower())
+            .is_some_and(SchoolingFish::is_follower)
     }
 }
 
@@ -402,7 +403,7 @@ impl SchoolingState {
 
     /// Vanilla `AbstractSchoolingFish.hasFollowers`.
     #[must_use]
-    pub(crate) fn has_followers(&self) -> bool {
+    pub(crate) const fn has_followers(&self) -> bool {
         self.school_size > 1
     }
 
@@ -414,17 +415,17 @@ impl SchoolingState {
 
     /// Vanilla `AbstractSchoolingFish.canBeFollowed`.
     #[must_use]
-    pub(crate) fn can_be_followed(&self, max_school_size: i32) -> bool {
+    pub(crate) const fn can_be_followed(&self, max_school_size: i32) -> bool {
         self.has_followers() && self.school_size < max_school_size
     }
 
     /// Vanilla `AbstractSchoolingFish.addFollower`.
-    fn add_follower(&mut self) {
+    const fn add_follower(&mut self) {
         self.school_size += 1;
     }
 
     /// Vanilla `AbstractSchoolingFish.removeFollower`.
-    fn remove_follower(&mut self) {
+    const fn remove_follower(&mut self) {
         self.school_size -= 1;
     }
 
@@ -439,7 +440,7 @@ impl SchoolingState {
     }
 
     /// Vanilla `AbstractSchoolingFish.tick` swarm reset.
-    fn reset_school_size(&mut self) {
+    const fn reset_school_size(&mut self) {
         self.school_size = 1;
     }
 }

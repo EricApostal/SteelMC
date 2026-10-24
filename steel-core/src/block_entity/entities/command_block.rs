@@ -136,7 +136,8 @@ impl CommandBlockEntity {
         if previous_automatic
             || !automatic
             || self.is_powered()
-            || Self::mode_for_block(self.get_block_state().get_block()) == CommandBlockMode::Sequence
+            || Self::mode_for_block(self.get_block_state().get_block())
+                == CommandBlockMode::Sequence
         {
             return;
         }
@@ -265,8 +266,9 @@ impl CommandBlockEntity {
                     .opposite(),
             );
             if is_command_block(world.get_block_state(relative).get_block()) {
-                world
-                    .get_block_entity(relative)
+                let block_entity = world.get_block_entity(relative);
+                block_entity
+                    .as_ref()
                     .and_then(|entity| entity.downcast_ref::<CommandBlockEntity>())
                     .is_some_and(|entity| entity.success_count() > 0)
             } else {
@@ -300,12 +302,7 @@ impl CommandBlockEntity {
     ) {
         let (mode, was_condition_met, powered, auto) = {
             let state = self.state.lock();
-            (
-                state.mode,
-                state.condition_met,
-                state.powered,
-                state.auto,
-            )
+            (state.mode, state.condition_met, state.powered, state.auto)
         };
 
         match mode {
@@ -360,6 +357,8 @@ impl BlockEntity for CommandBlockEntity {
             state.track_output = view.byte("TrackOutput").unwrap_or(1) != 0;
             state.last_output = if state.track_output {
                 TextComponent::from_optional_nbt_tag(view.get("LastOutput"))
+                    .ok()
+                    .flatten()
             } else {
                 None
             };

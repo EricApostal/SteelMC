@@ -394,14 +394,18 @@ impl BlockEntity for BeaconBlockEntity {
         }
 
         if scan_complete {
-            // TODO: Trigger the CONSTRUCT_BEACON criterion for nearby players on activation once
-            //       Steel's shared advancement foundations exist.
             let sound = match (previous_levels > 0, levels > 0) {
                 (false, true) => &sound_events::BLOCK_BEACON_ACTIVATE,
                 (true, false) => &sound_events::BLOCK_BEACON_DEACTIVATE,
                 _ => return,
             };
             Self::play_sound(world, pos, sound);
+
+            // Vanilla `BeaconBlockEntity.tick` fires `CONSTRUCT_BEACON` for the players
+            // around a beacon that just activated, with the beacon's new level.
+            if previous_levels <= 0 && levels > 0 {
+                crate::behavior::advancement_hooks::raise_construct_beacon(world, pos, levels);
+            }
         }
     }
 
@@ -414,5 +418,69 @@ impl BlockEntity for BeaconBlockEntity {
             self.get_block_pos(),
             &sound_events::BLOCK_BEACON_DEACTIVATE,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Weak};
+
+    use glam::DVec3;
+    use steel_registry::{init_vanilla_registry, vanilla_blocks};
+    use steel_utils::types::UpdateFlags;
+    use steel_utils::{BlockPos, ChunkPos};
+
+    use super::{BEACON_TICK_INTERVAL, BeaconBlockEntity};
+    use crate::behavior::advancement_hooks::test_support::criterion_granted;
+    use crate::block_entity::BlockEntity;
+    use crate::entity::Entity as _;
+    use crate::player::ResetReason;
+    use crate::test_support::{
+        TestPlayerBuilder, advance_test_game_time_to, fresh_test_world, insert_ready_full_chunk,
+    };
+
+    /// Vanilla `BeaconBlockEntity.tick` fires `CONSTRUCT_BEACON` for the players around a
+    /// beacon the moment a completed pyramid scan takes it from zero levels to an active
+    /// level, which is what `minecraft:nether/create_beacon` listens for.
+    #[test]
+    fn activating_pyramid_grants_the_create_beacon_criterion() {
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world("beacon_construct_beacon");
+        let world = &world_fixture.world;
+        let pos = BlockPos::new(8, 64, 8);
+        insert_ready_full_chunk(world, ChunkPos::from_block_pos(pos));
+
+        // A full four-level pyramid (`BeaconBlockEntity.updateBase`).
+        for step in 1..=4 {
+            for x in -step..=step {
+                for z in -step..=step {
+                    assert!(world.set_block(
+                        pos.offset(x, -step, z),
+                        vanilla_blocks::IRON_BLOCK.default_state(),
+                        UpdateFlags::UPDATE_ALL
+                    ));
+                }
+            }
+        }
+        let state = vanilla_blocks::BEACON.default_state();
+        assert!(world.set_block(pos, state, UpdateFlags::UPDATE_ALL));
+
+        let player = TestPlayerBuilder::new(Arc::clone(world), "BeaconTester", 1).build();
+        assert!(
+            player
+                .try_set_position(DVec3::new(8.5, 64.05, 6.5))
+                .is_ok()
+        );
+        assert!(world.add_player(Arc::clone(&player), ResetReason::InitialJoin));
+
+        let beacon = BeaconBlockEntity::new(Weak::clone(&Arc::downgrade(world)), pos, state);
+        let start = world.game_time();
+        for offset in 0..BEACON_TICK_INTERVAL * 4 {
+            advance_test_game_time_to(world, start + offset);
+            beacon.tick(world);
+        }
+
+        assert_eq!(beacon.state().lock().levels, 4, "the pyramid is active");
+        assert!(criterion_granted(&player, "nether/create_beacon", "beacon"));
     }
 }

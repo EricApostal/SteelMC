@@ -28,7 +28,7 @@ use crate::command::brigadier::{
     ArgumentSuggestionContext, CommandContext, CommandNodeBuilder, CommandRedirectTarget,
     CommandRuntime, CommandSyntaxError, ContextChain,
 };
-use crate::command::execution::argument::{AdvancementValue, DamageTypeValue};
+use crate::command::execution::argument::{AdvancementValue, DamageTypeValue, DialogValue};
 use crate::command::incorrectly_typed_argument;
 use crate::{
     chunk::heightmap::HeightmapType,
@@ -41,6 +41,7 @@ use simdnbt::owned::NbtTag;
 use steel_registry::advancement::registry::AdvancementRef;
 use steel_registry::attribute::AttributeRef;
 use steel_registry::damage_type::DamageTypeRef;
+use steel_registry::dialog::DialogRef;
 use steel_registry::data_components::vanilla_components::SwingAnimationType;
 use steel_registry::mob_effect::MobEffectRef;
 use steel_registry::particle_type::ParticleTypeRef;
@@ -540,6 +541,12 @@ where
     pub(crate) fn style(&self, name: &str) -> Result<&Format, CommandSyntaxError> {
         self.typed_argument::<StyleValue>(name)
             .map(|value| &value.0)
+    }
+
+    /// Returns the registered dialog selected by a dialog argument.
+    pub(crate) fn dialog(&self, name: &str) -> Result<DialogRef, CommandSyntaxError> {
+        self.typed_argument::<DialogValue>(name)
+            .map(|value| value.0)
     }
 }
 

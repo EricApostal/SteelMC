@@ -70,12 +70,13 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::enchantment_effect::EnchantmentEffectComponent;
+use steel_registry::entity_type::EntityAttachmentPoint;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::AbstractHorseEntityData;
 use steel_registry::{
-    REGISTRY, TaggedRegistryExt as _, vanilla_attributes, vanilla_blocks, vanilla_item_tags,
-    vanilla_items,
+    REGISTRY, TaggedRegistryExt as _, sound_events, vanilla_attributes, vanilla_blocks,
+    vanilla_item_tags, vanilla_items,
 };
 use steel_utils::entity_events::EntityStatus;
 use steel_utils::locks::{IntoShared, Shared, SyncMutex};
@@ -84,7 +85,9 @@ use steel_utils::{Downcast as _, UuidExt as _};
 
 use crate::behavior::InteractionResult;
 use crate::entity::ai::goal::{Goal, GoalControls, PanicGoal};
+use crate::entity::attribute::AttributeInstance;
 use crate::entity::entities::mobs::passive::camel::CamelEntity;
+use crate::entity::entities::mobs::passive::llama::{LlamaEntity, TraderLlamaEntity};
 use crate::entity::npc::inventory_carrier::InventoryCarrier;
 use crate::entity::{
     AgeableMob, AgeableMobGroupData, Animal, Entity, LivingEntity, PathfinderMob, SharedEntity,
@@ -123,6 +126,8 @@ pub(crate) const AMBIENT_STAND_INTERVAL: i32 = 400;
 pub(crate) struct AbstractHorseParts {
     /// Vanilla `AbstractHorse.temper`.
     temper: SyncMutex<i32>,
+    /// Vanilla `AbstractHorse.getMaxTemper`; `Llama` overrides it with 30.
+    max_temper: i32,
     /// Vanilla `AbstractHorse.owner` (`EntityReference` reduced to its UUID).
     owner: SyncMutex<Option<uuid::Uuid>>,
     /// Vanilla `AbstractHorse.inventory`; empty while `getInventoryColumns` is 0.
@@ -156,6 +161,7 @@ impl AbstractHorseParts {
     pub(crate) fn new(can_gallop: bool) -> Self {
         Self {
             temper: SyncMutex::new(DEFAULT_TEMPER),
+            max_temper: MAX_TEMPER,
             owner: SyncMutex::new(None),
             inventory: InventoryCarrier::new(0).into_shared(),
             inventory_generation: Arc::new(AtomicU32::new(0)),
@@ -180,9 +186,20 @@ impl AbstractHorseParts {
         *self.temper.lock() = temper;
     }
 
+    /// Vanilla `AbstractHorse.getMaxTemper`.
+    #[must_use]
+    pub(crate) const fn max_temper(&self) -> i32 {
+        self.max_temper
+    }
+
+    /// Sets vanilla `getMaxTemper`; used by `Llama` (30 instead of 100).
+    pub(crate) fn set_max_temper(&mut self, max_temper: i32) {
+        self.max_temper = max_temper;
+    }
+
     /// Vanilla `AbstractHorse.modifyTemper`: clamped to `0..=getMaxTemper()`.
     pub(crate) fn modify_temper(&self, amount: i32) -> i32 {
-        let temper = (self.temper() + amount).clamp(0, MAX_TEMPER);
+        let temper = (self.temper() + amount).clamp(0, self.max_temper);
         self.set_temper(temper);
         temper
     }
@@ -200,14 +217,14 @@ impl AbstractHorseParts {
 
     /// Vanilla `AbstractHorse.inventory`.
     #[must_use]
-    pub(crate) fn inventory(&self) -> &Shared<InventoryCarrier> {
+    pub(crate) const fn inventory(&self) -> &Shared<InventoryCarrier> {
         &self.inventory
     }
 
     /// The mount inventory as a menu container.
     #[must_use]
     pub(crate) fn inventory_container(&self) -> ContainerRef {
-        ContainerRef::from(self.inventory.clone())
+        ContainerRef::from(Arc::clone(&self.inventory))
     }
 
     /// The rebuild token an open mount menu compares against.
@@ -320,7 +337,7 @@ impl AbstractHorseParts {
 
     /// Vanilla `AbstractHorse.canGallop`.
     #[must_use]
-    pub(crate) fn can_gallop(&self) -> bool {
+    pub(crate) const fn can_gallop(&self) -> bool {
         self.can_gallop
     }
 
@@ -341,26 +358,16 @@ impl AbstractHorseParts {
         *self.player_jump_pending_scale.lock()
     }
 
-    /// Sets vanilla `AbstractHorse.playerJumpPendingScale`.
-    pub(crate) fn set_player_jump_pending_scale(&self, value: f32) {
-        *self.player_jump_pending_scale.lock() = value;
-    }
-
     /// Vanilla `AbstractHorse.allowStandSliding`.
     #[must_use]
     pub(crate) fn allow_stand_sliding(&self) -> bool {
         *self.allow_stand_sliding.lock()
     }
-
-    /// Sets vanilla `AbstractHorse.allowStandSliding`.
-    pub(crate) fn set_allow_stand_sliding(&self, value: bool) {
-        *self.allow_stand_sliding.lock() = value;
-    }
 }
 
 /// Vanilla `AbstractHorse.getFlag`.
 #[must_use]
-pub(crate) fn get_flag(data: &AbstractHorseEntityData, flag: i8) -> bool {
+pub(crate) const fn get_flag(data: &AbstractHorseEntityData, flag: i8) -> bool {
     *data.id_flags.get() & flag != 0
 }
 
@@ -377,25 +384,25 @@ pub(crate) fn set_flag(data: &mut AbstractHorseEntityData, flag: i8, value: bool
 
 /// Vanilla `AbstractHorse.isTamed`.
 #[must_use]
-pub(crate) fn is_tamed(data: &AbstractHorseEntityData) -> bool {
+pub(crate) const fn is_tamed(data: &AbstractHorseEntityData) -> bool {
     get_flag(data, FLAG_TAME)
 }
 
 /// Vanilla `AbstractHorse.isEating`.
 #[must_use]
-pub(crate) fn is_eating(data: &AbstractHorseEntityData) -> bool {
+pub(crate) const fn is_eating(data: &AbstractHorseEntityData) -> bool {
     get_flag(data, FLAG_EATING)
 }
 
 /// Vanilla `AbstractHorse.isStanding`.
 #[must_use]
-pub(crate) fn is_standing(data: &AbstractHorseEntityData) -> bool {
+pub(crate) const fn is_standing(data: &AbstractHorseEntityData) -> bool {
     get_flag(data, FLAG_STANDING)
 }
 
 /// Vanilla `AbstractHorse.isBred`.
 #[must_use]
-pub(crate) fn is_bred(data: &AbstractHorseEntityData) -> bool {
+pub(crate) const fn is_bred(data: &AbstractHorseEntityData) -> bool {
     get_flag(data, FLAG_BRED)
 }
 
@@ -448,16 +455,16 @@ pub(crate) fn generate_speed() -> f64 {
 /// Vanilla `AbstractHorse.createOffspringAttribute`.
 #[must_use]
 pub(crate) fn create_offspring_attribute(
-    parent_a_value: f64,
-    parent_b_value: f64,
+    parent_one_value: f64,
+    parent_two_value: f64,
     attribute_range_min: f64,
     attribute_range_max: f64,
 ) -> f64 {
-    let parent_a_value = parent_a_value.clamp(attribute_range_min, attribute_range_max);
-    let parent_b_value = parent_b_value.clamp(attribute_range_min, attribute_range_max);
+    let parent_one_value = parent_one_value.clamp(attribute_range_min, attribute_range_max);
+    let parent_two_value = parent_two_value.clamp(attribute_range_min, attribute_range_max);
     let margin = 0.15 * (attribute_range_max - attribute_range_min);
-    let range = (parent_a_value - parent_b_value).abs() + margin * 2.0;
-    let average = (parent_a_value + parent_b_value) / 2.0;
+    let range = (parent_one_value - parent_two_value).abs() + margin * 2.0;
+    let average = parent_one_value.midpoint(parent_two_value);
     let baby_quality =
         (rand::random::<f64>() + rand::random::<f64>() + rand::random::<f64>()) / 3.0 - 0.5;
     let new_value = average + range * baby_quality;
@@ -508,12 +515,12 @@ pub(crate) fn set_offspring_attributes(
             .attributes()
             .lock()
             .get_instance(attribute)
-            .map_or(0.0, |instance| instance.base_value());
+            .map_or(0.0, AttributeInstance::base_value);
         let parent_b = partner
             .attributes()
             .lock()
             .get_instance(attribute)
-            .map_or(0.0, |instance| instance.base_value());
+            .map_or(0.0, AttributeInstance::base_value);
         let value = create_offspring_attribute(parent_a, parent_b, min, max);
         baby.attributes().lock().set_base_value(attribute, value);
     }
@@ -527,10 +534,21 @@ pub(crate) fn is_horse_food(item_stack: &ItemStack) -> bool {
         .is_in_tag(item_stack.item(), &vanilla_item_tags::ItemTag::HORSE_FOOD)
 }
 
-/// Vanilla `AbstractHorse.getEquipSound`: saddle uses `HORSE_SADDLE`.
+/// Vanilla `AbstractHorse.getEquipSound`: the saddle uses `HORSE_SADDLE`,
+/// otherwise the equippable component's own sound.
+///
+/// The `LivingEntity::equip_sound` default body is inlined for the fallback: a
+/// UFCS call on the concrete type resolves back to the override and recurses.
 #[must_use]
-pub(crate) fn equip_sound(slot: EquipmentSlot) -> Option<SoundEventRef> {
-    (slot == EquipmentSlot::Saddle).then_some(&steel_registry::sound_events::ENTITY_HORSE_SADDLE)
+pub(crate) fn equip_sound(slot: EquipmentSlot, stack: &ItemStack) -> Option<SoundEventRef> {
+    if slot == EquipmentSlot::Saddle {
+        return Some(&sound_events::ENTITY_HORSE_SADDLE);
+    }
+
+    let equippable = stack.get_equippable()?;
+    (slot == equippable.slot)
+        .then(|| equippable.equip_sound.registry_ref())
+        .flatten()
 }
 
 /// Vanilla `AbstractChestedHorse.equipChest`: consume the chest and rebuild the
@@ -697,6 +715,10 @@ pub(crate) fn open_vehicle_inventory(vehicle: &dyn Entity, player: &Player) -> b
         horse.open_custom_inventory_screen(player);
     } else if let Some(camel) = mob.downcast_ref::<CamelEntity>() {
         camel.open_custom_inventory_screen(player);
+    } else if let Some(llama) = mob.downcast_ref::<LlamaEntity>() {
+        llama.open_custom_inventory_screen(player);
+    } else if let Some(llama) = mob.downcast_ref::<TraderLlamaEntity>() {
+        llama.open_custom_inventory_screen(player);
     } else {
         return false;
     }
@@ -986,7 +1008,7 @@ pub(crate) fn tick_abstract_horse<E: Animal + ?Sized>(
 
 /// Vanilla `AbstractHorse.isImmobile` tail: `isEating() || isStanding()`.
 #[must_use]
-pub(crate) fn is_immobile_from_state(data: &AbstractHorseEntityData) -> bool {
+pub(crate) const fn is_immobile_from_state(data: &AbstractHorseEntityData) -> bool {
     is_eating(data) || is_standing(data)
 }
 
@@ -1078,11 +1100,7 @@ pub(crate) fn play_step_sound<E: Animal + ?Sized>(
         if counter > 5 && counter % 3 == 0 {
             entity.play_sound(gallop_sound, 0.15, 1.0);
         } else if counter <= 5 {
-            entity.play_sound(
-                &steel_registry::sound_events::ENTITY_HORSE_STEP_WOOD,
-                0.15,
-                1.0,
-            );
+            entity.play_sound(&sound_events::ENTITY_HORSE_STEP_WOOD, 0.15, 1.0);
         }
     } else if AgeableMob::is_baby(entity) {
         entity.play_sound(baby_step_sound, 0.15, 1.0);
@@ -1148,6 +1166,12 @@ fn equine(mob: &dyn PathfinderMob) -> Option<&dyn Equine> {
     }
     if let Some(horse) = mob.downcast_ref::<ZombieHorseEntity>() {
         return Some(horse);
+    }
+    if let Some(llama) = mob.downcast_ref::<LlamaEntity>() {
+        return Some(llama);
+    }
+    if let Some(llama) = mob.downcast_ref::<TraderLlamaEntity>() {
+        return Some(llama);
     }
     None
 }
@@ -1252,7 +1276,7 @@ impl Goal for MountPanicGoal {
     }
 
     fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
-        let mob_controlled = equine(mob).is_some_and(|horse| horse.is_mob_controlled());
+        let mob_controlled = equine(mob).is_some_and(Equine::is_mob_controlled);
         !mob_controlled && self.inner.can_use(mob)
     }
 
@@ -1301,7 +1325,7 @@ impl RandomStandGoal {
         }
     }
 
-    fn reset_stand_interval(&mut self) {
+    const fn reset_stand_interval(&mut self) {
         self.next_stand = -self.interval;
     }
 }
@@ -1493,10 +1517,8 @@ pub(crate) fn max_up_step<E: LivingEntity + ?Sized>(entity: &E) -> f32 {
 /// Vanilla `AbstractHorse` baby passenger attachment for the horse-shaped
 /// variants: `attach(PASSENGER, 0, height - 0.125, 0)` then `scale(0.7)`.
 #[must_use]
-pub(crate) const fn horse_baby_passenger_attachments(
-    height: f32,
-) -> [steel_registry::entity_type::EntityAttachmentPoint; 1] {
-    [steel_registry::entity_type::EntityAttachmentPoint::new(
+pub(crate) const fn horse_baby_passenger_attachments(height: f32) -> [EntityAttachmentPoint; 1] {
+    [EntityAttachmentPoint::new(
         0.0,
         (height as f64 - 0.125) * 0.7,
         0.0,
@@ -1508,10 +1530,10 @@ pub(crate) const fn horse_baby_passenger_attachments(
 #[must_use]
 pub(crate) const fn chested_horse_baby_passenger_attachments(
     height: f32,
-) -> [steel_registry::entity_type::EntityAttachmentPoint; 1] {
-    [steel_registry::entity_type::EntityAttachmentPoint::new(
+) -> [EntityAttachmentPoint; 1] {
+    [EntityAttachmentPoint::new(
         0.0,
-        (height as f64 + 0.03125) * 0.5,
+        (height as f64).midpoint(0.03125),
         -0.3125 * 0.5,
     )]
 }

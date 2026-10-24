@@ -5,14 +5,16 @@
 //! mob's main hand and drives the state machine through the shared navigation.
 
 use glam::DVec3;
+use steel_registry::data_components::components::KineticWeapon;
 use steel_registry::data_components::vanilla_components::KINETIC_WEAPON;
+use steel_registry::equipment::EquipmentSlot;
 use steel_utils::types::InteractionHand;
 
 use super::random_pos::default_random_pos_away;
 use super::reduced_tick_delay;
 use super::selector::{Goal, GoalControls};
 use crate::entity::ai::control::rotate_towards;
-use crate::entity::{Mob as _, PathfinderMob, SharedEntity};
+use crate::entity::{PathfinderMob, SharedEntity};
 
 /// Vanilla `SpearUseGoal.MAX_FLEEING_TIME`.
 const MAX_FLEEING_TIME: i32 = 50;
@@ -56,7 +58,7 @@ impl SpearUseState {
     }
 
     /// Vanilla `SpearUseState.tickAndCheckEngagement`.
-    fn tick_and_check_engagement(&mut self) -> bool {
+    const fn tick_and_check_engagement(&mut self) -> bool {
         if self.engage_time > 0 {
             self.engage_time -= 1;
             if self.engage_time == 0 {
@@ -67,7 +69,7 @@ impl SpearUseState {
     }
 
     /// Vanilla `SpearUseState.tickAndCheckFleeing`.
-    fn tick_and_check_fleeing(&mut self) -> bool {
+    const fn tick_and_check_fleeing(&mut self) -> bool {
         if self.fleeing_time > 0 {
             self.fleeing_time += 1;
             if self.fleeing_time > MAX_FLEEING_TIME {
@@ -132,24 +134,20 @@ impl SpearUseGoal {
         }
 
         let mut holds_kinetic_weapon = false;
-        mob.with_equipment_slot(
-            steel_registry::equipment::EquipmentSlot::MainHand,
-            &mut |item_stack| holds_kinetic_weapon = item_stack.has(KINETIC_WEAPON),
-        );
+        mob.with_equipment_slot(EquipmentSlot::MainHand, &mut |item_stack| {
+            holds_kinetic_weapon = item_stack.has(KINETIC_WEAPON);
+        });
         holds_kinetic_weapon
     }
 
     /// Vanilla `SpearUseGoal.getKineticWeaponUseDuration`.
     fn kinetic_weapon_use_duration(mob: &dyn PathfinderMob) -> i32 {
         let mut duration = 0;
-        mob.with_equipment_slot(
-            steel_registry::equipment::EquipmentSlot::MainHand,
-            &mut |item_stack| {
-                duration = item_stack
-                    .get(KINETIC_WEAPON)
-                    .map_or(0, |weapon| weapon.compute_damage_use_duration());
-            },
-        );
+        mob.with_equipment_slot(EquipmentSlot::MainHand, &mut |item_stack| {
+            duration = item_stack
+                .get(KINETIC_WEAPON)
+                .map_or(0, KineticWeapon::compute_damage_use_duration);
+        });
         reduced_tick_delay(duration)
     }
 }
@@ -203,7 +201,7 @@ impl Goal for SpearUseGoal {
             .as_mob()
             .map_or(1.0, |vehicle| f64::from(vehicle.charge_speed_modifier()));
 
-        Self::look_at_target(mob, target);
+        Self::look_at_target(mob, &target);
         let target_position = target.position();
         mob.mob_base().controls().lock().look_control.set_look_at(
             DVec3::new(target_position.x, target.get_eye_y(), target_position.z),

@@ -27,7 +27,7 @@
 use std::sync::Arc;
 
 use glam::DVec3;
-use steel_protocol::packet_traits::{ClientPacket as _, EncodedPacket};
+use steel_protocol::packet_traits::EncodedPacket;
 use steel_protocol::packets::game::{CExplode, ExplosionBlockParticle};
 use steel_protocol::utils::ConnectionProtocol;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;

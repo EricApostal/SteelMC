@@ -14,7 +14,7 @@ use steel_utils::{BlockPos, BlockStateId, BoundingBox, Direction, Identifier, ty
 use super::StructurePiecePlacer;
 use crate::chunk::heightmap::HeightmapType;
 use crate::entity::{entities::ChestMinecartEntity, next_entity_id};
-use crate::world::{LevelAccessor as _, LevelReader as _};
+
 use crate::worldgen::generator::vanilla::fuzzed_biome_at_block;
 use crate::worldgen::template::TemplateLevelAccess;
 use steel_worldgen::structure::mineshaft::{

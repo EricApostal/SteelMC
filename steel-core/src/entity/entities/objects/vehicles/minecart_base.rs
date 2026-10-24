@@ -28,6 +28,8 @@ use steel_registry::items::ItemRef;
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entity_data::AbstractMinecartEntityData;
 use steel_registry::{vanilla_blocks, vanilla_game_events, vanilla_game_rules};
+use steel_utils::axis::Axis;
+use steel_utils::block_util::FoundRectangle;
 use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, BlockStateId, Downcast as _};
 
@@ -46,24 +48,24 @@ use super::minecart::MinecartEntity;
 use super::spawner_minecart::SpawnerMinecartEntity;
 use super::tnt_minecart::TntMinecartEntity;
 
-/// Vanilla `NewMinecartBehavior.getMaxSpeed` divides the rule value by the tick rate.
-const MAX_SPEED_PER_SECOND_DIVISOR: f64 = 20.0;
+/// Vanilla `OldMinecartBehavior.MAX_SPEED_ON_LAND`, in blocks per tick.
+const MAX_SPEED_ON_LAND: f64 = 0.4;
+/// Vanilla `OldMinecartBehavior.MAX_SPEED_IN_WATER`, in blocks per tick.
+const MAX_SPEED_IN_WATER: f64 = 0.2;
 
-/// Vanilla `NewMinecartBehavior.getMaxSpeed`: `max_minecart_speed` in blocks per
-/// second, halved in water.
+/// Vanilla `OldMinecartBehavior.getMaxSpeed`: `0.4` blocks per tick on land and
+/// `0.2` in water.
 ///
-/// Vanilla reads the rule only while carts use the experimental
-/// `NewMinecartBehavior` (`minecart_improvements` feature flag). Steel has no
-/// feature-flag system and always uses the stable behaviour (see the module
-/// docs), so the rule is honoured here; its default value `8` reproduces the
-/// stable behaviour's `0.4`/`0.2` speeds exactly.
-pub(super) fn default_max_speed(cart: &impl Minecart, world: &World) -> f64 {
-    let speed = f64::from(world.get_game_rule(&vanilla_game_rules::MAX_MINECART_SPEED))
-        / MAX_SPEED_PER_SECOND_DIVISOR;
+/// Vanilla reads the `max_minecart_speed` game rule only from the experimental
+/// `NewMinecartBehavior`, which is gated behind the off-by-default
+/// `minecart_improvements` feature flag. Steel always uses the stable behaviour
+/// (see the module docs), so — exactly as in vanilla — the rule has no effect on
+/// minecart speed.
+pub(super) fn default_max_speed(cart: &impl Minecart, _world: &World) -> f64 {
     if cart.is_in_water() {
-        speed * 0.5
+        MAX_SPEED_IN_WATER
     } else {
-        speed
+        MAX_SPEED_ON_LAND
     }
 }
 /// Vanilla `AbstractMinecart.WATER_SLOWDOWN_FACTOR`.
@@ -115,7 +117,7 @@ fn rail_shape(state: BlockStateId) -> Option<RailShape> {
 ///
 /// Endpoints are block-relative offsets; a non-zero Y means that endpoint is one
 /// block up or down.
-pub(super) fn exits(shape: RailShape) -> (IVec3, IVec3) {
+pub(super) const fn exits(shape: RailShape) -> (IVec3, IVec3) {
     let x_neg = IVec3::new(-1, 0, 0);
     let x_pos = IVec3::new(1, 0, 0);
     let z_neg = IVec3::new(0, 0, -1);
@@ -220,6 +222,10 @@ pub(super) fn base_natural_slowdown(cart: &impl Minecart, movement: DVec3) -> DV
 /// Implementors only supply their synchronized-data plumbing and the handful of
 /// variant-specific knobs (`default_display_block_state`, `max_speed`,
 /// `apply_natural_slowdown`, `activate_minecart`, `drop_item`, `is_rideable`).
+#[expect(
+    dead_code,
+    reason = "vanilla `AbstractMinecart.getDefaultDisplayBlockState`/`getDisplayBlockState`/`getRedstoneDirection`: every cart variant implements the default and the shared redstone helpers, but Steel has no client sync path reading them yet"
+)]
 pub(super) trait Minecart: Entity + Sized {
     /// Per-cart rail contact and rotation state.
     fn cart_state(&self) -> &SyncMutex<MinecartState>;
@@ -354,12 +360,19 @@ pub(super) trait Minecart: Entity + Sized {
         self.with_minecart_data_mut(|data| data.vehicle_entity.id_damage.set(damage));
     }
 
-    /// Vanilla `AbstractMinecart.animateHurt`: wobble the cart on damage.
-    fn animate_minecart_hurt(&self) {
+    /// Vanilla `VehicleEntity.hurtServer` wobble: the cart absorbs
+    /// `amount * 10` damage and is destroyed once its accumulated damage passes
+    /// `40.0`.
+    ///
+    /// Vanilla's `AbstractMinecart.animateHurt(float)` looks similar but is
+    /// client-only (called from `ClientPacketListener` on the hurt packet) and
+    /// scales the *existing* damage instead of the incoming amount, so it must
+    /// not be used here.
+    fn mark_minecart_hurt(&self, amount: f32) {
         self.set_hurt_dir(-self.hurt_dir());
         self.set_hurt_time(10);
-        let damage = self.hurt_damage();
-        self.set_hurt_damage(damage + damage * 10.0);
+        self.mark_hurt();
+        self.set_hurt_damage(self.hurt_damage() + amount * 10.0);
     }
 
     /// Vanilla `AbstractMinecart.getCurrentBlockPosOrRailBelow` for the old behavior.
@@ -527,6 +540,10 @@ pub(super) trait Minecart: Entity + Sized {
     }
 
     /// Vanilla `OldMinecartBehavior.moveAlongTrack`.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "vanilla `OldMinecartBehavior.moveAlongTrack` mirrors the Java method one-to-one"
+    )]
     fn move_along_track(self: Arc<Self>, world: &Arc<World>) {
         let pos = self.current_block_pos_or_rail_below();
         let state = world.get_block_state(pos);
@@ -799,8 +816,7 @@ pub(super) trait Minecart: Entity + Sized {
             return false;
         }
 
-        self.animate_minecart_hurt();
-        self.mark_hurt();
+        self.mark_minecart_hurt(amount);
         self.game_event_with_source_entity(
             &vanilla_game_events::ENTITY_DAMAGE,
             source.causing_entity().map(|entity| &**entity),
@@ -848,8 +864,8 @@ pub(super) trait Minecart: Entity + Sized {
 /// Vanilla `AbstractMinecart.getRelativePortalPosition` for carts.
 pub(super) fn minecart_relative_portal_position(
     entity: &dyn Entity,
-    axis: steel_utils::axis::Axis,
-    portal_area: steel_utils::block_util::FoundRectangle,
+    axis: Axis,
+    portal_area: FoundRectangle,
 ) -> DVec3 {
     reset_forward_direction_of_relative_portal_position(PortalShape::get_relative_position(
         portal_area,
@@ -857,4 +873,50 @@ pub(super) fn minecart_relative_portal_position(
         entity.position(),
         entity.dimensions_for_pose(entity.pose()),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Weak};
+
+    use steel_registry::{vanilla_entities, vanilla_game_rules};
+
+    use super::*;
+    use crate::test_support::fresh_test_world;
+
+    fn plain_cart(world: Weak<World>) -> MinecartEntity {
+        MinecartEntity::new(
+            &vanilla_entities::MINECART,
+            1,
+            DVec3::new(8.5, 64.0, 8.5),
+            world,
+        )
+    }
+
+    #[test]
+    fn minecart_damage_absorbs_ten_times_the_incoming_amount() {
+        let cart = plain_cart(Weak::new());
+
+        // Vanilla `VehicleEntity.hurtServer`: `setDamage(getDamage() + amount * 10.0f)`.
+        cart.mark_minecart_hurt(5.0);
+        assert_eq!(cart.hurt_damage(), 50.0);
+        assert_eq!(cart.hurt_time(), 10);
+
+        cart.mark_minecart_hurt(0.5);
+        assert_eq!(cart.hurt_damage(), 55.0);
+    }
+
+    #[test]
+    fn minecart_max_speed_follows_old_behavior_not_the_improvements_rule() {
+        let world_fixture = fresh_test_world("minecart_old_behavior_max_speed");
+        let world = &world_fixture.world;
+        world.set_game_rule(&vanilla_game_rules::MAX_MINECART_SPEED, 20);
+
+        let cart = plain_cart(Arc::downgrade(world));
+
+        // Vanilla reads `max_minecart_speed` only from the experimental
+        // `NewMinecartBehavior`; the stable behavior stays at 0.4 on land.
+        assert_eq!(default_max_speed(&cart, world), MAX_SPEED_ON_LAND);
+        assert!(!cart.is_in_water());
+    }
 }

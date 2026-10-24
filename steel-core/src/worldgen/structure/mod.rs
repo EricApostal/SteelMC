@@ -8,8 +8,6 @@ use steel_utils::{BlockPos, BoundingBox, ChunkPos, Identifier};
 use steel_worldgen::structure::StructureGenerationContext;
 
 use crate::chunk::Chunk;
-use crate::world::LevelReader as _;
-use crate::world::LevelReader as _;
 use crate::worldgen::template::TemplateLevelAccess;
 
 pub use steel_worldgen::structure::{

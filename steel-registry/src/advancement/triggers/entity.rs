@@ -12,7 +12,6 @@ use crate::advancement::predicates::{
     IntBounds, ItemPredicate, MobEffectsPredicate, item_predicate_matches,
 };
 use crate::advancement::triggers::{EventBase, PlayerCondition, TriggerEvent};
-use crate::item_stack::ItemStack;
 use steel_utils::Identifier;
 
 /// Testes every entry of `victims` against a distinct entity of `entities`
@@ -977,6 +976,3 @@ impl CriterionTrigger for TargetHitTrigger {
 
 /// The static `minecraft:target_hit` trigger.
 pub static TARGET_HIT: TargetHitTrigger = TargetHitTrigger;
-
-/// Vanilla `ItemStack` conversion helper for triggers holding a tool stack.
-pub(crate) type TriggerItemStack = ItemStack;

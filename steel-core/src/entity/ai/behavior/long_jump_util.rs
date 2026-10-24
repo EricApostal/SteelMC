@@ -4,6 +4,7 @@
 //! `pub(crate) mod long_jump_util;`.
 
 use glam::DVec3;
+use std::f32::consts::PI;
 use steel_utils::WorldAabb;
 
 use crate::behavior::BlockCollisionContext;
@@ -29,7 +30,7 @@ pub fn calculate_jump_vector_for_angle(
             * 0.5;
     let target_position = target_pos - direction_vector_plane;
     let direction_vector = target_position - mob_pos;
-    let angrad = angle as f32 * f32::consts::PI / 180.0;
+    let angrad = angle as f32 * PI / 180.0;
     let xz_ang = direction_vector.z.atan2(direction_vector.x);
     let r2 = (direction_vector - DVec3::new(0.0, direction_vector.y, 0.0)).length_squared();
     let r = r2.sqrt();
@@ -147,6 +148,6 @@ fn has_no_collision(body: &SharedEntity, bounds: &WorldAabb) -> bool {
 }
 
 /// Vanilla `Mth.ceil`.
-fn ceil_to_i32(value: f64) -> i32 {
+const fn ceil_to_i32(value: f64) -> i32 {
     value.ceil() as i32
 }

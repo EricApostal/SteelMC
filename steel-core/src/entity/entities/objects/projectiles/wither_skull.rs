@@ -16,13 +16,13 @@ use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::particle_type::ParticleData;
 use steel_registry::vanilla_entity_data::WitherSkullEntityData;
 use steel_registry::{
-    sound_events, vanilla_damage_types, vanilla_entities, vanilla_mob_effects,
-    vanilla_particle_types,
+    sound_events, vanilla_damage_types, vanilla_mob_effects, vanilla_particle_types,
 };
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::Difficulty;
 use steel_utils::{DowncastType, DowncastTypeKey};
 
+use crate::entity::MobEffectInstance;
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::objects::projectiles::hurting::{
     ExplosionInteraction, ExplosionSpec, HurtingProjectile, HurtingProjectileState,
@@ -32,7 +32,6 @@ use crate::entity::{
     Entity, EntityBase, EntityBaseLoad, EntitySyncedData, Projectile, ProjectileBase,
     ProjectileHit, RemovalReason, SharedEntity,
 };
-use crate::entity::{LivingEntity, MobEffectInstance};
 use crate::world::World;
 
 /// Vanilla `WitherSkull.getInertia` for the dangerous variant.
@@ -49,7 +48,7 @@ const MAGIC_FALLBACK_DAMAGE: f32 = 5.0;
 
 /// Vanilla difficulty-scaled wither durations (easy: none, normal: 10s, hard: 40s).
 /// Peaceful despawns all attacking mobs in vanilla, so no duration applies either.
-fn wither_ticks(difficulty: Difficulty) -> i32 {
+const fn wither_ticks(difficulty: Difficulty) -> i32 {
     match difficulty {
         Difficulty::Normal => 200,
         Difficulty::Hard => 800,
@@ -259,7 +258,7 @@ impl Projectile for WitherSkullEntity {
             && wither_ticks(world.difficulty()) > 0
         {
             living.add_mob_effect(MobEffectInstance::with_duration(
-                &vanilla_mob_effects::WITHER,
+                vanilla_mob_effects::WITHER,
                 wither_ticks(world.difficulty()),
                 1,
             ));
@@ -299,7 +298,6 @@ mod tests {
     use glam::DVec3;
     use steel_registry::{init_vanilla_registry, vanilla_entities};
 
-    use crate::entity::Entity;
     use crate::world::World;
 
     use super::WitherSkullEntity;

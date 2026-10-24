@@ -31,7 +31,7 @@ pub(crate) struct TradeWithPlayerGoal {
 }
 
 impl TradeWithPlayerGoal {
-    pub(crate) fn new(state: Arc<TraderState>) -> Self {
+    pub(crate) const fn new(state: Arc<TraderState>) -> Self {
         Self { state }
     }
 }
@@ -72,7 +72,7 @@ pub(crate) struct LookAtTradingPlayerGoal {
 }
 
 impl LookAtTradingPlayerGoal {
-    pub(crate) fn new(state: Arc<TraderState>) -> Self {
+    pub(crate) const fn new(state: Arc<TraderState>) -> Self {
         Self {
             state,
             look_time: 0,
@@ -121,7 +121,11 @@ pub(crate) struct WanderToPositionGoal {
 }
 
 impl WanderToPositionGoal {
-    pub(crate) fn new(state: Arc<TraderState>, stop_distance: f64, speed_modifier: f64) -> Self {
+    pub(crate) const fn new(
+        state: Arc<TraderState>,
+        stop_distance: f64,
+        speed_modifier: f64,
+    ) -> Self {
         Self {
             state,
             stop_distance,

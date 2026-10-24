@@ -9,9 +9,14 @@ use rustc_hash::FxHashMap;
 use steel_utils::{BlockPos, PackedBlockPos};
 
 use super::node_evaluator::VANILLA_HORIZONTAL_DIRECTIONS;
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+
+use crate::behavior::BlockStateBehaviorExt as _;
+use crate::fluid::FluidStateExt as _;
+
 use super::{
-    BlockStateExt as _, Direction, FluidStateExt as _, MobPathSettings, Node, NodeStore,
-    PathComputationType, PathType, PathfindingContext, WalkNeighbors, fast_floor,
+    Direction, MobPathSettings, Node, NodeStore, PathComputationType, PathType, PathfindingContext,
+    WalkNeighbors, fast_floor,
 };
 
 /// Vanilla `SwimNodeEvaluator`.

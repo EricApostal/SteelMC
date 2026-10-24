@@ -14,12 +14,12 @@ use steel_utils::Downcast as _;
 use steel_utils::types::InteractionHand;
 
 use super::utils;
+use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::MemoryStatus;
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::ai::brain::tracker::EntityTracker;
 use crate::entity::entities::mobs::illager::PillagerEntity;
-use crate::entity::{LivingEntity as _, SharedEntity};
 
 /// Vanilla `CrossbowAttack.TIMEOUT`.
 const TIMEOUT: i32 = 1200;
@@ -91,7 +91,8 @@ impl CrossbowAttack {
     fn is_holding_crossbow(body: &SharedEntity) -> bool {
         let mut holding = false;
         body.with_weapon_item(&mut |item| {
-            holding = item.is_some_and(|stack| ptr::eq(stack.item(), &*vanilla_items::CROSSBOW));
+            holding = item
+                .is_some_and(|stack| ptr::eq(stack.item(), &raw const *vanilla_items::CROSSBOW));
         });
         holding
     }
@@ -141,7 +142,10 @@ impl Behavior for CrossbowAttack {
             return;
         };
 
-        utils::set_look_target(ctx, Arc::new(EntityTracker::new(target.clone(), true)));
+        utils::set_look_target(
+            ctx,
+            Arc::new(EntityTracker::new(SharedEntity::clone(&target), true)),
+        );
 
         match self.crossbow_state {
             CrossbowState::Uncharged => {

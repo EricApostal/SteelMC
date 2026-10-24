@@ -10,7 +10,7 @@
 //! trident. Vanilla's `shouldRender` (always true) is client-local and has no
 //! server counterpart.
 //!
-//! GAP(thrown_trident): channeling does not summon its lightning bolt or play
+//! GAP(`thrown_trident`): channeling does not summon its lightning bolt or play
 //! `ITEM_TRIDENT_THUNDER`. The enchantment data is present
 //! (`CHANNELING.effects.post_attack` = `SummonEntity { LIGHTNING_BOLT }` +
 //! `PlaySound { ITEM_TRIDENT_THUNDER, 5.0, 1.0 }`) and the bolt path exists
@@ -21,22 +21,22 @@
 //! requirement parses as `EnchantmentEffectRequirements::Unsupported`, so the
 //! post-attack fold silently skips it. Wiring the effect belongs in
 //! `enchantment_helper`, not here.
-//! GAP(thrown_trident): `hitBlockEnchantmentEffects` (block-hit enchantment
+//! GAP(`thrown_trident`): `hitBlockEnchantmentEffects` (block-hit enchantment
 //! effects with an `onBreak` callback) is not run — `enchantment_helper`
 //! exposes no `on_hit_block` fold (also TODO in [`AbstractArrow`]).
-//! GAP(thrown_trident): the weapon-break callback that kills the trident is not
+//! GAP(`thrown_trident`): the weapon-break callback that kills the trident is not
 //! invoked — `enchantment_helper::do_post_attack_effects_with_item_source` has
 //! no `on_break` callback.
-//! GAP(thrown_trident): vanilla deflects with
+//! GAP(`thrown_trident`): vanilla deflects with
 //! `new Vec3(0.02, 0.2, 0.02)` as the power vector (the trident nearly stops
 //! after a hit), while `Projectile::deflect` takes no power vector and
 //! `ProjectileDeflection::Reverse` always scales by `-0.5`, so the trident
 //! bounces off at full strength instead.
-//! GAP(thrown_trident): vanilla gates the hit sound and the bounce on
+//! GAP(`thrown_trident`): vanilla gates the hit sound and the bounce on
 //! `Entity.projectileReceivesSideEffectsOnHit(wasHurt)` (overridden by
 //! `Enderman` to `wasHurt`), which Steel's [`Entity`] trait does not expose, so
 //! an unhurt Enderman still plays `ITEM_TRIDENT_HIT` and deflects the trident.
-//! GAP(thrown_trident): the old-position snapshot used for client interpolation
+//! GAP(`thrown_trident`): the old-position snapshot used for client interpolation
 //! is taken after the loyalty pull instead of before it —
 //! `AbstractArrow::abstract_arrow_tick` snapshots unconditionally at its start
 //! and offers no pre-tick hook.
@@ -537,10 +537,10 @@ impl AbstractArrow for ThrownTridentEntity {
     /// Vanilla `ThrownTrident.tickDespawn`: a loyal trident that can be picked
     /// up never despawns while it is flying back.
     fn tick_despawn(&self) {
-        if self.abstract_arrow_base().pickup() != Pickup::Allowed || self.loyalty() <= 0 {
-            if self.abstract_arrow_base().increment_life() >= DESPAWN_TICKS {
-                self.set_removed(RemovalReason::Discarded);
-            }
+        if (self.abstract_arrow_base().pickup() != Pickup::Allowed || self.loyalty() <= 0)
+            && self.abstract_arrow_base().increment_life() >= DESPAWN_TICKS
+        {
+            self.set_removed(RemovalReason::Discarded);
         }
     }
 }

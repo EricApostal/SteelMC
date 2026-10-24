@@ -12,10 +12,13 @@
 //! - the summoned vex is not added to the evoker's scoreboard team: Steel's scoreboard teams
 //!   are owned by the scoreboard lane and the evoker has no team accessor yet.
 
+use std::f32::consts::PI;
 use std::iter;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
+use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
+use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::Direction;
@@ -156,10 +159,7 @@ impl EvokerEntity {
             }
             goals.add_goal(4, SpellcasterUseSpellGoal::new(EvokerSummonSpell));
             goals.add_goal(5, SpellcasterUseSpellGoal::new(EvokerAttackSpell));
-            goals.add_goal(
-                6,
-                SpellcasterUseSpellGoal::new(EvokerWololoSpell::default()),
-            );
+            goals.add_goal(6, SpellcasterUseSpellGoal::new(EvokerWololoSpell));
             goals.add_goal(8, RandomStrollGoal::new(0.6));
             goals.add_goal(9, LookAtPlayerGoal::new(3.0));
             goals.add_goal(
@@ -238,6 +238,10 @@ impl EvokerEntity {
 
     /// Vanilla `SpellcasterIllager.getCastingSoundEvent`.
     #[must_use]
+    #[expect(
+        clippy::unused_self,
+        reason = "vanilla instance method reached through the `Spellcaster` UFCS shim"
+    )]
     pub fn casting_sound(&self) -> SoundEventRef {
         &sound_events::ENTITY_EVOKER_CAST_SPELL
     }
@@ -317,14 +321,14 @@ impl Entity for EvokerEntity {
             .unwrap_or(f64::from(DEFAULT_STEP_HEIGHT)) as f32
     }
 
-    fn save_additional(&self, nbt: &mut simdnbt::owned::NbtCompound) {
+    fn save_additional(&self, nbt: &mut NbtCompound) {
         self.save_mob(nbt);
         self.raider_base.save(nbt);
         // Vanilla `SpellcasterIllager.addAdditionalSaveData`.
         nbt.insert("SpellTicks", self.spell_casting_tick_count());
     }
 
-    fn load_additional(&self, nbt: simdnbt::borrow::NbtCompound<'_, '_>) {
+    fn load_additional(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
         self.load_mob(nbt);
         if let Some(raid_id) = self.raider_base.load(&nbt) {
             self.rejoin_saved_raid(raid_id);
@@ -506,7 +510,7 @@ impl SpellcasterSpell for EvokerAttackSpell {
 
         if mob.distance_to_sqr(target_pos) < FANGS_ARC_DISTANCE_SQR {
             for i in 0..5 {
-                let fang_angle = angle + i as f32 * f32::consts::PI * 0.4;
+                let fang_angle = angle + i as f32 * PI * 0.4;
                 create_fang(
                     &world,
                     origin.x + f64::from(fang_angle.cos()) * 1.5,
@@ -520,8 +524,7 @@ impl SpellcasterSpell for EvokerAttackSpell {
             }
 
             for i in 0..8 {
-                let fang_angle =
-                    angle + i as f32 * f32::consts::PI * 2.0 / 8.0 + (f32::consts::PI * 2.0 / 5.0);
+                let fang_angle = angle + i as f32 * PI * 2.0 / 8.0 + (PI * 2.0 / 5.0);
                 create_fang(
                     &world,
                     origin.x + f64::from(fang_angle.cos()) * 2.5,
@@ -553,6 +556,10 @@ impl SpellcasterSpell for EvokerAttackSpell {
 
 /// Vanilla `Evoker.EvokerAttackSpellGoal.createSpellEntity`: places a fang on the first sturdy
 /// floor between the maximum and minimum height, and only when one was found.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "vanilla `EvokerAttackSpellGoal.createSpellEntity` takes the same eight parameters"
+)]
 fn create_fang(
     world: &Arc<World>,
     x: f64,
@@ -730,7 +737,7 @@ impl EvokerWololoSpell {
         if blue.is_empty() {
             return None;
         }
-        Some(blue[rand::random_range(0..blue.len())].clone())
+        Some(Arc::clone(&blue[rand::random_range(0..blue.len())]))
     }
 }
 

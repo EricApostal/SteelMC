@@ -41,11 +41,13 @@ use steel_protocol::packets::game::{
 use steel_registry::advancement::registry::AdvancementRef;
 use steel_registry::attribute::AttributeRef;
 use steel_registry::damage_type::DamageTypeRef;
+use steel_registry::dialog::DialogRef;
 use steel_registry::data_components::vanilla_components::SwingAnimationType;
 use steel_registry::mob_effect::MobEffectRef;
 use steel_registry::particle_type::ParticleTypeRef;
 use steel_registry::{
-    DAMAGE_TYPE_REGISTRY, ENCHANTMENT_REGISTRY, ENTITY_TYPE_REGISTRY, MOB_EFFECT_REGISTRY,
+    DAMAGE_TYPE_REGISTRY, DIALOG_REGISTRY, ENCHANTMENT_REGISTRY, ENTITY_TYPE_REGISTRY,
+    MOB_EFFECT_REGISTRY,
     REGISTRY, RegistryExt as _, TIMELINE_REGISTRY, WORLD_CLOCK_REGISTRY,
     enchantment::EnchantmentRef, entity_type::EntityTypeRef, item_stack::ItemStack,
     timeline::TimelineRef, world_clock::WorldClockRef,
@@ -370,6 +372,12 @@ impl SteelArgumentType {
         Self::new(AdvancementParser)
     }
 
+    /// Vanilla `ResourceOrIdArgument.dialog`: registered `minecraft:dialog`
+    /// entries by key.
+    pub(crate) fn dialog() -> Self {
+        Self::new(DialogParser)
+    }
+
     pub(crate) fn world_clock() -> Self {
         Self::new(WorldClockParser)
     }
@@ -661,6 +669,7 @@ argument_value_wrapper!(
     DamageTypeValue(DamageTypeRef),
     "steel:command/value/damage_type"
 );
+argument_value_wrapper!(DialogValue(DialogRef), "steel:command/value/dialog");
 argument_value_wrapper!(ItemStackValue(ItemStack), "steel:command/value/item_stack");
 argument_value_wrapper!(
     ComponentValue(TextComponent),
@@ -1560,6 +1569,27 @@ unit_argument_parser!(
         },
         None,
     )
+);
+unit_argument_parser!(
+    DialogParser,
+    "steel:command/parser/dialog",
+    DialogValue,
+    parse | reader,
+    _source | {
+        let key = parse_identifier(reader)?;
+        REGISTRY.dialogs.by_key(&key).map_or_else(
+            || Err(unknown_resource(reader, &key, &DIALOG_REGISTRY)),
+            |dialog| Ok(DialogValue(dialog)),
+        )
+    },
+    suggest | _context,
+    builder | {
+        suggest_resources(
+            REGISTRY.dialogs.iter().map(|(_, dialog)| &dialog.key),
+            builder,
+        );
+    },
+    protocol(ProtocolArgumentType::Dialog, None)
 );
 unit_argument_parser!(
     AdvancementParser,

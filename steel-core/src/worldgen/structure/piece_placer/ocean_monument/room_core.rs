@@ -5,9 +5,7 @@ use super::{
 
 use crate::worldgen::template::TemplateLevelAccess;
 
-pub(super) fn place_core_room<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
-) {
+pub(super) fn place_core_room<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, L>) {
     generate_box_on_fill_only(placer, 1, 8, 0, 14, 8, 14, base_gray());
     placer.generate_box(0, 7, 0, 0, 7, 15, base_light(), base_light(), false);
     placer.generate_box(15, 7, 0, 15, 7, 15, base_light(), base_light(), false);
@@ -82,7 +80,7 @@ pub(super) fn place_core_room<L: TemplateLevelAccess>(
 }
 
 pub(super) fn place_entry_room<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     room: OceanMonumentRoomData,
 ) {
     placer.generate_box(0, 3, 0, 2, 3, 7, base_light(), base_light(), false);

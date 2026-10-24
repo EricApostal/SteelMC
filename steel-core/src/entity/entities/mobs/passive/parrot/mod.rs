@@ -389,7 +389,7 @@ fn tree_position(mob: &dyn PathfinderMob) -> Option<DVec3> {
 ///
 /// GAP: vanilla uses `HoverRandomPos`/`AirAndWaterRandomPos`; Steel has no port
 /// of those helpers, so this uses an equivalent directional hover pick.
-fn aerial_position(mob: &dyn PathfinderMob) -> Option<DVec3> {
+fn aerial_position(mob: &dyn PathfinderMob) -> DVec3 {
     let position = mob.position();
     let (yaw, _) = mob.rotation();
     let yaw = f64::from(yaw).to_radians();
@@ -399,11 +399,11 @@ fn aerial_position(mob: &dyn PathfinderMob) -> Option<DVec3> {
 
     let distance = rand::random_range(3.0..=f64::from(FLYING_RANDOM_HORIZONTAL));
     let height = rand::random_range(AERIAL_MIN_HEIGHT..=AERIAL_MAX_HEIGHT);
-    Some(DVec3::new(
+    DVec3::new(
         position.x + direction_x * distance,
         position.y + height,
         position.z + direction_z * distance,
-    ))
+    )
 }
 
 /// Vanilla `LandRandomPos.getPos(mob, 15, 15)` water fallback.
@@ -769,7 +769,7 @@ impl ParrotEntity {
             return false;
         }
 
-        let chosen = candidates[rand::random_range(0..candidates.len())].clone();
+        let chosen = Arc::clone(&candidates[rand::random_range(0..candidates.len())]);
         if chosen.is_silent() {
             return false;
         }
@@ -1327,18 +1327,14 @@ impl Mob for ParrotEntity {
             0,
         ));
 
-        if player.has_infinite_materials() || !self.is_invulnerable() {
-            if let Some(world) = self.level() {
-                let source = world
-                    .get_entity_by_id(player.id())
-                    .map(|attacker| {
-                        DamageSource::direct(&vanilla_damage_types::PLAYER_ATTACK, attacker)
-                    })
-                    .unwrap_or_else(|| {
-                        DamageSource::environment(&vanilla_damage_types::PLAYER_ATTACK)
-                    });
-                let _ = self.hurt(&world, &source, f32::MAX);
-            }
+        if (player.has_infinite_materials() || !self.is_invulnerable())
+            && let Some(world) = self.level()
+        {
+            let source = world.get_entity_by_id(player.id()).map_or_else(
+                || DamageSource::environment(&vanilla_damage_types::PLAYER_ATTACK),
+                |attacker| DamageSource::direct(&vanilla_damage_types::PLAYER_ATTACK, attacker),
+            );
+            let _ = self.hurt(&world, &source, f32::MAX);
         }
 
         InteractionResult::Success
@@ -1368,17 +1364,17 @@ impl ParrotWanderGoal {
     }
 
     /// Vanilla `Parrot.ParrotWanderGoal.getPosition`.
-    fn pick_position(mob: &dyn PathfinderMob) -> Option<DVec3> {
+    fn pick_position(mob: &dyn PathfinderMob) -> DVec3 {
         if mob.is_in_water()
             && let Some(position) = water_position(mob)
         {
-            return Some(position);
+            return position;
         }
 
         if rand::random::<f32>() >= WANDER_PROBABILITY
             && let Some(position) = tree_position(mob)
         {
-            return Some(position);
+            return position;
         }
 
         aerial_position(mob)
@@ -1401,10 +1397,7 @@ impl Goal for ParrotWanderGoal {
             return false;
         }
 
-        let Some(position) = Self::pick_position(mob) else {
-            return false;
-        };
-        self.wanted_position = Some(position);
+        self.wanted_position = Some(Self::pick_position(mob));
         true
     }
 

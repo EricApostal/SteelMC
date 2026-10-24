@@ -16,9 +16,9 @@ use steel_utils::Direction;
 use crate::behavior::ItemBehavior;
 use crate::behavior::items::ProjectileItem;
 use crate::entity::entities::objects::projectiles::{
-    AbstractArrow, ArrowEntity, Pickup, SpectralArrowEntity,
+    ARROW_SPAWN_EYE_OFFSET, AbstractArrow, ArrowEntity, Pickup, SpectralArrowEntity,
 };
-use crate::entity::{SharedEntity, next_entity_id};
+use crate::entity::{Entity as _, SharedEntity, next_entity_id};
 use crate::world::World;
 
 /// Behavior for the arrow item.
@@ -85,33 +85,42 @@ impl ProjectileItem for SpectralArrowItem {
 /// Creates the arrow entity a bow or crossbow fires from `stack`
 /// (vanilla `ArrowItem.createArrow`).
 ///
+/// Vanilla's `ArrowItem.createArrow` builds the arrow from the shooter, so the
+/// entity spawns at the shooter's eyes minus [`ARROW_SPAWN_EYE_OFFSET`]; a
+/// rotation-less spawn origin would drop the arrow at the shooter's feet.
 /// Tipped arrows keep their potion contents through the pickup stack; a
 /// spectral arrow stack yields a [`SpectralArrowEntity`].
 #[must_use]
 pub fn create_arrow(
     world: &Arc<World>,
-    position: DVec3,
     stack: &ItemStack,
-    owner: Option<&SharedEntity>,
+    shooter: &SharedEntity,
     fired_from_weapon: Option<&ItemStack>,
 ) -> SharedEntity {
+    let shooter_position = shooter.position();
+    let spawn_position = DVec3::new(
+        shooter_position.x,
+        shooter.get_eye_y() - ARROW_SPAWN_EYE_OFFSET,
+        shooter_position.z,
+    );
+
     if stack.is(&vanilla_items::SPECTRAL_ARROW) {
         let arrow = SpectralArrowEntity::new(
             &vanilla_entities::SPECTRAL_ARROW,
             next_entity_id(),
-            position,
+            spawn_position,
             Arc::downgrade(world),
         );
-        arrow.init_arrow(stack.copy_with_count(1), fired_from_weapon, owner);
+        arrow.init_arrow(stack.copy_with_count(1), fired_from_weapon, Some(shooter));
         return Arc::new(arrow);
     }
 
     let arrow = ArrowEntity::new(
         &vanilla_entities::ARROW,
         next_entity_id(),
-        position,
+        spawn_position,
         Arc::downgrade(world),
     );
-    arrow.init_arrow(stack.copy_with_count(1), fired_from_weapon, owner);
+    arrow.init_arrow(stack.copy_with_count(1), fired_from_weapon, Some(shooter));
     Arc::new(arrow)
 }

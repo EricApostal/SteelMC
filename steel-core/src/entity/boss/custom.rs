@@ -81,7 +81,7 @@ impl CustomBossEvent {
 
     /// Vanilla `CustomBossEvent.getName`.
     #[must_use]
-    pub fn name(&self) -> &TextComponent {
+    pub const fn name(&self) -> &TextComponent {
         self.event.name()
     }
 
@@ -276,7 +276,7 @@ impl CustomBossEvent {
     }
 
     /// The mutable shared presentation state.
-    pub fn event_mut(&mut self) -> &mut ServerBossEvent {
+    pub const fn event_mut(&mut self) -> &mut ServerBossEvent {
         &mut self.event
     }
 
@@ -341,7 +341,7 @@ impl CustomBossEvent {
         bar.set_darken_screen(record.darken_screen);
         bar.set_play_boss_music(record.play_boss_music);
         bar.set_create_world_fog(record.create_world_fog);
-        bar.players = record.players.clone();
+        bar.players.clone_from(&record.players);
         bar.event.mark_saved();
         bar
     }
@@ -436,7 +436,7 @@ fn parse_overlay(name: &str) -> BossBarOverlay {
 }
 
 /// Vanilla `BossBarColor.getSerializedName`.
-fn boss_bar_color_name(color: BossBarColor) -> &'static str {
+const fn boss_bar_color_name(color: BossBarColor) -> &'static str {
     match color {
         BossBarColor::Pink => "pink",
         BossBarColor::Blue => "blue",
@@ -449,7 +449,7 @@ fn boss_bar_color_name(color: BossBarColor) -> &'static str {
 }
 
 /// Vanilla `BossBarOverlay.getSerializedName`.
-fn boss_bar_overlay_name(overlay: BossBarOverlay) -> &'static str {
+const fn boss_bar_overlay_name(overlay: BossBarOverlay) -> &'static str {
     match overlay {
         BossBarOverlay::Progress => "progress",
         BossBarOverlay::Notched6 => "notched_6",
@@ -460,21 +460,11 @@ fn boss_bar_overlay_name(overlay: BossBarOverlay) -> &'static str {
 }
 
 /// Vanilla `CustomBossEvents` (`SavedData` `"custom_boss_events"`).
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct CustomBossEvents {
     events: BTreeMap<Identifier, CustomBossEvent>,
     ids: BTreeMap<Identifier, Uuid>,
     dirty: bool,
-}
-
-impl Default for CustomBossEvents {
-    fn default() -> Self {
-        Self {
-            events: BTreeMap::new(),
-            ids: BTreeMap::new(),
-            dirty: false,
-        }
-    }
 }
 
 impl CustomBossEvents {
@@ -486,6 +476,11 @@ impl CustomBossEvents {
 
     /// Vanilla `CustomBossEvents.create`: inserts a default bar, returning the
     /// existing bar when the id is already taken.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the bar inserted just above cannot be looked up again, which
+    /// cannot happen.
     pub fn create(&mut self, id: &Identifier) -> &mut CustomBossEvent {
         if !self.events.contains_key(id) {
             let uuid = Uuid::new_v4();
@@ -625,7 +620,7 @@ pub struct CustomBossEventsEntry {
 }
 
 /// Vanilla `BossEvent.BossBarColor.getFormatting` for the display name.
-fn boss_bar_text_color(color: BossBarColor) -> Color {
+const fn boss_bar_text_color(color: BossBarColor) -> Color {
     match color {
         BossBarColor::Pink => Color::Red,
         BossBarColor::Blue => Color::Blue,

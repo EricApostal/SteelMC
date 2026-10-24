@@ -1,6 +1,6 @@
 //! Vanilla `net.minecraft.world.entity.ai.behavior.ShootTongue`.
 //!
-//! The frog's `TONGUE` activity entry. `frog/brain.rs` (BrainMobs) registers it with
+//! The frog's `TONGUE` activity entry. `frog/brain.rs` (`BrainMobs`) registers it with
 //! the `FROG_TONGUE`/`FROG_EAT` sounds; this module owns the behavior itself.
 
 use steel_protocol::packets::game::SoundSource;

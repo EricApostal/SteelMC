@@ -87,9 +87,9 @@ impl Goal for SwellGoal {
             return;
         };
 
-        if mob.position().distance_squared(target.position()) > SWELL_STOP_RANGE_SQR {
-            creeper.set_swell_dir(-1);
-        } else if !mob.has_line_of_sight_cached(target.as_ref()) {
+        if mob.position().distance_squared(target.position()) > SWELL_STOP_RANGE_SQR
+            || !mob.has_line_of_sight_cached(target.as_ref())
+        {
             creeper.set_swell_dir(-1);
         } else {
             creeper.set_swell_dir(1);

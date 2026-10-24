@@ -7,7 +7,7 @@ use steel_utils::{BlockPos, BlockStateId, BoundingBox, Direction, types::UpdateF
 
 use super::StructurePiecePlacer;
 use crate::chunk::heightmap::HeightmapType;
-use crate::world::{LevelAccessor as _, LevelReader as _};
+
 use crate::worldgen::template::TemplateLevelAccess;
 
 const BURIED_TREASURE_LOOT: &str = "minecraft:chests/buried_treasure";

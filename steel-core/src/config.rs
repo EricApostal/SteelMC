@@ -204,8 +204,14 @@ pub struct ServerLinks {
 /// Configuration for world storage.
 #[derive(Debug, Clone)]
 pub enum WorldStorageConfig {
-    /// Standard disk persistence using region files.
+    /// Standard disk persistence using Steel's native region files (`.srg`).
     Disk {
+        /// Path to the region directory (e.g., "world/overworld/region").
+        path: String,
+    },
+    /// Vanilla Anvil persistence (`region/*.mca`, `entities/`, `poi/`, `level.dat`), so vanilla
+    /// 26.3 servers can open the world.
+    Anvil {
         /// Path to the world directory (e.g., "world/overworld").
         path: String,
     },

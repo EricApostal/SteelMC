@@ -37,7 +37,7 @@ impl BlockPosTracker {
     }
 
     #[must_use]
-    pub fn from_vec(position: DVec3) -> Self {
+    pub const fn from_vec(position: DVec3) -> Self {
         Self {
             block_pos: BlockPos::containing(position.x, position.y, position.z),
             center_position: position,
@@ -192,12 +192,12 @@ impl WalkTarget {
     }
 
     #[must_use]
-    pub fn speed_modifier(&self) -> f32 {
+    pub const fn speed_modifier(&self) -> f32 {
         self.speed_modifier
     }
 
     #[must_use]
-    pub fn close_enough_dist(&self) -> i32 {
+    pub const fn close_enough_dist(&self) -> i32 {
         self.close_enough_dist
     }
 }

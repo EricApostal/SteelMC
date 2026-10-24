@@ -18,15 +18,17 @@ mod small_fireball;
 mod snowball;
 mod spectral_arrow;
 mod thrown_egg;
-mod thrown_trident;
 mod thrown_experience_bottle;
 mod thrown_lingering_potion;
 mod thrown_potion;
 mod thrown_splash_potion;
+mod thrown_trident;
 mod wind_charge;
 mod wither_skull;
 
-pub use abstract_arrow::{AbstractArrow, AbstractArrowBase, Pickup, get_mob_arrow, piercing_count};
+pub use abstract_arrow::{
+    ARROW_SPAWN_EYE_OFFSET, AbstractArrow, AbstractArrowBase, Pickup, get_mob_arrow, piercing_count,
+};
 pub use area_effect_cloud::AreaEffectCloudEntity;
 pub use arrow::ArrowEntity;
 pub use breeze_wind_charge::BreezeWindChargeEntity;

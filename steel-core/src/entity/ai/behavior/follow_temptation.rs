@@ -151,7 +151,10 @@ impl Behavior for FollowTemptation {
             return;
         };
 
-        utils::set_look_target(ctx, Arc::new(EntityTracker::new(player.clone(), true)));
+        utils::set_look_target(
+            ctx,
+            Arc::new(EntityTracker::new(SharedEntity::clone(&player), true)),
+        );
 
         let body = ctx.body;
         let close_enough = self.close_enough_distance.apply(body);

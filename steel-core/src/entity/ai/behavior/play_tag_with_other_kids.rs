@@ -80,11 +80,14 @@ impl PlayTagWithOtherKids {
 
     /// Vanilla `PlayTagWithOtherKids.chaseKid`.
     fn chase_kid(ctx: &mut BehaviorContext<'_>, kid: &SharedEntity) {
-        ctx.set_memory(&mem::INTERACTION_TARGET, kid.clone());
-        utils::set_look_target(ctx, Arc::new(EntityTracker::new(kid.clone(), true)));
+        ctx.set_memory(&mem::INTERACTION_TARGET, SharedEntity::clone(kid));
+        utils::set_look_target(
+            ctx,
+            Arc::new(EntityTracker::new(SharedEntity::clone(kid), true)),
+        );
         utils::set_walk_target(
             ctx,
-            Arc::new(EntityTracker::new(kid.clone(), false)),
+            Arc::new(EntityTracker::new(SharedEntity::clone(kid), false)),
             CHASE_SPEED_MODIFIER,
             1,
         );

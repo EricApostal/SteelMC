@@ -7,6 +7,15 @@
 //! [`DatapackManager`], because [`crate::server::Server`] is a reserved
 //! integration file: `/reload`, `/datapack`, `/function` and `/schedule` all reach
 //! the manager through [`datapacks()`].
+//!
+//! `/reload` covers the datapack data this layer loads at runtime: pack discovery
+//! and selection, `mcfunction` bodies, and function tags (`data/<ns>/tags/function`).
+//! Vanilla's other data-pack registries are deliberately not reloadable here:
+//! block/item/… registry tags, recipes, loot tables, advancements and
+//! structure/feature JSON are compiled into typed Rust by the build scripts, per
+//! `AGENTS.md` ("Do not design for runtime datapack JSON loading"), so `/reload`
+//! has nothing to re-read for them and never resends the registry tag or recipe
+//! packets vanilla broadcasts from `PlayerList.reloadResources`.
 
 use std::{
     path::{Path, PathBuf},
@@ -27,16 +36,14 @@ pub(crate) mod schedule;
 
 pub(crate) use function::{
     Function, FunctionArguments, FunctionLoader, FunctionRegistry, InstantiationFailure,
-    macro_signature, run_function,
+    run_function,
 };
 pub(crate) use pack::PackError;
 pub(crate) use repository::{
     BuiltinPackSource, PackInsert, PackRepository, PackSelectionError, RepositorySource,
     WorldPackSource, world_datapack_dir,
 };
-pub(crate) use resource::{
-    MultiPackResourceManager, PreparableReloadListener, ReloadableResourceManager,
-};
+pub(crate) use resource::{MultiPackResourceManager, ReloadableResourceManager};
 pub(crate) use schedule::{ScheduleMode, ScheduleRegistry, ScheduledCallback};
 
 use crate::command::{execution::CommandSource, sender::CommandSender};
@@ -55,6 +62,8 @@ const LOAD_FUNCTION_TAG: Identifier = Identifier::vanilla_static("load");
 pub(crate) struct ReloadSummary {
     /// Number of enabled packs the reload read.
     pub(crate) packs_loaded: usize,
+    /// Ids of packs this reload selected for the first time.
+    pub(crate) new_packs: Vec<String>,
     /// Number of functions installed.
     pub(crate) functions_loaded: usize,
     /// Number of function tags installed.
@@ -124,17 +133,20 @@ impl DatapackManager {
         world_datapack_dir(&self.world_dir)
     }
 
-    /// Vanilla `PackRepository.reload` + resource reload: re-discovers packs from
-    /// the configured sources, then reloads every listener.
+    /// Vanilla `PackRepository.reload`: re-discovers packs from the configured
+    /// sources without re-reading resources.
     ///
     /// `/datapack list` calls this first, so a pack dropped into `datapacks/`
-    /// while the server runs becomes visible without a restart.
+    /// while the server runs becomes visible without a restart. Vanilla's `list`
+    /// does not re-read resources, and it never selects a pack that was not
+    /// already selected, so the new pack shows up under `list available` until
+    /// `/reload` or `/datapack enable` selects it.
     ///
     /// # Errors
-    /// Propagates [`PackError`] from discovery or a listener's prepare phase.
-    pub(crate) fn rediscover(&self) -> Result<ReloadSummary, PackError> {
+    /// Propagates [`PackError`] from discovery.
+    pub(crate) fn rediscover(&self) -> Result<(), PackError> {
         self.repository.write().rediscover()?;
-        self.reload_listeners()
+        Ok(())
     }
 
     /// The pack repository, for `/datapack list`.
@@ -155,22 +167,34 @@ impl DatapackManager {
         &self.schedules
     }
 
-    /// Vanilla `MinecraftServer.reloadResources`: re-reads every enabled pack and
-    /// re-runs every listener.
+    /// Vanilla `ReloadCommand` + `MinecraftServer.reloadResources`: re-discovers
+    /// packs, selects every pack the selection does not disable, persists the new
+    /// selection, then re-runs every listener.
     ///
     /// # Errors
-    /// Returns [`PackError`] when a listener fails to prepare; the previously
-    /// loaded state stays installed.
+    /// Returns [`PackError`] when discovery, the selection write, or a listener's
+    /// prepare phase fails; the previously loaded state stays installed.
     pub(crate) fn reload(&self) -> Result<ReloadSummary, PackError> {
-        // Vanilla re-discovers on `/reload` too (`DataPackCommand.list` relies on
-        // it); the current selection is preserved, so this only adds or drops packs
-        // whose directories appeared or vanished.
-        self.repository.write().rediscover()?;
-        self.reload_listeners()
+        // Vanilla `ReloadCommand.discoverNewPacks` re-discovers before the reload and
+        // hands the resulting id list to `reloadResources`, whose apply phase writes
+        // the new selection back into the world data.
+        let new_packs = {
+            let mut repository = self.repository.write();
+            let previously_enabled = repository.enabled_ids();
+            if repository.discover_new_packs()? {
+                repository.save_selection()?;
+            }
+            repository
+                .enabled_ids()
+                .into_iter()
+                .filter(|id| !previously_enabled.contains(id))
+                .collect()
+        };
+        self.reload_listeners(new_packs)
     }
 
     /// Rebuilds the resource overlay and re-runs every listener.
-    fn reload_listeners(&self) -> Result<ReloadSummary, PackError> {
+    fn reload_listeners(&self, new_packs: Vec<String>) -> Result<ReloadSummary, PackError> {
         let started = Instant::now();
         let (resources, packs_loaded) = {
             let repository = self.repository.read();
@@ -191,6 +215,7 @@ impl DatapackManager {
         let functions = self.functions.read();
         Ok(ReloadSummary {
             packs_loaded,
+            new_packs,
             functions_loaded: functions.len(),
             tags_loaded: functions.tag_ids().len(),
             elapsed: started.elapsed(),
@@ -299,7 +324,7 @@ pub(crate) fn tick(server: &Arc<Server>) {
             break;
         }
         for entry in due {
-            run_callback(&source, entry.callback);
+            run_callback(&source, entry);
         }
     }
 }
@@ -409,5 +434,64 @@ mod tests {
         assert!(repository.is_enabled("vanilla"));
         assert_eq!(repository.enabled_ids(), vec!["vanilla".to_owned()]);
         drop(DatapackManager::new(&world));
+    }
+
+    #[test]
+    fn reload_rereads_functions_and_function_tags() {
+        use steel_utils::Identifier;
+
+        let world = super::repository::temp_dir("reload-functions");
+        let pack = world.join("datapacks").join("reload_test");
+        let function_dir = pack.join("data/reload_test/function");
+        let tag_dir = pack.join("data/reload_test/tags/function");
+        std::fs::create_dir_all(&function_dir).unwrap();
+        std::fs::create_dir_all(&tag_dir).unwrap();
+        std::fs::write(
+            pack.join("pack.mcmeta"),
+            format!(
+                "{{\"pack\":{{\"min_format\":{format},\"max_format\":{format}}}}}",
+                format = super::pack::DATA_PACK_FORMAT
+            ),
+        )
+        .unwrap();
+
+        let manager = DatapackManager::new(&world).unwrap();
+        // The freshly discovered world pack is enabled at construction, like vanilla
+        // `MinecraftServer.configurePackRepository`, so it is already loaded.
+        assert!(
+            manager
+                .repository()
+                .read()
+                .is_enabled("file/reload_test")
+        );
+
+        let entry: Identifier = "reload_test:entry".parse().unwrap();
+        let tag: Identifier = "reload_test:tick".parse().unwrap();
+        assert!(manager.functions().read().get(&entry).is_none());
+
+        // A function added while the server runs becomes active on `/reload`.
+        std::fs::write(function_dir.join("entry.mcfunction"), "say hi\n").unwrap();
+        std::fs::write(
+            tag_dir.join("tick.json"),
+            "{\"values\":[\"reload_test:entry\"]}",
+        )
+        .unwrap();
+        manager.reload().unwrap();
+        assert!(manager.functions().read().get(&entry).is_some());
+        assert!(
+            manager
+                .functions()
+                .read()
+                .tagged(&tag)
+                .iter()
+                .any(|function| function.id == entry)
+        );
+
+        // Removing it drops it from the next reload as well.
+        std::fs::remove_file(function_dir.join("entry.mcfunction")).unwrap();
+        manager.reload().unwrap();
+        assert!(manager.functions().read().get(&entry).is_none());
+
+        std::fs::remove_dir_all(&world).ok();
     }
 }

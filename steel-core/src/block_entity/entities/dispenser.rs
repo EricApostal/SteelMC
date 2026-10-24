@@ -16,7 +16,7 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use rand::Rng as _;
+use rand::RngExt as _;
 use rand::SeedableRng as _;
 use rand::rngs::StdRng;
 use simdnbt::ToNbtTag;
@@ -567,7 +567,11 @@ mod tests {
         let container = dispenser.container.lock();
         assert!(container.loot_table.is_none());
         assert_eq!(
-            container.items.iter().filter(|item| !item.is_empty()).count(),
+            container
+                .items
+                .iter()
+                .filter(|item| !item.is_empty())
+                .count(),
             1
         );
         let slot = slot.expect("unpacked loot table should fill a slot");

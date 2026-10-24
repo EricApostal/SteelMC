@@ -1,14 +1,16 @@
 //! Vanilla `SpearRetreat`: fall back to a safe distance after the charge.
 
+use std::f64::consts::TAU;
 use std::sync::Arc;
 
 use glam::DVec3;
+use steel_registry::data_components::vanilla_components;
 
 use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::{MemoryModuleTypeRef, MemoryStatus, module_type as mem};
 use crate::entity::ai::brain::tracker::EntityTracker;
-use crate::entity::mob::Mob as _;
+use crate::entity::mob::Mob;
 
 use super::spear_attack::SpearStatus;
 
@@ -47,24 +49,28 @@ impl SpearRetreat {
     }
 
     /// Vanilla `ableToAttack`.
+    #[expect(
+        clippy::unused_self,
+        reason = "kept as a method to mirror vanilla `SpearRetreat.ableToAttack`"
+    )]
     fn able_to_attack(&self, ctx: &BehaviorContext<'_>) -> bool {
         Self::attack_target(ctx).is_some() && ctx.body.with_weapon_item_has_kinetic_weapon()
     }
 
     /// Vanilla's `LandRandomPos.getPosAway` for the fleeing position.
-    fn fleeing_position(ctx: &BehaviorContext<'_>, target: &SharedEntity) -> Option<DVec3> {
+    fn fleeing_position(ctx: &BehaviorContext<'_>, target: &SharedEntity) -> DVec3 {
         let mount_distance = f64::from(i32::from(ctx.body.is_passenger())) * 2.0;
         let target_pos = target.position();
         let distance = ctx.body.position().distance(target_pos);
         let min_dxz = (f64::from(MIN_COOLDOWN_DISTANCE) + mount_distance - distance).max(0.0);
         let max_dxz = (f64::from(MAX_COOLDOWN_DISTANCE) + mount_distance - distance).max(1.0);
-        let angle = rand::random_range(0.0..f64::consts::TAU);
+        let angle = rand::random_range(0.0..TAU);
         let radius = rand::random_range(min_dxz..max_dxz.max(min_dxz + 0.01));
-        Some(DVec3::new(
+        DVec3::new(
             target_pos.x + angle.cos() * radius,
             target_pos.y + f64::from(rand::random_range(-3..=3)),
             target_pos.z + angle.sin() * radius,
-        ))
+        )
     }
 }
 
@@ -78,9 +84,7 @@ impl WeaponItemKineticProbe for SharedEntity {
     fn with_weapon_item_has_kinetic_weapon(&self) -> bool {
         let mut has = false;
         self.with_weapon_item(&mut |item| {
-            has = item.is_some_and(|item| {
-                item.has(steel_registry::data_components::vanilla_components::KINETIC_WEAPON)
-            });
+            has = item.is_some_and(|item| item.has(vanilla_components::KINETIC_WEAPON));
         });
         has
     }
@@ -114,9 +118,7 @@ impl Behavior for SpearRetreat {
         let Some(target) = Self::attack_target(ctx) else {
             return false;
         };
-        let Some(away_pos) = Self::fleeing_position(ctx, &target) else {
-            return false;
-        };
+        let away_pos = Self::fleeing_position(ctx, &target);
         ctx.set_memory(&mem::SPEAR_FLEEING_POSITION, away_pos);
         true
     }
@@ -152,9 +154,7 @@ impl Behavior for SpearRetreat {
         ctx.set_memory(&mem::SPEAR_FLEEING_TIME, fleeing_time + 1);
 
         let boost = ctx.body.controlled_vehicle().map_or(1.0, |vehicle| {
-            vehicle
-                .as_mob()
-                .map_or(1.0, |mob| mob.charge_speed_modifier())
+            vehicle.as_mob().map_or(1.0, Mob::charge_speed_modifier)
         });
         if let (Some(flee_pos), Some(mob)) = (
             ctx.get_memory(&mem::SPEAR_FLEEING_POSITION),
@@ -163,7 +163,7 @@ impl Behavior for SpearRetreat {
             let flee: DVec3 = flee_pos;
             mob.move_to_pos(
                 flee,
-                f64::from(boost) * f64::from(self.speed_modifier_when_repositioning),
+                f64::from(boost) * self.speed_modifier_when_repositioning,
             );
         }
     }

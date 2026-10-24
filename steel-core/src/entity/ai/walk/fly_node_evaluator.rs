@@ -148,6 +148,10 @@ impl FlyNodeEvaluator {
 
     /// Vanilla `FlyNodeEvaluator.getNeighbors`: the full 26-neighborhood, each
     /// diagonal gated on the straight legs that lead to it.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keeping vanilla's ordered 26-neighborhood gating together makes parity auditable"
+    )]
     pub fn get_neighbors(
         &mut self,
         context: &mut PathfindingContext<'_>,
@@ -446,8 +450,9 @@ impl FlyNodeEvaluator {
     }
 
     /// Vanilla `FlyNodeEvaluator.getTarget`.
+    #[expect(clippy::unused_self, reason = "this is an api function")]
     #[must_use]
-    pub fn get_target(&self, x: i32, y: i32, z: i32) -> BlockPos {
+    pub const fn get_target(&self, x: i32, y: i32, z: i32) -> BlockPos {
         BlockPos::new(x, y, z)
     }
 

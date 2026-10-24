@@ -20,6 +20,7 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::data_components::components::CustomData;
 use steel_registry::data_components::vanilla_components::{
     AXOLOTL_VARIANT, BUCKET_ENTITY_DATA, CUSTOM_NAME,
@@ -47,6 +48,7 @@ use crate::entity::ai::brain::Brain;
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::mobs::water::abstract_fish::check_water_animal_spawn_obstruction;
+use crate::entity::leash::Leashable;
 use crate::entity::{
     AgeableMob, AgeableMobBase, AgeableMobGroupData, Animal, AnimalBase, Entity, EntityBase,
     EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData, LivingEntity,
@@ -166,6 +168,10 @@ impl AxolotlEntity {
 
     /// Vanilla `Axolotl.fromBucket`.
     #[must_use]
+    #[expect(
+        clippy::wrong_self_convention,
+        reason = "vanilla `Axolotl.fromBucket` getter; the name is shared with the other bucketable fish entities"
+    )]
     pub fn from_bucket(&self) -> bool {
         *self.entity_data.lock().from_bucket.get()
     }
@@ -198,7 +204,7 @@ impl AxolotlEntity {
     }
 
     /// Vanilla `Axolotl.Variant.getRareSpawnVariant`: only `Blue` is rare.
-    fn rare_variant() -> AxolotlVariant {
+    const fn rare_variant() -> AxolotlVariant {
         AxolotlVariant::Blue
     }
 
@@ -290,10 +296,6 @@ impl AxolotlEntity {
     ///
     /// `MobBucketItem` currently only applies generic item components, so the
     /// bucket's entity data is not fed back here yet (see the wave report).
-    #[expect(
-        dead_code,
-        reason = "vanilla Bucketable.loadFromBucketTag; the bucket item release path does not call it yet"
-    )]
     pub fn load_from_bucket_data(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
         if let Some(no_ai) = nbt.byte("NoAI") {
             self.set_no_ai(no_ai != 0);
@@ -737,10 +739,7 @@ impl Mob for AxolotlEntity {
 
     /// Vanilla `Axolotl.requiresCustomPersistence`.
     fn requires_custom_persistence(&self) -> bool {
-        (self.is_passenger()
-            || self
-                .as_leashable()
-                .is_some_and(|leashable| leashable.is_leashed()))
+        (self.is_passenger() || self.as_leashable().is_some_and(Leashable::is_leashed))
             || self.from_bucket()
     }
 

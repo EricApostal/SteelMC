@@ -116,7 +116,7 @@ pub trait ItemBehavior: Send + Sync {
         }
 
         let slot = equippable.slot;
-        let used_item = context.inv.with_item(ItemStack::item);
+        let used_item = context.inv.with_item(|item| item.item());
         let result = context.inv.with_inventory(|inventory| {
             inventory.try_swap_with_equipment_slot(
                 context.hand,
@@ -438,9 +438,10 @@ pub(crate) fn finish_consuming_stack(
     user.game_event(event);
     if let Some(player) = user.as_player() {
         player.award_stat(&vanilla_stat_types::ITEM_USED, stack.item());
+        // Vanilla `Consumable.onConsume` fires `CONSUME_ITEM` for the consuming
+        // player right after awarding the `used` stat, before the consume effects.
+        crate::behavior::advancement_hooks::raise_consume_item(player, world, stack);
     }
-    // TODO: Trigger CriteriaTriggers.CONSUME_ITEM once the advancement-criteria
-    // foundation exists.
 
     let mut used_stack = stack.copy_with_count(stack.count());
     if !user.has_infinite_materials() {
@@ -542,6 +543,7 @@ mod tests {
     use steel_utils::{ChunkPos, Downcast as _, WorldAabb};
 
     use super::finish_consuming_stack;
+    use crate::behavior::advancement_hooks::test_support::criterion_granted;
     use crate::behavior::{ITEM_BEHAVIORS, InteractionResult, UseItemContext, init_behaviors};
     use crate::entity::entities::ItemEntity;
     use crate::inventory::container::Container as _;
@@ -709,5 +711,33 @@ mod tests {
                 .map(|(_, count)| count),
             Some(1)
         );
+    }
+    /// Eating an item must report `minecraft:consume_item`, which
+    /// `minecraft:husbandry/balanced_diet` listens for with one criterion per food
+    /// (vanilla `Consumable.onConsume` fires it next to the `used` stat).
+    #[test]
+    fn consuming_an_item_grants_the_balanced_diet_criterion() {
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world("finish_consuming_grants_consume_item");
+        let world = &world_fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+        let player = TestPlayerBuilder::new(Arc::clone(world), "Test", 1).build();
+        player.set_client_loaded(true);
+
+        let stack = ItemStack::new(&vanilla_items::APPLE);
+        let _ = finish_consuming_stack(&stack, world, player.as_ref());
+
+        assert!(criterion_granted(
+            &player,
+            "husbandry/balanced_diet",
+            "apple"
+        ));
+
+        // A food the player has not eaten keeps its criterion open.
+        assert!(!criterion_granted(
+            &player,
+            "husbandry/balanced_diet",
+            "bread"
+        ));
     }
 }

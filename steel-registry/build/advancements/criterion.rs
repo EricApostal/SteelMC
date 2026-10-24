@@ -107,9 +107,9 @@ impl CriterionJson {
                         }
                     },
                     |slots| {
-                        let occupied = generator.int_bounds(slots.occupied);
-                        let full = generator.int_bounds(slots.full);
-                        let empty = generator.int_bounds(slots.empty);
+                        let occupied = CriterionGenerator::int_bounds(slots.occupied);
+                        let full = CriterionGenerator::int_bounds(slots.full);
+                        let empty = CriterionGenerator::int_bounds(slots.empty);
                         quote! {
                             InventoryChangedSlots { occupied: #occupied, full: #full, empty: #empty }
                         }
@@ -281,7 +281,7 @@ impl CriterionJson {
                 let blocks = generator.optional_holder_set(json.blocks);
                 let state = generator.optional_state(json.state);
                 let item = generator.optional_item_predicate(json.item);
-                let bees = generator.int_bounds(json.num_bees_inside);
+                let bees = CriterionGenerator::int_bounds(json.num_bees_inside);
                 (
                     quote! { BeeNestDestroyedTriggerInstance },
                     quote! {
@@ -343,8 +343,8 @@ impl CriterionJson {
             "changed_dimension" => {
                 let json: ChangedDimensionJson = conditions!(ChangedDimensionJson);
                 let player = generator.player(json.player);
-                let from = generator.optional_identifier(json.from.as_deref());
-                let to = generator.optional_identifier(json.to.as_deref());
+                let from = CriterionGenerator::optional_identifier(json.from.as_deref());
+                let to = CriterionGenerator::optional_identifier(json.to.as_deref());
                 (
                     quote! { ChangedDimensionTriggerInstance },
                     quote! {
@@ -355,7 +355,7 @@ impl CriterionJson {
             "brewed_potion" => {
                 let json: BrewedPotionJson = conditions!(BrewedPotionJson);
                 let player = generator.player(json.player);
-                let potion = generator.optional_identifier(json.potion.as_deref());
+                let potion = CriterionGenerator::optional_identifier(json.potion.as_deref());
                 (
                     quote! { BrewedPotionTriggerInstance },
                     quote! { BrewedPotionTriggerInstance { player: #player, potion: #potion } },
@@ -390,7 +390,7 @@ impl CriterionJson {
                 let json: KilledByArrowJson = conditions!(KilledByArrowJson);
                 let player = generator.player(json.player);
                 let victims = generator.conditions(json.victims);
-                let unique = generator.int_bounds(json.unique_entity_types);
+                let unique = CriterionGenerator::int_bounds(json.unique_entity_types);
                 let weapon = generator.optional_item_predicate(json.fired_from_weapon);
                 (
                     quote! { KilledByArrowTriggerInstance },
@@ -456,7 +456,7 @@ impl CriterionJson {
             "construct_beacon" => {
                 let json: BeaconJson = conditions!(BeaconJson);
                 let player = generator.player(json.player);
-                let level = generator.int_bounds(json.level);
+                let level = CriterionGenerator::int_bounds(json.level);
                 (
                     quote! { ConstructBeaconTriggerInstance },
                     quote! { ConstructBeaconTriggerInstance { player: #player, level: #level } },
@@ -491,7 +491,7 @@ impl CriterionJson {
                 let json: DistanceTriggerJson = conditions!(DistanceTriggerJson);
                 let player = generator.player(json.player);
                 let start = generator.optional_location(json.start_position);
-                let distance = generator.optional_distance(json.distance);
+                let distance = CriterionGenerator::optional_distance(json.distance);
                 (
                     quote! { DistanceTriggerInstance },
                     quote! {
@@ -507,7 +507,7 @@ impl CriterionJson {
                 let json: FallAfterExplosionJson = conditions!(FallAfterExplosionJson);
                 let player = generator.player(json.player);
                 let start = generator.optional_location(json.start_position);
-                let distance = generator.optional_distance(json.distance);
+                let distance = CriterionGenerator::optional_distance(json.distance);
                 let cause = generator.optional_condition(json.cause);
                 (
                     quote! { FallAfterExplosionTriggerInstance },
@@ -524,8 +524,8 @@ impl CriterionJson {
             "levitation" => {
                 let json: LevitationJson = conditions!(LevitationJson);
                 let player = generator.player(json.player);
-                let distance = generator.optional_distance(json.distance);
-                let duration = generator.int_bounds(json.duration);
+                let distance = CriterionGenerator::optional_distance(json.distance);
+                let duration = CriterionGenerator::int_bounds(json.duration);
                 (
                     quote! { LevitationTriggerInstance },
                     quote! {
@@ -557,8 +557,8 @@ impl CriterionJson {
                 let json: DurabilityJson = conditions!(DurabilityJson);
                 let player = generator.player(json.player);
                 let item = generator.optional_item_predicate(json.item);
-                let durability = generator.int_bounds(json.durability);
-                let delta = generator.int_bounds(json.delta);
+                let durability = CriterionGenerator::int_bounds(json.durability);
+                let delta = CriterionGenerator::int_bounds(json.delta);
                 (
                     quote! { ItemDurabilityChangedTriggerInstance },
                     quote! {
@@ -575,7 +575,7 @@ impl CriterionJson {
                 let json: EnchantedJson = conditions!(EnchantedJson);
                 let player = generator.player(json.player);
                 let item = generator.optional_item_predicate(json.item);
-                let levels = generator.int_bounds(json.levels);
+                let levels = CriterionGenerator::int_bounds(json.levels);
                 (
                     quote! { EnchantedItemTriggerInstance },
                     quote! {
@@ -586,7 +586,7 @@ impl CriterionJson {
             "used_ender_eye" => {
                 let json: UsedEnderEyeJson = conditions!(UsedEnderEyeJson);
                 let player = generator.player(json.player);
-                let distance = generator.double_bounds(json.distance);
+                let distance = CriterionGenerator::double_bounds(json.distance);
                 (
                     quote! { UsedEnderEyeTriggerInstance },
                     quote! { UsedEnderEyeTriggerInstance { player: #player, distance: #distance } },
@@ -679,32 +679,29 @@ impl CriterionGenerator {
     }
 
     fn optional_item_predicate(&mut self, item: Option<ItemPredicateJson>) -> TokenStream {
-        match item {
-            Some(item) => {
-                let item = self.item_predicate(&item);
-                quote! { Some(#item) }
-            }
-            None => quote! { None },
+        if let Some(item) = item {
+            let item = self.item_predicate(&item);
+            quote! { Some(#item) }
+        } else {
+            quote! { None }
         }
     }
 
     fn optional_condition(&mut self, condition: Option<ConditionJson>) -> TokenStream {
-        match condition {
-            Some(condition) => {
-                let condition = self.condition(&condition);
-                quote! { Some(#condition) }
-            }
-            None => quote! { None },
+        if let Some(condition) = condition {
+            let condition = self.condition(&condition);
+            quote! { Some(#condition) }
+        } else {
+            quote! { None }
         }
     }
 
     fn optional_holder_set(&mut self, set: Option<HolderSetJson>) -> TokenStream {
-        match set {
-            Some(set) => {
-                let set = self.holder_set(&set);
-                quote! { Some(#set) }
-            }
-            None => quote! { None },
+        if let Some(set) = set {
+            let set = self.holder_set(&set);
+            quote! { Some(#set) }
+        } else {
+            quote! { None }
         }
     }
 
@@ -774,32 +771,30 @@ impl CriterionGenerator {
     }
 
     fn optional_state(&mut self, state: Option<BTreeMap<String, String>>) -> TokenStream {
-        match state {
-            Some(state) => {
-                let elements: Vec<TokenStream> = state
-                    .iter()
-                    .map(|(name, value)| {
-                        quote! { PropertyCheck { name: #name, value: #value } }
-                    })
-                    .collect();
-                let properties = self.array(quote! { PropertyCheck }, elements);
-                quote! { Some(StatePropertiesPredicate { properties: #properties }) }
-            }
-            None => quote! { None },
+        if let Some(state) = state {
+            let elements: Vec<TokenStream> = state
+                .iter()
+                .map(|(name, value)| {
+                    quote! { PropertyCheck { name: #name, value: #value } }
+                })
+                .collect();
+            let properties = self.array(quote! { PropertyCheck }, elements);
+            quote! { Some(StatePropertiesPredicate { properties: #properties }) }
+        } else {
+            quote! { None }
         }
     }
 
-    fn optional_identifier(&mut self, value: Option<&str>) -> TokenStream {
-        match value {
-            Some(value) => {
-                let value = identifier(value);
-                quote! { Some(#value) }
-            }
-            None => quote! { None },
+    fn optional_identifier(value: Option<&str>) -> TokenStream {
+        if let Some(value) = value {
+            let value = identifier(value);
+            quote! { Some(#value) }
+        } else {
+            quote! { None }
         }
     }
 
-    fn int_bounds(&mut self, bounds: Option<IntBoundsJson>) -> TokenStream {
+    fn int_bounds(bounds: Option<IntBoundsJson>) -> TokenStream {
         match bounds {
             None => quote! { IntBounds::ANY },
             Some(IntBoundsJson::Exact(value)) => quote! { IntBounds::exactly(#value) },
@@ -812,7 +807,7 @@ impl CriterionGenerator {
         }
     }
 
-    fn double_bounds(&mut self, bounds: Option<DoubleBoundsJson>) -> TokenStream {
+    fn double_bounds(bounds: Option<DoubleBoundsJson>) -> TokenStream {
         match bounds {
             None => quote! { DoubleBounds::ANY },
             Some(DoubleBoundsJson::Exact(value)) => quote! { DoubleBounds::exactly(#value) },
@@ -825,13 +820,12 @@ impl CriterionGenerator {
         }
     }
 
-    fn optional_int_bounds(&mut self, bounds: Option<IntBoundsJson>) -> TokenStream {
-        match bounds {
-            Some(bounds) => {
-                let bounds = self.int_bounds(Some(bounds));
-                quote! { Some(#bounds) }
-            }
-            None => quote! { None },
+    fn optional_int_bounds(bounds: Option<IntBoundsJson>) -> TokenStream {
+        if let Some(bounds) = bounds {
+            let bounds = CriterionGenerator::int_bounds(Some(bounds));
+            quote! { Some(#bounds) }
+        } else {
+            quote! { None }
         }
     }
 
@@ -899,7 +893,7 @@ impl CriterionGenerator {
         let entity_type = self.optional_holder_set(predicate.entity_type.clone());
         let location = self.optional_location(predicate.location.clone());
         let stepping_on = self.optional_location(predicate.stepping_on.clone());
-        let distance = self.optional_distance(predicate.distance.clone());
+        let distance = CriterionGenerator::optional_distance(predicate.distance.clone());
         let effects = self.optional_effects(predicate.effects.clone());
         let flags = predicate.flags.as_ref().map_or_else(
             || quote! { None },
@@ -981,7 +975,8 @@ impl CriterionGenerator {
         let lightning = predicate.lightning.as_ref().map_or_else(
             || quote! { None },
             |lightning| {
-                let blocks = self.optional_int_bounds(lightning.blocks_set_on_fire.clone());
+                let blocks =
+                    CriterionGenerator::optional_int_bounds(lightning.blocks_set_on_fire.clone());
                 let struck = self.optional_entity_predicate(lightning.entity_struck.as_deref());
                 quote! {
                     Some(Box::new(LightningPredicate {
@@ -1011,12 +1006,11 @@ impl CriterionGenerator {
 
     /// Emits an `Option<Box<EntityPredicate>>` (vanilla `vehicle`/`passenger`).
     fn optional_boxed_entity(&mut self, predicate: Option<&EntityPredicateJson>) -> TokenStream {
-        match predicate {
-            Some(predicate) => {
-                let predicate = self.entity_predicate(predicate);
-                quote! { Some(Box::new(#predicate)) }
-            }
-            None => quote! { None },
+        if let Some(predicate) = predicate {
+            let predicate = self.entity_predicate(predicate);
+            quote! { Some(Box::new(#predicate)) }
+        } else {
+            quote! { None }
         }
     }
 
@@ -1025,22 +1019,20 @@ impl CriterionGenerator {
         &mut self,
         predicate: Option<&EntityPredicateJson>,
     ) -> TokenStream {
-        match predicate {
-            Some(predicate) => {
-                let predicate = self.entity_predicate(predicate);
-                quote! { Some(#predicate) }
-            }
-            None => quote! { None },
+        if let Some(predicate) = predicate {
+            let predicate = self.entity_predicate(predicate);
+            quote! { Some(#predicate) }
+        } else {
+            quote! { None }
         }
     }
 
     fn optional_location(&mut self, location: Option<LocationPredicateJson>) -> TokenStream {
-        match location {
-            Some(location) => {
-                let location = self.location_predicate(&location);
-                quote! { Some(#location) }
-            }
-            None => quote! { None },
+        if let Some(location) = location {
+            let location = self.location_predicate(&location);
+            quote! { Some(#location) }
+        } else {
+            quote! { None }
         }
     }
 
@@ -1048,16 +1040,16 @@ impl CriterionGenerator {
         let position = location.position.as_ref().map_or_else(
             || quote! { None },
             |position| {
-                let x = self.optional_double_bounds(position.x.clone());
-                let y = self.optional_double_bounds(position.y.clone());
-                let z = self.optional_double_bounds(position.z.clone());
+                let x = CriterionGenerator::optional_double_bounds(position.x.clone());
+                let y = CriterionGenerator::optional_double_bounds(position.y.clone());
+                let z = CriterionGenerator::optional_double_bounds(position.z.clone());
                 quote! { Some(PositionPredicate { x: #x, y: #y, z: #z }) }
             },
         );
         let biomes = self.optional_holder_set(location.biomes.clone());
         let structures = self.optional_holder_set(location.structures.clone());
-        let dimension = self.optional_identifier(location.dimension.as_deref());
-        let light = self.optional_int_bounds(location.light.clone());
+        let dimension = CriterionGenerator::optional_identifier(location.dimension.as_deref());
+        let light = CriterionGenerator::optional_int_bounds(location.light.clone());
         let block = location.block.as_ref().map_or_else(
             || quote! { None },
             |block| {
@@ -1066,7 +1058,7 @@ impl CriterionGenerator {
                 quote! { Some(BlockPredicate { blocks: #blocks, state: #state }) }
             },
         );
-        let fluid = self.optional_identifier(location.fluid.as_deref());
+        let fluid = CriterionGenerator::optional_identifier(location.fluid.as_deref());
         let smokey = optional_bool(location.smokey);
         let can_see_sky = optional_bool(location.can_see_sky);
         quote! {
@@ -1084,25 +1076,24 @@ impl CriterionGenerator {
         }
     }
 
-    fn optional_distance(&mut self, distance: Option<DistancePredicateJson>) -> TokenStream {
-        match distance {
-            Some(distance) => {
-                let x = self.optional_double_bounds(distance.x);
-                let y = self.optional_double_bounds(distance.y);
-                let z = self.optional_double_bounds(distance.z);
-                let horizontal = self.optional_double_bounds(distance.horizontal);
-                let absolute = self.optional_double_bounds(distance.absolute);
-                quote! {
-                    Some(DistancePredicate {
-                        x: #x,
-                        y: #y,
-                        z: #z,
-                        horizontal: #horizontal,
-                        absolute: #absolute,
-                    })
-                }
+    fn optional_distance(distance: Option<DistancePredicateJson>) -> TokenStream {
+        if let Some(distance) = distance {
+            let x = CriterionGenerator::optional_double_bounds(distance.x);
+            let y = CriterionGenerator::optional_double_bounds(distance.y);
+            let z = CriterionGenerator::optional_double_bounds(distance.z);
+            let horizontal = CriterionGenerator::optional_double_bounds(distance.horizontal);
+            let absolute = CriterionGenerator::optional_double_bounds(distance.absolute);
+            quote! {
+                Some(DistancePredicate {
+                    x: #x,
+                    y: #y,
+                    z: #z,
+                    horizontal: #horizontal,
+                    absolute: #absolute,
+                })
             }
-            None => quote! { None },
+        } else {
+            quote! { None }
         }
     }
 
@@ -1110,63 +1101,61 @@ impl CriterionGenerator {
         &mut self,
         effects: Option<BTreeMap<String, EffectPredicateJson>>,
     ) -> TokenStream {
-        match effects {
-            Some(effects) => {
-                let elements: Vec<TokenStream> = effects
-                    .iter()
-                    .map(|(key, effect)| {
-                        let key = key.strip_prefix("minecraft:").unwrap_or(key).to_owned();
-                        let amplifier = self.optional_int_bounds(effect.amplifier.clone());
-                        let duration = self.optional_int_bounds(effect.duration.clone());
-                        let ambient = optional_bool(effect.ambient);
-                        let visible = optional_bool(effect.visible);
-                        quote! {
-                            (#key, MobEffectPredicateData {
-                                amplifier: #amplifier,
-                                duration: #duration,
-                                ambient: #ambient,
-                                visible: #visible,
-                            })
-                        }
-                    })
-                    .collect();
-                let effects =
-                    self.array(quote! { (&'static str, MobEffectPredicateData) }, elements);
-                quote! { Some(MobEffectsPredicate { effects: #effects }) }
-            }
-            None => quote! { None },
+        if let Some(effects) = effects {
+            let elements: Vec<TokenStream> = effects
+                .iter()
+                .map(|(key, effect)| {
+                    let key = key.strip_prefix("minecraft:").unwrap_or(key).to_owned();
+                    let amplifier =
+                        CriterionGenerator::optional_int_bounds(effect.amplifier.clone());
+                    let duration = CriterionGenerator::optional_int_bounds(effect.duration.clone());
+                    let ambient = optional_bool(effect.ambient);
+                    let visible = optional_bool(effect.visible);
+                    quote! {
+                        (#key, MobEffectPredicateData {
+                            amplifier: #amplifier,
+                            duration: #duration,
+                            ambient: #ambient,
+                            visible: #visible,
+                        })
+                    }
+                })
+                .collect();
+            let effects = self.array(quote! { (&'static str, MobEffectPredicateData) }, elements);
+            quote! { Some(MobEffectsPredicate { effects: #effects }) }
+        } else {
+            quote! { None }
         }
     }
 
     fn optional_equipment(&mut self, equipment: Option<EntityEquipmentJson>) -> TokenStream {
-        match equipment {
-            Some(equipment) => {
-                let head = self.optional_item_predicate(equipment.head);
-                let chest = self.optional_item_predicate(equipment.chest);
-                let legs = self.optional_item_predicate(equipment.legs);
-                let feet = self.optional_item_predicate(equipment.feet);
-                let body = self.optional_item_predicate(equipment.body);
-                let mainhand = self.optional_item_predicate(equipment.mainhand);
-                let offhand = self.optional_item_predicate(equipment.offhand);
-                quote! {
-                    Some(EntityEquipmentPredicate {
-                        head: #head,
-                        chest: #chest,
-                        legs: #legs,
-                        feet: #feet,
-                        body: #body,
-                        mainhand: #mainhand,
-                        offhand: #offhand,
-                    })
-                }
+        if let Some(equipment) = equipment {
+            let head = self.optional_item_predicate(equipment.head);
+            let chest = self.optional_item_predicate(equipment.chest);
+            let legs = self.optional_item_predicate(equipment.legs);
+            let feet = self.optional_item_predicate(equipment.feet);
+            let body = self.optional_item_predicate(equipment.body);
+            let mainhand = self.optional_item_predicate(equipment.mainhand);
+            let offhand = self.optional_item_predicate(equipment.offhand);
+            quote! {
+                Some(EntityEquipmentPredicate {
+                    head: #head,
+                    chest: #chest,
+                    legs: #legs,
+                    feet: #feet,
+                    body: #body,
+                    mainhand: #mainhand,
+                    offhand: #offhand,
+                })
             }
-            None => quote! { None },
+        } else {
+            quote! { None }
         }
     }
 
     fn item_predicate(&mut self, item: &ItemPredicateJson) -> TokenStream {
         let items = self.optional_item_set(item.items.clone());
-        let count = self.optional_int_bounds(item.count.clone());
+        let count = CriterionGenerator::optional_int_bounds(item.count.clone());
         let mut exact = Vec::new();
         let mut has = Vec::new();
         if let Some(components) = &item.components {
@@ -1283,65 +1272,62 @@ impl CriterionGenerator {
     }
 
     fn optional_damage(&mut self, damage: Option<DamagePredicateJson>) -> TokenStream {
-        match damage {
-            Some(damage) => {
-                let dealt = self.optional_double_bounds(damage.dealt);
-                let taken = self.optional_double_bounds(damage.taken);
-                let blocked = optional_bool(damage.blocked);
-                let source_entity = self.optional_entity_predicate(damage.source_entity.as_ref());
-                let damage_type = self.optional_damage_source(damage.damage_type);
-                quote! {
-                    Some(DamagePredicate {
-                        dealt: #dealt,
-                        taken: #taken,
-                        source_entity: #source_entity,
-                        blocked: #blocked,
-                        damage_type: #damage_type,
-                    })
-                }
+        if let Some(damage) = damage {
+            let dealt = CriterionGenerator::optional_double_bounds(damage.dealt);
+            let taken = CriterionGenerator::optional_double_bounds(damage.taken);
+            let blocked = optional_bool(damage.blocked);
+            let source_entity = self.optional_entity_predicate(damage.source_entity.as_ref());
+            let damage_type = self.optional_damage_source(damage.damage_type);
+            quote! {
+                Some(DamagePredicate {
+                    dealt: #dealt,
+                    taken: #taken,
+                    source_entity: #source_entity,
+                    blocked: #blocked,
+                    damage_type: #damage_type,
+                })
             }
-            None => quote! { None },
+        } else {
+            quote! { None }
         }
     }
 
-    fn optional_double_bounds(&mut self, bounds: Option<DoubleBoundsJson>) -> TokenStream {
-        match bounds {
-            Some(bounds) => {
-                let bounds = self.double_bounds(Some(bounds));
-                quote! { Some(#bounds) }
-            }
-            None => quote! { None },
+    fn optional_double_bounds(bounds: Option<DoubleBoundsJson>) -> TokenStream {
+        if let Some(bounds) = bounds {
+            let bounds = CriterionGenerator::double_bounds(Some(bounds));
+            quote! { Some(#bounds) }
+        } else {
+            quote! { None }
         }
     }
 
     fn optional_damage_source(&mut self, source: Option<DamageSourcePredicateJson>) -> TokenStream {
-        match source {
-            Some(source) => {
-                let tags: Vec<TokenStream> = source
-                    .tags
-                    .iter()
-                    .flatten()
-                    .map(|damage_tag| {
-                        let tag = damage_tag.id.strip_prefix('#').unwrap_or(&damage_tag.id);
-                        let tag = tag.strip_prefix("minecraft:").unwrap_or(tag).to_owned();
-                        let expected = damage_tag.expected;
-                        quote! { (#tag, #expected) }
-                    })
-                    .collect();
-                let tags = self.array(quote! { (&'static str, bool) }, tags);
-                let source_entity = self.optional_entity_predicate(source.source_entity.as_ref());
-                let direct_entity = self.optional_entity_predicate(source.direct_entity.as_ref());
-                let is_direct = optional_bool(source.is_direct);
-                quote! {
-                    Some(DamageSourcePredicate {
-                        tags: #tags,
-                        source_entity: #source_entity,
-                        direct_entity: #direct_entity,
-                        is_direct: #is_direct,
-                    })
-                }
+        if let Some(source) = source {
+            let tags: Vec<TokenStream> = source
+                .tags
+                .iter()
+                .flatten()
+                .map(|damage_tag| {
+                    let tag = damage_tag.id.strip_prefix('#').unwrap_or(&damage_tag.id);
+                    let tag = tag.strip_prefix("minecraft:").unwrap_or(tag).to_owned();
+                    let expected = damage_tag.expected;
+                    quote! { (#tag, #expected) }
+                })
+                .collect();
+            let tags = self.array(quote! { (&'static str, bool) }, tags);
+            let source_entity = self.optional_entity_predicate(source.source_entity.as_ref());
+            let direct_entity = self.optional_entity_predicate(source.direct_entity.as_ref());
+            let is_direct = optional_bool(source.is_direct);
+            quote! {
+                Some(DamageSourcePredicate {
+                    tags: #tags,
+                    source_entity: #source_entity,
+                    direct_entity: #direct_entity,
+                    is_direct: #is_direct,
+                })
             }
-            None => quote! { None },
+        } else {
+            quote! { None }
         }
     }
 }
@@ -1426,26 +1412,27 @@ fn identifier(value: &str) -> TokenStream {
 }
 
 fn optional_identifier(value: Option<&str>) -> TokenStream {
-    match value {
-        Some(value) => {
-            let value = identifier(value);
-            quote! { Some(#value) }
-        }
-        None => quote! { None },
+    if let Some(value) = value {
+        let value = identifier(value);
+        quote! { Some(#value) }
+    } else {
+        quote! { None }
     }
 }
 
 fn optional_bool(value: Option<bool>) -> TokenStream {
-    match value {
-        Some(value) => quote! { Some(#value) },
-        None => quote! { None },
+    if let Some(value) = value {
+        quote! { Some(#value) }
+    } else {
+        quote! { None }
     }
 }
 
 fn optional_i32(value: Option<i32>) -> TokenStream {
-    match value {
-        Some(value) => quote! { Some(#value) },
-        None => quote! { None },
+    if let Some(value) = value {
+        quote! { Some(#value) }
+    } else {
+        quote! { None }
     }
 }
 
@@ -1540,7 +1527,7 @@ enum ConditionJson {
     #[serde(rename = "minecraft:entity_properties")]
     EntityProperties {
         entity: String,
-        predicate: EntityPredicateJson,
+        predicate: Box<EntityPredicateJson>,
     },
     #[serde(rename = "minecraft:location_check")]
     LocationCheck {

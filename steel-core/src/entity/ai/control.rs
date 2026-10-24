@@ -1,9 +1,11 @@
 //! Mob control state.
 
 use glam::DVec3;
+use std::f32::consts::PI;
 use steel_math::wrap_degrees;
+use steel_registry::vanilla_attributes;
 
-use crate::entity::{LivingEntity as _, LivingTravelInput, Mob};
+use crate::entity::{LivingTravelInput, Mob};
 
 pub(crate) const DEFAULT_LOOK_Y_MAX_ROT_SPEED: f32 = 10.0;
 pub(crate) const DEFAULT_LOOK_X_MAX_ROT_ANGLE: f32 = 40.0;
@@ -342,79 +344,6 @@ impl MobControls {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{BodyRotationControl, BodyRotationInput};
-
-    fn assert_f32_close(left: f32, right: f32) {
-        assert!(
-            (left - right).abs() < 1.0e-6,
-            "expected {left:?} to equal {right:?}"
-        );
-    }
-
-    #[test]
-    fn body_rotation_control_faces_body_forward_while_moving() {
-        let mut control = BodyRotationControl::new();
-
-        let update = control.tick(BodyRotationInput::new(true, false, 90.0, 0.0, 200.0, 75.0));
-
-        assert_f32_close(update.y_body_rot(), 90.0);
-        assert_f32_close(update.y_head_rot(), 165.0);
-        assert_eq!(control.head_stable_time(), 0);
-        assert_f32_close(control.last_stable_y_head_rot(), 165.0);
-    }
-
-    #[test]
-    fn body_rotation_control_turns_body_when_idle_head_moves() {
-        let mut control = BodyRotationControl::new();
-
-        let update = control.tick(BodyRotationInput::new(false, false, 0.0, 0.0, 90.0, 75.0));
-
-        assert_f32_close(update.y_body_rot(), 15.0);
-        assert_f32_close(update.y_head_rot(), 90.0);
-        assert_eq!(control.head_stable_time(), 0);
-        assert_f32_close(control.last_stable_y_head_rot(), 90.0);
-    }
-
-    #[test]
-    fn body_rotation_control_waits_then_turns_body_toward_stable_head() {
-        let mut control = BodyRotationControl::new();
-        let first = control.tick(BodyRotationInput::new(false, false, 0.0, 0.0, 90.0, 75.0));
-        let mut y_body_rot = first.y_body_rot();
-
-        for _ in 0..10 {
-            y_body_rot = control
-                .tick(BodyRotationInput::new(
-                    false, false, 0.0, y_body_rot, 90.0, 75.0,
-                ))
-                .y_body_rot();
-        }
-
-        assert_eq!(control.head_stable_time(), 10);
-        assert_f32_close(y_body_rot, 15.0);
-
-        let update = control.tick(BodyRotationInput::new(
-            false, false, 0.0, y_body_rot, 90.0, 75.0,
-        ));
-
-        assert_eq!(control.head_stable_time(), 11);
-        assert_f32_close(update.y_body_rot(), 22.5);
-    }
-
-    #[test]
-    fn body_rotation_control_does_not_turn_idle_body_when_carrying_mob_passenger() {
-        let mut control = BodyRotationControl::new();
-
-        let update = control.tick(BodyRotationInput::new(false, true, 0.0, 0.0, 90.0, 75.0));
-
-        assert_f32_close(update.y_body_rot(), 0.0);
-        assert_f32_close(update.y_head_rot(), 90.0);
-        assert_eq!(control.head_stable_time(), 0);
-        assert_f32_close(control.last_stable_y_head_rot(), 0.0);
-    }
-}
-
 /// Vanilla `FlyingMoveControl` input: the movement state the shared mover reads.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlyingMoveControlInput {
@@ -476,7 +405,7 @@ impl FlyingMoveControl {
 
     /// Vanilla `FlyingMoveControl.tick`.
     #[must_use]
-    pub fn tick(&self, input: FlyingMoveControlInput) -> FlyingMoveControlOutput {
+    pub fn tick(self, input: FlyingMoveControlInput) -> FlyingMoveControlOutput {
         let mut output = FlyingMoveControlOutput {
             y_rot: input.y_rot,
             x_rot: input.x_rot,
@@ -652,8 +581,8 @@ impl SmoothSwimmingMoveControl {
                 output.x_rot = rotate_towards(input.x_rot, x_rot_d, 5.0);
             }
 
-            let cos = (output.x_rot * f32::consts::PI / 180.0).cos();
-            let sin = (output.x_rot * f32::consts::PI / 180.0).sin();
+            let cos = (output.x_rot * PI / 180.0).cos();
+            let sin = (output.x_rot * PI / 180.0).sin();
             output.zza = cos * speed;
             output.yya = -sin * speed;
         } else {
@@ -722,7 +651,7 @@ impl SmoothSwimmingLookControl {
 
     /// Vanilla `SmoothSwimmingLookControl.tick`.
     #[must_use]
-    pub fn tick(&self, input: SmoothSwimmingLookControlInput) -> SmoothSwimmingLookControlOutput {
+    pub fn tick(self, input: SmoothSwimmingLookControlInput) -> SmoothSwimmingLookControlOutput {
         let mut output = SmoothSwimmingLookControlOutput {
             y_head_rot: input.y_head_rot,
             x_rot: input.x_rot,
@@ -836,7 +765,7 @@ pub(crate) fn tick_smooth_swimming_move_control<M: Mob + ?Sized>(
     let movement_speed = mob
         .attributes()
         .lock()
-        .required_value(steel_registry::vanilla_attributes::MOVEMENT_SPEED);
+        .required_value(vanilla_attributes::MOVEMENT_SPEED);
     let output = control.tick(SmoothSwimmingMoveControlInput {
         operation: move_control.operation(),
         navigation_done: mob.mob_base().navigation().lock().is_done(),
@@ -863,5 +792,78 @@ pub(crate) fn tick_smooth_swimming_move_control<M: Mob + ?Sized>(
     ));
     if output.apply_gravity_lift {
         mob.set_velocity(mob.velocity() + DVec3::new(0.0, 0.005, 0.0));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BodyRotationControl, BodyRotationInput};
+
+    fn assert_f32_close(left: f32, right: f32) {
+        assert!(
+            (left - right).abs() < 1.0e-6,
+            "expected {left:?} to equal {right:?}"
+        );
+    }
+
+    #[test]
+    fn body_rotation_control_faces_body_forward_while_moving() {
+        let mut control = BodyRotationControl::new();
+
+        let update = control.tick(BodyRotationInput::new(true, false, 90.0, 0.0, 200.0, 75.0));
+
+        assert_f32_close(update.y_body_rot(), 90.0);
+        assert_f32_close(update.y_head_rot(), 165.0);
+        assert_eq!(control.head_stable_time(), 0);
+        assert_f32_close(control.last_stable_y_head_rot(), 165.0);
+    }
+
+    #[test]
+    fn body_rotation_control_turns_body_when_idle_head_moves() {
+        let mut control = BodyRotationControl::new();
+
+        let update = control.tick(BodyRotationInput::new(false, false, 0.0, 0.0, 90.0, 75.0));
+
+        assert_f32_close(update.y_body_rot(), 15.0);
+        assert_f32_close(update.y_head_rot(), 90.0);
+        assert_eq!(control.head_stable_time(), 0);
+        assert_f32_close(control.last_stable_y_head_rot(), 90.0);
+    }
+
+    #[test]
+    fn body_rotation_control_waits_then_turns_body_toward_stable_head() {
+        let mut control = BodyRotationControl::new();
+        let first = control.tick(BodyRotationInput::new(false, false, 0.0, 0.0, 90.0, 75.0));
+        let mut y_body_rot = first.y_body_rot();
+
+        for _ in 0..10 {
+            y_body_rot = control
+                .tick(BodyRotationInput::new(
+                    false, false, 0.0, y_body_rot, 90.0, 75.0,
+                ))
+                .y_body_rot();
+        }
+
+        assert_eq!(control.head_stable_time(), 10);
+        assert_f32_close(y_body_rot, 15.0);
+
+        let update = control.tick(BodyRotationInput::new(
+            false, false, 0.0, y_body_rot, 90.0, 75.0,
+        ));
+
+        assert_eq!(control.head_stable_time(), 11);
+        assert_f32_close(update.y_body_rot(), 22.5);
+    }
+
+    #[test]
+    fn body_rotation_control_does_not_turn_idle_body_when_carrying_mob_passenger() {
+        let mut control = BodyRotationControl::new();
+
+        let update = control.tick(BodyRotationInput::new(false, true, 0.0, 0.0, 90.0, 75.0));
+
+        assert_f32_close(update.y_body_rot(), 0.0);
+        assert_f32_close(update.y_head_rot(), 90.0);
+        assert_eq!(control.head_stable_time(), 0);
+        assert_f32_close(control.last_stable_y_head_rot(), 0.0);
     }
 }

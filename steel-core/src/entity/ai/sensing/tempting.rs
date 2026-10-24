@@ -60,7 +60,7 @@ impl TemptingSensor {
     }
 
     /// Vanilla `TemptingSensor.TEMPT_TARGETING` with the body's `TEMPT_RANGE`.
-    fn targeting_conditions(tempt_range: f64) -> TargetingConditions {
+    const fn targeting_conditions(tempt_range: f64) -> TargetingConditions {
         TargetingConditions::for_non_combat()
             .ignore_line_of_sight()
             .range(tempt_range)
@@ -108,7 +108,8 @@ impl BrainSensor for TemptingSensor {
 
         let mut players: Vec<SharedEntity> = Vec::new();
         level.players.iter_players(|_uuid, player| {
-            let player: SharedEntity = player.clone();
+            let player = Arc::clone(player);
+            let player: SharedEntity = player;
 
             if player.is_spectator() {
                 return true;
@@ -141,7 +142,7 @@ impl BrainSensor for TemptingSensor {
         });
 
         match players.first() {
-            Some(player) => memories.set(&mem::TEMPTING_PLAYER, player.clone()),
+            Some(player) => memories.set(&mem::TEMPTING_PLAYER, SharedEntity::clone(player)),
             None => memories.erase(&mem::TEMPTING_PLAYER),
         }
     }

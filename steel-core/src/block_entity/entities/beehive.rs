@@ -48,8 +48,8 @@ use steel_utils::{
 use crate::block_entity::{BlockEntity, BlockEntityBase};
 use crate::entity::entities::BeeEntity;
 use crate::entity::{
-    AgeableMob, Animal, Entity, EntitySpawnPlacement, EntitySpawnReason, EntitySpawnRequest, Mob,
-    RemovalReason, SharedEntity, spawn_entity,
+    Entity, EntitySpawnPlacement, EntitySpawnReason, EntitySpawnRequest, RemovalReason,
+    SharedEntity, spawn_entity,
 };
 use crate::player::Player;
 use crate::world::World;
@@ -203,6 +203,24 @@ impl BeehiveBeeOccupant {
         }
     }
 
+    /// Vanilla `Occupant` codec entry from an owned compound.
+    fn load_owned(nbt: &NbtCompound) -> Self {
+        let entity_data = nbt
+            .compound("entity_data")
+            .cloned()
+            .unwrap_or_else(default_bee_entity_data);
+        let ticks_in_hive = nbt.int("ticks_in_hive").unwrap_or(0);
+        let min_ticks_in_hive = nbt
+            .int("min_ticks_in_hive")
+            .unwrap_or(BEEHIVE_MIN_OCCUPATION_TICKS_NECTARLESS);
+
+        Self {
+            entity_data,
+            ticks_in_hive,
+            min_ticks_in_hive,
+        }
+    }
+
     fn save(&self) -> NbtCompound {
         let mut nbt = NbtCompound::new();
         nbt.insert("entity_data", self.entity_data.clone());
@@ -308,8 +326,7 @@ impl BeehiveBlockEntity {
     /// Accepts the raw occupant compound (`entity_data`, `ticks_in_hive`,
     /// `min_ticks_in_hive`) so callers can restore saved or item-borne bees.
     pub fn store_bee(&self, occupant: NbtCompound) {
-        let view: NbtCompoundView<'_, '_> = (&occupant).into();
-        let occupant = BeehiveBeeOccupant::load(view);
+        let occupant = BeehiveBeeOccupant::load_owned(&occupant);
         self.state.lock().push_occupant(occupant);
     }
 

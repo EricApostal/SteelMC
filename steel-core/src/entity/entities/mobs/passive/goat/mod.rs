@@ -23,6 +23,7 @@
 
 mod brain;
 
+use std::f32::consts::PI;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -30,6 +31,7 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::data_components::components::InstrumentComponent;
 use steel_registry::data_components::vanilla_components::INSTRUMENT;
 use steel_registry::entity_data::EntityPose;
@@ -44,7 +46,7 @@ use steel_registry::vanilla_entity_data::GoatEntityData;
 use steel_registry::vanilla_instrument_tags::InstrumentTag;
 use steel_registry::vanilla_item_tags::ItemTag;
 use steel_registry::{
-    REGISTRY, TaggedRegistryExt, sound_events, vanilla_attributes, vanilla_items,
+    REGISTRY, TaggedRegistryExt, sound_events, vanilla_attributes, vanilla_entities, vanilla_items,
 };
 use steel_utils::locks::SyncMutex;
 use steel_utils::random::Random as _;
@@ -290,7 +292,7 @@ impl GoatEntity {
             f64::from(random_between(-0.2, 0.2)),
         );
         let item_entity = ItemEntity::with_item_and_velocity(
-            &steel_registry::vanilla_entities::ITEM,
+            &vanilla_entities::ITEM,
             next_entity_id(),
             self.position(),
             item,
@@ -314,7 +316,7 @@ impl GoatEntity {
         };
         let lower_head_tick =
             f32::from(i16::try_from(self.state.lock().lower_head_tick).unwrap_or(0));
-        lower_head_tick / 20.0 * max_ramming_x_head_rot * (f32::consts::PI / 180.0)
+        lower_head_tick / 20.0 * max_ramming_x_head_rot * (PI / 180.0)
     }
 
     /// Vanilla `Goat.handleEntityEvent(58)`: start lowering the head.
@@ -727,10 +729,11 @@ impl Mob for GoatEntity {
             item_stack.copy_with_count(item_stack.count())
         };
 
-        if held_item.is(&vanilla_items::BUCKET) && !AgeableMob::is_baby(self) {
-            if self.try_milk(player, hand) {
-                return InteractionResult::Success;
-            }
+        if held_item.is(&vanilla_items::BUCKET)
+            && !AgeableMob::is_baby(self)
+            && self.try_milk(player, hand)
+        {
+            return InteractionResult::Success;
         }
 
         let interaction_result = Animal::mob_interact_animal(self, player, hand);

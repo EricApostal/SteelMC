@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use glam::DVec3;
+use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::value_providers::IntProvider;
 
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
@@ -52,8 +53,7 @@ impl RandomLookAround {
     /// convention is `rand`, so the provider is driven by a `LegacyRandom` seeded
     /// from it: same distribution, different source.
     fn sample_interval(&self) -> i32 {
-        let mut random =
-            steel_utils::random::legacy_random::LegacyRandom::from_seed(rand::random());
+        let mut random = LegacyRandom::from_seed(rand::random());
         self.interval.sample(&mut random)
     }
 }

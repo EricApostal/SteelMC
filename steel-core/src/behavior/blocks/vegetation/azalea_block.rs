@@ -32,6 +32,15 @@ impl AzaleaBlock {
 }
 
 impl BlockBehavior for AzaleaBlock {
+    /// Vanilla `AzaleaBlock.isPathfindable`: azalea bushes are never pathfindable.
+    fn is_pathfindable(
+        &self,
+        _state: BlockStateId,
+        _computation_type: PathComputationType,
+    ) -> bool {
+        false
+    }
+
     fn update_shape(
         &self,
         state: BlockStateId,
@@ -56,13 +65,5 @@ impl BlockBehavior for AzaleaBlock {
 impl Vegetation for AzaleaBlock {
     fn may_place_on(&self, state: BlockStateId, _world: &dyn LevelReader, _pos: BlockPos) -> bool {
         state.get_block().has_tag(&BlockTag::SUPPORTS_AZALEA)
-    }
-    /// Vanilla `AzaleaBlock.isPathfindable`: azalea bushes are never pathfindable.
-    fn is_pathfindable(
-        &self,
-        _state: BlockStateId,
-        _computation_type: PathComputationType,
-    ) -> bool {
-        false
     }
 }

@@ -8,8 +8,7 @@
 use glam::DVec3;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::entity_data::EntityPose;
-use steel_registry::sound_events;
-use steel_registry::vanilla_blocks;
+use steel_registry::{sound_events, vanilla_attributes, vanilla_blocks, vanilla_mob_effects};
 use steel_utils::BlockPos;
 
 use crate::entity::ai::behavior::long_jump_util::calculate_jump_vector_for_angle;
@@ -266,7 +265,7 @@ fn out_of_aggro_range(body: &SharedEntity, target: &SharedEntity) -> bool {
             living
                 .attributes()
                 .lock()
-                .get_value(steel_registry::vanilla_attributes::FOLLOW_RANGE)
+                .get_value(vanilla_attributes::FOLLOW_RANGE)
         })
         .unwrap_or(f64::from(DEFAULT_MAX_JUMP_VELOCITY));
     body.distance_to_sqr(target.position()) > follow_range * follow_range
@@ -310,7 +309,7 @@ fn calculate_optimal_jump_vector(
             living
                 .attributes()
                 .lock()
-                .get_value(steel_registry::vanilla_attributes::FOLLOW_RANGE)
+                .get_value(vanilla_attributes::FOLLOW_RANGE)
         })
         .unwrap_or(0.0);
     let max_jump_velocity = MAX_JUMP_VELOCITY_MULTIPLIER * follow_range as f32;
@@ -337,7 +336,7 @@ fn calculate_optimal_jump_vector(
 /// branch, via `LivingEntity.getJumpBoostPower`.
 fn jump_boost_power(entity: &SharedEntity) -> Option<f64> {
     let living = entity.as_living_entity()?;
-    let effect = living.mob_effect(steel_registry::vanilla_mob_effects::JUMP_BOOST)?;
+    let effect = living.mob_effect(vanilla_mob_effects::JUMP_BOOST)?;
     Some(0.1 * f64::from(effect.amplifier() + 1))
 }
 

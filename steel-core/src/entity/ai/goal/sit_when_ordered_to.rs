@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crate::entity::{PathfinderMob, SharedEntity};
 
+use super::capabilities::Tameable;
 use super::selector::{Goal, GoalControls};
 
 /// Vanilla `SitWhenOrderedToGoal.canUse`: the owner distance below which the animal keeps
@@ -74,8 +75,7 @@ impl Goal for SitWhenOrderedToGoal {
     }
 
     fn can_continue_to_use(&mut self, mob: &dyn PathfinderMob) -> bool {
-        mob.as_tameable()
-            .is_some_and(|tameable| tameable.is_ordered_to_sit())
+        mob.as_tameable().is_some_and(Tameable::is_ordered_to_sit)
     }
 
     fn start(&mut self, mob: &dyn PathfinderMob) {

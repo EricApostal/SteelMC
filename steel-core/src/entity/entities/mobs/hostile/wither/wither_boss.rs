@@ -6,6 +6,7 @@
 //! heals, and finally explodes; below half health it gains a blue aura and deflects arrows
 //! and wind charges.
 
+use std::f64::consts::PI;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -359,8 +360,7 @@ impl WitherBossEntity {
 
     /// The shared `WitherBoss.getHeadX`/`getHeadZ` side-head angle, converted to radians.
     fn side_head_angle(&self, index: i32) -> f64 {
-        f64::from(self.y_body_rot() + SIDE_HEAD_ANGLE_STEP * (index - 1) as f32) * f64::consts::PI
-            / 180.0
+        f64::from(self.y_body_rot() + SIDE_HEAD_ANGLE_STEP * (index - 1) as f32) * PI / 180.0
     }
 
     /// Vanilla `WitherBoss.canDestroy`: every non-air block outside `WITHER_IMMUNE`.
@@ -526,10 +526,10 @@ impl WitherBossEntity {
                 let yd = target.get_eye_y() - self.head_y(head);
                 let zd = target.position().z - self.head_z(head);
                 let distance = (xd * xd + zd * zd).sqrt();
-                let target_y_rot = (zd.atan2(xd) as f32).to_degrees() - DEGREE_90;
-                let target_x_rot = -(yd.atan2(distance) as f32).to_degrees();
-                x_rots[index] = rotate_towards(x_rots[index], target_x_rot, HEAD_X_ROT_CLAMP);
-                y_rots[index] = rotate_towards(y_rots[index], target_y_rot, HEAD_Y_ROT_CLAMP);
+                let target_yaw = (zd.atan2(xd) as f32).to_degrees() - DEGREE_90;
+                let target_pitch = -(yd.atan2(distance) as f32).to_degrees();
+                x_rots[index] = rotate_towards(x_rots[index], target_pitch, HEAD_X_ROT_CLAMP);
+                y_rots[index] = rotate_towards(y_rots[index], target_yaw, HEAD_Y_ROT_CLAMP);
             } else {
                 y_rots[index] = rotate_towards(y_rots[index], self.y_body_rot(), HEAD_Y_ROT_CLAMP);
             }

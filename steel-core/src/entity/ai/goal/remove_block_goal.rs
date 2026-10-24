@@ -9,7 +9,9 @@ use std::ptr;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::particle_type::{ItemParticleOption, ParticleData};
-use steel_registry::{ItemStackTemplate, vanilla_items, vanilla_particle_types};
+use steel_registry::{
+    ItemStackTemplate, vanilla_game_rules, vanilla_items, vanilla_particle_types,
+};
 use steel_utils::BlockPos;
 
 use super::move_to_block::MoveToBlockGoal;
@@ -109,7 +111,7 @@ impl Goal for RemoveBlockGoal {
         let Some(world) = mob.level() else {
             return false;
         };
-        if !world.get_game_rule(&steel_registry::vanilla_game_rules::MOB_GRIEFING) {
+        if !world.get_game_rule(&vanilla_game_rules::MOB_GRIEFING) {
             return false;
         }
 
@@ -230,10 +232,11 @@ impl Goal for RemoveBlockGoal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use steel_registry::vanilla_blocks;
 
     #[test]
     fn remove_block_goal_uses_the_move_to_block_controls() {
-        let goal = RemoveBlockGoal::new(&steel_registry::vanilla_blocks::TURTLE_EGG, 1.0, 1);
+        let goal = RemoveBlockGoal::new(&vanilla_blocks::TURTLE_EGG, 1.0, 1);
 
         assert_eq!(goal.controls(), GoalControls::MOVE | GoalControls::JUMP);
     }

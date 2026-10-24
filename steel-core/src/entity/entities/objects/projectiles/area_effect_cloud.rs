@@ -10,10 +10,10 @@
 //! setter): it round-trips through synced entity data, but NBT load always
 //! clears it.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
+use rustc_hash::FxHashMap;
 use simdnbt::FromNbtTag as _;
 use simdnbt::ToNbtTag as _;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
@@ -77,7 +77,7 @@ struct CloudState {
     /// Server-chosen particle override; replaces the potion-derived default.
     custom_particle: Option<ParticleData>,
     /// Vanilla `victims`: entity id to the first tick it may be affected again.
-    victims: HashMap<i32, i32>,
+    victims: FxHashMap<i32, i32>,
     /// Vanilla `duration` (-1 for infinite).
     duration: i32,
     /// Vanilla `waitTime`.
@@ -109,7 +109,7 @@ impl CloudState {
             contents: PotionContents::empty(),
             potion_duration_scale: 1.0,
             custom_particle: None,
-            victims: HashMap::new(),
+            victims: FxHashMap::default(),
             duration: -1,
             wait_time: DEFAULT_WAIT_TIME,
             reapplication_delay: DEFAULT_REAPPLICATION_DELAY,
@@ -381,6 +381,10 @@ impl AreaEffectCloudEntity {
     }
 
     /// Vanilla `AreaEffectCloud` server tick.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "vanilla `AreaEffectCloud.serverTick` mirrors the Java method one-to-one"
+    )]
     fn server_tick(self: &Arc<Self>, world: &Arc<World>) {
         let age = self.age();
         let (duration, wait_time) = {
@@ -589,6 +593,10 @@ impl Entity for AreaEffectCloudEntity {
         if state.contents != PotionContents::empty() {
             nbt.insert("potion_contents", state.contents.clone().to_nbt_tag());
         }
+        #[expect(
+            clippy::float_cmp,
+            reason = "vanilla compares `potionDurationScale != 1.0F` exactly"
+        )]
         if state.potion_duration_scale != 1.0 {
             nbt.insert("potion_duration_scale", state.potion_duration_scale);
         }

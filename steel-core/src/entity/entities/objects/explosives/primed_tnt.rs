@@ -4,13 +4,13 @@
 //! block state it renders as, falls under vanilla gravity, and detonates when the fuse
 //! expires.
 
+use std::f64::consts::TAU;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::{NbtCompound, NbtTag};
 use steel_macros::entity_behavior;
-use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::particle_type::ParticleData;
 use steel_registry::vanilla_blocks;
@@ -117,7 +117,7 @@ impl PrimedTntEntity {
         world: Weak<World>,
         owner: Option<&SharedEntity>,
     ) -> Self {
-        let rotation = rand::random::<f64>() * f64::consts::TAU;
+        let rotation = rand::random::<f64>() * TAU;
         let velocity = DVec3::new(-rotation.sin() * 0.02, 0.2, -rotation.cos() * 0.02);
 
         let mut state = PrimedTntState::new();
@@ -362,6 +362,7 @@ impl Entity for PrimedTntEntity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use simdnbt::borrow::read_compound;
 
     use steel_registry::vanilla_entities;
 
@@ -403,8 +404,7 @@ mod tests {
 
         let mut bytes = Vec::new();
         nbt.write(&mut bytes);
-        let Ok(borrowed) = simdnbt::borrow::read_compound(&mut Cursor::new(bytes.as_slice()))
-        else {
+        let Ok(borrowed) = read_compound(&mut Cursor::new(bytes.as_slice())) else {
             panic!("saved primed TNT NBT should reborrow");
         };
         tnt.load_additional((&borrowed).into());

@@ -22,7 +22,7 @@ use steel_registry::equipment::EquipmentSlot;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::ZombifiedPiglinEntityData;
-use steel_registry::{sound_events, vanilla_attributes, vanilla_items};
+use steel_registry::{sound_events, vanilla_attributes, vanilla_blocks, vanilla_items};
 use steel_utils::locks::SyncMutex;
 use steel_utils::random::Random as _;
 use steel_utils::random::legacy_random::LegacyRandom;
@@ -30,6 +30,7 @@ use steel_utils::{
     BlockPos, BlockStateId, Downcast as _, DowncastType, DowncastTypeKey, Identifier,
 };
 
+use crate::behavior::BLOCK_BEHAVIORS;
 use crate::entity::ai::goal::{
     HurtByTargetGoal, NearestAttackableTargetGoal, ResetUniversalAngerTargetGoal,
     WaterAvoidingRandomStrollGoal, ZombieAttackGoal,
@@ -559,13 +560,23 @@ impl Mob for ZombifiedPiglinEntity {
     where
         Self: Sized,
     {
-        // The non-peaceful gate comes from `<Self as Monster>::check_mob_spawn_rules`.
         if level.get_block_state(pos.offset(0, -1, 0)).get_block()
-            == &steel_registry::vanilla_blocks::NETHER_WART_BLOCK
+            == &vanilla_blocks::NETHER_WART_BLOCK
         {
             return false;
         }
-        <Self as Mob>::check_mob_spawn_rules(entity_type, level, spawn_reason, pos)
+        // Inlined `Mob::check_mob_spawn_rules` default, which vanilla
+        // `ZombifiedPiglin.checkZombifiedPiglinSpawnRules` reaches through
+        // `checkMobSpawnRules`; Rust has no super-call, so the shared body is repeated
+        // here. The non-peaceful gate comes from `Monster::check_monster_spawn_rules`.
+        if spawn_reason.is_spawner() {
+            return true;
+        }
+        let below = pos.below();
+        let state = level.get_block_state(below);
+        BLOCK_BEHAVIORS
+            .get_behavior(state.get_block())
+            .is_valid_spawn(state, level, below, entity_type)
     }
 
     /// Vanilla `Zombie.finalizeSpawn`, which `ZombifiedPiglin` inherits: loot
@@ -642,6 +653,7 @@ impl PathfinderMob for ZombifiedPiglinEntity {}
 
 #[cfg(test)]
 mod tests {
+    use simdnbt::owned::NbtCompound;
     use std::sync::Weak;
 
     use glam::DVec3;
@@ -664,7 +676,7 @@ mod tests {
         piglin.set_baby(true);
         piglin.set_can_break_doors(true);
 
-        let mut nbt = simdnbt::owned::NbtCompound::new();
+        let mut nbt = NbtCompound::new();
         piglin.save_additional(&mut nbt);
         assert_eq!(nbt.byte("IsBaby"), Some(1));
         assert_eq!(nbt.byte("CanBreakDoors"), Some(1));

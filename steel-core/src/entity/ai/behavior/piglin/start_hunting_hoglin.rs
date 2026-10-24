@@ -3,7 +3,7 @@
 use super::ai;
 use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
 use crate::entity::ai::brain::memory::module_type as mem;
-use crate::entity::{Mob as _, SharedEntity};
+use crate::entity::{LivingEntity, Mob, SharedEntity};
 
 /// Vanilla `StartHuntingHoglin`: an adult piglin starts hunting a huntable hoglin
 /// when nobody in its group has hunted recently.
@@ -27,10 +27,7 @@ impl Trigger for StartHuntingHoglin {
         let body = ctx.body;
         let level = ctx.level;
 
-        if body
-            .as_living_entity()
-            .is_some_and(|living| living.is_baby())
-        {
+        if body.as_living_entity().is_some_and(LivingEntity::is_baby) {
             return false;
         }
         if ctx.has_memory_value(&mem::ANGRY_AT) || ctx.has_memory_value(&mem::HUNTED_RECENTLY) {
@@ -48,9 +45,19 @@ impl Trigger for StartHuntingHoglin {
             return false;
         };
 
-        ai::set_anger_target(level, body, &target, ctx.memories_mut());
+        ai::set_anger_target(
+            level,
+            body.as_entity_event_source(),
+            &target,
+            ctx.memories_mut(),
+        );
         ai::dont_kill_any_more_hoglins_for_a_while(ctx.memories_mut());
-        ai::broadcast_anger_target(level, body, &target, ctx.memories());
+        ai::broadcast_anger_target(
+            level,
+            body.as_entity_event_source(),
+            &target,
+            ctx.memories(),
+        );
 
         for piglin in nearest_piglins {
             if let Some(brain) = piglin.as_mob().and_then(Mob::brain) {

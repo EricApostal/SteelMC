@@ -1,5 +1,6 @@
 //! Zombie family persistence and conversion-state unit tests.
 
+use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use std::io::Cursor;
 use std::sync::Weak;
 
@@ -16,7 +17,7 @@ use crate::entity::{Entity, EntityFluidContact};
 
 /// Re-parses saved NBT and hands the borrowed view to `load_additional`,
 /// mirroring the entity reload path.
-fn reload(nbt: &NbtCompound, load: impl FnOnce(simdnbt::borrow::NbtCompound<'_, '_>)) {
+fn reload(nbt: &NbtCompound, load: impl FnOnce(BorrowedNbtCompoundView<'_, '_>)) {
     let mut bytes = Vec::new();
     nbt.write(&mut bytes);
     let borrowed = read_compound(&mut Cursor::new(&bytes))
@@ -51,7 +52,7 @@ fn zombie_nbt_round_trip_keeps_baby_doors_and_drowning_state() {
     assert_eq!(nbt.int("InWaterTime"), Some(400));
 
     let loaded = ZombieEntity::new(&vanilla_entities::ZOMBIE, 2, DVec3::ZERO, Weak::new());
-    reload(&nbt, |borrowed| loaded.load_additional(borrowed.into()));
+    reload(&nbt, |borrowed| loaded.load_additional(borrowed));
 
     assert!(loaded.is_baby());
     assert!(loaded.can_break_doors());
@@ -110,7 +111,7 @@ fn zombie_villager_nbt_round_trip_keeps_villager_data_and_conversion() {
         Weak::new(),
     );
     assert!(!loaded.is_converting());
-    reload(&nbt, |borrowed| loaded.load_additional(borrowed.into()));
+    reload(&nbt, |borrowed| loaded.load_additional(borrowed));
 
     assert!(loaded.is_converting());
     assert_eq!(loaded.villager_xp(), 42);

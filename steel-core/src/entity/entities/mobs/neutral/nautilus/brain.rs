@@ -34,12 +34,11 @@ use crate::entity::ai::behavior::move_to_target_sink::MoveToTargetSink;
 use crate::entity::ai::behavior::piglin::ai::is_entity_attackable_ignoring_line_of_sight;
 use crate::entity::ai::behavior::random_stroll::RandomStroll;
 use crate::entity::ai::behavior::set_walk_target_from_look_target::SetWalkTargetFromLookTarget;
-use crate::entity::ai::behavior::start_attacking::StartAttacking;
 use crate::entity::ai::brain::SensorType;
 use crate::entity::ai::brain::activity::Activity;
-use crate::entity::ai::brain::behavior::BehaviorContext;
 use crate::entity::ai::brain::behavior::builder::BehaviorBuilder;
 use crate::entity::ai::brain::behavior::gate::{GateBehavior, OrderPolicy, RunningPolicy};
+use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::ai::brain::memory::nearest_visible::NearestVisibleLivingEntities;
 use crate::entity::ai::brain::memory::{MemoryModuleTypeRef, MemoryStatus};
@@ -201,9 +200,7 @@ fn idle_activity(with_breeding: bool) -> ActivityData {
         close_enough_distance_tempted,
         false,
     )));
-    behaviors.push(BehaviorBuilder::boxed(StartAttacking::create(
-        find_nearest_valid_attack_target,
-    )));
+    behaviors.push(BehaviorBuilder::boxed(OneShot::new(NautilusStartAttacking)));
     behaviors.push(BehaviorBuilder::boxed(GateBehavior::new(
         vec![(&mem::WALK_TARGET, MemoryStatus::ValueAbsent)],
         Vec::new(),
@@ -263,11 +260,44 @@ fn attack_target_conditions() -> TargetingConditions {
     })
 }
 
+/// Vanilla `StartAttacking.create(NautilusAi::findNearestValidAttackTarget)`.
+///
+/// Vanilla's `findNearestValidAttackTarget` writes `ATTACK_TARGET_COOLDOWN`, so it needs
+/// a mutable behavior context; Steel's shared `StartAttacking.TargetFinder` is a
+/// read-only function pointer, hence this local trigger that mirrors
+/// `StartAttacking.trigger` and adds the vanilla cooldown write. It replaces
+/// `StartAttacking::create` for both nautilus brains.
+pub(crate) struct NautilusStartAttacking;
+
+impl Trigger for NautilusStartAttacking {
+    fn trigger(&mut self, ctx: &mut BehaviorContext<'_>) -> bool {
+        // Vanilla `StartAttacking.trigger` entry condition: `absent(ATTACK_TARGET)`.
+        if ctx.check_memory(&mem::ATTACK_TARGET, MemoryStatus::ValuePresent) {
+            return false;
+        }
+
+        let Some(target) = find_nearest_valid_attack_target(ctx) else {
+            return false;
+        };
+
+        let can_attack = target.as_living_entity().is_some_and(|living| {
+            ctx.body
+                .as_mob()
+                .is_some_and(|mob| Mob::can_attack(mob, living))
+        });
+        if !can_attack {
+            return false;
+        }
+
+        ctx.set_memory(&mem::ATTACK_TARGET, target);
+        ctx.erase_memory(&mem::CANT_REACH_WALK_TARGET_SINCE);
+        true
+    }
+}
+
 /// Vanilla `NautilusAi.findNearestValidAttackTarget`.
-fn find_nearest_valid_attack_target(
-    ctx: &BehaviorContext<'_>,
-    body: &SharedEntity,
-) -> Option<SharedEntity> {
+fn find_nearest_valid_attack_target(ctx: &mut BehaviorContext<'_>) -> Option<SharedEntity> {
+    let body = ctx.body;
     let is_baby = body.as_ageable_mob().is_some_and(AgeableMob::is_baby);
     let is_tame = body.as_tameable().is_some_and(Tameable::is_tame);
     if ctx.has_memory_value(&mem::BREED_TARGET) || !body.is_in_water() || is_baby || is_tame {
@@ -275,7 +305,11 @@ fn find_nearest_valid_attack_target(
     }
 
     if let Some(angry_at) = angry_at(ctx)
-        && is_entity_attackable_ignoring_line_of_sight(ctx.level, body, &angry_at)
+        && is_entity_attackable_ignoring_line_of_sight(
+            ctx.level,
+            body.as_entity_event_source(),
+            &angry_at,
+        )
     {
         return Some(angry_at);
     }

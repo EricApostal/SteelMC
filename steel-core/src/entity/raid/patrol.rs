@@ -34,11 +34,11 @@ use steel_utils::BlockPos;
 use crate::chunk::heightmap::HeightmapType;
 use crate::chunk::light::LightLayer;
 use crate::entity::entities::mobs::illager::PillagerEntity;
+use crate::entity::raid::Raid;
 use crate::entity::raid::raid::is_valid_empty_spawn_block;
-use crate::entity::raid::{Raid, Raider};
 use crate::entity::{
-    Entity, EntitySpawnPlacement, EntitySpawnReason, EntitySpawnRequest, LivingEntity, Mob,
-    Monster, SharedEntity, spawn_entity,
+    Entity, EntitySpawnPlacement, EntitySpawnReason, EntitySpawnRequest, Monster, SharedEntity,
+    spawn_entity,
 };
 use crate::player::Player;
 use crate::world::custom_spawner::CustomSpawner;

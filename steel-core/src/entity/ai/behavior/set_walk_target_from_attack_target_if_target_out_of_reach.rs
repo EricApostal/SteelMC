@@ -85,7 +85,7 @@ impl Trigger for SetWalkTargetFromAttackTargetIfTargetOutOfReach {
         } else {
             ctx.set_memory(
                 &mem::LOOK_TARGET,
-                Arc::new(EntityTracker::new(to_attack.clone(), true)),
+                Arc::new(EntityTracker::new(SharedEntity::clone(&to_attack), true)),
             );
             ctx.set_memory(
                 &mem::WALK_TARGET,

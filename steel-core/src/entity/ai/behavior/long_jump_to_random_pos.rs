@@ -1,21 +1,20 @@
 //! Vanilla `LongJumpToRandomPos`: prepare, then perform, a long jump to a random spot.
 
 use std::any::Any;
-use std::mem;
+use std::mem::take;
 use std::sync::Arc;
 
 use glam::DVec3;
 use steel_utils::BlockPos;
+use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::value_providers::UniformIntProvider;
 
 use super::long_jump_util;
-use crate::entity::LivingEntity as _;
-use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::{MemoryModuleTypeRef, MemoryStatus, module_type as mem};
 use crate::entity::ai::brain::tracker::{BlockPosTracker, PositionTracker};
 use crate::entity::ai::path::PathfindingContext;
-use crate::entity::mob::Mob as _;
+use crate::entity::{LivingEntity, SharedEntity};
 
 /// Vanilla `LongJumpToRandomPos.FIND_JUMP_TRIES`.
 pub const FIND_JUMP_TRIES: i32 = 20;
@@ -210,8 +209,7 @@ impl LongJumpToRandomPos {
     }
 
     fn sample_time_between_long_jumps(&self) -> i32 {
-        let mut random =
-            steel_utils::random::legacy_random::LegacyRandom::from_seed(rand::random());
+        let mut random = LegacyRandom::from_seed(rand::random());
         self.time_between_long_jumps.sample(&mut random)
     }
 
@@ -251,7 +249,7 @@ impl LongJumpToRandomPos {
 
     /// Vanilla `pickCandidate`.
     fn pick_candidate(&mut self, ctx: &mut BehaviorContext<'_>) {
-        let mut pool = mem::take(&mut self.jump_candidates);
+        let mut pool = take(&mut self.jump_candidates);
         let mut picked = None;
         while !pool.is_empty() {
             let Some(jump) = self.picker.pick(ctx, &mut pool) else {
@@ -303,14 +301,12 @@ impl LongJumpToRandomPos {
 /// Vanilla `Attributes.JUMP_STRENGTH` value for the body.
 fn jump_strength(body: &SharedEntity) -> f32 {
     use steel_registry::vanilla_attributes;
-    body.as_living_entity()
-        .map(|living| {
-            living
-                .attributes()
-                .lock()
-                .required_value(vanilla_attributes::JUMP_STRENGTH) as f32
-        })
-        .unwrap_or(0.42)
+    body.as_living_entity().map_or(0.42, |living| {
+        living
+            .attributes()
+            .lock()
+            .required_value(vanilla_attributes::JUMP_STRENGTH) as f32
+    })
 }
 
 impl Behavior for LongJumpToRandomPos {
@@ -383,7 +379,7 @@ impl Behavior for LongJumpToRandomPos {
                 let yaw = ctx
                     .body
                     .as_living_entity()
-                    .map_or(0.0, |living| living.y_body_rot());
+                    .map_or(0.0, LivingEntity::y_body_rot);
                 ctx.body.set_rotation((yaw, pitch));
 
                 let jump_boost = if let Some(living) = ctx.body.as_living_entity() {

@@ -11,7 +11,7 @@ use std::sync::{Arc, Weak};
 
 use glam::DVec3;
 use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
-use simdnbt::owned::{NbtCompound, NbtTag};
+use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{BlockStateProperties, Direction, EnumProperty};
 use steel_registry::game_events::GameEventRef;
@@ -102,7 +102,10 @@ pub(crate) fn save_listener_nbt(nbt: &mut NbtCompound, state: &VibrationListener
         event.insert("game_event", current.event_key.to_string());
         event.insert("distance", current.distance);
         // Vanilla `Vec3.CODEC`: `[x, y, z]` doubles.
-        event.insert("pos", NbtTag::Double(vec![current.x, current.y, current.z]));
+        event.insert(
+            "pos",
+            NbtTag::List(NbtList::Double(vec![current.x, current.y, current.z])),
+        );
         if let Some(source) = current.source {
             insert_uuid(&mut event, "source", source);
         }

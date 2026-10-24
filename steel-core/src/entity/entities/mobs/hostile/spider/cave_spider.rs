@@ -11,7 +11,7 @@ use steel_protocol::packets::game::SoundSource;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::CaveSpiderEntityData;
-use steel_registry::{sound_events, vanilla_attributes, vanilla_mob_effects};
+use steel_registry::{sound_events, vanilla_attributes, vanilla_entities, vanilla_mob_effects};
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::Difficulty;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
@@ -86,7 +86,7 @@ impl CaveSpiderEntity {
             goal_selector.add_goal(
                 2,
                 AvoidEntityGoal::with_selector(6.0, 1.0, 1.2, |target, _world| {
-                    target.entity_type() == &steel_registry::vanilla_entities::ARMADILLO
+                    target.entity_type() == &vanilla_entities::ARMADILLO
                 }),
             );
             goal_selector.add_goal(3, LeapAtTargetGoal::new(0.4));
@@ -252,7 +252,7 @@ impl LivingEntity for CaveSpiderEntity {
 
     /// Vanilla `Spider.canBeAffected` rejects poison; inherited unchanged.
     fn can_be_affected(&self, effect: &MobEffectInstance) -> bool {
-        if ptr::eq(effect.effect(), &*vanilla_mob_effects::POISON) {
+        if ptr::eq(effect.effect(), &raw const *vanilla_mob_effects::POISON) {
             return false;
         }
         LivingEntity::default_can_be_affected(self, effect)
@@ -301,11 +301,11 @@ impl Mob for CaveSpiderEntity {
     }
 
     /// Vanilla `CaveSpider.doHurtTarget` poison rider on the shared melee path.
-    fn after_hurt_target(&self, world: &World, _target: &SharedEntity, was_hurt: bool) {
+    fn after_hurt_target(&self, world: &World, target: &SharedEntity, was_hurt: bool) {
         if !was_hurt {
             return;
         }
-        let Some(target_living) = _target.as_living_entity() else {
+        let Some(target_living) = target.as_living_entity() else {
             return;
         };
         let poison_seconds = match world.difficulty() {
@@ -315,7 +315,7 @@ impl Mob for CaveSpiderEntity {
         };
         if poison_seconds > 0 {
             target_living.add_mob_effect(MobEffectInstance::with_duration(
-                &vanilla_mob_effects::POISON,
+                vanilla_mob_effects::POISON,
                 poison_seconds * TICKS_PER_SECOND,
                 0,
             ));
@@ -346,6 +346,7 @@ impl PathfinderMob for CaveSpiderEntity {
 #[cfg(test)]
 mod tests {
     use std::sync::Weak;
+    use steel_registry::vanilla_mob_effects;
 
     use glam::DVec3;
     use steel_registry::{init_vanilla_registry, vanilla_entities};
@@ -366,7 +367,7 @@ mod tests {
         assert!(spider.is_climbing());
         assert!(spider.on_climbable());
 
-        let poison = MobEffectInstance::new(&steel_registry::vanilla_mob_effects::POISON, 0);
+        let poison = MobEffectInstance::new(vanilla_mob_effects::POISON, 0);
         assert!(!spider.can_be_affected(&poison));
         assert_eq!(spider.entity_type(), &vanilla_entities::CAVE_SPIDER);
     }

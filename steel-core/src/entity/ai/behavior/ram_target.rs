@@ -5,13 +5,14 @@ use glam::DVec3;
 use steel_registry::registry::TaggedRegistryExt as _;
 use steel_utils::BlockPos;
 use steel_utils::entity_events::EntityStatus;
+use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::value_providers::UniformIntProvider;
 
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::{MemoryModuleTypeRef, MemoryStatus, module_type as mem};
 use crate::entity::ai::brain::tracker::WalkTarget;
 use crate::entity::ai::targeting::TargetingConditions;
-use crate::world::LevelReader as _;
+use crate::entity::living_entity::LivingEntity;
 
 /// Vanilla `RamTarget.TIME_OUT_DURATION`.
 pub const TIME_OUT_DURATION: i32 = 200;
@@ -69,8 +70,7 @@ impl RamTarget {
     }
 
     fn sample_time_between_rams(&self) -> i32 {
-        let mut random =
-            steel_utils::random::legacy_random::LegacyRandom::from_seed(rand::random());
+        let mut random = LegacyRandom::from_seed(rand::random());
         self.time_between_rams.sample(&mut random)
     }
 
@@ -85,6 +85,10 @@ impl RamTarget {
     ///
     /// The block tag test is ported; `Goat.dropHorn` is goat-specific and is not
     /// available on Steel's generic mob surface, so no horn can be dropped here.
+    #[expect(
+        clippy::unused_self,
+        reason = "kept as a method to mirror vanilla `Goat.hasRammedHornBreakingBlock`"
+    )]
     fn has_rammed_horn_breaking_block(&self, ctx: &BehaviorContext<'_>) -> bool {
         use steel_registry::blocks::block_state_ext::BlockStateExt as _;
         use steel_registry::vanilla_block_tags::BlockTag;
@@ -154,14 +158,14 @@ impl Behavior for RamTarget {
 
         if let Some(ram_target) = nearby_entities.first() {
             if let Some(mob) = ctx.body.as_mob() {
-                mob.do_hurt_target(ctx.body, ctx.level, ram_target);
+                let _ = mob.do_hurt_target(ctx.body, ctx.level, ram_target);
             }
 
             let speed_boost_power = 0.0;
             let speed_factor = ((ctx
                 .body
                 .as_living_entity()
-                .map_or(1.0, |living| living.get_speed())
+                .map_or(1.0, LivingEntity::get_speed)
                 * RAM_SPEED_FORCE_FACTOR)
                 .clamp(RAM_SPEED_FACTOR_MIN, RAM_SPEED_FACTOR_MAX))
                 + speed_boost_power;

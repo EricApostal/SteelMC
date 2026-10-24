@@ -14,6 +14,7 @@ use crate::{
     },
     player::Player,
 };
+use rustc_hash::FxHashMap;
 use steel_math::{DEGREE_90, wrap_degrees};
 use steel_protocol::packets::game::{CGameRuleValues, CSound, SoundSource};
 use steel_registry::blocks::{

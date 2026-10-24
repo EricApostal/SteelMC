@@ -7,6 +7,10 @@
 //! lives in its own module.
 
 pub mod brain;
+#[expect(
+    clippy::module_inception,
+    reason = "vanilla mirrors one class per directory (piglin); renaming would churn every consumer"
+)]
 pub mod piglin;
 pub mod piglin_brute;
 pub mod zombified_piglin;

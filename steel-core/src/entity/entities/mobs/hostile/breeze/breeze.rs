@@ -11,11 +11,14 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
+use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
-use steel_registry::particle_type::ParticleData;
+use steel_registry::particle_type::{BlockParticleOption, ParticleData};
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::BreezeEntityData;
-use steel_registry::{sound_events, vanilla_attributes, vanilla_entities};
+use steel_registry::{
+    sound_events, vanilla_attributes, vanilla_blocks, vanilla_entities, vanilla_particle_types,
+};
 use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
@@ -156,8 +159,8 @@ impl BreezeEntity {
         for _ in 0..JUMP_TRAIL_PARTICLES {
             world.send_particles(
                 ParticleData::new(
-                    &steel_registry::vanilla_particle_types::BLOCK,
-                    steel_registry::particle_type::BlockParticleOption::new(ground),
+                    &vanilla_particle_types::BLOCK,
+                    BlockParticleOption::new(ground),
                 ),
                 centered,
                 1,
@@ -182,8 +185,8 @@ impl BreezeEntity {
         for _ in 0..amount {
             world.send_particles(
                 ParticleData::new(
-                    &steel_registry::vanilla_particle_types::BLOCK,
-                    steel_registry::particle_type::BlockParticleOption::new(ground),
+                    &vanilla_particle_types::BLOCK,
+                    BlockParticleOption::new(ground),
                 ),
                 position,
                 1,
@@ -197,12 +200,12 @@ impl BreezeEntity {
     fn ground_state_for_particles(&self) -> BlockStateId {
         if let Some(world) = self.level() {
             let in_block = self.in_block_state(&world);
-            if !steel_registry::blocks::block_state_ext::BlockStateExt::is_air(&in_block) {
+            if !in_block.is_air() {
                 return in_block;
             }
             return world.get_block_state(self.block_position().offset(0, -1, 0));
         }
-        steel_registry::vanilla_blocks::AIR.default_state()
+        vanilla_blocks::AIR.default_state()
     }
 
     /// Vanilla `Breeze.canAttack`: only players and iron golems.
@@ -351,11 +354,14 @@ impl LivingEntity for BreezeEntity {
     fn ai_step(&self, entity: &SharedEntity) -> Option<MoveResult> {
         Monster::monster_ai_step(self, entity)
     }
-    fn is_invulnerable_to(&self, world: &World, source: &DamageSource) -> bool {
+    fn default_is_invulnerable_to(&self, source: &DamageSource) -> bool {
+        // Vanilla `Breeze.isInvulnerableTo`: wind charges never hurt a breeze.
+        // (This used to call `LivingEntity::is_invulnerable_to(self, ..)` from inside
+        // its own override, i.e. unconditionally recurse.)
         source
             .causing_entity()
             .is_some_and(|entity| entity.entity_type() == &vanilla_entities::BREEZE)
-            || LivingEntity::is_invulnerable_to(self, world, source)
+            || self.is_invulnerable_to_base(source)
     }
 }
 

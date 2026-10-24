@@ -15,6 +15,7 @@
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
+use simdnbt::borrow::NbtCompound as NbtCompoundView;
 use simdnbt::owned::{NbtCompound, NbtTag};
 use steel_registry::game_events::GameEventRef;
 use steel_registry::particle_type::{ParticleData, VibrationParticleOption};
@@ -30,7 +31,7 @@ use super::vibration::{
     ignores_vibrations_when_sneaking, vibration_frequency_for_event,
 };
 use super::{GameEventContext, GameEventDeliveryMode, GameEventListener, SharedGameEventListener};
-use crate::entity::{Entity, SharedEntity};
+use crate::entity::SharedEntity;
 use crate::world::World;
 
 /// Builds Vanilla's `new VibrationParticleOption(positionSource, arrivalInTicks)` payload.
@@ -396,10 +397,7 @@ pub fn save_listener_nbt(nbt: &mut NbtCompound, state: &VibrationListenerState) 
 }
 
 /// Restores a [`VibrationListenerState`] from its `listener` compound.
-pub fn restore_listener(
-    state: &SyncMutex<VibrationListenerState>,
-    nbt: &simdnbt::borrow::BaseNbtCompound<'_, '_>,
-) {
+pub fn restore_listener(state: &SyncMutex<VibrationListenerState>, nbt: &NbtCompoundView<'_, '_>) {
     let Some(listener) = nbt.compound(LISTENER_NBT_KEY) else {
         return;
     };

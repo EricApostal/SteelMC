@@ -9,6 +9,10 @@
 
 pub mod abstract_nautilus;
 pub mod brain;
+#[expect(
+    clippy::module_inception,
+    reason = "vanilla mirrors one class per directory (nautilus); renaming would churn every consumer"
+)]
 mod nautilus;
 mod zombie_nautilus;
 

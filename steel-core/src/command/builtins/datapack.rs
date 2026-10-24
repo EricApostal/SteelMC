@@ -123,6 +123,11 @@ fn list_all(context: &SteelCommandContext<CommandSource>) -> Result<i32, Command
 
 /// Vanilla `PackRepository.reload()` at the start of both list forms.
 ///
+/// Vanilla's `list` only re-discovers packs: it never re-reads resources and never
+/// selects a pack that was not already selected, so a pack dropped into
+/// `datapacks/` still shows up under `list available` until `/reload` or
+/// `/datapack enable` selects it.
+///
 /// Re-discovery can only fail on unreadable pack metadata; vanilla logs and keeps
 /// the previous view in that case, so the listing still shows what is loaded.
 fn rediscover_for_list(manager: &datapack::DatapackManager) {
@@ -280,6 +285,7 @@ fn reload_after_selection(
         Ok(summary) => {
             tracing::info!(
                 packs = summary.packs_loaded,
+                new_packs = ?summary.new_packs,
                 functions = summary.functions_loaded,
                 elapsed = ?summary.elapsed,
                 "Reloaded data packs after selection change"

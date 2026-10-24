@@ -6,6 +6,8 @@ use super::{
 use steel_registry::data_components::vanilla_components::USE_REMAINDER;
 use steel_registry::stat::vanilla_stat_types;
 
+use crate::behavior::advancement_hooks::raise_item_used_on_block;
+
 /// Handles using an item on a block.
 ///
 /// This implements the logic from Java's `ServerPlayerGameMode.useItemOn()`.
@@ -56,6 +58,11 @@ pub fn use_item_on(
         let behavior = block_behaviors.get_behavior(block);
 
         let mut inventory_access = InventoryAccess::new(Arc::clone(&player.inventory), hand);
+        // Vanilla `ServerPlayerGameMode.useItemOn` copies the used stack
+        // (`stackBeforeUse = stack.copy()`) *before* the block interaction and hands
+        // that copy to the `ITEM_USED_ON_BLOCK` trigger, so the criterion sees the
+        // item as it was used, not the stack the interaction left behind.
+        let stack_before_use = inventory_access.with_item(|item| item.clone());
 
         let block_result = behavior.use_item_on(
             state,
@@ -68,6 +75,10 @@ pub fn use_item_on(
         );
 
         if block_result.consumes_action() {
+            // Vanilla reports every consuming block-state interaction here, which is
+            // what makes the trigger fire for behaviours that do not report it
+            // themselves (signs, campfires, respawn anchors, flint & steel, ...).
+            raise_item_used_on_block(player, world, pos, &stack_before_use);
             return block_result;
         }
 

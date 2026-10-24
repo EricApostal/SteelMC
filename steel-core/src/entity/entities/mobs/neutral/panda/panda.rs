@@ -377,11 +377,9 @@ impl Entity for PandaEntity {
         self.load_mob(nbt);
         self.load_ageable_mob(nbt);
         self.load_animal(nbt);
-        self.set_main_gene(PandaGene::by_id(
-            nbt.byte("MainGene").map(i32::from).unwrap_or(0),
-        ));
+        self.set_main_gene(PandaGene::by_id(nbt.byte("MainGene").map_or(0, i32::from)));
         self.set_hidden_gene(PandaGene::by_id(
-            nbt.byte("HiddenGene").map(i32::from).unwrap_or(0),
+            nbt.byte("HiddenGene").map_or(0, i32::from),
         ));
         self.apply_gene_attributes();
     }

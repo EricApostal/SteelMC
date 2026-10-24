@@ -288,16 +288,16 @@ pub(super) fn is_crop(state: steel_utils::BlockStateId) -> bool {
 /// The tag cannot distinguish `StemBlock` from `CropBlock`; an age property at its
 /// maximum approximates both.
 pub(super) fn is_mature_crop(state: steel_utils::BlockStateId) -> bool {
-    if !is_crop(state) {
-        return false;
-    }
-
     const AGE_PROPERTIES: [&IntProperty; 4] = [
         &BlockStateProperties::AGE_7,
         &BlockStateProperties::AGE_4,
         &BlockStateProperties::AGE_3,
         &BlockStateProperties::AGE_2,
     ];
+
+    if !is_crop(state) {
+        return false;
+    }
 
     AGE_PROPERTIES.iter().any(|property| {
         state

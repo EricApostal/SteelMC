@@ -2,11 +2,11 @@
 
 use steel_registry::vanilla_entities;
 
-use crate::entity::SharedEntity;
 use crate::entity::ai::brain::memory::MemoryModuleTypeRef;
 use crate::entity::ai::brain::memory::MemoryStore;
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::ai::brain::sensor::BrainSensor;
+use crate::entity::{LivingEntity, SharedEntity};
 use crate::world::World;
 
 /// Vanilla `SensorType.VILLAGER_BABIES` factory.
@@ -39,7 +39,5 @@ impl BrainSensor for VillagerBabiesSensor {
 /// Vanilla `isVillagerBaby`: `entity.is(EntityTypes.VILLAGER) && entity.isBaby()`.
 fn is_villager_baby(entity: &SharedEntity) -> bool {
     entity.entity_type().key == vanilla_entities::VILLAGER.key
-        && entity
-            .as_living_entity()
-            .is_some_and(|living| living.is_baby())
+        && entity.as_living_entity().is_some_and(LivingEntity::is_baby)
 }

@@ -11,11 +11,13 @@ use steel_protocol::packets::game::SoundSource;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::SilverfishEntityData;
-use steel_registry::{sound_events, vanilla_attributes, vanilla_game_rules};
+use steel_registry::{
+    sound_events, vanilla_attributes, vanilla_damage_type_tags, vanilla_game_rules,
+};
 use steel_utils::entity_events::EntityStatus;
 use steel_utils::locks::SyncMutex;
 use steel_utils::random::RandomSource;
-use steel_utils::types::UpdateFlags;
+use steel_utils::types::{GameType, UpdateFlags};
 use steel_utils::{BlockPos, BlockStateId, Downcast as _, DowncastType, DowncastTypeKey};
 
 use crate::behavior::blocks::InfestedBlock;
@@ -42,8 +44,6 @@ const WAKE_HORIZONTAL_RADIUS: i32 = 10;
 const WAKE_LOOK_FOR_FRIENDS_TICKS: i32 = 20;
 /// Vanilla `SilverfishMergeWithStoneGoal` griefing roll: `reducedTickDelay(10)` → 5.
 const MERGE_GRIEFING_ROLL_BOUND: i32 = 5;
-/// Vanilla `SilverfishMergeWithStoneGoal` random-stroll interval (10).
-const MERGE_RANDOM_STROLL_INTERVAL: i32 = 10;
 
 /// Vanilla `Silverfish`.
 #[entity_behavior(class = "Silverfish")]
@@ -179,10 +179,7 @@ impl SilverfishEntity {
                     f64::from(pos.z()) + 0.5,
                 ),
                 5.0,
-                |player| {
-                    !player.is_spectator()
-                        && player.game_mode() != steel_utils::types::GameType::Creative
-                },
+                |player| !player.is_spectator() && player.game_mode() != GameType::Creative,
             )
             .is_none()
     }
@@ -197,7 +194,7 @@ struct SilverfishMergeWithStoneGoal {
 
 impl SilverfishMergeWithStoneGoal {
     /// Vanilla `new SilverfishMergeWithStoneGoal(this)` → `super(mob, 1.0, 10)`.
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             inner: RandomStrollGoal::new(1.0),
             selected_offset: None,
@@ -469,6 +466,19 @@ impl LivingEntity for SilverfishEntity {
         Some(&sound_events::ENTITY_SILVERFISH_HURT)
     }
 
+    fn before_actually_hurt(&self, source: &DamageSource, _amount: f32) {
+        // Vanilla `Silverfish.hurtServer` arms `SilverfishWakeUpFriendsGoal` before
+        // calling `super.hurtServer`: any attacker, or a damage type in
+        // `#minecraft:always_triggers_silverfish`. Steel's `hurtServer` body is not
+        // callable from an override, so the wake-up happens in this hook instead —
+        // same tick, after vanilla's invulnerability/reduction checks.
+        if source.causing_entity().is_some()
+            || source.is(&vanilla_damage_type_tags::DamageTypeTag::ALWAYS_TRIGGERS_SILVERFISH)
+        {
+            self.notify_wake_up_friends();
+        }
+    }
+
     fn death_sound(&self) -> Option<SoundEventRef> {
         Some(&sound_events::ENTITY_SILVERFISH_DEATH)
     }
@@ -536,13 +546,16 @@ impl PathfinderMob for SilverfishEntity {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Weak;
+    use std::sync::{Arc, Weak};
 
     use glam::DVec3;
     use steel_registry::{init_vanilla_registry, vanilla_entities};
 
     use super::SilverfishEntity;
-    use crate::entity::Entity;
+    use crate::entity::damage::DamageSource;
+    use crate::entity::entities::mobs::hostile::enderman::EndermanEntity;
+    use crate::entity::{Entity, LivingEntity, SharedEntity};
+    use steel_registry::vanilla_damage_types;
 
     #[test]
     fn silverfish_notifies_friends_once_per_quiet_period() {
@@ -561,5 +574,38 @@ mod tests {
             "vanilla only arms the search when the counter is zero"
         );
         assert_eq!(silverfish.entity_type(), &vanilla_entities::SILVERFISH);
+    }
+
+    #[test]
+    fn hurt_arms_the_wake_up_search_like_vanilla() {
+        init_vanilla_registry();
+        let silverfish =
+            SilverfishEntity::new(&vanilla_entities::SILVERFISH, 1, DVec3::ZERO, Weak::new());
+
+        // An attacker's damage arms the search (`source.getEntity() != null`).
+        let attacker: SharedEntity = Arc::new(EndermanEntity::new(
+            &vanilla_entities::ENDERMAN,
+            2,
+            DVec3::ZERO,
+            Weak::new(),
+        ));
+        let attacker_source = DamageSource::direct(
+            &vanilla_damage_types::MOB_ATTACK,
+            SharedEntity::clone(&attacker),
+        );
+        silverfish.before_actually_hurt(&attacker_source, 1.0);
+        assert_eq!(*silverfish.look_for_friends.lock(), 20);
+
+        // `#minecraft:always_triggers_silverfish` arms it without an attacker.
+        *silverfish.look_for_friends.lock() = 0;
+        let magic_source = DamageSource::environment(&vanilla_damage_types::MAGIC);
+        silverfish.before_actually_hurt(&magic_source, 1.0);
+        assert_eq!(*silverfish.look_for_friends.lock(), 20);
+
+        // Neither an entity nor the tag: vanilla leaves the counter alone.
+        *silverfish.look_for_friends.lock() = 0;
+        let generic_source = DamageSource::environment(&vanilla_damage_types::GENERIC);
+        silverfish.before_actually_hurt(&generic_source, 1.0);
+        assert_eq!(*silverfish.look_for_friends.lock(), 0);
     }
 }

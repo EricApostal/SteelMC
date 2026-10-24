@@ -172,7 +172,6 @@ impl PrepareRamNearestTarget {
 /// Vanilla `isWalkableBlock`: stable destination with zero pathfinding malus.
 fn is_walkable_block(mob: &dyn PathfinderMob, target_pos: BlockPos) -> bool {
     use crate::entity::ai::path::PathfindingContext;
-    use crate::entity::mob::Mob as _;
 
     let Some(world) = mob.level() else {
         return false;
@@ -189,7 +188,7 @@ fn is_walkable_block(mob: &dyn PathfinderMob, target_pos: BlockPos) -> bool {
 }
 
 /// Vanilla `BlockPos.distManhattan`.
-fn manhattan_distance(a: BlockPos, b: BlockPos) -> i32 {
+const fn manhattan_distance(a: BlockPos, b: BlockPos) -> i32 {
     (a.x() - b.x()).abs() + (a.y() - b.y()).abs() + (a.z() - b.z()).abs()
 }
 
@@ -254,12 +253,15 @@ impl Behavior for PrepareRamNearestTarget {
         );
         ctx.set_memory(
             &mem::LOOK_TARGET,
-            Arc::new(EntityTracker::new(candidate.target().clone(), true)),
+            Arc::new(EntityTracker::new(
+                SharedEntity::clone(candidate.target()),
+                true,
+            )),
         );
 
         let did_target_move = candidate.target().block_position() != candidate.target_position();
         if did_target_move {
-            let target = candidate.target().clone();
+            let target = SharedEntity::clone(candidate.target());
             ctx.body.broadcast_entity_event(EntityStatus::EndRam);
             if let Some(mob) = ctx.body.as_pathfinder_mob() {
                 mob.mob_base().navigation().lock().stop();

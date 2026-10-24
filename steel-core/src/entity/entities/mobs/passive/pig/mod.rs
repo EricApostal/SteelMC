@@ -21,11 +21,11 @@ use steel_registry::vanilla_entity_data::PigEntityData;
 use steel_registry::vanilla_item_tags::ItemTag;
 use steel_registry::{
     REGISTRY, RegistryExt, RegistryReference, TaggedRegistryExt, sound_events, vanilla_attributes,
-    vanilla_items,
+    vanilla_damage_types, vanilla_entities, vanilla_items,
 };
 use steel_utils::locks::SyncMutex;
 use steel_utils::random::legacy_random::LegacyRandom;
-use steel_utils::types::InteractionHand;
+use steel_utils::types::{Difficulty, InteractionHand};
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier};
 
 use crate::behavior::InteractionResult;
@@ -237,9 +237,9 @@ impl Entity for PigEntity {
     /// Vanilla `Pig.thunderHit`: converts to a zombified piglin unless the
     /// difficulty is peaceful, otherwise takes the default 5.0 lightning damage.
     fn thunder_hit(&self, world: &Arc<World>, bolt: &SharedEntity) {
-        if world.difficulty() != steel_utils::types::Difficulty::Peaceful {
+        if world.difficulty() != Difficulty::Peaceful {
             let converted = self.convert_to(
-                &steel_registry::vanilla_entities::ZOMBIFIED_PIGLIN,
+                &vanilla_entities::ZOMBIFIED_PIGLIN,
                 ConversionParams::single(false, true),
                 Some(&move |mob| {
                     mob.set_persistence_required();
@@ -257,7 +257,7 @@ impl Entity for PigEntity {
         if Entity::is_alive(self) {
             self.hurt(
                 world,
-                &DamageSource::environment(&steel_registry::vanilla_damage_types::LIGHTNING_BOLT),
+                &DamageSource::environment(&vanilla_damage_types::LIGHTNING_BOLT),
                 5.0,
             );
         }

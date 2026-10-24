@@ -35,10 +35,10 @@ use crate::behavior::blocks::{CreakingHeartBlock, multiface_face_property};
 use crate::block_entity::{BlockEntity, BlockEntityBase};
 use crate::entity::entities::mobs::hostile::creaking::CreakingEntity;
 use crate::entity::{Entity as _, EntitySpawnReason, SharedEntity};
+use crate::world::World;
 use crate::world::game_event::GameEventContext;
 use crate::world::spawn::SpawnStrategy;
 use crate::world::spawn::natural::runtime_random;
-use crate::world::World;
 
 /// Vanilla `CreakingHeartBlockEntity.PLAYER_DETECTION_RANGE`.
 const PLAYER_DETECTION_RANGE: f64 = 32.0;
@@ -197,9 +197,7 @@ impl CreakingHeartBlockEntity {
             f64::from(pos.z()) + 0.5,
         );
         self.get_creaking_protector(world)
-            .map_or(0.0, |creaking| {
-                creaking.position().distance(bottom_center)
-            })
+            .map_or(0.0, |creaking| creaking.position().distance(bottom_center))
     }
 
     /// Vanilla `CreakingHeartBlockEntity.computeAnalogOutputSignal`.
@@ -207,7 +205,9 @@ impl CreakingHeartBlockEntity {
         if self.creaking().is_none() || self.get_creaking_protector(world).is_none() {
             return 0;
         }
-        let distance = self.distance_to_creaking(world).clamp(0.0, CREAKING_ROAMING_RADIUS);
+        let distance = self
+            .distance_to_creaking(world)
+            .clamp(0.0, CREAKING_ROAMING_RADIUS);
         let scaled_distance = distance / CREAKING_ROAMING_RADIUS;
         15 - (scaled_distance * 15.0).floor() as i32
     }
@@ -331,8 +331,9 @@ impl CreakingHeartBlockEntity {
                     } else if neighbour_state.get_block() == &vanilla_blocks::WATER
                         && neighbour_state.get_fluid_state().is_source()
                     {
-                        neighbour_state =
-                            vanilla_blocks::RESIN_CLUMP.default_state().set_value(WATERLOGGED, true);
+                        neighbour_state = vanilla_blocks::RESIN_CLUMP
+                            .default_state()
+                            .set_value(WATERLOGGED, true);
                     }
                     let face = multiface_face_property(opposite);
                     if neighbour_state.get_block() == &vanilla_blocks::RESIN_CLUMP
@@ -485,7 +486,10 @@ impl BlockEntity for CreakingHeartBlockEntity {
 
     fn save_additional(&self, nbt: &mut NbtCompound) {
         if let Some(creaking) = self.creaking() {
-            nbt.insert("creaking", NbtTag::IntArray(creaking.to_int_array().to_vec()));
+            nbt.insert(
+                "creaking",
+                NbtTag::IntArray(creaking.to_int_array().to_vec()),
+            );
         }
     }
 

@@ -94,6 +94,10 @@ impl CodEntity {
 
     /// Vanilla `AbstractFish.fromBucket`.
     #[must_use]
+    #[expect(
+        clippy::wrong_self_convention,
+        reason = "vanilla `AbstractFish.fromBucket` getter; the name is shared with the other bucketable fish entities"
+    )]
     pub fn from_bucket(&self) -> bool {
         *self.entity_data.lock().abstract_fish.from_bucket.get()
     }
@@ -108,25 +112,25 @@ impl CodEntity {
     }
 
     /// Vanilla `AbstractSchoolingFish` flock state.
-    pub(super) fn schooling_state(&self) -> &SyncMutex<SchoolingState> {
+    pub(super) const fn schooling_state(&self) -> &SyncMutex<SchoolingState> {
         &self.schooling
     }
 
     /// Vanilla `Cod.getBucketItemStack`.
     #[must_use]
-    pub fn bucket_item_stack(&self) -> ItemStack {
+    pub fn bucket_item_stack() -> ItemStack {
         ItemStack::new(&vanilla_items::COD_BUCKET)
     }
 
     /// Vanilla `AbstractFish.getPickupSound`.
     #[must_use]
-    pub fn pickup_sound(&self) -> SoundEventRef {
+    pub fn pickup_sound() -> SoundEventRef {
         &sound_events::ITEM_BUCKET_FILL_FISH
     }
 
     /// Vanilla `Cod.saveToBucketTag` (`Bucketable.saveDefaultDataToBucketTag`).
     fn create_bucket_stack(&self) -> ItemStack {
-        let mut stack = self.bucket_item_stack();
+        let mut stack = Self::bucket_item_stack();
         abstract_fish::save_default_bucket_data(self, &mut stack);
         stack
     }
@@ -138,7 +142,7 @@ impl CodEntity {
 
     /// Vanilla `AbstractFish.mobInteract`'s bucket half (`Bucketable.bucketMobPickup`).
     fn try_bucket_pickup(&self, player: &Player, hand: InteractionHand) -> bool {
-        abstract_fish::try_bucket_pickup(self, player, hand, self.pickup_sound(), || {
+        abstract_fish::try_bucket_pickup(self, player, hand, Self::pickup_sound(), || {
             self.create_bucket_stack()
         })
     }

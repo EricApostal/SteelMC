@@ -15,6 +15,8 @@ use std::iter::empty;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
+use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
+use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_registry::data_components::PotionContents;
 use steel_registry::data_components::vanilla_components;
@@ -27,6 +29,7 @@ use steel_registry::{
     RegistryReference, sound_events, vanilla_attributes, vanilla_custom_stats,
     vanilla_damage_type_tags, vanilla_items, vanilla_mob_effects, vanilla_potions,
 };
+use steel_utils::entity_events::EntityStatus;
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::InteractionHand;
 use steel_utils::{DowncastType, DowncastTypeKey, Identifier};
@@ -288,7 +291,7 @@ impl WitchEntity {
             // drops the target so the witch stops attacking its ally.
             let health = target
                 .as_living_entity()
-                .map_or(f32::MAX, |target| target.get_health());
+                .map_or(f32::MAX, LivingEntity::get_health);
             Mob::set_target(self, None);
             return if health <= RAIDER_HEALING_HEALTH {
                 &vanilla_potions::HEALING
@@ -379,14 +382,14 @@ impl Entity for WitchEntity {
             .unwrap_or(f64::from(DEFAULT_STEP_HEIGHT)) as f32
     }
 
-    fn save_additional(&self, nbt: &mut simdnbt::owned::NbtCompound) {
+    fn save_additional(&self, nbt: &mut NbtCompound) {
         self.save_mob(nbt);
         // Vanilla `Witch` adds no NBT of its own; only the inherited raider fields
         // (`Raider.addAdditionalSaveData`) are saved.
         self.raider_base.save(nbt);
     }
 
-    fn load_additional(&self, nbt: simdnbt::borrow::NbtCompound<'_, '_>) {
+    fn load_additional(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
         self.load_mob(nbt);
         if let Some(raid_id) = self.raider_base.load(&nbt) {
             self.rejoin_saved_raid(raid_id);
@@ -510,9 +513,7 @@ impl LivingEntity for WitchEntity {
             self.update_witch_target_state();
             self.tick_potion_use();
             if rand::random::<f32>() < 7.5E-4 {
-                self.broadcast_entity_event(
-                    steel_utils::entity_events::EntityStatus::WitchHatMagic,
-                );
+                self.broadcast_entity_event(EntityStatus::WitchHatMagic);
             }
         }
         Raider::raider_ai_step(self, entity);

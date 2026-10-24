@@ -17,9 +17,7 @@ use steel_registry::item_stack::ItemStack;
 use steel_registry::particle_type::ParticleData;
 use steel_registry::vanilla_entity_data::FireballEntityData;
 use steel_registry::vanilla_game_rules::MOB_GRIEFING;
-use steel_registry::{
-    sound_events, vanilla_damage_types, vanilla_entities, vanilla_items, vanilla_particle_types,
-};
+use steel_registry::{sound_events, vanilla_damage_types, vanilla_items, vanilla_particle_types};
 use steel_utils::locks::SyncMutex;
 use steel_utils::{DowncastType, DowncastTypeKey};
 

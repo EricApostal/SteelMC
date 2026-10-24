@@ -134,7 +134,7 @@ impl BrushableBlockEntity {
         }
 
         state.cool_down_ends_at_tick = game_time + BRUSH_COOLDOWN_TICKS;
-        self.unpack_loot_table(&mut state, player, brush);
+        self.unpack_loot_table(&mut state, world, player, brush);
 
         let previous_completion_state = state.completion_state();
         state.brush_count += 1;
@@ -196,10 +196,19 @@ impl BrushableBlockEntity {
         mutation
     }
 
-    fn unpack_loot_table(&self, state: &mut BrushableState, player: &Player, brush: &ItemStack) {
+    fn unpack_loot_table(
+        &self,
+        state: &mut BrushableState,
+        world: &Arc<World>,
+        player: &Player,
+        brush: &ItemStack,
+    ) {
         let Some(loot_table_key) = state.loot_table.take() else {
             return;
         };
+        // Vanilla `BrushableBlockEntity.unpackLootTable` fires `GENERATE_LOOT` with the
+        // block entity's loot table key before the loot is rolled.
+        crate::behavior::advancement_hooks::raise_generate_loot(player, world, &loot_table_key);
         let loot_table = REGISTRY.loot_tables.by_key(&loot_table_key);
 
         if state.loot_table_seed == 0 {
@@ -223,7 +232,6 @@ impl BrushableBlockEntity {
     ) {
         let loot = match loot_table {
             Some(table) => {
-                // TODO: Trigger CriteriaTriggers.GENERATE_LOOT once criteria triggers exist.
                 let equipment = living_loot_equipment(player);
                 let mut ctx = LootContext::new(rng)
                     .with_luck(player.get_luck())
@@ -520,5 +528,48 @@ mod tests {
         );
         assert!(update.compound("item").is_some());
         assert!(update.string("LootTable").is_none());
+    }
+    /// Vanilla `BrushableBlockEntity.unpackLootTable` fires `GENERATE_LOOT` with the
+    /// block entity's loot table key, which is what `minecraft:adventure/salvage_sherd`
+    /// listens for through its `minecraft:player_generates_container_loot` criteria.
+    #[test]
+    fn brushing_loot_table_grants_the_salvage_sherd_criterion() {
+        use crate::behavior::advancement_hooks::test_support::criterion_granted;
+        use crate::test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk};
+        use steel_utils::ChunkPos;
+
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world("brushable_generate_loot");
+        let world = &world_fixture.world;
+        let pos = BlockPos::new(8, 64, 8);
+        insert_ready_full_chunk(world, ChunkPos::from_block_pos(pos));
+        let state = vanilla_blocks::SUSPICIOUS_SAND.default_state();
+        assert!(world.set_block(pos, state, UpdateFlags::UPDATE_ALL));
+
+        let mut entity = BrushableBlockEntity::new(Arc::downgrade(world), pos, state);
+        let mut nbt = NbtCompound::new();
+        nbt.insert("LootTable", "minecraft:archaeology/desert_pyramid");
+        load_from_owned_nbt(&mut entity, &nbt);
+
+        let player = TestPlayerBuilder::new(Arc::clone(world), "BrushingPlayer", 1).build();
+        entity.brush(
+            0,
+            world,
+            player.as_ref(),
+            Direction::North,
+            &ItemStack::new(&vanilla_items::BRUSH),
+        );
+
+        assert!(criterion_granted(
+            &player,
+            "adventure/salvage_sherd",
+            "desert_pyramid"
+        ));
+        // Another archaeology table the player never brushed stays open.
+        assert!(!criterion_granted(
+            &player,
+            "adventure/salvage_sherd",
+            "desert_well"
+        ));
     }
 }

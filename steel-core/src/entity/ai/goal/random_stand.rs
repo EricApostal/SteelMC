@@ -4,6 +4,7 @@
 //! Vanilla stores the `AbstractHorse`; Steel reads the stand state through
 //! [`AbstractHorse`](crate::entity::ai::goal::AbstractHorse).
 
+use super::capabilities::AbstractHorse;
 use super::selector::{Goal, GoalControls};
 use crate::entity::PathfinderMob;
 
@@ -31,7 +32,7 @@ impl RandomStandGoal {
     fn reset_stand_interval(&mut self, mob: &dyn PathfinderMob) {
         self.next_stand = -mob
             .as_abstract_horse()
-            .map_or(0, |horse| horse.ambient_stand_interval());
+            .map_or(0, AbstractHorse::ambient_stand_interval);
     }
 }
 

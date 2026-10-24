@@ -54,7 +54,7 @@ impl Behavior for ShootWhenStuck {
             || ctx
                 .body
                 .as_living_entity()
-                .is_some_and(|living| living.has_mob_effect(&vanilla_mob_effects::LEVITATION))
+                .is_some_and(|living| living.has_mob_effect(vanilla_mob_effects::LEVITATION))
     }
 
     fn can_still_use(&self, _ctx: &mut BehaviorContext<'_>) -> bool {

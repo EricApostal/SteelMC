@@ -6,11 +6,12 @@
 //!
 //! **Vanilla differences:** the inventory click handlers
 //! (`overrideStackedOnOther`/`overrideOtherStackedOnMe`), the durability-style
-//! fullness bar (`isBarVisible`/`getBarWidth`/`getBarColor`), the bundle tooltip
-//! and `onDestroyed` scattering have no `ItemBehavior` hook in Steel, so they
-//! are not implemented here. `BundleContents` also stores no selected-item
-//! index, so a drop always takes the first stored stack instead of vanilla's
-//! selected one.
+//! fullness bar (`isBarVisible`/`getBarWidth`/`getBarColor`), the bundle
+//! tooltip and `onDestroyed` scattering have no `ItemBehavior` hook in Steel,
+//! so they are not implemented here. Drops already honor the selected index:
+//! `BundleContents` keeps the selection as runtime-only state (excluded from
+//! every serializer) and a drop removes the selected stack, falling back to
+//! the first one when the selection is out of bounds.
 
 use std::sync::Arc;
 
@@ -53,12 +54,27 @@ impl BundleItem {
         let Some(contents) = stack.get(BUNDLE_CONTENTS) else {
             return false;
         };
-        let Some((removed, remaining)) = contents.items().split_first() else {
+        let items = contents.items();
+        // Vanilla `BundleContents.Mutable.removeOne`: an out-of-bounds (or
+        // cleared) selection falls back to the first stored stack, then the
+        // selection is cleared.
+        let selected = contents.selected_item_index();
+        let index = if selected < 0 || selected as usize >= items.len() {
+            0
+        } else {
+            selected as usize
+        };
+        let Some(removed) = items.get(index) else {
             return false;
         };
 
         let dropped = removed.create();
-        let remaining = remaining.to_vec();
+        let remaining: Vec<_> = items
+            .iter()
+            .enumerate()
+            .filter(|(slot, _)| *slot != index)
+            .map(|(_, item)| item.clone())
+            .collect();
         stack.set(BUNDLE_CONTENTS, BundleContents::new(remaining));
 
         player.play_sound(

@@ -26,7 +26,7 @@ fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
             .then(literal("add").then(argument("name", ArgumentType::word()).executes(add_tag)))
             .then(
                 literal("remove")
-                    .then(argument("name", SteelArgumentType::entity_tag()).executes(remove_tag)),
+                    .then(argument("name", ArgumentType::word()).executes(remove_tag)),
             )
             .then(literal("list").executes(list_tags)),
     )

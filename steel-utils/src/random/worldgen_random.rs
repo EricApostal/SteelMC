@@ -1,15 +1,28 @@
 use crate::random::{
-    Random, RandomSplitter, gaussian::MarsagliaPolarGaussian, xoroshiro::Xoroshiro,
+    Random, RandomSource, RandomSplitter, gaussian::MarsagliaPolarGaussian, xoroshiro::Xoroshiro,
 };
 
-/// Vanilla's `WorldgenRandom` when constructed for biome decoration.
+/// Vanilla's `WorldgenRandom`.
 ///
-/// Feature decoration always constructs `WorldgenRandom(new XoroshiroRandomSource(...))`.
-/// Sampling then goes through `BitRandomSource.next*`, so it does not match raw
-/// `XoroshiroRandomSource` for `nextInt`, bounded ints, doubles, longs, or gaussians.
+/// Vanilla `WorldgenRandom extends LegacyRandomSource` and delegates every draw
+/// to a wrapped `RandomSource` (`WorldgenRandom.fork()`,
+/// `WorldgenRandom.next(I)I`, `WorldgenRandom.setSeed(J)V` bytecode). Its
+/// `next(int)` even branches on `delegate instanceof LegacyRandomSource` and
+/// keeps that source's own `LegacyRandomSource.next(int)` path; every other
+/// delegate falls back to `nextLong() >>> (64 - bits)`. The gaussian cache
+/// lives on the wrapper, not on the delegate: `MarsagliaPolarGaussian` is
+/// inherited from `LegacyRandomSource`.
+///
+/// Feature decoration constructs `WorldgenRandom(new XoroshiroRandomSource(...))`,
+/// so sampling goes through `BitRandomSource.next*` and does not match a raw
+/// `XoroshiroRandomSource` for `nextInt`, bounded ints, doubles, longs, or
+/// gaussians. `/place template` and `/place structure` instead hand the template
+/// and structure-piece layer the legacy sources vanilla gives those commands
+/// (`StructureBlockEntity.createRandom(seed)` and `Level.getRandom()`), which is
+/// why the delegate is the enum and not a concrete source.
 #[derive(Clone)]
 pub struct WorldgenRandom {
-    source: Xoroshiro,
+    source: RandomSource,
     next_gaussian: Option<f64>,
 }
 
@@ -18,19 +31,31 @@ impl WorldgenRandom {
     #[must_use]
     pub const fn from_seed(seed: u64) -> Self {
         Self {
-            source: Xoroshiro::from_seed(seed),
+            source: RandomSource::Xoroshiro(Xoroshiro::from_seed(seed)),
             next_gaussian: None,
         }
     }
 
-    /// Re-seeds the backing `XoroshiroRandomSource`.
+    /// Wraps an existing source, mirroring vanilla `new WorldgenRandom(RandomSource)`.
+    #[must_use]
+    pub const fn from_source(source: RandomSource) -> Self {
+        Self {
+            source,
+            next_gaussian: None,
+        }
+    }
+
+    /// Re-seeds the wrapped source.
     ///
     /// Vanilla `WorldgenRandom` inherits its gaussian cache from
     /// `LegacyRandomSource`, but overrides `setSeed` to only reseed the
     /// wrapped source. That means `setDecorationSeed` / `setFeatureSeed`
     /// intentionally preserve a pending gaussian value.
     pub const fn set_seed(&mut self, seed: i64) {
-        self.source.set_seed(seed);
+        match &mut self.source {
+            RandomSource::Xoroshiro(source) => source.set_seed(seed),
+            RandomSource::Legacy(source) => source.set_seed(seed),
+        }
     }
 
     /// Vanilla's `WorldgenRandom.setDecorationSeed`.
@@ -54,7 +79,15 @@ impl WorldgenRandom {
         self.set_seed(feature_seed);
     }
 
+    /// Vanilla `WorldgenRandom.next(int)`.
     fn next_bits(&mut self, bits: u64) -> u64 {
+        if matches!(self.source, RandomSource::Legacy(_)) {
+            // Vanilla keeps the delegate's `LegacyRandomSource.next(int)` path.
+            // That path logical-shifts the 48-bit LCG state and truncates, so it
+            // must be recovered from `next(32)` with a logical shift, not an
+            // arithmetic one (`next(32) >> 1` sign-extends).
+            return u64::from(self.source.next_i32() as u32 >> (32 - bits));
+        }
         self.source.next_i64() as u64 >> (64 - bits)
     }
 }
@@ -130,7 +163,9 @@ impl Random for WorldgenRandom {
 #[cfg(test)]
 mod tests {
     use super::WorldgenRandom;
-    use crate::random::Random;
+    use crate::random::legacy_random::LegacyRandom;
+    use crate::random::xoroshiro::Xoroshiro;
+    use crate::random::{Random, RandomSource};
 
     #[test]
     fn set_decoration_seed_matches_vanilla_trace() {
@@ -166,5 +201,44 @@ mod tests {
         let mut reseeded_reference = WorldgenRandom::from_seed(0);
         reseeded_reference.set_feature_seed(456, 7, 8);
         assert_eq!(random.next_gaussian(), reseeded_reference.next_gaussian());
+    }
+
+    #[test]
+    fn legacy_delegate_matches_bare_legacy_draws() {
+        // Vanilla `WorldgenRandom.next(int)` keeps the delegate's
+        // `LegacyRandomSource.next(int)` path, so wrapping a legacy source must
+        // draw exactly like the source would on its own.
+        let seed = 0x1234_5678_ABCD_EF01u64;
+        let mut bare = RandomSource::Legacy(LegacyRandom::from_seed(seed));
+        let mut wrapped =
+            WorldgenRandom::from_source(RandomSource::Legacy(LegacyRandom::from_seed(seed)));
+        for _ in 0..200 {
+            assert_eq!(bare.next_i32(), wrapped.next_i32());
+            assert_eq!(bare.next_i32_bounded(37), wrapped.next_i32_bounded(37));
+            assert_eq!(bare.next_i64(), wrapped.next_i64());
+            assert_eq!(bare.next_f32(), wrapped.next_f32());
+            assert_eq!(bare.next_f64(), wrapped.next_f64());
+            assert_eq!(bare.next_bool(), wrapped.next_bool());
+            assert_eq!(bare.next_gaussian(), wrapped.next_gaussian());
+        }
+    }
+
+    #[test]
+    fn xoroshiro_delegate_matches_from_seed() {
+        // `from_seed` must keep producing the exact stream decoration code relies on.
+        let mut seeded = WorldgenRandom::from_seed(987_654_321);
+        let mut wrapped =
+            WorldgenRandom::from_source(RandomSource::Xoroshiro(Xoroshiro::from_seed(
+                987_654_321,
+            )));
+        for _ in 0..200 {
+            assert_eq!(seeded.next_i32(), wrapped.next_i32());
+            assert_eq!(seeded.next_i32_bounded(37), wrapped.next_i32_bounded(37));
+            assert_eq!(seeded.next_i64(), wrapped.next_i64());
+            assert_eq!(seeded.next_f32(), wrapped.next_f32());
+            assert_eq!(seeded.next_f64(), wrapped.next_f64());
+            assert_eq!(seeded.next_bool(), wrapped.next_bool());
+            assert_eq!(seeded.next_gaussian(), wrapped.next_gaussian());
+        }
     }
 }

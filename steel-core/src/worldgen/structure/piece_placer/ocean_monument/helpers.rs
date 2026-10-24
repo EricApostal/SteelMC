@@ -3,7 +3,7 @@ use super::*;
 use crate::worldgen::template::TemplateLevelAccess;
 
 pub(super) fn generate_water_box<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     x0: i32,
     y0: i32,
     z0: i32,
@@ -37,7 +37,7 @@ pub(super) fn generate_water_box<L: TemplateLevelAccess>(
     reason = "matches vanilla OceanMonumentPiece.generateBoxOnFillOnly bounds"
 )]
 pub(super) fn generate_box_on_fill_only<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     x0: i32,
     y0: i32,
     z0: i32,
@@ -63,7 +63,7 @@ pub(super) fn generate_box_on_fill_only<L: TemplateLevelAccess>(
     reason = "direct port of vanilla OceanMonumentPiece.generateDefaultFloor"
 )]
 pub(super) fn generate_default_floor<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     xoff: i32,
     zoff: i32,
     down_opening: bool,
@@ -173,7 +173,7 @@ pub(super) fn generate_default_floor<L: TemplateLevelAccess>(
 }
 
 pub(super) fn spawn_elder<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     x: i32,
     y: i32,
     z: i32,

@@ -5,8 +5,9 @@
 //! through [`SchoolingFish`](crate::entity::ai::goal::SchoolingFish), the capability every
 //! schooling fish implements.
 
-use crate::entity::{Entity, PathfinderMob, SharedEntity};
+use crate::entity::{PathfinderMob, SharedEntity};
 
+use super::capabilities::SchoolingFish;
 use super::reduced_tick_delay;
 use super::selector::{Goal, GoalControls};
 
@@ -102,7 +103,7 @@ impl Goal for FollowFlockLeaderGoal {
                 entity.id() != self_id
                     && !entity
                         .as_schooling_fish()
-                        .is_some_and(|fish| fish.is_follower())
+                        .is_some_and(SchoolingFish::is_follower)
             })
             .cloned()
             .collect();
@@ -112,7 +113,7 @@ impl Goal for FollowFlockLeaderGoal {
             .find(|entity| {
                 entity
                     .as_schooling_fish()
-                    .is_some_and(|fish| fish.can_be_followed())
+                    .is_some_and(SchoolingFish::can_be_followed)
             })
             .cloned();
         match leader {

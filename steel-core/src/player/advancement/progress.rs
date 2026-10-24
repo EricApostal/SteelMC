@@ -222,7 +222,7 @@ mod tests {
 
     use super::{AdvancementProgress, AdvancementProgressMap};
 
-    fn advancement(key: &str) -> AdvancementRef {
+    fn advancement(key: &'static str) -> AdvancementRef {
         REGISTRY
             .advancements
             .value_by_key(&Identifier::vanilla_static(key))

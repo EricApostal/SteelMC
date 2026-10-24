@@ -8,7 +8,7 @@ use super::utils;
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::MemoryStatus;
 use crate::entity::ai::brain::memory::module_type as mem;
-use crate::entity::{Mob, SharedEntity};
+use crate::entity::{Animal, Mob, SharedEntity};
 
 /// Vanilla `AnimalMakeLove.BREED_RANGE`.
 const BREED_RANGE: f64 = 3.0;
@@ -99,11 +99,15 @@ impl AnimalMakeLove {
     /// Vanilla `AnimalMakeLove.start`'s `partner.getBrain().setMemory(...)`:
     /// Steel brains are reachable through `Mob::brain`, but never through the
     /// body's own lock (the body brain is already borrowed for this tick).
+    #[expect(
+        clippy::unused_self,
+        reason = "kept as a method to mirror the vanilla `AnimalMakeLove` instance call site"
+    )]
     fn set_partner_breed_target(&self, partner: &SharedEntity, body: &SharedEntity) {
         if let Some(brain) = partner.as_mob().and_then(Mob::brain) {
             brain
                 .lock()
-                .set_memory(&mem::BREED_TARGET, Some(body.clone()));
+                .set_memory(&mem::BREED_TARGET, Some(SharedEntity::clone(body)));
         }
     }
 }
@@ -127,9 +131,7 @@ impl Behavior for AnimalMakeLove {
     }
 
     fn check_extra_start_conditions(&self, ctx: &mut BehaviorContext<'_>) -> bool {
-        ctx.body
-            .as_animal()
-            .is_some_and(|animal| animal.is_in_love())
+        ctx.body.as_animal().is_some_and(Animal::is_in_love)
             && self.find_valid_breed_partner(ctx).is_some()
     }
 
@@ -161,7 +163,7 @@ impl Behavior for AnimalMakeLove {
         };
 
         let body = ctx.body;
-        ctx.set_memory(&mem::BREED_TARGET, partner.clone());
+        ctx.set_memory(&mem::BREED_TARGET, SharedEntity::clone(&partner));
         self.set_partner_breed_target(&partner, body);
         utils::lock_gaze_and_walk_to_each_other(
             ctx,

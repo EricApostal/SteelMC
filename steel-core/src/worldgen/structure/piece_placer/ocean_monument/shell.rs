@@ -5,7 +5,7 @@ use super::{
 use crate::worldgen::template::TemplateLevelAccess;
 
 pub(super) fn place_monument_building_shell<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
 ) {
     let water_height = placer.sea_level().max(64) - placer.world_pos(0, 0, 0).y();
     generate_water_box(placer, 0, 0, 0, 58, water_height, 58);
@@ -55,7 +55,7 @@ pub(super) fn place_monument_building_shell<L: TemplateLevelAccess>(
     reason = "direct port of vanilla MonumentBuilding.generateWing"
 )]
 fn generate_wing<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     is_flipped: bool,
     xoff: i32,
 ) {
@@ -235,7 +235,7 @@ fn generate_wing<L: TemplateLevelAccess>(
     );
 }
 
-fn generate_entrance_archs<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, '_, L>) {
+fn generate_entrance_archs<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, L>) {
     if !placer.chunk_intersects(22, 5, 35, 17) {
         return;
     }
@@ -257,7 +257,7 @@ fn generate_entrance_archs<L: TemplateLevelAccess>(placer: &mut ScatteredFeature
     }
 }
 
-fn generate_entrance_wall<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, '_, L>) {
+fn generate_entrance_wall<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, L>) {
     if !placer.chunk_intersects(15, 20, 42, 21) {
         return;
     }
@@ -315,7 +315,7 @@ fn generate_entrance_wall<L: TemplateLevelAccess>(placer: &mut ScatteredFeatureP
     generate_water_box(placer, 35, 1, 21, 35, 2, 21);
 }
 
-fn generate_roof_piece<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, '_, L>) {
+fn generate_roof_piece<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, L>) {
     if !placer.chunk_intersects(21, 21, 36, 36) {
         return;
     }
@@ -392,7 +392,7 @@ fn generate_roof_piece<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlac
     placer.generate_box(30, 21, 28, 30, 21, 29, base_gray(), base_gray(), false);
 }
 
-fn generate_lower_wall<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, '_, L>) {
+fn generate_lower_wall<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, L>) {
     if placer.chunk_intersects(0, 21, 6, 58) {
         placer.generate_box(0, 0, 21, 6, 0, 57, base_gray(), base_gray(), false);
         generate_water_box(placer, 0, 1, 21, 6, 7, 57);
@@ -475,7 +475,7 @@ fn generate_lower_wall<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlac
     }
 }
 
-fn generate_middle_wall<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, '_, L>) {
+fn generate_middle_wall<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, L>) {
     if placer.chunk_intersects(7, 21, 13, 50) {
         placer.generate_box(7, 0, 21, 13, 0, 50, base_gray(), base_gray(), false);
         generate_water_box(placer, 7, 1, 21, 13, 10, 50);
@@ -557,7 +557,7 @@ fn generate_middle_wall<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePla
     }
 }
 
-fn generate_upper_wall<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, '_, L>) {
+fn generate_upper_wall<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, L>) {
     if placer.chunk_intersects(14, 21, 20, 43) {
         placer.generate_box(14, 0, 21, 20, 0, 43, base_gray(), base_gray(), false);
         generate_water_box(placer, 14, 1, 22, 20, 14, 43);

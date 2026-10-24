@@ -1,5 +1,6 @@
 //! Vanilla `MagmaCube` (`net.minecraft.world.entity.monster.cubemob.MagmaCube`).
 
+use std::f32::consts::TAU;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -11,7 +12,9 @@ use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::particle_type::ParticleData;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::MagmaCubeEntityData;
-use steel_registry::{sound_events, vanilla_attributes, vanilla_entities, vanilla_particle_types};
+use steel_registry::{
+    sound_events, vanilla_attributes, vanilla_entities, vanilla_mob_effects, vanilla_particle_types,
+};
 use steel_utils::locks::SyncMutex;
 use steel_utils::random::RandomSource;
 use steel_utils::types::Difficulty;
@@ -45,11 +48,6 @@ const MAGMA_CUBE_ATTACK_DAMAGE_BONUS: f32 = 2.0;
 const MAGMA_CUBE_JUMP_DELAY_MULTIPLIER: i32 = 4;
 /// Vanilla `MagmaCube.jumpFromGround` size-based boost.
 const MAGMA_CUBE_JUMP_BOOST_PER_SIZE: f32 = 0.1;
-/// Vanilla `MagmaCube.jumpInLiquid` lava boost.
-const MAGMA_CUBE_LAVA_JUMP_BASE: f64 = 0.22;
-const MAGMA_CUBE_LAVA_JUMP_PER_SIZE: f64 = 0.05;
-/// Vanilla `MagmaCube.decreaseSquish` factor.
-const MAGMA_CUBE_SQUISH_FACTOR: f32 = 0.9;
 
 /// Vanilla `MagmaCube`.
 #[entity_behavior(class = "MagmaCube")]
@@ -218,7 +216,7 @@ impl MagmaCubeEntity {
 
     /// Vanilla `MagmaCube.getJumpSound`.
     #[must_use]
-    pub fn jump_sound(&self) -> SoundEventRef {
+    pub fn jump_sound() -> SoundEventRef {
         &sound_events::ENTITY_MAGMA_CUBE_JUMP
     }
 
@@ -250,7 +248,7 @@ impl MagmaCubeEntity {
                 let count = (size * 16.0) as i32;
                 let position = self.position();
                 for _ in 0..count {
-                    let dir = rand::random::<f32>() * f32::consts::TAU;
+                    let dir = rand::random::<f32>() * TAU;
                     let d = rand::random::<f32>() * 0.5 + 0.5;
                     let xd = f64::from(dir.sin() * radius * d);
                     let zd = f64::from(dir.cos() * radius * d);
@@ -294,7 +292,7 @@ impl MagmaCubeEntity {
             if state.tick_jump_delay(cube_jump_delay() * MAGMA_CUBE_JUMP_DELAY_MULTIPLIER) {
                 self.jump_control_jump();
                 self.play_sound(
-                    self.jump_sound(),
+                    Self::jump_sound(),
                     cube_sound_volume(self.size()),
                     cube_sound_pitch(self.is_tiny()),
                 );
@@ -479,7 +477,7 @@ impl Goal for MagmaCubeRandomDirectionGoal {
             && (mob.on_ground()
                 || mob.is_in_water()
                 || mob.is_in_lava()
-                || mob.has_mob_effect(&steel_registry::vanilla_mob_effects::LEVITATION))
+                || mob.has_mob_effect(vanilla_mob_effects::LEVITATION))
     }
 
     fn tick(&mut self, mob: &dyn PathfinderMob, _entity: &SharedEntity) {
@@ -756,6 +754,7 @@ impl PathfinderMob for MagmaCubeEntity {}
 #[cfg(test)]
 mod tests {
     use std::sync::Weak;
+    use steel_registry::vanilla_attributes;
 
     use glam::DVec3;
     use steel_registry::{init_vanilla_registry, vanilla_entities};
@@ -774,7 +773,7 @@ mod tests {
         assert_eq!(
             cube.attributes()
                 .lock()
-                .get_value(steel_registry::vanilla_attributes::ARMOR),
+                .get_value(vanilla_attributes::ARMOR),
             Some(9.0)
         );
         assert!((cube.attack_damage() - 5.0).abs() < f32::EPSILON);

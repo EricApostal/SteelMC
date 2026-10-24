@@ -15,6 +15,7 @@ use std::sync::Arc;
 use steel_registry::RegistryEntry;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::{BlockStateProperties, Direction};
+use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_blocks;
 use steel_registry::vanilla_game_rules::FIRE_SPREAD_RADIUS_AROUND_PLAYER;
@@ -392,7 +393,7 @@ impl World {
         if old_state.get_block() == &vanilla_blocks::TNT {
             // Vanilla primes TNT caught in a fire burnout; Steel's TntBlock.prime returns false
             // until the PrimedTnt entity lane registers a factory.
-            crate::behavior::blocks::TntBlock::prime(self, pos, None);
+            crate::behavior::blocks::TntBlock::prime(self, pos, None, &ItemStack::empty());
         }
     }
 

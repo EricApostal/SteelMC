@@ -10,7 +10,6 @@ use steel_registry::vanilla_entities;
 use steel_registry::vanilla_item_tags::ItemTag;
 use steel_utils::{BlockPos, BlockStateId};
 
-use crate::entity::Entity as _;
 use crate::entity::LivingEntity;
 use crate::entity::SharedEntity;
 use crate::entity::ai::brain::memory::nearest_visible::NearestVisibleLivingEntities;
@@ -81,37 +80,37 @@ impl BrainSensor for PiglinSpecificSensor {
             if entity.entity_type().key == vanilla_entities::HOGLIN.key {
                 if is_baby(entity) {
                     if baby_hoglin.is_none() {
-                        baby_hoglin = Some(entity.clone());
+                        baby_hoglin = Some(SharedEntity::clone(entity));
                     }
                 } else if is_adult(entity) {
                     visible_adult_hoglin_count += 1;
                     if huntable_hoglin.is_none() && can_be_hunted(entity) {
-                        huntable_hoglin = Some(entity.clone());
+                        huntable_hoglin = Some(SharedEntity::clone(entity));
                     }
                 }
             } else if entity.entity_type().key == vanilla_entities::PIGLIN_BRUTE.key {
-                visible_adult_piglins.push(entity.clone());
+                visible_adult_piglins.push(SharedEntity::clone(entity));
             } else if entity.entity_type().key == vanilla_entities::PIGLIN.key {
                 if is_baby(entity) {
                     if baby_piglin.is_none() {
-                        baby_piglin = Some(entity.clone());
+                        baby_piglin = Some(SharedEntity::clone(entity));
                     }
                 } else if is_adult(entity) {
-                    visible_adult_piglins.push(entity.clone());
+                    visible_adult_piglins.push(SharedEntity::clone(entity));
                 }
             } else if entity.entity_type().key == vanilla_entities::PLAYER.key {
                 if player_not_wearing_gold.is_none()
                     && !is_wearing_safe_armor(entity)
                     && body_can_attack(body, entity)
                 {
-                    player_not_wearing_gold = Some(entity.clone());
+                    player_not_wearing_gold = Some(SharedEntity::clone(entity));
                 }
 
                 if player_holding_wanted_item.is_none()
                     && !entity.is_spectator()
                     && is_player_holding_loved_item(entity)
                 {
-                    player_holding_wanted_item = Some(entity.clone());
+                    player_holding_wanted_item = Some(SharedEntity::clone(entity));
                 }
             } else {
                 let is_nemesis_type = entity.entity_type().key
@@ -122,10 +121,10 @@ impl BrainSensor for PiglinSpecificSensor {
                 // zombified check.
                 if nemesis.is_some() || !is_nemesis_type {
                     if zombified.is_none() && is_zombified(entity) {
-                        zombified = Some(entity.clone());
+                        zombified = Some(SharedEntity::clone(entity));
                     }
                 } else {
-                    nemesis = Some(entity.clone());
+                    nemesis = Some(SharedEntity::clone(entity));
                 }
             }
         }

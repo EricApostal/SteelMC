@@ -299,7 +299,7 @@ impl AbstractSkeleton for StrayEntity {
         let arrow = SkeletonArrow::base(power);
         SkeletonArrow {
             effect: Some(MobEffectInstance::with_duration(
-                &vanilla_mob_effects::SLOWNESS,
+                vanilla_mob_effects::SLOWNESS,
                 STRAY_SLOWNESS_DURATION,
                 0,
             )),
@@ -316,7 +316,7 @@ impl RangedAttackMob for StrayEntity {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Weak;
+    use std::sync::{Arc, Weak};
 
     use glam::DVec3;
     use steel_registry::{init_vanilla_registry, vanilla_entities, vanilla_mob_effects};
@@ -324,8 +324,8 @@ mod tests {
     use steel_registry::item_stack::ItemStack;
 
     use super::StrayEntity;
+    use crate::entity::SharedEntity;
     use crate::entity::entities::mobs::skeleton::abstract_skeleton::AbstractSkeleton;
-    use crate::entity::{Entity, SharedEntity};
 
     #[test]
     fn stray_implements_the_bow_capability_and_arrow_effect() {
@@ -339,7 +339,7 @@ mod tests {
         assert_eq!(effect.effect().key, vanilla_mob_effects::SLOWNESS.key);
         assert_eq!(effect.duration(), 600);
 
-        let stray_entity: SharedEntity = std::sync::Arc::new(stray);
+        let stray_entity: SharedEntity = Arc::new(stray);
         assert!(stray_entity.as_ranged_attack_mob().is_some());
     }
 }

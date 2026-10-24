@@ -4,6 +4,7 @@ use crate::entity::Entity as _;
 use steel_protocol::packets::game::CEntityEvent;
 use steel_utils::entity_events::EntityStatus;
 
+use steel_registry::game_rules::ErasedGameRule;
 use steel_registry::vanilla_game_rules::{
     COMMAND_BLOCK_OUTPUT, COMMAND_BLOCKS_WORK, IMMEDIATE_RESPAWN, LIMITED_CRAFTING,
     REDUCED_DEBUG_INFO,
@@ -219,7 +220,7 @@ impl World {
 
     /// Gets a type-erased value for a dynamically selected game rule.
     #[must_use]
-    pub fn get_erased_game_rule(&self, rule: ErasedGameRuleRef) -> GameRuleValue {
+    pub fn get_erased_game_rule(&self, rule: &dyn ErasedGameRule) -> GameRuleValue {
         self.level_data
             .read()
             .data()
@@ -282,7 +283,7 @@ impl World {
     /// `advance_time` is handled by the caller (it broadcasts the clock sync) and
     /// the dynamic `/gamerule` path goes through [`World::set_erased_game_rule`],
     /// which compares the rule key and forwards here.
-    fn on_game_rule_changed(&self, rule: ErasedGameRuleRef) {
+    fn on_game_rule_changed(&self, rule: &dyn ErasedGameRule) {
         let key = rule.key();
         let current = self.get_erased_game_rule(rule);
         let Some(value) = current.downcast_ref::<bool>() else {

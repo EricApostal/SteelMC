@@ -1,5 +1,6 @@
 //! Vanilla `RandomStroll`: pick a random nearby position as the walk target.
 
+use std::f64::consts::FRAC_PI_2;
 use std::sync::Arc;
 
 use glam::DVec3;
@@ -109,7 +110,7 @@ impl RandomStroll {
     }
 
     /// Vanilla `strollFlyOrSwim` target fetch plus the `canRun` gate.
-    fn target_pos(&self, ctx: &BehaviorContext<'_>, body: &SharedEntity) -> Option<DVec3> {
+    fn target_pos(&self, _ctx: &BehaviorContext<'_>, body: &SharedEntity) -> Option<DVec3> {
         if !self.may_stroll_from_water && body.is_in_water() {
             // Vanilla gates non-water strolls on `b -> !b.isInWater()`.
             return None;
@@ -131,7 +132,7 @@ impl RandomStroll {
                     MAX_XZ_DIST,
                     MAX_Y_DIST,
                     body_pos + DVec3::new(view.x, 0.0, view.z) * 10.0,
-                    f64::consts::FRAC_PI_2,
+                    FRAC_PI_2,
                 )
                 // Vanilla `AirAndWaterRandomPos.getPos(..., -2, x, z, PI/2)`:
                 // `-2` is an extra downward offset for the landing-height search
@@ -146,6 +147,10 @@ impl RandomStroll {
     /// Vanilla calls `BehaviorUtils.getRandomSwimmablePos(body, tierXz, tierY)`
     /// for the first tier and then probes along the previous fallback direction
     /// for the remaining tiers; Steel ports both halves.
+    #[expect(
+        clippy::unused_self,
+        reason = "kept as a method to mirror vanilla `RandomStroll.getTargetSwimPos`"
+    )]
     fn target_swim_pos(&self, body: &SharedEntity) -> Option<DVec3> {
         let mob = body.as_pathfinder_mob()?;
         let body_pos = body.position();

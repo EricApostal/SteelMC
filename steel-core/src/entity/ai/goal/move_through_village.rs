@@ -170,18 +170,14 @@ impl Goal for MoveThroughVillageGoal {
             }
         }
 
-        let nodes: Vec<BlockPos> = self
-            .path
-            .as_ref()
-            .map(|path| {
-                (0..path.node_count())
-                    .filter_map(|index| {
-                        path.node(index)
-                            .map(|node| BlockPos::new(node.x, node.y, node.z))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let nodes: Vec<BlockPos> = self.path.as_ref().map_or_default(|path| {
+            (0..path.node_count())
+                .filter_map(|index| {
+                    path.node(index)
+                        .map(|node| BlockPos::new(node.x, node.y, node.z))
+                })
+                .collect()
+        });
         for node in nodes {
             let door_pos = node.above();
             let state = world.get_block_state(door_pos);
@@ -202,7 +198,7 @@ impl Goal for MoveThroughVillageGoal {
             return false;
         }
 
-        let reach = f64::from(mob.bounding_box().width()) + f64::from(self.distance_to_poi);
+        let reach = mob.bounding_box().width() + f64::from(self.distance_to_poi);
         !self.poi_pos.closer_to_center_than(mob.position(), reach)
     }
 

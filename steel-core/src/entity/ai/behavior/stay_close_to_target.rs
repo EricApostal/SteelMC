@@ -68,7 +68,7 @@ impl Trigger for StayCloseToTarget {
             return false;
         }
 
-        ctx.set_memory(&mem::LOOK_TARGET, position_tracker.clone());
+        ctx.set_memory(&mem::LOOK_TARGET, Arc::clone(&position_tracker));
         ctx.set_memory(
             &mem::WALK_TARGET,
             WalkTarget::new(position_tracker, self.speed_modifier, self.close_enough),

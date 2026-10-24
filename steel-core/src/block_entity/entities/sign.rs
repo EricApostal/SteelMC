@@ -143,7 +143,10 @@ impl SignText {
         // `lenientOptionalFieldOf`: `filtered_messages` is only written when it
         // differs from `messages` (`SignText.filteredMessagesForSerialization`).
         if self.filtered_messages != self.messages {
-            nbt.insert("filtered_messages", sign_lines_to_nbt(&self.filtered_messages));
+            nbt.insert(
+                "filtered_messages",
+                sign_lines_to_nbt(&self.filtered_messages),
+            );
         }
 
         // Save color

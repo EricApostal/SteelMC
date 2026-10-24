@@ -9,7 +9,6 @@
 
 use std::sync::Arc;
 
-use steel_registry::RegistryEntry as _;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::Direction;
 use steel_registry::blocks::shapes::is_offset_face_full;
@@ -27,14 +26,9 @@ pub mod placement;
 pub mod spawn_util;
 pub mod structure_spawns;
 
-pub use difficulty::{DifficultyInstance, MOON_BRIGHTNESS_PER_PHASE};
-pub use local_mob_cap::LocalMobCapCalculator;
-pub use natural::{NaturalSpawner, PotentialCalculator, SpawnState};
-pub use placement::{
-    SpawnPlacementType, SpawnPlacements, SpawnPlacementsData, is_valid_empty_spawn_block,
-};
+pub use natural::NaturalSpawner;
+pub use placement::SpawnPlacements;
 pub use spawn_util::{SpawnStrategy, try_spawn_mob};
-pub use structure_spawns::{FORTRESS_ENEMIES, is_in_nether_fortress_bounds, structure_spawns_at};
 
 const fn chunk_min_block_x(pos: ChunkPos) -> i32 {
     pos.0.x << 4

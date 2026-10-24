@@ -420,11 +420,7 @@ impl Goal for CatRelaxOnOwnerGoal {
             } else {
                 let owner_pos = owner.position();
                 mob.mob_base().controls().lock().look_control.set_look_at(
-                    DVec3::new(
-                        owner_pos.x,
-                        owner_pos.y + f64::from(owner.get_eye_y()),
-                        owner_pos.z,
-                    ),
+                    DVec3::new(owner_pos.x, owner_pos.y + owner.get_eye_y(), owner_pos.z),
                     OWNER_LOOK_SPEED,
                     OWNER_LOOK_ANGLE,
                 );

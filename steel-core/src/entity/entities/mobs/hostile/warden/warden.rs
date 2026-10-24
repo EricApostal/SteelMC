@@ -302,14 +302,14 @@ impl WardenEntity {
 
     /// Vanilla `Warden.getVibrationData`.
     #[must_use]
-    pub fn vibration_state(&self) -> &Arc<SyncMutex<VibrationListenerState>> {
+    pub const fn vibration_state(&self) -> &Arc<SyncMutex<VibrationListenerState>> {
         &self.vibration_state
     }
 
     /// Vanilla `Warden.getVibrationUser`, over any shared handle to this warden.
     #[must_use]
     pub fn vibration_user(self: &Arc<Self>) -> Arc<dyn EntityVibrationUser> {
-        let entity: SharedEntity = Arc::clone(self);
+        let entity: SharedEntity = Arc::clone(self) as SharedEntity;
         Arc::new(WardenVibrationUser {
             warden: Arc::downgrade(&entity),
         })
@@ -515,7 +515,7 @@ impl WardenEntity {
     fn set_attack_target(&self, target: &SharedEntity) {
         let mut brain = self.brain.lock();
         brain.erase_memory(&mem::ROAR_TARGET);
-        brain.set_memory(&mem::ATTACK_TARGET, Some(target.clone()));
+        brain.set_memory(&mem::ATTACK_TARGET, Some(Arc::clone(target)));
         brain.erase_memory(&mem::CANT_REACH_WALK_TARGET_SINCE);
         brain.set_memory_with_expiry(
             &mem::SONIC_BOOM_COOLDOWN,
@@ -894,9 +894,9 @@ impl LivingEntity for WardenEntity {
             return;
         };
         if self.target().is_none()
-            && (source.is_direct() || self.closer_than(&attacker, HURT_ANGER_TARGET_DISTANCE))
+            && (source.is_direct() || self.closer_than(attacker, HURT_ANGER_TARGET_DISTANCE))
         {
-            self.set_attack_target(&attacker);
+            self.set_attack_target(attacker);
         }
     }
 
@@ -966,7 +966,8 @@ impl Mob for WardenEntity {
             // A melee hit during the brain tick queued its sonic-boom cooldown;
             // apply it now that the lock is ours (vanilla sets it in
             // `doHurtTarget`, i.e. inside the brain tick).
-            if let Some(ticks) = self.pending_sonic_boom_cooldown.lock().take() {
+            let pending_cooldown = self.pending_sonic_boom_cooldown.lock().take();
+            if let Some(ticks) = pending_cooldown {
                 brain.set_memory_with_expiry(&mem::SONIC_BOOM_COOLDOWN, (), ticks);
             }
         }
@@ -1006,7 +1007,7 @@ impl Mob for WardenEntity {
 
         self.brain
             .lock()
-            .set_memory(&mem::ATTACK_TARGET, Some(target.clone()));
+            .set_memory(&mem::ATTACK_TARGET, Some(Arc::clone(target)));
         true
     }
 

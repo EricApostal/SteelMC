@@ -19,7 +19,7 @@ use crate::chunk::heightmap::HeightmapType;
 use crate::entity::{entities::ItemFrameEntity, next_entity_id};
 use crate::fluid::FluidStateExt as _;
 use crate::world::World;
-use crate::world::{LevelAccessor as _, LevelReader as _};
+
 use crate::worldgen::template::{
     StructureDataMarker, StructurePlaceSettings, StructureProcessorRandom, StructureTemplate,
     TemplateLevelAccess,

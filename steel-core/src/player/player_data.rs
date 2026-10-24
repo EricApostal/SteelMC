@@ -3,16 +3,16 @@
 //! This module defines the data format for saving and loading player state.
 
 use rustc_hash::FxHashSet;
+use steel_registry::REGISTRY;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::stat::Stat;
-use steel_registry::{REGISTRY, RegistryExt as _};
 use steel_utils::types::GameType;
 
 use super::{
     Player, PlayerRespawnConfig, abilities::Abilities, experience::Experience, food_data::FoodData,
     player_inventory::PlayerInventory,
 };
-use crate::player::advancement::{PersistentAdvancement, PersistentCriterion};
+use crate::player::advancement::PersistentAdvancement;
 use crate::player::stats_counter::StatState;
 use crate::{
     chunk_saver::{ChunkStorage, PersistentEntity},

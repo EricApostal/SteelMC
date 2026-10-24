@@ -10,11 +10,12 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
+use steel_registry::MobEffectInstance;
 use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::level_events;
 use steel_registry::particle_type::ParticleData;
 use steel_registry::vanilla_entity_data::DragonFireballEntityData;
-use steel_registry::{vanilla_entities, vanilla_mob_effects, vanilla_particle_types};
+use steel_registry::{vanilla_mob_effects, vanilla_particle_types};
 use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, DowncastType, DowncastTypeKey};
 
@@ -214,8 +215,8 @@ impl DragonFireballEntity {
         cloud.set_duration(CLOUD_DURATION);
         cloud.set_radius_per_tick((CLOUD_MAX_RADIUS - CLOUD_RADIUS) / CLOUD_DURATION as f32);
         cloud.set_potion_duration_scale(CLOUD_POTION_DURATION_SCALE);
-        cloud.add_effect(steel_registry::MobEffectInstance::new(
-            &vanilla_mob_effects::INSTANT_DAMAGE,
+        cloud.add_effect(MobEffectInstance::new(
+            vanilla_mob_effects::INSTANT_DAMAGE,
             1,
             1,
             false,

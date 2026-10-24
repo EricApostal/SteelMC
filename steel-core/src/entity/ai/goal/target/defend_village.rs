@@ -3,6 +3,8 @@
 //! The iron golem attacks a player whose reputation with any nearby villager dropped to `-100`
 //! or lower, i.e. who has been seen hurting or killing villagers.
 
+use steel_registry::vanilla_entities;
+use steel_utils::types::GameType;
 use uuid::Uuid;
 
 use super::super::selector::{Goal, GoalControls};
@@ -55,7 +57,7 @@ impl Goal for DefendVillageTargetGoal {
             mob.bounding_box()
                 .inflate_xyz(HORIZONTAL_RANGE, VERTICAL_RANGE, HORIZONTAL_RANGE);
         let villagers = world.get_entities_in_aabb_matching(&grow, |entity| {
-            entity.entity_type() == &steel_registry::vanilla_entities::VILLAGER
+            entity.entity_type() == &vanilla_entities::VILLAGER
                 && entity.as_living_entity().is_some_and(|villager| {
                     attack_targeting.test(world.as_ref(), Some(mob), villager)
                 })
@@ -80,8 +82,7 @@ impl Goal for DefendVillageTargetGoal {
 
         self.potential_target.as_ref().is_some_and(|target| {
             !target.as_player().is_some_and(|player| {
-                player.is_spectator()
-                    || player.game_mode() == steel_utils::types::GameType::Creative
+                player.is_spectator() || player.game_mode() == GameType::Creative
             })
         })
     }

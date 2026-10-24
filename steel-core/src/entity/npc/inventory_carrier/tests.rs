@@ -1,5 +1,6 @@
 //! Tests for [`InventoryCarrier`].
 
+use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use std::io::Cursor;
 
 use simdnbt::borrow::read_compound as read_borrowed_compound;
@@ -95,7 +96,7 @@ fn inventory_nbt_round_trip() {
 }
 
 /// Borrowed view of an owned compound, matching how entities load saved NBT.
-fn with_borrowed_nbt(nbt: &NbtCompound, read: impl FnOnce(&simdnbt::borrow::NbtCompound<'_, '_>)) {
+fn with_borrowed_nbt(nbt: &NbtCompound, read: impl FnOnce(&BorrowedNbtCompoundView<'_, '_>)) {
     let mut bytes = Vec::new();
     nbt.write(&mut bytes);
     let base = read_borrowed_compound(&mut Cursor::new(bytes.as_slice()))

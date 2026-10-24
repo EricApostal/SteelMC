@@ -18,6 +18,7 @@ use steel_registry::{TaggedRegistryExt, vanilla_items};
 use steel_utils::{BlockPos, types::UpdateFlags};
 
 use crate::behavior::ItemBehavior;
+use crate::behavior::advancement_hooks::raise_used_ender_eye;
 use crate::behavior::block::push_entities_up;
 use crate::behavior::context::{InteractionResult, UseOnContext};
 use crate::behavior::item_utils::get_player_pov_hit_result;
@@ -194,6 +195,12 @@ impl ItemBehavior for EnderEyeItem {
             return InteractionResult::Consume;
         }
 
+        // Vanilla `EnderEyeItem.use` raises `used_ender_eye` right after the eye
+        // is added, with the squared horizontal distance to the stronghold.
+        let dx = player_pos.x - f64::from(stronghold_pos.x());
+        let dz = player_pos.z - f64::from(stronghold_pos.z());
+        raise_used_ender_eye(context.player, world, dx * dx + dz * dz);
+
         let has_infinite_materials = context.player.has_infinite_materials();
         context
             .inv
@@ -203,8 +210,6 @@ impl ItemBehavior for EnderEyeItem {
             .award_stat(&vanilla_stat_types::ITEM_USED, &vanilla_items::ENDER_EYE);
 
         InteractionResult::SuccessServer
-
-        // TODO implement advancment
     }
 }
 

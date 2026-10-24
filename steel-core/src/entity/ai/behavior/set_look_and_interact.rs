@@ -6,6 +6,7 @@ use std::sync::Arc;
 use steel_registry::entity_type::EntityTypeRef;
 
 use super::utils;
+use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::ai::brain::tracker::EntityTracker;
@@ -57,7 +58,7 @@ impl Trigger for SetLookAndInteract {
             return false;
         };
 
-        ctx.set_memory(&mem::INTERACTION_TARGET, closest.clone());
+        ctx.set_memory(&mem::INTERACTION_TARGET, SharedEntity::clone(&closest));
         utils::set_look_target(ctx, Arc::new(EntityTracker::new(closest, true)));
         true
     }

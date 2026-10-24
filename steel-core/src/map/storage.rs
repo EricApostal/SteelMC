@@ -11,10 +11,8 @@ use std::io;
 
 use serde::{Deserialize, Serialize};
 use steel_registry::vanilla_map_decoration_types;
-use steel_utils::Identifier;
 use steel_utils::locks::{SyncMutex, SyncRwLock};
 use steel_utils::saved_data::{SavedDataManager, names as saved_data_names};
-use uuid::Uuid;
 
 use super::data::{MapItemSavedData, PersistentMapData};
 use super::decoration::MapFrame;
@@ -186,7 +184,7 @@ impl MapStorage {
             map.update_packet(map_id, player_uuid)
         };
         if let Some(packet) = packet {
-            player.connection.send_packet(packet);
+            player.send_packet(packet);
         }
         true
     }

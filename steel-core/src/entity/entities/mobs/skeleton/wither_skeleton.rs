@@ -8,6 +8,7 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
+use steel_registry::enchantment::table::EnchantmentRandom;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
@@ -17,6 +18,8 @@ use steel_registry::{sound_events, vanilla_attributes, vanilla_items, vanilla_mo
 use steel_utils::locks::SyncMutex;
 use steel_utils::random::Random;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier};
+
+use std::ptr;
 
 use crate::entity::ai::goal::RangedAttackMob;
 use crate::entity::ai::path::PathType;
@@ -210,7 +213,7 @@ impl LivingEntity for WitherSkeletonEntity {
 
     fn can_be_affected(&self, effect: &MobEffectInstance) -> bool {
         // Vanilla `WitherSkeleton.canBeAffected` rejects wither.
-        if std::ptr::eq(effect.effect(), &*vanilla_mob_effects::WITHER) {
+        if ptr::eq(effect.effect(), vanilla_mob_effects::WITHER) {
             return false;
         }
         LivingEntity::default_can_be_affected(self, effect)
@@ -283,7 +286,7 @@ impl Mob for WitherSkeletonEntity {
         if let Some(target_living) = target.as_living_entity() {
             // Vanilla `WitherSkeleton.doHurtTarget` applies wither after a landed hit.
             target_living.add_mob_effect(MobEffectInstance::with_duration(
-                &vanilla_mob_effects::WITHER,
+                vanilla_mob_effects::WITHER,
                 WITHER_EFFECT_DURATION,
                 0,
             ));
@@ -333,7 +336,7 @@ impl AbstractSkeleton for WitherSkeletonEntity {
     fn populate_default_equipment_enchantments(
         &self,
         _world: &World,
-        _random: &mut (impl Random + steel_registry::enchantment::table::EnchantmentRandom),
+        _random: &mut (impl Random + EnchantmentRandom),
         _difficulty_modifier: f32,
     ) {
         // Vanilla `WitherSkeleton.populateDefaultEquipmentEnchantments` is empty.
@@ -376,7 +379,6 @@ mod tests {
     };
 
     use super::WitherSkeletonEntity;
-    use crate::entity::entities::mobs::skeleton::abstract_skeleton::AbstractSkeleton;
     use crate::entity::{LivingEntity, Mob};
 
     #[test]

@@ -48,10 +48,10 @@ impl YieldJobSite {
         let Some(other) = villager::as_villager(nearby) else {
             return false;
         };
-        if !other
+        if other
             .profession()
             .held_job_site
-            .is_some_and(|held| held.key == poi_type.key)
+            .is_none_or(|held| held.key != poi_type.key)
         {
             return false;
         }

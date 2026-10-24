@@ -20,7 +20,7 @@ use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::ItemRef;
 use steel_registry::vanilla_entity_data::{AbstractArrowEntityData, ArrowEntityData};
-use steel_registry::{sound_events, vanilla_entities, vanilla_items};
+use steel_registry::{sound_events, vanilla_items};
 use steel_utils::entity_events::EntityStatus;
 use steel_utils::locks::SyncMutex;
 use steel_utils::{DowncastType, DowncastTypeKey};

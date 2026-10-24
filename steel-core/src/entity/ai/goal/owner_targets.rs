@@ -12,9 +12,12 @@
 //! damage history only exposes the no-argument window (40 ticks), so a retaliation between 40
 //! and 100 ticks old is not seen.
 
-use crate::entity::ai::targeting::TargetingConditions;
-use crate::entity::{LivingEntity, PathfinderMob, SharedEntity};
+use steel_registry::vanilla_damage_type_tags::DamageTypeTag;
 
+use crate::entity::ai::targeting::TargetingConditions;
+use crate::entity::{PathfinderMob, SharedEntity};
+
+use super::capabilities::Tameable;
 use super::selector::{Goal, GoalControls};
 use super::target_goal::TargetGoalBase;
 
@@ -77,8 +80,7 @@ impl Goal for OwnerHurtByTargetGoal {
         let Some(source) = owner_living.last_damage_source() else {
             return false;
         };
-        if source.is(&steel_registry::vanilla_damage_type_tags::DamageTypeTag::NO_WOLF_RETALIATION)
-        {
+        if source.is(&DamageTypeTag::NO_WOLF_RETALIATION) {
             return false;
         }
 
@@ -104,10 +106,10 @@ impl Goal for OwnerHurtByTargetGoal {
 
     fn start(&mut self, mob: &dyn PathfinderMob) {
         let _ = mob.set_target(self.owner_last_hurt_by.as_ref());
-        if let Some(owner) = mob.as_tameable().and_then(|tameable| tameable.owner()) {
-            if let Some(owner_living) = owner.as_living_entity() {
-                self.timestamp = owner_living.last_hurt_by_mob_timestamp();
-            }
+        if let Some(owner) = mob.as_tameable().and_then(Tameable::owner)
+            && let Some(owner_living) = owner.as_living_entity()
+        {
+            self.timestamp = owner_living.last_hurt_by_mob_timestamp();
         }
         self.target_goal.start();
     }
@@ -179,10 +181,10 @@ impl Goal for OwnerHurtTargetGoal {
 
     fn start(&mut self, mob: &dyn PathfinderMob) {
         let _ = mob.set_target(self.owner_last_hurt.as_ref());
-        if let Some(owner) = mob.as_tameable().and_then(|tameable| tameable.owner()) {
-            if let Some(owner_living) = owner.as_living_entity() {
-                self.timestamp = owner_living.last_hurt_mob_timestamp();
-            }
+        if let Some(owner) = mob.as_tameable().and_then(Tameable::owner)
+            && let Some(owner_living) = owner.as_living_entity()
+        {
+            self.timestamp = owner_living.last_hurt_mob_timestamp();
         }
         self.target_goal.start();
     }

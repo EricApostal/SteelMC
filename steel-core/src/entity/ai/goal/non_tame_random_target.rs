@@ -4,6 +4,7 @@
 use crate::entity::{LivingEntity, PathfinderMob, SharedEntity};
 use crate::world::World;
 
+use super::capabilities::Tameable;
 use super::nearest_attackable_target::NearestAttackableTargetGoal;
 use super::selector::{Goal, GoalControls};
 
@@ -38,7 +39,7 @@ impl Goal for NonTameRandomTargetGoal {
     }
 
     fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
-        if mob.as_tameable().is_some_and(|tameable| tameable.is_tame()) {
+        if mob.as_tameable().is_some_and(Tameable::is_tame) {
             return false;
         }
 

@@ -44,7 +44,7 @@ pub(super) use steel_utils::random::{
 pub(super) use steel_utils::types::UpdateFlags;
 pub(super) use steel_utils::value_providers::IntProvider;
 pub(super) use steel_utils::{BlockPos, BlockStateId, Direction, Identifier, Rotation, SectionPos};
-pub(super) use steel_worldgen::noise::{NormalNoise, PerlinSimplexNoise};
+pub(super) use steel_worldgen::noise::NormalNoise;
 
 pub(super) use crate::behavior::BLOCK_BEHAVIORS;
 pub(super) use crate::chunk::heightmap::HeightmapType;

@@ -14,7 +14,7 @@ use steel_registry::{
         properties::{BlockStateProperties, EnumProperty},
     },
     items::item::BlockHitResult,
-    vanilla_blocks, vanilla_custom_stats, vanilla_damage_types, vanilla_level_events,
+    level_events, vanilla_blocks, vanilla_custom_stats, vanilla_damage_types,
 };
 use steel_utils::{BlockPos, BlockStateId, Direction, translations};
 use text_components::TextComponent;
@@ -22,6 +22,7 @@ use text_components::TextComponent;
 use crate::{
     behavior::blocks::falling::FallingBlock,
     behavior::{BlockBehavior, BlockPlaceContext, Fallable, InteractionResult, InventoryAccess},
+    entity::Entity as _,
     entity::ai::path::PathComputationType,
     entity::damage::DamageSource,
     entity::entities::FallingBlockEntity,
@@ -84,14 +85,14 @@ impl Fallable for AnvilBlock {
         entity: &FallingBlockEntity,
     ) {
         if !entity.is_silent() {
-            world.level_event(vanilla_level_events::SOUND_ANVIL_LAND, pos, 0, None);
+            world.level_event(level_events::SOUND_ANVIL_LAND, pos, 0, None);
         }
     }
 
     /// Vanilla `AnvilBlock.onBrokenAfterFall`: the anvil broken level event.
     fn on_broken_after_fall(&self, world: &Arc<World>, pos: BlockPos, entity: &FallingBlockEntity) {
         if !entity.is_silent() {
-            world.level_event(vanilla_level_events::SOUND_ANVIL_BROKEN, pos, 0, None);
+            world.level_event(level_events::SOUND_ANVIL_BROKEN, pos, 0, None);
         }
     }
 

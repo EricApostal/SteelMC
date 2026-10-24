@@ -8,7 +8,7 @@ use steel_registry::{
 };
 use text_components::TextComponent;
 
-use crate::entity::{Entity, LivingEntity, SharedEntity, get_kill_credit};
+use crate::entity::{LivingEntity, SharedEntity, get_kill_credit};
 use crate::player::Player;
 
 use super::{death_message, has_custom_name, item_display_name, main_hand_item};

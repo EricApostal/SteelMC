@@ -168,7 +168,7 @@ impl Entity for LightningBoltEntity {
             position.z + DAMAGE_RADIUS,
         );
         let bolt: SharedEntity = Arc::clone(&self) as SharedEntity;
-        let hit = world.get_entities_in_aabb_matching(&search, |entity| entity.is_alive());
+        let hit = world.get_entities_in_aabb_matching(&search, Entity::is_alive);
         for entity in hit {
             if entity.id() == self.id() {
                 continue;

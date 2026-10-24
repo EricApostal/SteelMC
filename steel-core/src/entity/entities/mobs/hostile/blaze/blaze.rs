@@ -168,7 +168,7 @@ impl BlazeEntity {
     }
 
     /// Vanilla `Blaze.customServerAiStep` server-side body.
-    fn custom_step_blaze(&self, entity: &SharedEntity) {
+    fn custom_step_blaze(&self) {
         {
             let mut tick = self.next_height_offset_change_tick.lock();
             *tick -= 1;
@@ -197,8 +197,6 @@ impl BlazeEntity {
                 ));
             }
         }
-
-        Monster::monster_ai_step(self, entity);
     }
 }
 
@@ -230,7 +228,7 @@ impl BlazeAttackGoal {
     }
 
     /// Vanilla `Blaze.BlazeAttackGoal` fireball volley.
-    fn shoot_fireballs(&self, blaze: &BlazeEntity, target: &SharedEntity, world: &Arc<World>) {
+    fn shoot_fireballs(blaze: &BlazeEntity, target: &SharedEntity, world: &Arc<World>) {
         let distance = blaze.position().distance_squared(target.position());
         let sqd = distance.sqrt().sqrt() * 0.5;
         let uncertainty = FIREBALL_UNCERTAINTY_SCALE * sqd;
@@ -326,7 +324,7 @@ impl Goal for BlazeAttackGoal {
 
             if self.attack_time <= 0 {
                 self.attack_time = 20;
-                Mob::do_hurt_target(blaze, entity, &world, &target);
+                let _ = Mob::do_hurt_target(blaze, entity, &world, &target);
             }
             mob.mob_base()
                 .controls()
@@ -348,7 +346,7 @@ impl Goal for BlazeAttackGoal {
                 }
 
                 if self.attack_step > 1 {
-                    self.shoot_fireballs(blaze, &target, &world);
+                    Self::shoot_fireballs(blaze, &target, &world);
                 }
             }
         } else if self.last_seen < 5 {
@@ -466,8 +464,11 @@ impl LivingEntity for BlazeEntity {
     }
 
     fn server_ai_step(&self, entity: &SharedEntity) {
-        // Vanilla `Blaze.customServerAiStep` then the shared mob step.
-        self.custom_step_blaze(entity);
+        // Vanilla `Blaze.customServerAiStep` then `super.customServerAiStep`, which
+        // `Mob::mob_server_ai_step` provides. Calling the monster step here instead
+        // re-enters `LivingEntity::default_ai_step` through `ai_step` forever.
+        self.custom_step_blaze();
+        Mob::mob_server_ai_step(self, entity);
     }
 
     fn ai_step(&self, entity: &SharedEntity) -> Option<MoveResult> {
@@ -507,13 +508,13 @@ impl PathfinderMob for BlazeEntity {}
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Weak;
+    use std::sync::{Arc, Weak};
 
     use glam::DVec3;
     use steel_registry::{init_vanilla_registry, vanilla_entities};
 
     use super::BlazeEntity;
-    use crate::entity::Entity;
+    use crate::entity::{Entity, LivingEntity, SharedEntity};
 
     #[test]
     fn blaze_charge_flag_round_trips() {
@@ -528,5 +529,38 @@ mod tests {
         blaze.set_charged(false);
         assert!(!blaze.is_charged());
         assert_eq!(blaze.entity_type(), &vanilla_entities::BLAZE);
+    }
+
+    /// `Blaze.customServerAiStep` must run once and then the shared mob step.
+    ///
+    /// The override used to end in `Monster::monster_ai_step`, which reaches
+    /// `LivingEntity::default_ai_step` -> `server_ai_step` again, so one blaze tick
+    /// recursed until the world-tick thread overflowed its stack and the server aborted.
+    #[test]
+    fn blaze_server_ai_step_runs_once_and_reaches_the_shared_mob_step() {
+        init_vanilla_registry();
+        let blaze = Arc::new(BlazeEntity::new(
+            &vanilla_entities::BLAZE,
+            1,
+            DVec3::ZERO,
+            Weak::new(),
+        ));
+        let shared: SharedEntity = blaze.clone();
+
+        // A regression overflows the stack instead of hanging, so run it off-thread and
+        // bound it: either outcome fails the test rather than the whole binary silently.
+        let (done, finished) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            LivingEntity::server_ai_step(blaze.as_ref(), &shared);
+            let _ = done.send(());
+        });
+        let outcome = finished.recv_timeout(std::time::Duration::from_secs(10));
+        assert!(
+            outcome.is_ok(),
+            "blaze server_ai_step did not terminate: customServerAiStep re-enters itself"
+        );
+        worker
+            .join()
+            .expect("blaze ai step worker should not panic");
     }
 }

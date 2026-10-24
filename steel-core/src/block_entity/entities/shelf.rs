@@ -101,8 +101,7 @@ impl ShelfBlockEntity {
                 world.send_block_updated(pos);
             }
         });
-        let shared_container: SharedContainer =
-            Arc::<SyncMutex<ShelfContainer>>::clone(&container);
+        let shared_container: SharedContainer = Arc::<SyncMutex<ShelfContainer>>::clone(&container);
 
         Self {
             container_ref: ContainerRef::owned_by_block_entity_with_callback(
@@ -178,7 +177,10 @@ impl BlockEntity for ShelfBlockEntity {
         let Some(world) = self.get_level() else {
             return;
         };
-        self.mark_changed(&world, Some(&steel_registry::vanilla_game_events::BLOCK_ACTIVATE));
+        self.mark_changed(
+            &world,
+            Some(&steel_registry::vanilla_game_events::BLOCK_ACTIVATE),
+        );
     }
 
     fn container_ref(&self) -> Option<ContainerRef> {

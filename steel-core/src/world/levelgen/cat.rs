@@ -3,11 +3,10 @@
 
 use std::sync::Arc;
 
-use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::vanilla_entities;
 use steel_registry::vanilla_poi_types;
 use steel_registry::{REGISTRY, RegistryExt as _};
-use steel_utils::random::{Random as _, RandomSource};
+use steel_utils::random::Random as _;
 use steel_utils::{BlockPos, WorldAabb};
 
 use crate::entity::Entity as _;

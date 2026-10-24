@@ -20,7 +20,7 @@ use steel_utils::{BlockPos, BoundingBox, ChunkPos, Identifier};
 use steel_worldgen::structure::StructurePiece;
 
 use crate::chunk::status::ChunkStatus;
-use crate::world::{LevelReader as _, World};
+use crate::world::World;
 
 /// Vanilla `NetherFortressStructure.FORTRESS_ENEMIES`.
 ///

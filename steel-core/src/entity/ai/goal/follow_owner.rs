@@ -12,6 +12,7 @@
 use crate::entity::ai::path::PathType;
 use crate::entity::{PathfinderMob, SharedEntity};
 
+use super::capabilities::Tameable;
 use super::reduced_tick_delay;
 use super::selector::{Goal, GoalControls};
 
@@ -84,7 +85,7 @@ impl Goal for FollowOwnerGoal {
         }
         if mob
             .as_tameable()
-            .is_some_and(|tameable| tameable.unable_to_move_to_owner())
+            .is_some_and(Tameable::unable_to_move_to_owner)
         {
             return false;
         }
@@ -111,7 +112,7 @@ impl Goal for FollowOwnerGoal {
 
         let owner_far_away = mob
             .as_tameable()
-            .is_some_and(|tameable| tameable.should_try_teleport_to_owner());
+            .is_some_and(Tameable::should_try_teleport_to_owner);
 
         if !owner_far_away {
             let owner_position = owner.position();

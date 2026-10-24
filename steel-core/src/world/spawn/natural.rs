@@ -9,26 +9,24 @@ use std::sync::Arc;
 
 use glam::DVec3;
 use rustc_hash::FxHashMap;
+use steel_registry::REGISTRY;
 use steel_registry::RegistryExt as _;
 use steel_registry::biome::{Biome, BiomeRef, SpawnCost, SpawnerData};
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::entity_type::{EntityTypeRef, MobCategory};
 use steel_registry::vanilla_biome_tags::BiomeTag;
 use steel_registry::vanilla_game_rules::{SPAWN_MOBS, SPAWN_MONSTERS};
-use steel_registry::{REGISTRY, RegistryEntry as _};
 use steel_utils::random::{Random as _, RandomSource, legacy_random::LegacyRandom};
 use steel_utils::{BlockPos, ChunkPos, WorldAabb};
 
 use super::local_mob_cap::{LocalMobCapCalculator, players_close_for_spawning};
-use super::placement::{SpawnPlacements, is_collision_shape_full_block};
+use super::placement::SpawnPlacements;
 use super::structure_spawns::{
     FORTRESS_ENEMIES, is_in_nether_fortress_bounds, structure_spawns_at,
 };
 use crate::chunk::full_chunk::FullChunkRef;
 use crate::chunk::heightmap::HeightmapType;
 use crate::entity::Entity as _;
-use crate::entity::Mob as _;
-use crate::entity::PathfinderMob as _;
 use crate::entity::SharedEntity;
 use crate::entity::{EntitySpawnReason, create_entity_instance};
 use crate::physics::CollisionWorld as _;
@@ -490,11 +488,13 @@ fn random_pos_within(
 ) -> BlockPos {
     let x = (chunk_pos.0.x << 4) + random.next_i32_bounded(16);
     let z = (chunk_pos.0.y << 4) + random.next_i32_bounded(16);
+    // Vanilla adds one to the heightmap lookup on top of the heightmap's own
+    // "first empty y" semantics.
     let top_empty_y = chunk.get_height(
         HeightmapType::WorldSurface,
         (x & 15) as usize,
         (z & 15) as usize,
-    );
+    ) + 1;
     let y = random.next_i32_between(world.get_min_y(), top_empty_y);
     BlockPos::new(x, y, z)
 }
@@ -1010,7 +1010,7 @@ impl World {
             let _ = self.chunk_map.with_full_chunk(pos, |chunk| {
                 // Vanilla `ServerChunkCache.tickSpawningChunk` increments
                 // inhabited time for every spawning chunk, before the spawn gate.
-                chunk.increment_inhabited_time();
+                chunk.common().increment_inhabited_time();
 
                 if spawning_categories.is_empty() || !self.can_spawn_entities_in_chunk(pos) {
                     return;
@@ -1038,5 +1038,183 @@ impl World {
     #[must_use]
     pub fn spawn_biome_at(&self, pos: BlockPos) -> Option<BiomeRef> {
         self.biome_at(pos)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use steel_registry::entity_type::MobCategory;
+    use steel_registry::vanilla_biomes;
+    use steel_registry::{RegistryEntry as _, vanilla_blocks, vanilla_dimension_types};
+    use steel_utils::random::legacy_random::LegacyRandom;
+    use steel_utils::types::UpdateFlags;
+    use steel_utils::{BlockPos, ChunkPos};
+
+    use super::*;
+    use crate::behavior::init_behaviors;
+    use crate::chunk::chunk_holder::TickingReadiness;
+    use crate::chunk::chunk_ticket_manager::ChunkTicketLevel;
+    use crate::player::ResetReason;
+    use crate::test_support::{
+        TestPlayerBuilder, fresh_test_world_with_dimension_type, insert_ready_full_chunk,
+    };
+
+    /// `nether_wastes` monster spawn list, in the registry entity-type order the
+    /// vanilla biome JSON declares.
+    const NETHER_WASTES_MONSTERS: [&str; 5] = [
+        "enderman",
+        "ghast",
+        "magma_cube",
+        "piglin",
+        "zombified_piglin",
+    ];
+
+    /// Netherrack floor height: the tests keep air above it so `ON_GROUND`
+    /// placement has a valid surface with two empty blocks above.
+    const FLOOR_Y: i32 = 3;
+
+    /// Entity-ticking spawn grid. Vanilla's global monster cap is
+    /// `maxInstancesPerChunk * spawnableChunkCount / 289`, so a single chunk caps
+    /// monsters at zero; this grid gives a cap of
+    /// `70 * 30 / 289 = 7` monsters.
+    const GRID_X: i32 = 6;
+    const GRID_Z: i32 = 5;
+
+    /// Inserts one entity-ticking chunk whose whole column carries the
+    /// `nether_wastes` biome and a netherrack floor.
+    fn prepare_nether_chunk(world: &Arc<World>, pos: ChunkPos) {
+        let holder = insert_ready_full_chunk(world, pos);
+        holder.set_simulation_level(Some(ChunkTicketLevel::ENTITY_TICKING_CHUNK));
+        holder.transition_ticking_readiness(TickingReadiness::EntityTicking);
+
+        let biome_id = vanilla_biomes::NETHER_WASTES.id() as u16;
+        world
+            .chunk_map
+            .with_full_chunk(pos, |chunk| {
+                for section in chunk.sections().sections.iter() {
+                    let mut section = section.write();
+                    for quart_x in 0..4 {
+                        for quart_y in 0..4 {
+                            for quart_z in 0..4 {
+                                section.set_biome(quart_x, quart_y, quart_z, biome_id);
+                            }
+                        }
+                    }
+                }
+            })
+            .expect("prepared chunk should be loaded");
+
+        let netherrack = vanilla_blocks::NETHERRACK.default_state();
+        for local_x in 0..16 {
+            for local_z in 0..16 {
+                let block_pos =
+                    BlockPos::new((pos.0.x << 4) + local_x, FLOOR_Y, (pos.0.y << 4) + local_z);
+                assert!(
+                    world.set_block(block_pos, netherrack, UpdateFlags::UPDATE_NONE),
+                    "the netherrack floor should be placeable at {block_pos:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nether_wastes_resolves_vanilla_monster_spawn_list() {
+        init_behaviors();
+        let fixture = fresh_test_world_with_dimension_type(
+            "nether_biome_spawn_list",
+            "nether_biome_spawn_list",
+            &vanilla_dimension_types::THE_NETHER,
+        );
+        let world = &fixture.world;
+        let chunk_pos = ChunkPos::new(0, 0);
+        prepare_nether_chunk(world, chunk_pos);
+
+        let pos = BlockPos::new(8, FLOOR_Y + 1, 8);
+        assert_eq!(
+            world
+                .spawn_biome_at(pos)
+                .map(|biome| biome.key.path.to_string()),
+            Some("nether_wastes".to_owned()),
+            "the prepared chunk should report the nether wastes biome"
+        );
+
+        let mut spawns: Vec<String> = mobs_at(world, MobCategory::Monster, pos)
+            .expect("the nether wastes biome should carry a monster spawn list")
+            .iter()
+            .map(|data| data.entity_type.path.to_string())
+            .collect();
+        spawns.sort();
+        assert_eq!(
+            spawns, NETHER_WASTES_MONSTERS,
+            "the nether monster list should match vanilla"
+        );
+
+        let mut random = RandomSource::Legacy(LegacyRandom::from_seed(4242));
+        for _ in 0..32 {
+            let (entity_type, _) =
+                random_spawn_mob_at(world, MobCategory::Monster, &mut random, pos)
+                    .expect("the weighted roll should resolve a nether monster");
+            assert!(
+                NETHER_WASTES_MONSTERS.contains(&entity_type.key.path.as_ref()),
+                "rolled monster {} should come from the nether wastes list",
+                entity_type.key
+            );
+        }
+    }
+
+    #[test]
+    fn nether_world_spawns_monsters_around_a_player() {
+        init_behaviors();
+        let fixture = fresh_test_world_with_dimension_type(
+            "nether_natural_spawn",
+            "nether_natural_spawn",
+            &vanilla_dimension_types::THE_NETHER,
+        );
+        let world = &fixture.world;
+
+        for chunk_x in 0..GRID_X {
+            for chunk_z in 0..GRID_Z {
+                prepare_nether_chunk(world, ChunkPos::new(chunk_x, chunk_z));
+            }
+        }
+        let player = TestPlayerBuilder::new(Arc::clone(world), "NetherSpawnTester", 4242).build();
+        player.snap_to(DVec3::new(48.5, f64::from(FLOOR_Y + 1), 40.5), 0.0, 0.0);
+        assert!(world.add_player(Arc::clone(&player), ResetReason::InitialJoin));
+
+        world.chunk_map.rebuild_ticking_chunk_snapshot();
+        assert_eq!(
+            world.chunk_map.tickable_full_chunk_positions().len(),
+            (GRID_X * GRID_Z) as usize,
+            "every prepared chunk should stay entity ticking for the spawn pass"
+        );
+
+        for _ in 0..16 {
+            world.tick_natural_spawning(true);
+        }
+
+        let spawned: Vec<SharedEntity> = world
+            .entity_manager
+            .get_accessible_entities()
+            .into_iter()
+            .filter(|entity| entity.entity_type().mob_category == MobCategory::Monster)
+            .collect();
+        assert!(
+            !spawned.is_empty(),
+            "a nether world with a nearby player should spawn monsters"
+        );
+        for mob in &spawned {
+            let entity_type = mob.entity_type().key.path.as_ref();
+            assert!(
+                NETHER_WASTES_MONSTERS.contains(&entity_type),
+                "nether spawning produced {entity_type}, which is not in the nether wastes list"
+            );
+            let distance = mob.position().distance(player.position());
+            assert!(
+                distance <= f64::from(MobCategory::Monster.despawn_distance()),
+                "spawned {entity_type} {distance} blocks away, outside the monster despawn range"
+            );
+        }
     }
 }

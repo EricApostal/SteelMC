@@ -7,6 +7,8 @@
 //! the matching `Entity::as_*` accessor. Every trait here mirrors vanilla method names and
 //! signatures and documents the vanilla class it replaces.
 
+use steel_registry::sound_event::SoundEventRef;
+
 use crate::entity::SharedEntity;
 
 /// Vanilla `TamableAnimal`: owner binding plus the sitting pose goals steer.
@@ -115,7 +117,7 @@ pub trait AbstractHorse: Send + Sync + 'static {
     fn is_immobile(&self) -> bool;
 
     /// Vanilla `AbstractHorse.getAmbientStandSound`.
-    fn ambient_stand_sound(&self) -> Option<steel_registry::sound_event::SoundEventRef>;
+    fn ambient_stand_sound(&self) -> Option<SoundEventRef>;
 
     /// Vanilla `AbstractHorse.isMobControlled`.
     fn is_mob_controlled(&self) -> bool;

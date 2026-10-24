@@ -185,7 +185,7 @@ impl CartographyKind {
             return;
         };
 
-        let mut result = ItemStack::empty();
+        let mut result;
         if additional_stack.is(&vanilla_items::PAPER)
             && REGISTRY
                 .items

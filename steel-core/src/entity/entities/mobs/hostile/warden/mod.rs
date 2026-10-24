@@ -10,6 +10,10 @@
 mod anger;
 mod brain;
 mod spawn_tracker;
+#[expect(
+    clippy::module_inception,
+    reason = "vanilla mirrors one class per directory (warden); renaming would churn every consumer"
+)]
 mod warden;
 
 pub use anger::AngerLevel;

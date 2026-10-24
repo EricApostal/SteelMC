@@ -2,6 +2,7 @@
 
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::registry::TaggedRegistryExt as _;
+use steel_registry::sound_events;
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_fluid_tags::FluidTag;
 use steel_registry::vanilla_game_events;
@@ -11,7 +12,6 @@ use steel_utils::types::UpdateFlags;
 
 use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
 use crate::entity::ai::brain::memory::module_type as mem;
-use crate::world::LevelReader as _;
 use crate::world::game_event::GameEventContext;
 
 /// Blocks checked horizontally around the body for a spawn-supporting surface.
@@ -76,7 +76,7 @@ impl Trigger for TryLaySpawnOnFluidNearLand {
                 &GameEventContext::new(Some(ctx.body.as_ref()), Some(self.spawn_block)),
             );
             ctx.level.play_block_sound(
-                &steel_registry::sound_events::ENTITY_FROG_LAY_SPAWN,
+                &sound_events::ENTITY_FROG_LAY_SPAWN,
                 spawn_pos,
                 1.0,
                 1.0,

@@ -1,6 +1,17 @@
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+
+use crate::behavior::BlockStateBehaviorExt as _;
+use crate::entity::ai::node::{Node, NodeStore};
+use crate::entity::ai::path::PathfindingContext;
+use crate::fluid::FluidStateExt as _;
+
+use super::collision::WalkNodeCollision;
+use super::path_evaluator::WalkPathEvaluator;
+use super::settings::MobPathSettings;
 use super::{
-    BlockPos, BlockStateExt as _, BlockStateProperties, Direction, FluidState, Identifier, Mob,
-    PathComputationType, PathType, PathTypeSet, PathfindingMalus, WorldAabb, fast_floor,
+    Axis, BLOCK_BEHAVIORS, BlockCollisionContext, BlockPos, Direction, Identifier, LevelReader,
+    PathComputationType, PathType, PathTypeSet, WorldAabb, does_block_have_partial_collision,
+    fast_floor,
 };
 
 #[derive(Debug, Clone)]

@@ -20,6 +20,8 @@ use std::iter;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
+use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
+use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::equipment::EquipmentSlot;
@@ -208,6 +210,10 @@ impl IllusionerEntity {
 
     /// Vanilla `Illusioner.getCastingSoundEvent`.
     #[must_use]
+    #[expect(
+        clippy::unused_self,
+        reason = "vanilla instance method reached through the `Spellcaster` UFCS shim"
+    )]
     pub fn casting_sound(&self) -> SoundEventRef {
         &sound_events::ENTITY_ILLUSIONER_CAST_SPELL
     }
@@ -316,14 +322,14 @@ impl Entity for IllusionerEntity {
             .unwrap_or(f64::from(DEFAULT_STEP_HEIGHT)) as f32
     }
 
-    fn save_additional(&self, nbt: &mut simdnbt::owned::NbtCompound) {
+    fn save_additional(&self, nbt: &mut NbtCompound) {
         self.save_mob(nbt);
         self.raider_base.save(nbt);
         // Vanilla `SpellcasterIllager.addAdditionalSaveData`.
         nbt.insert("SpellTicks", self.spell_casting_tick_count());
     }
 
-    fn load_additional(&self, nbt: simdnbt::borrow::NbtCompound<'_, '_>) {
+    fn load_additional(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
         self.load_mob(nbt);
         if let Some(raid_id) = self.raider_base.load(&nbt) {
             self.rejoin_saved_raid(raid_id);
@@ -423,8 +429,11 @@ impl Mob for IllusionerEntity {
         let Some(world) = self.level() else {
             return false;
         };
+        // Vanilla's `super.canAttack` is `Mob.canAttack`, whose default cannot be reached from
+        // an override; its body (ghast veto + `LivingEntity.canAttack`) is inlined here.
         super::abstract_illager::can_attack_villager(target, &world)
-            && Mob::can_attack(self, target)
+            && target.entity_type() != &vanilla_entities::GHAST
+            && LivingEntity::can_attack(self, target)
     }
 
     /// Vanilla `SpellcasterIllager.customServerAiStep`.
@@ -494,5 +503,41 @@ impl Raider for IllusionerEntity {
         // Vanilla `Illusioner.getCelebrateSound` returns `SoundEvents.ILLUSIONER_AMBIENT`;
         // there is no dedicated `ENTITY_ILLUSIONER_CELEBRATE` sound.
         &sound_events::ENTITY_ILLUSIONER_AMBIENT
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use glam::DVec3;
+    use steel_registry::{init_vanilla_registry, vanilla_entities};
+
+    use super::IllusionerEntity;
+    use crate::entity::{Mob, init_entities};
+    use crate::test_support::fresh_test_world;
+
+    #[test]
+    fn illusioner_can_attack_keeps_the_illager_veto_without_recursing() {
+        init_vanilla_registry();
+        init_entities();
+        let world = fresh_test_world("illusioner_can_attack");
+        let illusioner = IllusionerEntity::new(
+            &vanilla_entities::ILLUSIONER,
+            1,
+            DVec3::ZERO,
+            Arc::downgrade(&world.world),
+        );
+        let target = IllusionerEntity::new(
+            &vanilla_entities::ILLUSIONER,
+            2,
+            DVec3::ZERO,
+            Arc::downgrade(&world.world),
+        );
+
+        // Vanilla `AbstractIllager.canAttack` = baby-villager veto && `Mob.canAttack`. Before
+        // the fix the `Mob::can_attack(self, ..)` fallback re-entered this override and
+        // stack-overflowed whenever the entity had a level.
+        assert!(illusioner.can_attack(&target));
     }
 }

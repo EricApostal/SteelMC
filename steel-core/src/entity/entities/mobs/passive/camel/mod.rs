@@ -37,6 +37,7 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::entity_data::EntityPose;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::item_stack::ItemStack;
@@ -272,7 +273,7 @@ impl CamelEntity {
 
         self.make_sound(Some(&sound_events::ENTITY_CAMEL_SIT));
         self.set_pose(EntityPose::Sitting);
-        self.game_event(&steel_registry::vanilla_game_events::ENTITY_ACTION);
+        self.game_event(&vanilla_game_events::ENTITY_ACTION);
         if let Some(world) = self.level() {
             self.reset_last_pose_change_tick(-world.game_time());
         }
@@ -286,7 +287,7 @@ impl CamelEntity {
 
         self.make_sound(Some(&sound_events::ENTITY_CAMEL_STAND));
         self.set_pose(EntityPose::Standing);
-        self.game_event(&steel_registry::vanilla_game_events::ENTITY_ACTION);
+        self.game_event(&vanilla_game_events::ENTITY_ACTION);
         if let Some(world) = self.level() {
             self.reset_last_pose_change_tick(world.game_time());
         }
@@ -295,7 +296,7 @@ impl CamelEntity {
     /// Vanilla `Camel.standUpInstantly`: standing pose with no transition.
     pub fn stand_up_instantly(&self) {
         self.set_pose(EntityPose::Standing);
-        self.game_event(&steel_registry::vanilla_game_events::ENTITY_ACTION);
+        self.game_event(&vanilla_game_events::ENTITY_ACTION);
         self.reset_last_pose_change_tick_to_full_stand();
     }
 
@@ -305,7 +306,7 @@ impl CamelEntity {
     /// block-shape query, which Steel does not expose yet, so the change is
     /// always allowed.
     #[must_use]
-    pub fn can_camel_change_pose(&self) -> bool {
+    pub const fn can_camel_change_pose() -> bool {
         true
     }
 
@@ -316,6 +317,10 @@ impl CamelEntity {
     }
 
     /// Vanilla `Camel.isTamed`: camels are always tamed.
+    #[expect(
+        clippy::unused_self,
+        reason = "vanilla Camel.isTamed is an instance method"
+    )]
     #[must_use]
     pub const fn is_tamed(&self) -> bool {
         true
@@ -575,7 +580,7 @@ impl CamelEntity {
         }
 
         self.make_sound(Some(&sound_events::ENTITY_CAMEL_EAT));
-        self.game_event(&steel_registry::vanilla_game_events::EAT);
+        self.game_event(&vanilla_game_events::EAT);
         InteractionResult::SuccessServer
     }
 }
@@ -635,8 +640,6 @@ impl Entity for CamelEntity {
     }
 
     fn play_step_sound(&self, _pos: BlockPos, block_state: BlockStateId) {
-        use steel_registry::blocks::block_state_ext::BlockStateExt as _;
-
         if block_state
             .get_block()
             .has_tag(&BlockTag::CAMEL_SAND_STEP_SOUND_BLOCKS)

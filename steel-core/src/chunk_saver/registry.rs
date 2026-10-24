@@ -48,6 +48,13 @@ impl WorldStorageRegistry {
                 create: create_ram_storage,
             },
         )?;
+        registry.register(
+            Identifier::from_steel("anvil"),
+            WorldStorageFactory {
+                validate: validate_anvil_config,
+                create: create_anvil_storage,
+            },
+        )?;
         Ok(registry)
     }
 
@@ -96,7 +103,10 @@ impl WorldStorageRegistry {
                     .get(key)
                     .ok_or_else(|| format!("world {key} has no resolved storage"))?;
                 if output.level_data_path.is_some()
-                    || matches!(output.storage, WorldStorageConfig::Disk { .. })
+                    || matches!(
+                        output.storage,
+                        WorldStorageConfig::Disk { .. } | WorldStorageConfig::Anvil { .. }
+                    )
                 {
                     return Err(format!(
                         "domain {} default world {} must persist level data because world {key} uses persistent storage",
@@ -168,6 +178,57 @@ fn create_disk_storage(
             path: path_to_string(path.join("region")),
         },
         level_data_path: Some(path),
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnvilStorageConfig {
+    /// World directory. Defaults to the per-world save path.
+    path: Option<String>,
+    /// Dimension key whose folder is written, e.g. `minecraft:overworld`. Defaults to the
+    /// overworld, matching vanilla's `dimensions/<namespace>/<path>` layout.
+    dimension: Option<Identifier>,
+}
+
+fn validate_anvil_config(config: &toml::Value) -> Result<(), String> {
+    let parsed: AnvilStorageConfig = config
+        .clone()
+        .try_into()
+        .map_err(|e| format!("invalid steel:anvil config: {e}"))?;
+    if let Some(path) = parsed.path {
+        validate_relative_path(&path, "storage.config.path")?;
+    }
+    Ok(())
+}
+
+/// Creates a vanilla-Anvil world: `<world>/level.dat`, `<world>/data/`, and the dimension
+/// folder `<world>/dimensions/<namespace>/<path>` holding `region/`, `entities/`, and `poi/`.
+fn create_anvil_storage(
+    config: &toml::Value,
+    save_root: &Path,
+    default_world_path: &Path,
+) -> Result<WorldStorageOutput, String> {
+    let parsed: AnvilStorageConfig = config
+        .clone()
+        .try_into()
+        .map_err(|e| format!("invalid steel:anvil config: {e}"))?;
+    let world_path = parsed.path.map_or_else(
+        || default_world_path.to_path_buf(),
+        |path| save_root.join(path),
+    );
+    let dimension = parsed
+        .dimension
+        .unwrap_or_else(|| Identifier::vanilla_static("overworld"));
+    let dimension_path = world_path
+        .join("dimensions")
+        .join(dimension.namespace.as_ref())
+        .join(dimension.path.as_ref());
+    Ok(WorldStorageOutput {
+        storage: WorldStorageConfig::Anvil {
+            path: path_to_string(dimension_path),
+        },
+        level_data_path: Some(world_path),
     })
 }
 

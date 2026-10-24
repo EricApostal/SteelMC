@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use steel_registry::enchantment_effect::EnchantmentEffectComponent;
 use steel_utils::{DowncastType, DowncastTypeKey};
 
-use crate::entity::{Entity, LivingEntity as _, Mob as _, SharedEntity, WeakEntity};
+use crate::entity::{SharedEntity, WeakEntity};
 use crate::inventory::prelude::*;
 use crate::inventory::slots::SlotStorage;
 use crate::player::player_inventory::PlayerInventory;
@@ -440,3 +440,6 @@ mod tests {
         assert_eq!(SLOT_INVENTORY_START + get_inventory_size(5) + 36, 53);
     }
 }
+
+#[cfg(test)]
+mod mount_screen;

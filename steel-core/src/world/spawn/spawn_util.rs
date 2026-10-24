@@ -13,7 +13,6 @@ use steel_registry::vanilla_blocks;
 use steel_utils::random::{Random as _, RandomSource};
 use steel_utils::{BlockPos, BlockStateId};
 
-use crate::entity::Mob as _;
 use crate::entity::SharedEntity;
 use crate::entity::{EntitySpawnReason, create_entity_instance};
 use crate::world::World;
@@ -33,7 +32,7 @@ impl SpawnStrategy {
     /// Vanilla `SpawnUtil.Strategy.canSpawnOn`.
     fn can_spawn_on(
         self,
-        level: &World,
+        _level: &World,
         pos: BlockPos,
         block_state: BlockStateId,
         above_pos: BlockPos,

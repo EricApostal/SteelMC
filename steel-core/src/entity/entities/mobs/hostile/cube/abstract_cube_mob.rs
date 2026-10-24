@@ -20,9 +20,11 @@ pub const CUBE_MOVEMENT_SPEED_STEP: f64 = 0.1;
 pub const CUBE_SOUND_VOLUME_PER_SIZE: f32 = 0.4;
 /// Vanilla `AbstractCubeMob.getJumpDelay` base bounds.
 pub const JUMP_DELAY_BASE_MIN: i32 = 10;
+/// Vanilla `AbstractCubeMob.getJumpDelay` base range.
 pub const JUMP_DELAY_BASE_RANGE: i32 = 20;
 /// Vanilla `AbstractCubeMob.remove` split count bounds.
 pub const SPLIT_COUNT_MIN: i32 = 2;
+/// Vanilla `AbstractCubeMob.remove` split count range.
 pub const SPLIT_COUNT_RANGE: i32 = 3;
 /// Vanilla `AbstractCubeMob.tick` squish interpolation factor.
 const SQUISH_INTERPOLATION: f32 = 0.5;

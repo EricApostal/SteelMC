@@ -163,7 +163,7 @@ impl Behavior for Shoot {
             Arc::downgrade(&world),
         );
         let mut item_stack = ItemStack::empty();
-        spawn_projectile_using_shoot(
+        let _ = spawn_projectile_using_shoot(
             &world,
             projectile,
             &mut item_stack,

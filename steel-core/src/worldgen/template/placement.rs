@@ -1,5 +1,4 @@
 use super::*;
-use crate::world::{LevelAccessor as _, LevelReader as _};
 use crate::worldgen::template::TemplateLevelAccess;
 use steel_math::{DEGREE_90, DEGREE_180, DEGREE_270, wrap_degrees};
 

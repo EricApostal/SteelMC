@@ -77,13 +77,13 @@ impl Trigger for MeleeAttack {
 
         ctx.set_memory(
             &mem::LOOK_TARGET,
-            Arc::new(EntityTracker::new(target.clone(), true)),
+            Arc::new(EntityTracker::new(SharedEntity::clone(&target), true)),
         );
         if let Some(living) = ctx.body.as_living_entity() {
             living.swing_for_attack(InteractionHand::MainHand);
         }
         if let Some(mob) = ctx.body.as_mob() {
-            mob.do_hurt_target(ctx.body, ctx.level, &target);
+            let _ = mob.do_hurt_target(ctx.body, ctx.level, &target);
         }
         ctx.set_memory_with_expiry(
             &mem::ATTACK_COOLING_DOWN,

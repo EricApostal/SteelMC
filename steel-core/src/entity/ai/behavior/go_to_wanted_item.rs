@@ -3,10 +3,10 @@
 use std::sync::Arc;
 
 use super::utils;
-use crate::entity::Mob;
 use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::ai::brain::tracker::{EntityTracker, WalkTarget};
+use crate::entity::{Mob, SharedEntity};
 
 /// Vanilla `GoToWantedItem.create(speedModifier, interruptOngoingWalk, maxDistToWalk)`.
 ///
@@ -83,7 +83,10 @@ impl Trigger for GoToWantedItem {
             return false;
         }
 
-        utils::set_look_target(ctx, Arc::new(EntityTracker::new(item.clone(), true)));
+        utils::set_look_target(
+            ctx,
+            Arc::new(EntityTracker::new(SharedEntity::clone(&item), true)),
+        );
         ctx.set_memory(
             &mem::WALK_TARGET,
             WalkTarget::new(

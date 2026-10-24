@@ -2,6 +2,7 @@
 
 use std::io::Cursor;
 use std::sync::LazyLock;
+use steel_registry::trade;
 
 use rand::SeedableRng as _;
 use rand::rngs::StdRng;
@@ -268,7 +269,7 @@ fn base_trade(result: ItemRef, wants_count: i32) -> VillagerTrade {
         wants: DataTradeCost {
             item: &vanilla_items::EMERALD,
             count: NumberProvider::Constant(wants_count as f32),
-            components: &steel_registry::trade::EMPTY_COMPONENTS,
+            components: &trade::EMPTY_COMPONENTS,
         },
         additional_wants: None,
         gives: ItemStackTemplate::new(result),

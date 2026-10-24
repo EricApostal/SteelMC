@@ -1,7 +1,7 @@
 use super::{
     BlockStateExt, DamageSourceInfo, DyeColor, EntityEquipmentRef, EntityRef, EntityRefFlags,
     Identifier, ItemStack, LootContext, LootContextEntity, NumberProvider, NumberProviderRange,
-    REGISTRY, RegistryExt, RngExt, TaggedRegistryExt,
+    REGISTRY, RegistryExt, RngExt, ScoreboardTarget, TaggedRegistryExt, score_of,
 };
 use crate::data_components::vanilla_components::{ENCHANTMENTS, STORED_ENCHANTMENTS};
 use crate::equipment::EquipmentSlot;
@@ -89,6 +89,21 @@ pub enum LootCondition {
     EntityScores {
         entity: LootContextEntity,
         scores: &'static [(&'static str, NumberProviderRange)],
+    },
+    /// Check the value of an environment attribute (vanilla
+    /// `minecraft:environment_attribute_check`).
+    ///
+    /// **Deviation from vanilla:** vanilla compares the attribute's typed value
+    /// (`EnvironmentAttributeCheck.value` is decoded by the attribute's own
+    /// `AttributeType`, so colours, particles, moon phases, … compare as their own
+    /// type). Steel's [`EnvironmentAttributeLookup`] exposes only the
+    /// `AttributeType.toFloat` projection, so the comparison happens on that
+    /// projection; an attribute whose value is not carried by the hook fails.
+    EnvironmentAttributeCheck {
+        /// Environment attribute id (vanilla `attribute`).
+        attribute: Identifier,
+        /// Expected value, as its `AttributeType.toFloat` projection.
+        value: f32,
     },
     /// Reference to a named condition in the registry.
     Reference(Identifier),
@@ -421,14 +436,34 @@ impl LootCondition {
                 let is_active = level > 0;
                 is_active == *active
             }
-            LootCondition::EntityScores { .. } => {
-                // TODO: Implement when scoreboard system is available
-                true
+            LootCondition::EntityScores { entity, scores } => {
+                // Vanilla `EntityHasScoreCondition.test` / `hasScore`: the target
+                // entity must be present, every listed objective must exist, and
+                // the target must hold a score that lies inside the range.
+                if ctx.get_entity(*entity).is_none() {
+                    return false;
+                }
+                let target = ScoreboardTarget::Context(*entity);
+                scores.iter().all(|(objective, range)| {
+                    score_of(ctx, &target, objective)
+                        .is_some_and(|score| range.test(score as f32, ctx.rng))
+                })
+            }
+            LootCondition::EnvironmentAttributeCheck { attribute, value } => {
+                // Vanilla `EnvironmentAttributeCheck.test`: the attribute's value
+                // is compared against the configured one; with no attribute source
+                // installed the value is unavailable, so the check fails.
+                ctx.environment_attributes
+                    .and_then(|attributes| attributes.get_attribute(attribute, ctx.origin))
+                    .is_some_and(|actual| actual == *value)
             }
             LootCondition::Reference(_name) => {
-                // TODO: Implement condition registry lookup
-                // For now, return true (permissive)
-                true
+                // Steel inlines `minecraft:<path>` condition references at build
+                // time (the loot-table build script substitutes the referenced
+                // `predicate/` registry entry), so generated tables never contain
+                // this variant. An unresolved reference fails closed rather than
+                // silently passing.
+                false
             }
         }
     }
@@ -437,7 +472,7 @@ impl LootCondition {
 /// Whether `predicate` constrains nothing, matching vanilla's absent
 /// `LocationCheck.predicate` (an empty predicate always passes when an origin is
 /// present).
-fn location_predicate_is_unconstrained(predicate: &LocationPredicate) -> bool {
+const fn location_predicate_is_unconstrained(predicate: &LocationPredicate) -> bool {
     predicate.position.is_none()
         && predicate.biomes.is_none()
         && predicate.structures.is_none()

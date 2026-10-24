@@ -7,11 +7,12 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
-use steel_registry::particle_type::ParticleData;
+use steel_registry::particle_type::{ParticleData, ParticleTypeRef};
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::GlowSquidEntityData;
-use steel_registry::{sound_events, vanilla_attributes, vanilla_blocks};
+use steel_registry::{sound_events, vanilla_attributes, vanilla_blocks, vanilla_particle_types};
 use steel_utils::locks::SyncMutex;
 use steel_utils::random::RandomSource;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
@@ -125,13 +126,13 @@ impl GlowSquidEntity {
 
     /// Vanilla `GlowSquid.getInkParticle`.
     #[must_use]
-    pub fn ink_particle(&self) -> steel_registry::particle_type::ParticleTypeRef {
-        &steel_registry::vanilla_particle_types::GLOW_SQUID_INK
+    pub fn ink_particle() -> ParticleTypeRef {
+        &vanilla_particle_types::GLOW_SQUID_INK
     }
 
     /// Vanilla `GlowSquid.getSquirtSound`.
     #[must_use]
-    pub fn squirt_sound(&self) -> SoundEventRef {
+    pub fn squirt_sound() -> SoundEventRef {
         &sound_events::ENTITY_GLOW_SQUID_SQUIRT
     }
 
@@ -145,7 +146,7 @@ impl GlowSquidEntity {
         let position = self.position();
         let spread = 0.6;
         world.send_particles(
-            ParticleData::simple(&steel_registry::vanilla_particle_types::GLOW),
+            ParticleData::simple(&vanilla_particle_types::GLOW),
             DVec3::new(
                 position.x + (rand::random::<f64>() * 2.0 - 1.0) * spread,
                 position.y + rand::random::<f64>() * f64::from(self.entity_type.dimensions.height),
@@ -374,6 +375,7 @@ impl PathfinderMob for GlowSquidEntity {}
 
 #[cfg(test)]
 mod tests {
+    use simdnbt::owned::NbtCompound;
     use std::sync::Weak;
 
     use glam::DVec3;
@@ -391,7 +393,7 @@ mod tests {
         assert_eq!(squid.dark_ticks_remaining(), 0);
         squid.set_dark_ticks(100);
 
-        let mut nbt = simdnbt::owned::NbtCompound::new();
+        let mut nbt = NbtCompound::new();
         squid.save_additional(&mut nbt);
         assert_eq!(nbt.int("DarkTicksRemaining"), Some(100));
 

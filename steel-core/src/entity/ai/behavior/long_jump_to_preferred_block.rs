@@ -15,7 +15,6 @@ use super::long_jump_to_random_pos::{
 };
 use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
-use crate::world::LevelReader as _;
 
 /// Vanilla `LongJumpToPreferredBlock.getJumpCandidate` override state.
 struct PreferredBlockPicker {

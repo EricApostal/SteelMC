@@ -72,17 +72,11 @@ impl Minecart for MinecartEntity {
         &self.state
     }
 
-    fn with_minecart_data<R>(
-        &self,
-        f: impl FnOnce(&steel_registry::vanilla_entity_data::AbstractMinecartEntityData) -> R,
-    ) -> R {
+    fn with_minecart_data<R>(&self, f: impl FnOnce(&AbstractMinecartEntityData) -> R) -> R {
         f(self.entity_data.lock().abstract_minecart())
     }
 
-    fn with_minecart_data_mut<R>(
-        &self,
-        f: impl FnOnce(&mut steel_registry::vanilla_entity_data::AbstractMinecartEntityData) -> R,
-    ) -> R {
+    fn with_minecart_data_mut<R>(&self, f: impl FnOnce(&mut AbstractMinecartEntityData) -> R) -> R {
         f(self.entity_data.lock().abstract_minecart_mut())
     }
 

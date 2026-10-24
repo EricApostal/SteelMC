@@ -16,7 +16,7 @@ use crate::entity::Entity as _;
 use crate::entity::{EntitySpawnReason, create_entity_instance};
 use crate::world::World;
 use crate::world::custom_spawner::CustomSpawner;
-use crate::world::spawn::natural::{NaturalSpawner, runtime_random};
+use crate::world::spawn::natural::runtime_random;
 
 /// Vanilla `VillageSiege.State`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

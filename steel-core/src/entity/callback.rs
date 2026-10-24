@@ -166,15 +166,14 @@ impl EntityLevelCallback for PlayerEntityCallback {
             |player_id| world.players.get_by_entity_id(player_id),
         );
 
-        if update.section_changed() {
-            if let Some(player) = world.players.get_by_entity_id(self.entity_id)
-                && let Some(view) = *player.last_tracking_view.lock()
-            {
-                let sent_chunks = player.chunk_sender().lock().sent_chunks_snapshot();
-                world
-                    .entity_tracker()
-                    .update_player(&player, &view, |chunk| sent_chunks.contains(&chunk));
-            }
+        if update.section_changed()
+            && let Some(player) = world.players.get_by_entity_id(self.entity_id)
+            && let Some(view) = *player.last_tracking_view.lock()
+        {
+            let sent_chunks = player.chunk_sender().lock().sent_chunks_snapshot();
+            world
+                .entity_tracker()
+                .update_player(&player, &view, |chunk| sent_chunks.contains(&chunk));
         }
 
         Ok(())

@@ -548,7 +548,7 @@ fn check_patrolling_monster_spawn_rules(
     if level.light_value_at(crate::chunk::light::LightLayer::Block, pos) > 8 {
         return false;
     }
-    <PigEntity as Monster>::check_any_light_monster_spawn_rules(
+    <ZombieEntity as Monster>::check_any_light_monster_spawn_rules(
         entity_type,
         level,
         spawn_reason,

@@ -5,7 +5,11 @@ use std::ptr;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
+use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
+use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
+use steel_registry::enchantment::provider::enchant_item_from_provider;
+use steel_registry::enchantment::table::RandRngAdapter;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::equipment::EquipmentSlot;
 use steel_registry::item_stack::ItemStack;
@@ -15,7 +19,7 @@ use steel_registry::{sound_events, vanilla_attributes, vanilla_items};
 use steel_utils::locks::SyncMutex;
 use steel_utils::random::Random as _;
 use steel_utils::random::legacy_random::LegacyRandom;
-use steel_utils::{DowncastType, DowncastTypeKey};
+use steel_utils::{DowncastType, DowncastTypeKey, Identifier};
 
 use super::abstract_illager::{IllagerArmPose, RaiderKeys};
 use crate::entity::ai::goal::{
@@ -146,7 +150,9 @@ impl PillagerEntity {
     pub fn arm_pose(&self) -> IllagerArmPose {
         if self.is_charging_crossbow() {
             IllagerArmPose::CrossbowCharge
-        } else if self.is_holding(&mut |stack| ptr::eq(stack.item(), &*vanilla_items::CROSSBOW)) {
+        } else if self.is_holding(&mut |stack| {
+            ptr::eq(stack.item(), ptr::from_ref(&*vanilla_items::CROSSBOW))
+        }) {
             IllagerArmPose::CrossbowHold
         } else if self.is_aggressive() {
             IllagerArmPose::Attacking
@@ -207,12 +213,12 @@ impl Entity for PillagerEntity {
             .unwrap_or(f64::from(DEFAULT_STEP_HEIGHT)) as f32
     }
 
-    fn save_additional(&self, nbt: &mut simdnbt::owned::NbtCompound) {
+    fn save_additional(&self, nbt: &mut NbtCompound) {
         self.save_mob(nbt);
         self.raider_base.save(nbt);
     }
 
-    fn load_additional(&self, nbt: simdnbt::borrow::NbtCompound<'_, '_>) {
+    fn load_additional(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
         self.load_mob(nbt);
         if let Some(raid_id) = self.raider_base.load(&nbt) {
             self.rejoin_saved_raid(raid_id);
@@ -310,9 +316,9 @@ impl Mob for PillagerEntity {
                 .is(&vanilla_items::CROSSBOW)
         {
             let mut crossbow = self.equipment_in_slot(EquipmentSlot::MainHand);
-            steel_registry::enchantment::provider::enchant_item_from_provider(
+            enchant_item_from_provider(
                 &mut crossbow,
-                &steel_utils::Identifier::vanilla_static("pillager_spawn_crossbow"),
+                &Identifier::vanilla_static("pillager_spawn_crossbow"),
                 difficulty_modifier,
                 &mut random,
             );
@@ -404,7 +410,7 @@ impl Raider for PillagerEntity {
             world
                 .current_difficulty_at(self.block_position())
                 .special_multiplier(),
-            &mut steel_registry::enchantment::table::RandRngAdapter(&mut rand::rng()),
+            &mut RandRngAdapter(&mut rand::rng()),
         );
         self.living_base()
             .equipment()

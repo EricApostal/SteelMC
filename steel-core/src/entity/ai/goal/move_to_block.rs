@@ -15,6 +15,9 @@ const DEFAULT_ACCEPTED_DISTANCE: f64 = 1.0;
 
 type ValidTargetPredicate = Box<dyn Fn(&dyn LevelReader, BlockPos) -> bool + Send + Sync>;
 type MoveToTarget = Box<dyn Fn(BlockPos) -> BlockPos + Send + Sync>;
+/// Vanilla `MoveToBlockGoal.nextStartTick`: the per-goal tick source, defaulting to
+/// [`MoveToBlockGoal::default_next_start_tick`].
+type NextStartTickFn = Box<dyn Fn(&dyn PathfinderMob) -> i32 + Send + Sync>;
 
 pub struct MoveToBlockGoal {
     block_pos: BlockPos,
@@ -22,7 +25,7 @@ pub struct MoveToBlockGoal {
     move_to_target: MoveToTarget,
     speed_modifier: f64,
     next_start_tick: i32,
-    next_start_tick_fn: Box<dyn Fn(&dyn PathfinderMob) -> i32 + Send + Sync>,
+    next_start_tick_fn: NextStartTickFn,
     try_ticks: i32,
     max_stay_ticks: i32,
     reached_target: bool,

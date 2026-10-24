@@ -12,8 +12,8 @@ use steel_utils::SectionPos;
 
 use super::{ChunkMap, ChunkPos, ChunkStatus};
 use crate::chunk::light::{
-    DataLayer, LayerLightState, LevelLightState, LightLayer, LightSection, LightSectionData,
-    LightSectionRange, SectionType,
+    DataLayer, LayerLightState, LightLayer, LightSection, LightSectionData, LightSectionRange,
+    SectionType,
 };
 
 impl ChunkMap {

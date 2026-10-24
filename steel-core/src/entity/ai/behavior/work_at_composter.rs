@@ -1,6 +1,7 @@
 //! Vanilla `WorkAtComposter`.
 
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+use steel_registry::vanilla_blocks;
 
 use super::villager;
 use super::work_at_poi::WorkAtPoi;
@@ -33,19 +34,19 @@ impl Default for WorkAtComposter {
 
 impl WorkAtComposter {
     /// Vanilla `WorkAtComposter.useWorkstation`.
+    #[expect(
+        clippy::unused_self,
+        reason = "kept as a method to mirror vanilla `WorkAtComposter.useWorkstation`"
+    )]
     fn use_workstation(&self, ctx: &mut BehaviorContext<'_>) {
         let Some(site) = ctx.get_memory(&mem::JOB_SITE) else {
             return;
         };
-        if ctx.level.get_block_state(site.pos).get_block().key
-            != steel_registry::vanilla_blocks::COMPOSTER.key
-        {
-            return;
+        if ctx.level.get_block_state(site.pos).get_block().key == vanilla_blocks::COMPOSTER.key {
+            // Vanilla `makeBread` (wheat -> bread, max 3) and `compostItems` (compostable
+            // seed insertion, `ComposterBlock.LEVEL == 8` extraction) need mutable
+            // inventory and block access; unavailable here.
         }
-
-        // Vanilla `makeBread` (wheat -> bread, max 3) and `compostItems` (compostable
-        // seed insertion, `ComposterBlock.LEVEL == 8` extraction) need mutable
-        // inventory and block access; unavailable here.
     }
 }
 

@@ -98,7 +98,7 @@ impl Activity {
     }
 
     #[must_use]
-    pub fn identifier(self) -> Identifier {
+    pub const fn identifier(self) -> Identifier {
         Identifier::vanilla_static(self.name())
     }
 

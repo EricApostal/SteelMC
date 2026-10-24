@@ -188,7 +188,7 @@ fn visible_test(
     attack_target: Option<SharedEntity>,
 ) -> impl Fn(&SharedEntity) -> bool + Send + Sync + 'static {
     let world = body.level();
-    let body = body.clone();
+    let body = SharedEntity::clone(body);
 
     move |target: &SharedEntity| {
         let Some(world) = world.as_deref() else {
@@ -225,17 +225,15 @@ fn for_each_manhattan_pos(
     reach_y: i32,
     mut visit: impl FnMut(BlockPos) -> bool,
 ) -> Option<BlockPos> {
-    let reach_x = reach_xz;
-    let reach_z = reach_xz;
-    let max_depth = reach_x + reach_y + reach_z;
+    let max_depth = reach_xz * 2 + reach_y;
 
     for depth in 0..=max_depth {
-        let max_x = reach_x.min(depth);
+        let max_x = reach_xz.min(depth);
         for x in -max_x..=max_x {
             let max_y = reach_y.min(depth - x.abs());
             for y in -max_y..=max_y {
                 let z = depth - x.abs() - y.abs();
-                if z > reach_z {
+                if z > reach_xz {
                     continue;
                 }
 

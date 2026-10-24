@@ -80,7 +80,7 @@ impl MoveToTargetSink {
 
     /// Vanilla `isWalkTargetSpectator`: the target only matters for spectator
     /// entities, which villagers never track.
-    fn is_walk_target_spectator(_walk_target: &WalkTarget) -> bool {
+    const fn is_walk_target_spectator(_walk_target: &WalkTarget) -> bool {
         false
     }
 
@@ -214,7 +214,7 @@ impl Behavior for MoveToTargetSink {
             let mut progress = self.progress.lock();
             let mut path = self.path.lock();
             if *path != new_path {
-                *path = new_path.clone();
+                path.clone_from(&new_path);
                 match &new_path {
                     Some(new_path) => ctx.set_memory(&mem::PATH, new_path.clone()),
                     None => ctx.erase_memory(&mem::PATH),

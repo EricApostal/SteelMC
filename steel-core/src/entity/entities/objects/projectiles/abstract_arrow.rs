@@ -37,8 +37,8 @@ use crate::entity::damage::DamageSource;
 use crate::entity::entities::ArrowEntity;
 use crate::entity::projectile::triangle_random;
 use crate::entity::{
-    Entity, EntityEventSource as _, EntityReference, LivingEntity, Projectile,
-    ProjectileDeflection, ProjectileHit, RemovalReason, SharedEntity, next_entity_id,
+    Entity, EntityReference, LivingEntity, Projectile, ProjectileDeflection, ProjectileHit,
+    RemovalReason, SharedEntity, next_entity_id,
 };
 use crate::inventory::container::Container as _;
 use crate::physics::{WorldCollisionProvider, has_block_collision};
@@ -47,6 +47,11 @@ use crate::world::{ClipHitResult, World};
 
 /// Vanilla `AbstractArrow.ARROW_BASE_DAMAGE`.
 pub const ARROW_BASE_DAMAGE: f64 = 2.0;
+
+/// Vanilla `AbstractArrow` spawn offset below the shooter's eyes (the
+/// `LivingEntity` constructor spawns at `mob.getEyeY() - 0.1F`). Shared by the
+/// player weapon and mob-arrow factories.
+pub const ARROW_SPAWN_EYE_OFFSET: f64 = 0.1;
 
 /// Vanilla `AbstractArrow.SHAKE_TIME`.
 const SHAKE_TIME: i32 = 7;
@@ -634,13 +639,18 @@ pub trait AbstractArrow: Projectile + Sized {
     /// hits in the same order, because pierced entities are excluded by
     /// `can_hit_entity` and the recomputed block clip stops at the same block
     /// face.
+    ///
+    /// A clip that hits nothing still reports the end of the move vector in
+    /// vanilla (`BlockHitResult.miss(to, …)`), so a clean miss advances the
+    /// arrow by its whole velocity before the loop ends.
     fn step_move_and_hit(self: Arc<Self>) {
         while self.is_alive() {
-            let Some(hit) = self.get_hit_result_on_move_vector() else {
-                break;
-            };
             let from = self.position();
-            let next = hit.location();
+            let hit = self.get_hit_result_on_move_vector();
+            let next = match &hit {
+                Some(hit) => hit.location(),
+                None => from + self.velocity(),
+            };
             if let Err(error) = self.try_set_position(next) {
                 log::debug!("failed to advance arrow {}: {error}", self.id());
                 self.set_removed(RemovalReason::Discarded);
@@ -648,6 +658,9 @@ pub trait AbstractArrow: Projectile + Sized {
             }
             self.apply_effects_from_blocks_between(from, next);
 
+            let Some(hit) = hit else {
+                break;
+            };
             match hit {
                 ProjectileHit::Entity(_) => {
                     let deflection = Arc::clone(&self).hit_target_or_deflect_self(&hit);
@@ -1029,7 +1042,11 @@ pub fn get_mob_arrow(
     let arrow = ArrowEntity::new(
         &vanilla_entities::ARROW,
         next_entity_id(),
-        DVec3::new(position.x, mob.get_eye_y() - 0.1, position.z),
+        DVec3::new(
+            position.x,
+            mob.get_eye_y() - ARROW_SPAWN_EYE_OFFSET,
+            position.z,
+        ),
         Arc::downgrade(&world),
     );
     arrow.init_arrow(projectile, fired_from_weapon.as_ref(), Some(mob));

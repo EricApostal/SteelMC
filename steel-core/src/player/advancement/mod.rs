@@ -12,7 +12,7 @@ use crate::player::Player;
 use crate::player::advancement::rewards::grant_reward;
 use progress::{AdvancementProgress, AdvancementProgressMap};
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 use steel_protocol::packets::game::CSelectAdvancementsTab;
 use steel_protocol::packets::game::CUpdateAdvancements;
 use steel_registry::REGISTRY;

@@ -8,7 +8,7 @@ use std::sync::{Arc, Weak};
 
 use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
-use simdnbt::owned::NbtCompound;
+use simdnbt::owned::{NbtCompound, NbtTag};
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
@@ -20,6 +20,7 @@ use steel_registry::{
     vanilla_particle_types,
 };
 use steel_utils::UuidExt as _;
+use steel_utils::axis::Axis;
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::Difficulty;
 use steel_utils::{BlockPos, Direction, DowncastType, DowncastTypeKey};
@@ -27,9 +28,8 @@ use uuid::Uuid;
 
 use crate::entity::damage::DamageSource;
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityReference, EntitySyncedData, LivingEntity as _,
-    MobEffectInstance, Projectile, ProjectileBase, ProjectileDeflection, ProjectileHit,
-    RemovalReason, SharedEntity,
+    Entity, EntityBase, EntityBaseLoad, EntityReference, EntitySyncedData, MobEffectInstance,
+    Projectile, ProjectileBase, ProjectileDeflection, ProjectileHit, RemovalReason, SharedEntity,
 };
 use crate::world::{ClipHitResult, LevelReader as _, World};
 
@@ -47,9 +47,6 @@ const IMPACT_DAMAGE: f32 = 4.0;
 
 /// Vanilla `ShulkerBullet` levitation duration (`new MobEffectInstance(LEVITATION, 200)`).
 const LEVITATION_TICKS: i32 = 200;
-
-/// Vanilla `ShulkerBullet.getDefaultGravity`.
-const DEFAULT_GRAVITY: f64 = 0.04;
 
 /// Vanilla `ShulkerBullet` first flight-step range (`10 + random.nextInt(5) * 10`).
 const FLIGHT_STEPS_BASE: i32 = 10;
@@ -131,16 +128,16 @@ impl ShulkerBulletEntity {
         id: i32,
         owner: &SharedEntity,
         target: &SharedEntity,
-        invalid_start_axis: Option<steel_utils::axis::Axis>,
+        invalid_start_axis: Option<Axis>,
         world: Weak<World>,
     ) -> Self {
         let bounds = owner.bounding_box();
         let min = bounds.min_corner();
         let max = bounds.max_corner();
         let position = DVec3::new(
-            (min.x + max.x) / 2.0,
-            (min.y + max.y) / 2.0,
-            (min.z + max.z) / 2.0,
+            f64::midpoint(min.x, max.x),
+            f64::midpoint(min.y, max.y),
+            f64::midpoint(min.z, max.z),
         );
         let bullet = Self::new(entity_type, id, position, world);
         bullet.set_owner_entity(Some(owner));
@@ -198,11 +195,7 @@ impl ShulkerBulletEntity {
     }
 
     /// Vanilla `ShulkerBullet.selectNextMoveDirection`.
-    fn select_next_move_direction(
-        &self,
-        avoid_axis: Option<steel_utils::axis::Axis>,
-        target: Option<&SharedEntity>,
-    ) {
+    fn select_next_move_direction(&self, avoid_axis: Option<Axis>, target: Option<&SharedEntity>) {
         let Some(world) = self.level() else {
             return;
         };
@@ -225,30 +218,35 @@ impl ShulkerBulletEntity {
         let mut selection = None;
 
         let own_position = self.position();
-        let close_to_center = (own_position.x - (f64::from(target_pos.x()) + 0.5)).abs() < 2.0
-            && (own_position.y - (f64::from(target_pos.y()) + 0.5)).abs() < 2.0
-            && (own_position.z - (f64::from(target_pos.z()) + 0.5)).abs() < 2.0;
+        // Vanilla `BlockPos.closerToCenterThan(position, 2.0)`: the block-centre
+        // offsets are compared in Euclidean space, not per axis.
+        let target_center = DVec3::new(
+            f64::from(target_pos.x()) + 0.5,
+            f64::from(target_pos.y()) + 0.5,
+            f64::from(target_pos.z()) + 0.5,
+        );
+        let close_to_center = own_position.distance_squared(target_center) < 2.0 * 2.0;
 
         if !close_to_center {
             let current = self.block_position();
             let mut options: Vec<Direction> = Vec::new();
             let is_empty = |pos: BlockPos| world.get_block_state(pos).is_air();
 
-            if avoid_axis != Some(steel_utils::axis::Axis::X) {
+            if avoid_axis != Some(Axis::X) {
                 if current.x() < target_pos.x() && is_empty(current.east()) {
                     options.push(Direction::East);
                 } else if current.x() > target_pos.x() && is_empty(current.west()) {
                     options.push(Direction::West);
                 }
             }
-            if avoid_axis != Some(steel_utils::axis::Axis::Y) {
+            if avoid_axis != Some(Axis::Y) {
                 if current.y() < target_pos.y() && is_empty(current.above()) {
                     options.push(Direction::Up);
                 } else if current.y() > target_pos.y() && is_empty(current.below()) {
                     options.push(Direction::Down);
                 }
             }
-            if avoid_axis != Some(steel_utils::axis::Axis::Z) {
+            if avoid_axis != Some(Axis::Z) {
                 if current.z() < target_pos.z() && is_empty(current.south()) {
                     options.push(Direction::South);
                 } else if current.z() > target_pos.z() && is_empty(current.north()) {
@@ -321,39 +319,36 @@ impl Entity for ShulkerBulletEntity {
             target.is_alive() && !(target.as_player().is_some() && target.is_spectator())
         });
 
-        match &target {
-            None => {
-                self.state.lock().final_target = None;
-                self.apply_gravity();
+        if target.is_none() {
+            self.state.lock().final_target = None;
+            self.apply_gravity();
+        } else {
+            {
+                let mut state = self.state.lock();
+                state.target_delta_x =
+                    (state.target_delta_x * (1.0 + ACCELERATION)).clamp(-1.0, 1.0);
+                state.target_delta_y =
+                    (state.target_delta_y * (1.0 + ACCELERATION)).clamp(-1.0, 1.0);
+                state.target_delta_z =
+                    (state.target_delta_z * (1.0 + ACCELERATION)).clamp(-1.0, 1.0);
             }
-            Some(target) => {
-                {
-                    let mut state = self.state.lock();
-                    state.target_delta_x =
-                        (state.target_delta_x * (1.0 + ACCELERATION)).clamp(-1.0, 1.0);
-                    state.target_delta_y =
-                        (state.target_delta_y * (1.0 + ACCELERATION)).clamp(-1.0, 1.0);
-                    state.target_delta_z =
-                        (state.target_delta_z * (1.0 + ACCELERATION)).clamp(-1.0, 1.0);
-                }
-                let (dx, dy, dz) = {
-                    let state = self.state.lock();
-                    (
-                        state.target_delta_x,
-                        state.target_delta_y,
-                        state.target_delta_z,
-                    )
-                };
-                let movement = self.velocity();
-                self.set_velocity(
-                    movement
-                        + DVec3::new(
-                            (dx - movement.x) * BLEND,
-                            (dy - movement.y) * BLEND,
-                            (dz - movement.z) * BLEND,
-                        ),
-                );
-            }
+            let (dx, dy, dz) = {
+                let state = self.state.lock();
+                (
+                    state.target_delta_x,
+                    state.target_delta_y,
+                    state.target_delta_z,
+                )
+            };
+            let movement = self.velocity();
+            self.set_velocity(
+                movement
+                    + DVec3::new(
+                        (dx - movement.x) * BLEND,
+                        (dy - movement.y) * BLEND,
+                        (dz - movement.z) * BLEND,
+                    ),
+            );
         }
 
         let hit = self.get_hit_result_on_move_vector();
@@ -383,7 +378,7 @@ impl Entity for ShulkerBulletEntity {
         };
 
         let mut reselect = false;
-        let move_direction = self.state.lock().current_move_direction;
+        let old_direction = self.state.lock().current_move_direction;
         {
             let mut state = self.state.lock();
             if state.flight_steps > 0 {
@@ -394,12 +389,13 @@ impl Entity for ShulkerBulletEntity {
             }
         }
         if reselect {
-            let axis = move_direction.map(Direction::get_axis);
+            // Vanilla re-reads `currentMoveDirection` after the reselect, so the
+            // blocked/aligned checks below use the freshly chosen direction.
+            let axis = old_direction.map(Direction::get_axis);
             self.select_next_move_direction(axis, Some(&target));
-            return;
         }
 
-        let Some(move_direction) = move_direction else {
+        let Some(move_direction) = self.state.lock().current_move_direction else {
             return;
         };
         let current = self.block_position();
@@ -414,9 +410,9 @@ impl Entity for ShulkerBulletEntity {
 
         let target_pos = target.block_position();
         let aligned = match axis {
-            steel_utils::axis::Axis::X => current.x() == target_pos.x(),
-            steel_utils::axis::Axis::Z => current.z() == target_pos.z(),
-            steel_utils::axis::Axis::Y => current.y() == target_pos.y(),
+            Axis::X => current.x() == target_pos.x(),
+            Axis::Z => current.z() == target_pos.z(),
+            Axis::Y => current.y() == target_pos.y(),
         };
         if aligned {
             self.select_next_move_direction(Some(axis), Some(&target));
@@ -481,7 +477,7 @@ impl Entity for ShulkerBulletEntity {
         if let Some(target) = &state.final_target {
             nbt.insert(
                 "Target",
-                simdnbt::owned::NbtTag::IntArray(target.uuid().to_int_array().to_vec()),
+                NbtTag::IntArray(target.uuid().to_int_array().to_vec()),
             );
         }
         if let Some(direction) = state.current_move_direction {
@@ -539,7 +535,7 @@ impl Projectile for ShulkerBulletEntity {
         }
         if let Some(living) = entity.as_living_entity() {
             living.add_mob_effect(MobEffectInstance::with_duration(
-                &vanilla_mob_effects::LEVITATION,
+                vanilla_mob_effects::LEVITATION,
                 LEVITATION_TICKS,
                 0,
             ));

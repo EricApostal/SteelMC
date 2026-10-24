@@ -885,10 +885,13 @@ pub trait LivingEntity: Entity {
         if damage != 0.0 {
             // Vanilla `LivingEntity.actuallyHurt` records the combat entry before
             // applying the damage.
-            self.living_base()
-                .combat_tracker()
-                .lock()
-                .record_damage(self, source, damage);
+            if let Some(self_entity) = self.as_living_entity() {
+                self.living_base().combat_tracker().lock().record_damage(
+                    self_entity,
+                    source,
+                    damage,
+                );
+            }
             self.set_health(self.get_health() - damage);
             self.set_absorption_amount(self.get_absorption_amount() - damage);
             self.game_event(&vanilla_game_events::ENTITY_DAMAGE);
@@ -1073,10 +1076,12 @@ pub trait LivingEntity: Entity {
             }
         }
 
-        self.living_base()
-            .combat_tracker()
-            .lock()
-            .recheck_status(self);
+        if let Some(self_entity) = self.as_living_entity() {
+            self.living_base()
+                .combat_tracker()
+                .lock()
+                .recheck_status(self_entity);
+        }
         self.broadcast_entity_event(EntityStatus::Death);
         self.set_pose(EntityPose::Dying);
     }
@@ -1122,7 +1127,9 @@ pub trait LivingEntity: Entity {
     /// killer's `mob_experience` enchantment effects (vanilla
     /// `EnchantmentHelper.processMobExperience`).
     fn experience_reward(&self, _world: &World, killer_entity: Option<&dyn Entity>) -> i32 {
-        experience_reward_with_enchantments(self, killer_entity)
+        self.as_living_entity().map_or(0, |victim| {
+            experience_reward_with_enchantments(victim, killer_entity)
+        })
     }
 
     /// Runs the currently implemented subset of vanilla `LivingEntity.dropAllDeathLoot`.
@@ -2234,11 +2241,13 @@ pub trait LivingEntity: Entity {
         self.detect_equipment_updates();
 
         // Vanilla `LivingEntity.tick` rechecks combat state every 20 ticks.
-        if self.tick_count() % 20 == 0 {
+        if self.tick_count() % 20 == 0
+            && let Some(self_entity) = self.as_living_entity()
+        {
             self.living_base()
                 .combat_tracker()
                 .lock()
-                .recheck_status(self);
+                .recheck_status(self_entity);
         }
 
         if self.is_dead_or_dying() {

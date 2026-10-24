@@ -7,7 +7,12 @@
 
 use glam::DVec3;
 use rustc_hash::FxHashMap;
+use steel_registry::entity_type::EntityTypeRef;
+use steel_registry::equipment::EquipmentSlot;
+use steel_registry::poi::PoiTypeRef;
+use steel_registry::vanilla_attributes;
 use steel_registry::vanilla_entities;
+use steel_registry::vanilla_poi_types;
 use steel_utils::BlockPos;
 use steel_utils::random::legacy_random::LegacyRandom;
 
@@ -65,7 +70,7 @@ impl RaiderObtainLeaderBannerGoal {
             return true;
         }
 
-        let head = raider.equipment_in_slot(steel_registry::equipment::EquipmentSlot::Head);
+        let head = raider.equipment_in_slot(EquipmentSlot::Head);
         if ItemStack::matches(&head, &Raid::ominous_banner_instance()) {
             return true;
         }
@@ -114,7 +119,7 @@ impl Goal for RaiderObtainLeaderBannerGoal {
         let follow_range = mob
             .attributes()
             .lock()
-            .get_value(steel_registry::vanilla_attributes::FOLLOW_RANGE)
+            .get_value(vanilla_attributes::FOLLOW_RANGE)
             .unwrap_or(16.0);
         let area = mob
             .bounding_box()
@@ -296,7 +301,7 @@ impl RaiderMoveThroughVillageGoal {
         let visited = self.visited.clone();
 
         let found = world.poi_storage.lock().get_random(
-            &|poi_type| poi_type.key == steel_registry::vanilla_poi_types::HOME.key,
+            &|poi_type| poi_type.key == vanilla_poi_types::HOME.key,
             &|candidate| !visited.contains(&candidate),
             pos,
             48,
@@ -458,12 +463,12 @@ pub fn is_ominous_banner(item_stack: &ItemStack) -> bool {
 
 /// The village POI predicate the raider move-through-village goal uses for homes.
 #[must_use]
-pub fn is_raider_walk_poi(poi_type: steel_registry::poi::PoiTypeRef) -> bool {
+pub fn is_raider_walk_poi(poi_type: PoiTypeRef) -> bool {
     is_village_poi(poi_type)
 }
 
 /// Iron golem and villager types an illager may target, for reuse by target goals.
 #[must_use]
-pub const fn targetable_golem() -> steel_registry::entity_type::EntityTypeRef {
+pub const fn targetable_golem() -> EntityTypeRef {
     &vanilla_entities::IRON_GOLEM
 }

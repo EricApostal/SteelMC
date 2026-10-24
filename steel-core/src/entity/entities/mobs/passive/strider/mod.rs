@@ -45,6 +45,7 @@
 //!   complete but `world::spawn::placement` has no `minecraft:strider` entry yet, so
 //!   natural strider spawning is not wired.
 
+use std::f32::consts::PI;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
@@ -68,7 +69,7 @@ use steel_registry::{
     vanilla_entities, vanilla_game_events, vanilla_items,
 };
 use steel_utils::locks::SyncMutex;
-use steel_utils::random::Random as _;
+use steel_utils::random::Random;
 use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::types::InteractionHand;
 use steel_utils::{
@@ -93,9 +94,9 @@ use crate::entity::entities::mobs::zombie::ZombieEntity;
 use crate::entity::registry::ENTITIES;
 use crate::entity::{
     AgeableMob, AgeableMobBase, AgeableMobGroupData, Animal, AnimalBase, Entity, EntityBase,
-    EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData, ItemBasedSteering,
-    ItemSteerable, LivingEntity, LivingEntityBase, LivingEntitySyncedData, Mob, MobBase,
-    PathfinderMob, SharedEntity, SpawnGroupData, next_entity_id,
+    EntityBaseLoad, EntityEventSource as _, EntityPose, EntitySpawnReason, EntitySyncedData,
+    ItemBasedSteering, ItemSteerable, LivingEntity, LivingEntityBase, LivingEntitySyncedData, Mob,
+    MobBase, PathfinderMob, SharedEntity, SpawnGroupData, next_entity_id,
 };
 use crate::fluid::FluidStateExt as _;
 use crate::inventory::equipment::EquipmentSlot;
@@ -293,7 +294,7 @@ impl StriderEntity {
     /// Vanilla `Strider.isSensitiveToWater`; see the module GAP note for why this
     /// is an inherent method rather than a `LivingEntity` hook.
     #[must_use]
-    pub const fn is_sensitive_to_water(&self) -> bool {
+    pub const fn is_sensitive_to_water() -> bool {
         true
     }
 
@@ -324,8 +325,7 @@ impl StriderEntity {
         let state_inside = world.get_block_state(self.block_position());
         let state_on = self
             .on_pos_legacy()
-            .map(|pos| world.get_block_state(pos))
-            .unwrap_or(state_inside);
+            .map_or(state_inside, |pos| world.get_block_state(pos));
         let in_warm_blocks = state_inside
             .get_block()
             .has_tag(&BlockTag::STRIDER_WARM_BLOCKS)
@@ -396,12 +396,8 @@ impl StriderEntity {
         jockey: &SharedEntity,
         jockey_group_data: Option<SpawnGroupData>,
     ) -> Option<SpawnGroupData> {
-        let Some(vehicle) = world.get_entity_by_id(self.id()) else {
-            return None;
-        };
-        let Some(jockey_mob) = jockey.as_mob() else {
-            return None;
-        };
+        let vehicle = world.get_entity_by_id(self.id())?;
+        let jockey_mob = jockey.as_mob()?;
 
         jockey_mob.snap_to(self.position(), self.rotation().0, 0.0);
         jockey_mob.finalize_spawn(world, EntitySpawnReason::Jockey, jockey_group_data);
@@ -493,7 +489,7 @@ impl StriderEntity {
         level: &World,
         _spawn_reason: EntitySpawnReason,
         pos: BlockPos,
-        _random: &mut impl steel_utils::random::Random,
+        _random: &mut impl Random,
     ) -> bool {
         let mut check_pos = pos;
         loop {
@@ -514,7 +510,7 @@ fn collision_horizontal_escape_vector(
     direction_degrees: f32,
 ) -> DVec3 {
     let distance = (collider_width + colliding_width + 1.0e-5) / 2.0;
-    let radians = direction_degrees * (f32::consts::PI / 180.0);
+    let radians = direction_degrees * (PI / 180.0);
     let direction_x = -f64::from(radians.sin());
     let direction_z = f64::from(radians.cos());
     let scale = direction_x.abs().max(direction_z.abs());

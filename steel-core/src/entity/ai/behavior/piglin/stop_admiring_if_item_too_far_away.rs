@@ -5,8 +5,6 @@ use crate::entity::ai::brain::memory::MemoryStatus;
 use crate::entity::ai::brain::memory::module_type as mem;
 use steel_utils::types::InteractionHand;
 
-use crate::entity::{Entity as _, LivingEntity as _};
-
 /// Vanilla `StopAdmiringIfItemTooFarAway`: ends the admire activity once the wanted
 /// item is gone or beyond `maxDistanceToItem`.
 pub struct StopAdmiringIfItemTooFarAway {

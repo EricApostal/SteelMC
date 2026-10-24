@@ -1,5 +1,5 @@
 use std::io::Cursor;
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 
 use glam::DVec3;
 use simdnbt::borrow::read_compound as read_borrowed_compound;
@@ -126,11 +126,11 @@ fn employed_villager_generates_level_offers() {
 
     let fixture = fresh_test_world("villager_offers");
     let world = &fixture.world;
-    let villager: SharedEntity = std::sync::Arc::new(VillagerEntity::new(
+    let villager: SharedEntity = Arc::new(VillagerEntity::new(
         &vanilla_entities::VILLAGER,
         1,
         DVec3::new(0.5, 1.0, 0.5),
-        std::sync::Arc::downgrade(world),
+        Arc::downgrade(world),
     ));
     let entity = villager
         .downcast_ref::<VillagerEntity>()
@@ -162,11 +162,11 @@ fn naturally_spawned_villager_gets_offers_after_taking_a_job() {
 
     let fixture = fresh_test_world("villager_takes_job");
     let world = &fixture.world;
-    let villager: SharedEntity = std::sync::Arc::new(VillagerEntity::new(
+    let villager: SharedEntity = Arc::new(VillagerEntity::new(
         &vanilla_entities::VILLAGER,
         1,
         DVec3::new(0.5, 1.0, 0.5),
-        std::sync::Arc::downgrade(world),
+        Arc::downgrade(world),
     ));
     let entity = villager
         .downcast_ref::<VillagerEntity>()
@@ -388,7 +388,7 @@ fn update_special_prices_applies_reputation_and_hero_discounts() {
     let world = &fixture.world;
     insert_ready_full_chunk(world, ChunkPos::new(0, 0));
     let villager = test_villager_with_offers(world, 1);
-    let shared: SharedEntity = villager.clone();
+    let shared: SharedEntity = Arc::<VillagerEntity>::clone(&villager);
     world
         .try_add_entity(shared)
         .expect("the villager joins the loaded chunk");
@@ -528,4 +528,92 @@ fn profession_requested_items_and_secondary_poi_match_vanilla() {
             profession.key
         );
     }
+}
+
+// --- live path: a villager taking a job site from the loaded world ----------------------
+
+/// End-to-end: a job site placed in a live world must be found through POI storage and the
+/// brain's `AcquirePoi`/`AssignProfessionFromJobSite`, giving the villager a profession and
+/// level offers. This is the path a player actually exercises when they walk up to a village
+/// villager; the unit tests above start from `apply_profession_from_poi` and so cannot see a
+/// break in POI scanning, the acquire behaviours, or the schedule that runs them.
+#[test]
+fn villager_takes_a_job_site_placed_in_the_live_world() {
+    use steel_registry::vanilla_blocks;
+    use steel_utils::types::UpdateFlags;
+    use steel_utils::{BlockPos, ChunkPos};
+
+    use crate::entity::{EntitySpawnReason, SharedEntity, add_spawned_entity};
+    use crate::player::ResetReason;
+    use crate::test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk};
+
+    init_vanilla_registry();
+    crate::entity::init_entities();
+    crate::behavior::init_behaviors();
+
+    let fixture = fresh_test_world("villager_live_job_site");
+    let world = &fixture.world;
+    let center = ChunkPos::new(0, 0);
+    insert_ready_full_chunk(world, center);
+
+    // A player keeps the chunk entity-ticking so `tick_game` actually steps the villager.
+    let player = TestPlayerBuilder::new(Arc::clone(world), "JobSiteWatcher", 1).build();
+    assert!(
+        world.add_player(Arc::clone(&player), ResetReason::InitialJoin),
+        "the test player must hold the chunk active"
+    );
+
+    let villager: SharedEntity = Arc::new(VillagerEntity::new(
+        &vanilla_entities::VILLAGER,
+        2,
+        DVec3::new(0.5, 64.0, 0.5),
+        Arc::downgrade(world),
+    ));
+    let entity = villager
+        .downcast_ref::<VillagerEntity>()
+        .expect("villager downcast");
+    entity.finalize_spawn(world, EntitySpawnReason::Natural, None);
+    assert_eq!(
+        entity.profession().key,
+        vanilla_villager_professions::NONE.key,
+        "a naturally spawned villager starts unemployed"
+    );
+    add_spawned_entity(world, Arc::clone(&villager)).expect("villager joins the world");
+
+    // A floor to stand on, plus the farmer's job site two blocks away.
+    let stone = REGISTRY.blocks.get_default_state_id(&vanilla_blocks::STONE);
+    let composter = REGISTRY
+        .blocks
+        .get_default_state_id(&vanilla_blocks::COMPOSTER);
+    for x in -4..=4 {
+        for z in -4..=4 {
+            world.set_block(BlockPos::new(x, 63, z), stone, UpdateFlags::UPDATE_ALL);
+        }
+    }
+    world.set_block(BlockPos::new(2, 64, 0), composter, UpdateFlags::UPDATE_ALL);
+    assert!(
+        world
+            .poi_storage
+            .lock()
+            .exists(BlockPos::new(2, 64, 0), &|_| true),
+        "placing a job-site block must record a POI"
+    );
+
+    // Vanilla's job search is a jittered retry; two in-game minutes is ample. The server
+    // advances the domain clock before dispatching each world tick, so mirror that here —
+    // `AcquirePoi` gates its scan on `game_time`.
+    for tick in 0..2_400_u64 {
+        world.game_time.advance();
+        world.tick_game(tick, true);
+    }
+
+    assert_eq!(
+        entity.profession().key,
+        vanilla_villager_professions::FARMER.key,
+        "the villager should have claimed the composter and become a farmer"
+    );
+    assert!(
+        !entity.merchant.offers().is_empty(),
+        "an employed villager must offer trades (a player clicking it must not get a head shake)"
+    );
 }

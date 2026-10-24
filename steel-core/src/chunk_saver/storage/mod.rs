@@ -14,6 +14,7 @@ use crate::chunk::light::{
 use crate::chunk::paletted_container::PalettedContainer;
 use crate::chunk::section::{ChunkSection, SectionHolder, Sections};
 use crate::chunk::{Chunk, status::ChunkStatus};
+use crate::chunk_saver::anvil::AnvilStorage;
 use crate::chunk_saver::bit_pack::{bits_for_palette_len, pack_indices_from_iter, unpack_indices};
 use crate::entity::{
     ENTITIES, Entity, EntityBase, EntityBaseSaveData, EntityFireFreezeState, EntityLoadRequest,
@@ -446,8 +447,10 @@ impl<'a> ChunkBuilder<'a> {
 /// or in-memory (for testing/minigames).
 /// TODO: make it possible to give plugins the option to load a custom backend
 pub enum ChunkStorage {
-    /// Disk-based storage using region files.
+    /// Disk-based storage using Steel's native region files (`.srg`).
     Disk(RegionManager),
+    /// Disk-based storage using vanilla Anvil region files (`.mca`).
+    Anvil(AnvilStorage),
     /// In-memory storage for testing and minigames.
     RamOnly(RamOnlyStorage),
 }
@@ -478,6 +481,11 @@ impl ChunkStorage {
     ) -> io::Result<Option<LoadedChunk>> {
         match self {
             Self::Disk(rm) => rm.load_chunk(pos, min_y, height, level, thread_pool).await,
+            Self::Anvil(storage) => {
+                storage
+                    .load_chunk(pos, min_y, height, level, thread_pool)
+                    .await
+            }
             Self::RamOnly(ram) => ram.load_chunk(pos, min_y, height, level).await,
         }
     }
@@ -492,6 +500,7 @@ impl ChunkStorage {
     ) -> io::Result<bool> {
         match self {
             Self::Disk(rm) => rm.save_chunk_data(prepared, thread_pool).await,
+            Self::Anvil(storage) => storage.save_chunk_data(prepared, thread_pool).await,
             Self::RamOnly(ram) => ram.save_chunk_data(prepared).await,
         }
     }
@@ -500,6 +509,7 @@ impl ChunkStorage {
     pub async fn chunk_exists(&self, pos: ChunkPos) -> io::Result<bool> {
         match self {
             Self::Disk(rm) => rm.chunk_exists(pos).await,
+            Self::Anvil(storage) => storage.chunk_exists(pos).await,
             Self::RamOnly(ram) => ram.chunk_exists(pos).await,
         }
     }
@@ -511,6 +521,7 @@ impl ChunkStorage {
     pub async fn acquire_chunk(&self, pos: ChunkPos) -> io::Result<bool> {
         match self {
             Self::Disk(rm) => rm.acquire_chunk(pos).await,
+            Self::Anvil(storage) => storage.acquire_chunk(pos).await,
             Self::RamOnly(ram) => ram.chunk_exists(pos).await,
         }
     }
@@ -519,6 +530,7 @@ impl ChunkStorage {
     pub async fn release_chunk(&self, pos: ChunkPos) -> io::Result<()> {
         match self {
             Self::Disk(rm) => rm.release_chunk(pos).await,
+            Self::Anvil(storage) => storage.release_chunk(pos).await,
             Self::RamOnly(_) => Ok(()), // No-op for RAM storage
         }
     }
@@ -527,6 +539,7 @@ impl ChunkStorage {
     pub async fn flush_all(&self) -> io::Result<()> {
         match self {
             Self::Disk(rm) => rm.flush_all().await,
+            Self::Anvil(storage) => storage.flush_all().await,
             Self::RamOnly(_) => Ok(()), // No-op for RAM storage
         }
     }
@@ -535,6 +548,7 @@ impl ChunkStorage {
     pub async fn close_all(&self) -> io::Result<()> {
         match self {
             Self::Disk(rm) => rm.close_all().await,
+            Self::Anvil(storage) => storage.close_all().await,
             Self::RamOnly(_) => Ok(()), // No-op for RAM storage
         }
     }

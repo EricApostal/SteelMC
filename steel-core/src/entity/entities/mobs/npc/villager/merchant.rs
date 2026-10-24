@@ -41,7 +41,6 @@ impl Default for VillagerMerchantState {
 
 impl VillagerMerchantState {
     /// Locks the offer list.
-    #[must_use]
     pub fn offers(&self) -> MerchantOffersGuard<'_> {
         self.offers.lock()
     }
@@ -170,8 +169,8 @@ impl Merchant for VillagerMerchantHandle {
     }
 
     fn override_xp(&self, xp: i32) {
-        if let Some(villager) = self.villager() {
-            villager.override_villager_xp(xp);
+        if self.villager().is_some() {
+            VillagerEntity::override_villager_xp(xp);
         }
     }
 

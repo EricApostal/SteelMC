@@ -139,7 +139,10 @@ impl ContainerViewers for EnderChestBlockEntity {
         };
         let pos = self.get_block_pos();
         let state = self.get_block_state();
-        let transition = self.openers.lock().increment(player.block_interaction_range());
+        let transition = self
+            .openers
+            .lock()
+            .increment(player.block_interaction_range());
         ContainerOpenersCounter::apply(self, transition, Some(player), &world, pos, state);
     }
 

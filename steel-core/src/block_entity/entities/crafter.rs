@@ -119,7 +119,7 @@ impl CrafterContainer {
     }
 
     /// Vanilla `CrafterBlockEntity.canPlaceItem`.
-    fn can_place_item_vanilla(&self, slot: usize, stack: &ItemStack) -> bool {
+    fn can_place_item_vanilla(&self, slot: usize, _stack: &ItemStack) -> bool {
         if self.states.is_disabled(slot) {
             return false;
         }

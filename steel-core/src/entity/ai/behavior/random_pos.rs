@@ -8,6 +8,7 @@
 //! and delete this file to restore the single implementation.
 
 use glam::DVec3;
+use std::f64::consts::TAU;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_utils::BlockPos;
 
@@ -62,7 +63,7 @@ fn rand_position(
                 let base = delta.z.atan2(delta.x);
                 base + rand::random_range(-max_radians..max_radians)
             }
-            None => rand::random_range(0.0..f64::consts::TAU),
+            None => rand::random_range(0.0..TAU),
         };
         let radius = rand::random::<f64>() * f64::from(horizontal_dist);
         let dy = rand::random_range(-vertical_dist..=vertical_dist);

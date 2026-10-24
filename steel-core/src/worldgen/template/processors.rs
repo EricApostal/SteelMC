@@ -1,6 +1,4 @@
 use super::*;
-use crate::world::LevelReader as _;
-use crate::world::LevelReader as _;
 use crate::worldgen::template::TemplateLevelAccess;
 use steel_registry::structure_processor::{
     StructureProcessorBlockSet, StructureProcessorHeightmap,

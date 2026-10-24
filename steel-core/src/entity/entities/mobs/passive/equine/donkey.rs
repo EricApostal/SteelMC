@@ -23,7 +23,8 @@ use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::{AbstractHorseEntityData, DonkeyEntityData};
 use steel_registry::vanilla_item_tags::ItemTag;
 use steel_registry::{
-    REGISTRY, TaggedRegistryExt as _, sound_events, vanilla_entities, vanilla_items,
+    REGISTRY, TaggedRegistryExt as _, sound_events, vanilla_attributes, vanilla_entities,
+    vanilla_items,
 };
 use steel_utils::locks::{Shared, SyncMutex};
 use steel_utils::types::InteractionHand;
@@ -158,7 +159,7 @@ impl DonkeyEntity {
     }
 
     /// Vanilla `AbstractHorse.canPerformRearing`.
-    const fn can_perform_rearing(&self) -> bool {
+    const fn can_perform_rearing() -> bool {
         true
     }
 
@@ -202,7 +203,7 @@ impl DonkeyEntity {
     /// Vanilla `AbstractChestedHorse.randomizeAttributes`: health only.
     fn randomize_attributes(&self) {
         self.attributes().lock().set_base_value(
-            steel_registry::vanilla_attributes::MAX_HEALTH,
+            vanilla_attributes::MAX_HEALTH,
             f64::from(generate_max_health()),
         );
     }
@@ -269,7 +270,7 @@ impl DonkeyEntity {
     /// Vanilla `AbstractHorse.isTamed`.
     #[must_use]
     pub fn is_tamed(&self) -> bool {
-        is_tamed(&self.entity_data.lock().abstract_horse())
+        is_tamed(self.entity_data.lock().abstract_horse())
     }
 
     /// Vanilla `AbstractHorse.setTamed`.
@@ -284,7 +285,7 @@ impl DonkeyEntity {
     /// Vanilla `AbstractHorse.isEating`.
     #[must_use]
     pub fn is_eating(&self) -> bool {
-        is_eating(&self.entity_data.lock().abstract_horse())
+        is_eating(self.entity_data.lock().abstract_horse())
     }
 
     /// Vanilla `AbstractHorse.setEating`.
@@ -295,7 +296,7 @@ impl DonkeyEntity {
     /// Vanilla `AbstractHorse.isBred`.
     #[must_use]
     pub fn is_bred(&self) -> bool {
-        is_bred(&self.entity_data.lock().abstract_horse())
+        is_bred(self.entity_data.lock().abstract_horse())
     }
 
     /// Vanilla `AbstractHorse.setBred`.
@@ -327,14 +328,14 @@ impl DonkeyEntity {
 
     /// Vanilla `AbstractHorse.inventory`.
     #[must_use]
-    pub fn carried_items(&self) -> &Shared<InventoryCarrier> {
+    pub const fn carried_items(&self) -> &Shared<InventoryCarrier> {
         self.parts.inventory()
     }
 
     /// Vanilla `AbstractHorse.openCustomInventoryScreen`.
     pub fn open_custom_inventory_screen(&self, player: &Player) {
         self.with_horse_data(|data| {
-            open_custom_inventory_screen(self, &self.parts, data, player, self.inventory_columns())
+            open_custom_inventory_screen(self, &self.parts, data, player, self.inventory_columns());
         });
     }
 
@@ -505,7 +506,7 @@ impl Entity for DonkeyEntity {
         self.save_ageable_mob(nbt);
         self.save_animal(nbt);
         self.parts
-            .save_abstract_horse(&self.entity_data.lock().abstract_horse(), nbt);
+            .save_abstract_horse(self.entity_data.lock().abstract_horse(), nbt);
         // Vanilla `AbstractChestedHorse.addAdditionalSaveData`.
         nbt.insert("ChestedHorse", i8::from(self.has_chest()));
         if self.has_chest() {
@@ -575,7 +576,7 @@ impl LivingEntity for DonkeyEntity {
     fn equip_sound(&self, slot: EquipmentSlot, stack: &ItemStack) -> Option<SoundEventRef> {
         // Vanilla `AbstractHorse.getEquipSound`: the saddle sound, otherwise the
         // equippable component's own sound.
-        super::equip_sound(slot).or_else(|| LivingEntity::equip_sound(self, slot, stack))
+        super::equip_sound(slot, stack)
     }
 
     /// Vanilla `AbstractChestedHorse.dropEquipment`: carried inventory stacks
@@ -590,7 +591,7 @@ impl LivingEntity for DonkeyEntity {
 
     fn is_immobile(&self) -> bool {
         self.default_is_immobile() && self.is_vehicle() && self.is_saddled()
-            || is_immobile_from_state(&self.entity_data.lock().abstract_horse())
+            || is_immobile_from_state(self.entity_data.lock().abstract_horse())
     }
 
     fn server_ai_step(&self, entity: &SharedEntity) {
@@ -711,7 +712,7 @@ impl Equine for DonkeyEntity {
     }
 
     fn make_mad(&self, _mob: &SharedEntity) {
-        let can_perform_rearing = self.can_perform_rearing();
+        let can_perform_rearing = Self::can_perform_rearing();
         self.with_horse_data(|data| {
             make_mad(
                 self,
@@ -724,7 +725,7 @@ impl Equine for DonkeyEntity {
     }
 
     fn stand_if_possible(&self) {
-        let can_perform_rearing = self.can_perform_rearing();
+        let can_perform_rearing = Self::can_perform_rearing();
         self.with_horse_data(|data| {
             stand_if_possible(self, &self.parts, data, can_perform_rearing);
         });
@@ -736,6 +737,11 @@ impl Equine for DonkeyEntity {
 }
 
 impl Mob for DonkeyEntity {
+    /// Vanilla `AbstractHorse.getMaxSpawnClusterSize`.
+    fn max_spawn_cluster_size(&self) -> i32 {
+        6
+    }
+
     fn mob_base(&self) -> &MobBase {
         &self.mob_base
     }
@@ -769,11 +775,6 @@ impl Mob for DonkeyEntity {
 
     fn mob_interact(&self, player: &Player, hand: InteractionHand) -> InteractionResult {
         self.donkey_mob_interact(player, hand)
-    }
-
-    /// Vanilla `AbstractHorse.getMaxSpawnClusterSize`.
-    fn max_spawn_cluster_size(&self) -> i32 {
-        6
     }
 
     fn mob_flags(&self) -> i8 {

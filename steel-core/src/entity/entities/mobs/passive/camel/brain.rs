@@ -52,6 +52,7 @@ use crate::entity::ai::brain::{ActivityData, Brain};
 use crate::entity::ai::sensing;
 use crate::entity::ai::sensing::villager as villager_sensors;
 use crate::entity::entities::mobs::passive::camel::CamelEntity;
+use crate::entity::leash::Leashable;
 use crate::world::World;
 
 /// Vanilla `CamelAi.SPEED_MULTIPLIER_WHEN_PANICKING`.
@@ -341,10 +342,10 @@ impl Behavior for RandomSitting {
 
         !body.is_in_water()
             && camel.pose_time() >= i64::from(self.minimal_pose_ticks)
-            && !body.as_mob().is_some_and(|mob| mob.is_leashed())
+            && !body.as_mob().is_some_and(Leashable::is_leashed)
             && body.on_ground()
             && body.controlling_passenger().is_none()
-            && camel.can_camel_change_pose()
+            && CamelEntity::can_camel_change_pose()
     }
 
     fn start(&mut self, ctx: &mut BehaviorContext<'_>) {

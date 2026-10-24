@@ -1,5 +1,7 @@
 //! Vanilla `PlayerSensor`.
 
+use std::sync::Arc;
+
 use crate::entity::SharedEntity;
 use crate::entity::ai::brain::memory::MemoryStore;
 use crate::entity::ai::brain::memory::module_type as mem;
@@ -36,7 +38,8 @@ impl BrainSensor for PlayerSensor {
 
         let mut players: Vec<SharedEntity> = Vec::new();
         level.players.iter_players(|_uuid, player| {
-            let player: SharedEntity = player.clone();
+            let player = Arc::clone(player);
+            let player: SharedEntity = player;
             if !player.is_spectator() && closer_than(entity, &player, follow_range) {
                 players.push(player);
             }
@@ -86,7 +89,7 @@ fn set_single_memory(
     entities: &[SharedEntity],
 ) {
     match entities.first() {
-        Some(entity) => memories.set(ty, entity.clone()),
+        Some(entity) => memories.set(ty, SharedEntity::clone(entity)),
         None => memories.erase(ty),
     }
 }

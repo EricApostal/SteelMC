@@ -311,8 +311,9 @@ fn spawn_golem_in_world(
 
     add_spawned_entity(level, Arc::clone(&golem)).ok()?;
 
-    // TODO: trigger `CriteriaTriggers.SUMMONED_ENTITY` for players within 5 blocks once
-    // Steel has the advancement foundation.
+    // Vanilla `CarvedPumpkinBlock.spawnGolemInWorld` fires `SUMMONED_ENTITY` for every
+    // player within 5 blocks of the golem once it has joined the level.
+    crate::behavior::advancement_hooks::raise_golem_summoned(level, golem.as_ref());
 
     update_pattern_blocks(level, found, pattern);
     Some(golem)
@@ -346,6 +347,8 @@ fn update_pattern_blocks(level: &Arc<World>, found: &PatternMatch, pattern: &Blo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use steel_registry::init_vanilla_registry;
+    use steel_utils::Downcast as _;
 
     /// A pattern cell without a predicate would silently never match, so every declared
     /// pattern must cover its own characters.
@@ -388,7 +391,6 @@ mod tests {
     #[test]
     fn pumpkin_build_spawns_a_player_created_iron_golem() {
         use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
-        use steel_registry::blocks::block_state_ext::BlockStateExt as _;
         use steel_utils::ChunkPos;
 
         init_vanilla_registry();
@@ -454,7 +456,6 @@ mod tests {
     #[test]
     fn pumpkin_build_spawns_a_snow_golem() {
         use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
-        use steel_registry::blocks::block_state_ext::BlockStateExt as _;
         use steel_utils::ChunkPos;
 
         init_vanilla_registry();
@@ -495,7 +496,6 @@ mod tests {
     #[test]
     fn can_spawn_golem_checks_the_base_patterns() {
         use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
-        use steel_registry::blocks::block_state_ext::BlockStateExt as _;
         use steel_utils::ChunkPos;
 
         init_vanilla_registry();
@@ -547,5 +547,59 @@ mod tests {
             translate_and_rotate(origin, Direction::East, Direction::Up, 1, 0, 0),
             BlockPos::new(10, 64, 11)
         );
+    }
+    /// Vanilla `CarvedPumpkinBlock.spawnGolemInWorld` reports the spawned golem through
+    /// `SUMMONED_ENTITY` for every player within five blocks, which is what
+    /// `minecraft:adventure/summon_iron_golem` listens for.
+    #[test]
+    fn pumpkin_build_reports_the_summoned_golem_to_nearby_players() {
+        use crate::behavior::advancement_hooks::test_support::criterion_granted;
+        use crate::entity::Entity as _;
+        use crate::player::ResetReason;
+        use crate::test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk};
+        use steel_utils::ChunkPos;
+
+        init_vanilla_registry();
+        crate::entity::init_entities();
+
+        let fixture = fresh_test_world("pumpkin_golem_summoned_entity");
+        let world = &fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+
+        // forwards = north, up = up, so the iron pattern sits around the pumpkin at
+        // `(1, 2, 0)` with the golem spawning at `(8.5, 68.05, 8.5)`.
+        let pumpkin = BlockPos::new(8, 70, 8);
+        world.set_block(
+            pumpkin,
+            vanilla_blocks::CARVED_PUMPKIN.default_state(),
+            UpdateFlags::UPDATE_CLIENTS,
+        );
+        for x in 7..=9 {
+            world.set_block(
+                BlockPos::new(x, 69, 8),
+                vanilla_blocks::IRON_BLOCK.default_state(),
+                UpdateFlags::UPDATE_CLIENTS,
+            );
+        }
+        for x in [7, 9] {
+            world.set_block(
+                BlockPos::new(x, 68, 8),
+                vanilla_blocks::IRON_BLOCK.default_state(),
+                UpdateFlags::UPDATE_CLIENTS,
+            );
+        }
+
+        let player = TestPlayerBuilder::new(Arc::clone(world), "GolemWatcher", 1).build();
+        assert!(player.try_set_position(DVec3::new(8.5, 68.05, 8.5)).is_ok());
+        assert!(world.add_player(Arc::clone(&player), ResetReason::InitialJoin));
+
+        let golem = try_spawn_golem(world, pumpkin).expect("the iron pattern builds a golem");
+
+        assert_eq!(golem.entity_type(), &vanilla_entities::IRON_GOLEM);
+        assert!(criterion_granted(
+            &player,
+            "adventure/summon_iron_golem",
+            "summoned_golem"
+        ));
     }
 }

@@ -71,10 +71,10 @@ impl BrainSensor for HoglinSpecificSensor {
             if is_piglin(candidate) {
                 adult_piglin_count += 1;
                 if adult_piglin.is_none() {
-                    adult_piglin = Some(candidate.clone());
+                    adult_piglin = Some(SharedEntity::clone(candidate));
                 }
             } else if is_hoglin(candidate) {
-                adult_hoglins.push(candidate.clone());
+                adult_hoglins.push(SharedEntity::clone(candidate));
             }
         }
 

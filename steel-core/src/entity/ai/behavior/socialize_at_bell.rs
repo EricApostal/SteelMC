@@ -5,6 +5,7 @@ use std::sync::Arc;
 use steel_registry::vanilla_entities;
 
 use super::utils;
+use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
 use crate::entity::ai::brain::memory::{MemoryModuleTypeRef, module_type as mem};
 use crate::entity::ai::brain::tracker::EntityTracker;
@@ -62,8 +63,11 @@ impl Trigger for SocializeAtBell {
             entity.entity_type() == &vanilla_entities::VILLAGER
                 && entity.distance_to_sqr(ctx.body.position()) <= SEARCH_DISTANCE_SQR
         }) {
-            ctx.set_memory(&mem::INTERACTION_TARGET, mob.clone());
-            utils::set_look_target(ctx, Arc::new(EntityTracker::new(mob.clone(), true)));
+            ctx.set_memory(&mem::INTERACTION_TARGET, SharedEntity::clone(&mob));
+            utils::set_look_target(
+                ctx,
+                Arc::new(EntityTracker::new(SharedEntity::clone(&mob), true)),
+            );
             utils::set_walk_target(
                 ctx,
                 Arc::new(EntityTracker::new(mob, false)),

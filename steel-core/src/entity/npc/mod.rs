@@ -7,6 +7,10 @@ pub use gossip::{
 };
 
 pub mod inventory_carrier;
+#[expect(
+    clippy::module_inception,
+    reason = "vanilla mirrors one class per directory (npc/npc); renaming would churn every consumer"
+)]
 pub mod npc;
 pub mod trading;
 

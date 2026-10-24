@@ -33,7 +33,7 @@ use crate::behavior::block::BlockBehavior;
 use crate::behavior::blocks::vegetation::Vegetation;
 use crate::behavior::blocks::vegetation::vegetation_block::survival_update_shape;
 use crate::behavior::context::BlockPlaceContext;
-use crate::entity::{Entity, InsideBlockEffectCollector, LivingEntity, MobEffectInstance};
+use crate::entity::{Entity, InsideBlockEffectCollector, MobEffectInstance};
 use crate::world::game_event::GameEventContext;
 use crate::world::{LevelReader, ScheduledTickAccess, World};
 
@@ -42,7 +42,7 @@ use super::{BlockRef, default_surviving_state, survives_on_tag};
 /// Vanilla `EnvironmentAttributes.EYEBLOSSOM_OPEN` key.
 pub const EYEBLOSSOM_OPEN_ATTRIBUTE: &str = "minecraft:gameplay/eyeblossom_open";
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Vanilla open/closed eyeblossom type from `classes.json`.
 pub enum EyeblossomType {
     /// Emits open-eyeblossom effects and transforms closed at daytime.
@@ -90,9 +90,9 @@ impl EyeblossomType {
     #[must_use]
     pub const fn long_switch_sound(self) -> SoundEventRef {
         if self.is_open() {
-            &sound_events::EYEBLOSSOM_OPEN_LONG
+            &sound_events::BLOCK_EYEBLOSSOM_OPEN_LONG
         } else {
-            &sound_events::EYEBLOSSOM_CLOSE_LONG
+            &sound_events::BLOCK_EYEBLOSSOM_CLOSE_LONG
         }
     }
 
@@ -100,9 +100,9 @@ impl EyeblossomType {
     #[must_use]
     pub const fn short_switch_sound(self) -> SoundEventRef {
         if self.is_open() {
-            &sound_events::EYEBLOSSOM_OPEN
+            &sound_events::BLOCK_EYEBLOSSOM_OPEN
         } else {
-            &sound_events::EYEBLOSSOM_CLOSE
+            &sound_events::BLOCK_EYEBLOSSOM_CLOSE
         }
     }
 

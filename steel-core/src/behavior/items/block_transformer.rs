@@ -13,6 +13,7 @@ use steel_utils::BlockStateId;
 use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::types::{InteractionHand, UpdateFlags};
 
+use crate::behavior::advancement_hooks::raise_item_used_on_block;
 use crate::behavior::block::drop_from_block_interact_loot_table;
 use crate::behavior::{InteractionResult, UseOnContext};
 use crate::block_state_provider::BlockStateProviderEvaluator;
@@ -64,7 +65,15 @@ pub(crate) fn use_on(context: &mut UseOnContext) -> InteractionResult {
             new_state
         };
 
-        // TODO: Trigger ITEM_USED_ON_BLOCK advancements here
+        // Vanilla `BlockTransformer.transformBlock` raises
+        // `item_used_on_block` per transform, before the old state is read and
+        // the new one applied.
+        raise_item_used_on_block(
+            context.player,
+            context.world,
+            pos,
+            &context.inv.with_item(|item| item.clone()),
+        );
         let old_state = context.world.get_block_state(pos);
         drop_loot(transform, context, old_state);
         let broken_item = context.inv.with_item(|item| {

@@ -928,8 +928,8 @@ impl LivingEntity for ArmorStandEntity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use simdnbt::owned::NbtCompound;
     use std::io::Cursor;
-    use std::string::ToString;
     use steel_registry::vanilla_entities;
 
     fn new_stand() -> ArmorStandEntity {
@@ -939,15 +939,15 @@ mod tests {
 
     /// Re-borrows owned NBT the way entity loading does from disk.
     fn with_reborrow<R>(
-        nbt: &simdnbt::owned::NbtCompound,
-        visitor: impl FnOnce(simdnbt::borrow::NbtCompound<'_, '_>) -> R,
+        nbt: &NbtCompound,
+        visitor: impl FnOnce(BorrowedNbtCompoundView<'_, '_>) -> R,
     ) -> R {
         use simdnbt::borrow::read_compound;
         let mut bytes = Vec::new();
         nbt.write(&mut bytes);
         let mut cursor = Cursor::new(bytes.as_slice());
         let base = read_compound(&mut cursor).expect("entity NBT should reborrow");
-        let borrowed: simdnbt::borrow::NbtCompound<'_, '_> = (&base).into();
+        let borrowed: BorrowedNbtCompoundView<'_, '_> = (&base).into();
         visitor(borrowed)
     }
 

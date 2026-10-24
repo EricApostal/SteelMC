@@ -74,44 +74,46 @@ impl MultiPackResourceManager {
             .collect()
     }
 
-    /// Vanilla `ResourceManager.listResources`: unions every pack's listing.
+    /// Vanilla `ResourceManager.listResources`: unions every pack's listing across
+    /// every namespace.
     ///
     /// The returned paths are relative to `<pack_type>/<namespace>/`, matching
     /// vanilla's `ResourceLocation` conversion of a listed file.
     pub(crate) fn list_resources(
         &self,
         pack_type: PackType,
-        namespace: &str,
         path: &str,
     ) -> BTreeMap<String, Vec<Resource>> {
         let mut found: BTreeMap<String, Vec<Resource>> = BTreeMap::new();
         // Lowest priority first so that each entry's stack ends highest-priority first.
         for pack in &self.packs {
-            let mut listed = Vec::new();
-            pack.list_resources(pack_type, namespace, path, "", &mut listed);
-            for relative in listed {
-                let Some(name) = relative
-                    .strip_suffix(".json")
-                    .or_else(|| relative.strip_suffix(".mcfunction"))
-                    .or_else(|| relative.strip_suffix(".nbt"))
-                else {
-                    continue;
-                };
-                let key = format!("{namespace}:{name}");
-                let location = match key.parse::<Identifier>() {
-                    Ok(location) => location,
-                    Err(error) => {
-                        tracing::warn!(path = %relative, %error, "skipping unparsable resource path");
+            for namespace in pack.get_namespaces(pack_type) {
+                let mut listed = Vec::new();
+                pack.list_resources(pack_type, &namespace, path, "", &mut listed);
+                for relative in listed {
+                    let Some(name) = relative
+                        .strip_suffix(".json")
+                        .or_else(|| relative.strip_suffix(".mcfunction"))
+                        .or_else(|| relative.strip_suffix(".nbt"))
+                    else {
                         continue;
-                    }
-                };
-                let Some(bytes) = pack.get_resource(pack_type, &location) else {
-                    continue;
-                };
-                found.entry(key).or_default().push(Resource {
-                    source_pack: pack.location().id.clone(),
-                    bytes,
-                });
+                    };
+                    let key = format!("{namespace}:{name}");
+                    let location = match key.parse::<Identifier>() {
+                        Ok(location) => location,
+                        Err(error) => {
+                            tracing::warn!(path = %relative, %error, "skipping unparsable resource path");
+                            continue;
+                        }
+                    };
+                    let Some(bytes) = pack.get_resource(pack_type, &location) else {
+                        continue;
+                    };
+                    found.entry(key).or_default().push(Resource {
+                        source_pack: pack.location().id.clone(),
+                        bytes,
+                    });
+                }
             }
         }
         for stack in found.values_mut() {
@@ -260,7 +262,7 @@ mod tests {
         );
         assert!(
             resources
-                .list_resources(super::PackType::Server, "minecraft", "function")
+                .list_resources(super::PackType::Server, "function")
                 .is_empty()
         );
     }

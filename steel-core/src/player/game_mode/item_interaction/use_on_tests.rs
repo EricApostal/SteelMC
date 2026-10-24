@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use glam::DVec3;
 use steel_registry::block_transformer::BlockTransformerComponent;
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+use steel_registry::blocks::properties::BlockStateProperties;
 use steel_registry::data_components::UseRemainder;
 use steel_registry::data_components::vanilla_components::{
     BLOCK_TRANSFORMER, USE_COOLDOWN, USE_REMAINDER, UseCooldown,
@@ -18,6 +20,7 @@ use uuid::Uuid;
 use crate::behavior::{
     BlockHitResult, InteractionResult, blocks::facing_text_slot, init_behaviors,
 };
+use crate::behavior::advancement_hooks::test_support::criterion_granted;
 use crate::block_entity::SharedBlockEntity;
 use crate::block_entity::entities::{SignBlockEntity, SignText};
 use crate::entity::{Entity as _, entities::ItemEntity};
@@ -387,4 +390,46 @@ fn honeycomb_can_wax_blank_signs_without_consuming_in_creative() {
     assert_eq!(sign.get_player_who_may_edit(), None);
     assert_eq!(interaction.count(&vanilla_items::HONEYCOMB), 1);
     assert_eq!(interaction.used(&vanilla_items::HONEYCOMB), 1);
+}
+
+/// Vanilla `ServerPlayerGameMode.useItemOn` reports `ITEM_USED_ON_BLOCK` for every
+/// consuming *block-state* interaction, including the ones whose block behaviour
+/// handles the use itself and whose item behaviour never reports anything:
+/// `RespawnAnchorBlock.useItemOn` charges the anchor when glowstone is used on it,
+/// so `minecraft:nether/charge_respawn_anchor` (a `location` predicate on the
+/// anchor's `charges` state plus a glowstone tool) can only be granted by the
+/// central raise.
+#[test]
+fn item_used_on_block_fires_for_a_block_state_use() {
+    let interaction = Interaction::new("use_on_item_used_on_block");
+    interaction.block(
+        vanilla_blocks::RESPAWN_ANCHOR
+            .default_state()
+            .set_value(&BlockStateProperties::RESPAWN_ANCHOR_CHARGES, 3),
+    );
+    interaction.hold(
+        InteractionHand::MainHand,
+        ItemStack::new(&vanilla_items::GLOWSTONE),
+    );
+
+    assert_eq!(
+        interaction.use_on(InteractionHand::MainHand),
+        InteractionResult::Success
+    );
+
+    assert_eq!(
+        interaction
+            .world_fixture
+            .world
+            .get_block_state(interaction.pos)
+            .get_value(&BlockStateProperties::RESPAWN_ANCHOR_CHARGES),
+        4,
+        "the block behaviour charged the anchor"
+    );
+    assert_eq!(interaction.count(&vanilla_items::GLOWSTONE), 0);
+    assert!(criterion_granted(
+        &interaction.player,
+        "nether/charge_respawn_anchor",
+        "charge_respawn_anchor"
+    ));
 }

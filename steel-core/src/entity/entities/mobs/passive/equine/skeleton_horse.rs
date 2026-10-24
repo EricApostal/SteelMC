@@ -18,7 +18,7 @@ use steel_registry::entity_type::{
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::{AbstractHorseEntityData, SkeletonHorseEntityData};
-use steel_registry::{sound_events, vanilla_entities};
+use steel_registry::{sound_events, vanilla_attributes, vanilla_entities};
 use steel_utils::locks::{Shared, SyncMutex};
 use steel_utils::random::RandomSource;
 use steel_utils::types::InteractionHand;
@@ -156,7 +156,7 @@ impl SkeletonHorseEntity {
     }
 
     /// Vanilla `AbstractHorse.canPerformRearing`.
-    const fn can_perform_rearing(&self) -> bool {
+    const fn can_perform_rearing() -> bool {
         true
     }
 
@@ -187,10 +187,9 @@ impl SkeletonHorseEntity {
 
     /// Vanilla `SkeletonHorse.randomizeAttributes`: jump strength only.
     fn randomize_attributes(&self) {
-        self.attributes().lock().set_base_value(
-            steel_registry::vanilla_attributes::JUMP_STRENGTH,
-            generate_jump_strength(),
-        );
+        self.attributes()
+            .lock()
+            .set_base_value(vanilla_attributes::JUMP_STRENGTH, generate_jump_strength());
     }
 
     fn update_dirty_mob_effect_entity_data(&self) {
@@ -301,14 +300,14 @@ impl SkeletonHorseEntity {
 
     /// Vanilla `AbstractHorse.inventory`.
     #[must_use]
-    pub fn carried_items(&self) -> &Shared<InventoryCarrier> {
+    pub const fn carried_items(&self) -> &Shared<InventoryCarrier> {
         self.parts.inventory()
     }
 
     /// Vanilla `AbstractHorse.openCustomInventoryScreen`.
     pub fn open_custom_inventory_screen(&self, player: &Player) {
         self.with_horse_data(|data| {
-            open_custom_inventory_screen(self, &self.parts, data, player, 0)
+            open_custom_inventory_screen(self, &self.parts, data, player, 0);
         });
     }
 
@@ -543,7 +542,7 @@ impl LivingEntity for SkeletonHorseEntity {
     fn equip_sound(&self, slot: EquipmentSlot, stack: &ItemStack) -> Option<SoundEventRef> {
         // Vanilla `AbstractHorse.getEquipSound`: the saddle sound, otherwise the
         // equippable component's own sound.
-        super::equip_sound(slot).or_else(|| LivingEntity::equip_sound(self, slot, stack))
+        super::equip_sound(slot, stack)
     }
 
     /// Vanilla `SkeletonHorse.hurtArmor`: body armor absorbs damage.
@@ -692,14 +691,14 @@ impl Equine for SkeletonHorseEntity {
 
     fn make_mad(&self, _mob: &SharedEntity) {
         // Vanilla `SkeletonHorse` has no angry sound (`getAngrySound` is null).
-        let can_perform_rearing = self.can_perform_rearing();
+        let can_perform_rearing = Self::can_perform_rearing();
         self.with_horse_data(|data| {
             make_mad(self, &self.parts, data, can_perform_rearing, None);
         });
     }
 
     fn stand_if_possible(&self) {
-        let can_perform_rearing = self.can_perform_rearing();
+        let can_perform_rearing = Self::can_perform_rearing();
         self.with_horse_data(|data| {
             stand_if_possible(self, &self.parts, data, can_perform_rearing);
         });
@@ -711,6 +710,11 @@ impl Equine for SkeletonHorseEntity {
 }
 
 impl Mob for SkeletonHorseEntity {
+    /// Vanilla `AbstractHorse.getMaxSpawnClusterSize`.
+    fn max_spawn_cluster_size(&self) -> i32 {
+        6
+    }
+
     fn mob_base(&self) -> &MobBase {
         &self.mob_base
     }
@@ -746,11 +750,6 @@ impl Mob for SkeletonHorseEntity {
 
     fn mob_interact(&self, player: &Player, hand: InteractionHand) -> InteractionResult {
         self.skeleton_horse_mob_interact(player, hand)
-    }
-
-    /// Vanilla `AbstractHorse.getMaxSpawnClusterSize`.
-    fn max_spawn_cluster_size(&self) -> i32 {
-        6
     }
 
     fn mob_flags(&self) -> i8 {

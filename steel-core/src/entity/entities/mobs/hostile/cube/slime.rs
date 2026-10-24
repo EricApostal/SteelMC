@@ -1,5 +1,6 @@
 //! Vanilla `Slime` (`net.minecraft.world.entity.monster.cubemob.Slime`).
 
+use std::f32::consts::TAU;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -11,7 +12,9 @@ use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::particle_type::ParticleData;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::SlimeEntityData;
-use steel_registry::{sound_events, vanilla_attributes, vanilla_entities, vanilla_particle_types};
+use steel_registry::{
+    sound_events, vanilla_attributes, vanilla_entities, vanilla_mob_effects, vanilla_particle_types,
+};
 use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, BlockStateId, Downcast as _, DowncastType, DowncastTypeKey};
 
@@ -221,7 +224,7 @@ impl SlimeEntity {
                 let count = (size * 16.0) as i32;
                 let position = self.position();
                 for _ in 0..count {
-                    let dir = rand::random::<f32>() * f32::consts::TAU;
+                    let dir = rand::random::<f32>() * TAU;
                     let d = rand::random::<f32>() * 0.5 + 0.5;
                     let xd = f64::from(dir.sin() * radius * d);
                     let zd = f64::from(dir.cos() * radius * d);
@@ -433,7 +436,7 @@ impl Goal for CubeMobRandomDirectionGoal {
             && (mob.on_ground()
                 || mob.is_in_water()
                 || mob.is_in_lava()
-                || mob.has_mob_effect(&steel_registry::vanilla_mob_effects::LEVITATION))
+                || mob.has_mob_effect(vanilla_mob_effects::LEVITATION))
     }
 
     fn tick(&mut self, mob: &dyn PathfinderMob, _entity: &SharedEntity) {
@@ -711,10 +714,12 @@ impl Mob for SlimeEntity {
     where
         Self: Sized,
     {
-        if spawn_reason.is_spawner() {
-            return <Self as Mob>::check_mob_spawn_rules(entity_type, level, spawn_reason, pos);
-        }
-        false
+        // Vanilla delegates spawner spawns to `checkMobSpawnRules`; the inlined `Mob`
+        // default returns `true` before its surface check, so a spawner always passes
+        // here. Everything else needs the swamp surface chance and the slime-chunk seed
+        // roll this static rule cannot reach.
+        let _ = (entity_type, level, pos);
+        spawn_reason.is_spawner()
     }
 }
 
@@ -724,6 +729,7 @@ impl PathfinderMob for SlimeEntity {}
 
 #[cfg(test)]
 mod tests {
+    use simdnbt::owned::NbtCompound;
     use std::sync::Weak;
 
     use glam::DVec3;
@@ -746,7 +752,7 @@ mod tests {
         assert_eq!(slime.get_max_health(), 9.0);
         assert_eq!(slime.get_health(), 9.0);
 
-        let mut nbt = simdnbt::owned::NbtCompound::new();
+        let mut nbt = NbtCompound::new();
         slime.save_additional(&mut nbt);
         assert_eq!(nbt.int("Size"), Some(2));
         assert_eq!(slime.entity_type(), &vanilla_entities::SLIME);

@@ -718,7 +718,7 @@ impl Entity for ItemEntity {
         };
         self.game_event_with_source_entity(
             &vanilla_game_events::ENTITY_DAMAGE,
-            source.causing_entity().map(|entity| entity.as_ref()),
+            source.causing_entity().map(AsRef::as_ref),
         );
         if new_health <= 0 {
             // Vanilla hook: `ItemStack.onDestroyed(ItemEntity)`. Steel has no item

@@ -425,7 +425,7 @@ pub fn explode(world: &Arc<World>, spec: &ExplosionSpec) {
 fn entity_damage_amount(radius: f32, distance: f64, exposure: f32) -> f32 {
     let double_radius = f64::from(radius) * 2.0;
     let power = (1.0 - distance) * f64::from(exposure);
-    ((power * power + power) / 2.0 * 7.0 * double_radius + 1.0) as f32
+    (f64::midpoint(power * power, power) * 7.0 * double_radius + 1.0) as f32
 }
 
 /// Vanilla `ServerExplosion.getSeenPercent`: the fraction of sampled points on the

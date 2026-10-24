@@ -14,7 +14,9 @@ use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::{AbstractHorseEntityData, ZombieHorseEntityData};
 use steel_registry::vanilla_item_tags::ItemTag;
-use steel_registry::{REGISTRY, TaggedRegistryExt as _, sound_events, vanilla_attributes};
+use steel_registry::{
+    REGISTRY, TaggedRegistryExt as _, sound_events, vanilla_attributes, vanilla_entities,
+};
 use steel_utils::locks::{Shared, SyncMutex};
 use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
@@ -151,7 +153,7 @@ impl ZombieHorseEntity {
     }
 
     /// Vanilla `AbstractHorse.canPerformRearing`.
-    const fn can_perform_rearing(&self) -> bool {
+    const fn can_perform_rearing() -> bool {
         true
     }
 
@@ -292,14 +294,14 @@ impl ZombieHorseEntity {
 
     /// Vanilla `AbstractHorse.inventory`.
     #[must_use]
-    pub fn carried_items(&self) -> &Shared<InventoryCarrier> {
+    pub const fn carried_items(&self) -> &Shared<InventoryCarrier> {
         self.parts.inventory()
     }
 
     /// Vanilla `AbstractHorse.openCustomInventoryScreen`.
     pub fn open_custom_inventory_screen(&self, player: &Player) {
         self.with_horse_data(|data| {
-            open_custom_inventory_screen(self, &self.parts, data, player, 0)
+            open_custom_inventory_screen(self, &self.parts, data, player, 0);
         });
     }
 
@@ -512,7 +514,7 @@ impl LivingEntity for ZombieHorseEntity {
     fn equip_sound(&self, slot: EquipmentSlot, stack: &ItemStack) -> Option<SoundEventRef> {
         // Vanilla `AbstractHorse.getEquipSound`: the saddle sound, otherwise the
         // equippable component's own sound.
-        super::equip_sound(slot).or_else(|| LivingEntity::equip_sound(self, slot, stack))
+        super::equip_sound(slot, stack)
     }
 
     /// Vanilla `ZombieHorse.hurtArmor`: body armor absorbs damage.
@@ -593,7 +595,7 @@ impl AgeableMob for ZombieHorseEntity {
         _partner: &dyn AgeableMob,
     ) -> Option<SharedEntity> {
         ENTITIES.create(
-            &steel_registry::vanilla_entities::ZOMBIE_HORSE,
+            &vanilla_entities::ZOMBIE_HORSE,
             next_entity_id(),
             self.position(),
             Arc::downgrade(world),
@@ -652,7 +654,7 @@ impl Equine for ZombieHorseEntity {
     }
 
     fn make_mad(&self, _mob: &SharedEntity) {
-        let can_perform_rearing = self.can_perform_rearing();
+        let can_perform_rearing = Self::can_perform_rearing();
         self.with_horse_data(|data| {
             make_mad(
                 self,
@@ -665,7 +667,7 @@ impl Equine for ZombieHorseEntity {
     }
 
     fn stand_if_possible(&self) {
-        let can_perform_rearing = self.can_perform_rearing();
+        let can_perform_rearing = Self::can_perform_rearing();
         self.with_horse_data(|data| {
             stand_if_possible(self, &self.parts, data, can_perform_rearing);
         });
@@ -681,6 +683,11 @@ impl Equine for ZombieHorseEntity {
 }
 
 impl Mob for ZombieHorseEntity {
+    /// Vanilla `AbstractHorse.getMaxSpawnClusterSize`.
+    fn max_spawn_cluster_size(&self) -> i32 {
+        6
+    }
+
     fn mob_base(&self) -> &MobBase {
         &self.mob_base
     }
@@ -739,11 +746,6 @@ impl Mob for ZombieHorseEntity {
         // Vanilla `ZombieHorse.interact` forces persistence.
         self.set_persistence_required();
         self.zombie_horse_mob_interact(player, hand)
-    }
-
-    /// Vanilla `AbstractHorse.getMaxSpawnClusterSize`.
-    fn max_spawn_cluster_size(&self) -> i32 {
-        6
     }
 
     fn mob_flags(&self) -> i8 {

@@ -214,7 +214,7 @@ impl Player {
 
         if !orbs.is_empty() {
             let index = rand::random_range(0..orbs.len());
-            orbs[index].player_touch(&player_arc);
+            Arc::clone(&orbs[index]).player_touch(&player_arc);
         }
     }
 

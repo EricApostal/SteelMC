@@ -6,11 +6,15 @@ use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
-use steel_registry::entity_type::EntityTypeRef;
+use steel_protocol::packets::game::SoundSource;
+use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
+use steel_registry::item_stack::ItemStack;
+use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::TraderLlamaEntityData;
 use steel_registry::vanilla_entity_type_tags::EntityTypeTag;
 use steel_registry::{REGISTRY, TaggedRegistryExt as _, vanilla_entities};
 use steel_utils::locks::SyncMutex;
+use steel_utils::types::InteractionHand;
 use steel_utils::{Downcast as _, DowncastType, DowncastTypeKey};
 
 use super::LlamaEntity;
@@ -18,6 +22,7 @@ use crate::behavior::InteractionResult;
 use crate::entity::ai::goal::{Goal, GoalControls, NearestAttackableTargetGoal, PanicGoal};
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::mobs::npc::wandering_trader::WanderingTraderEntity;
+use crate::entity::entities::mobs::passive::equine::Equine;
 use crate::entity::leash::Leashable;
 use crate::entity::{
     AgeableMob, AgeableMobBase, Animal, AnimalBase, Entity, EntityBase, EntityBaseLoad, EntityPose,
@@ -117,7 +122,7 @@ impl TraderLlamaEntity {
 
     /// Vanilla `TraderLlama.isTraderLlama`.
     #[must_use]
-    pub const fn is_trader_llama(&self) -> bool {
+    pub const fn is_trader_llama() -> bool {
         true
     }
 
@@ -172,6 +177,46 @@ impl TraderLlamaEntity {
     pub fn can_player_ride(&self) -> bool {
         self.is_leashed_to_wandering_trader().is_none()
     }
+
+    /// Vanilla `HasCustomInventoryScreen.openCustomInventoryScreen`, which
+    /// `TraderLlama` inherits from `AbstractHorse` unchanged.
+    pub fn open_custom_inventory_screen(&self, player: &Player) {
+        self.llama.open_custom_inventory_screen(player);
+    }
+}
+
+impl Equine for TraderLlamaEntity {
+    fn is_tamed(&self) -> bool {
+        Equine::is_tamed(&self.llama)
+    }
+
+    fn temper(&self) -> i32 {
+        Equine::temper(&self.llama)
+    }
+
+    fn max_temper(&self) -> i32 {
+        Equine::max_temper(&self.llama)
+    }
+
+    fn modify_temper(&self, amount: i32) -> i32 {
+        Equine::modify_temper(&self.llama, amount)
+    }
+
+    fn tame_with_name(&self, player: &SharedEntity) {
+        Equine::tame_with_name(&self.llama, player);
+    }
+
+    fn make_mad(&self, mob: &SharedEntity) {
+        Equine::make_mad(&self.llama, mob);
+    }
+
+    fn stand_if_possible(&self) {
+        Equine::stand_if_possible(&self.llama);
+    }
+
+    fn ambient_stand_sound(&self) -> Option<SoundEventRef> {
+        Equine::ambient_stand_sound(&self.llama)
+    }
 }
 
 impl Entity for TraderLlamaEntity {
@@ -187,10 +232,7 @@ impl Entity for TraderLlamaEntity {
         self.llama.base_tick();
     }
 
-    fn dimensions_for_pose(
-        &self,
-        pose: EntityPose,
-    ) -> steel_registry::entity_type::EntityDimensions {
+    fn dimensions_for_pose(&self, pose: EntityPose) -> EntityDimensions {
         self.llama.dimensions_for_pose(pose)
     }
 
@@ -207,7 +249,7 @@ impl Entity for TraderLlamaEntity {
         self.llama.max_up_step()
     }
 
-    fn sound_source(&self) -> steel_protocol::packets::game::SoundSource {
+    fn sound_source(&self) -> SoundSource {
         self.llama.sound_source()
     }
 
@@ -246,14 +288,11 @@ impl LivingEntity for TraderLlamaEntity {
         self.llama.sound_volume()
     }
 
-    fn hurt_sound(
-        &self,
-        source: &DamageSource,
-    ) -> Option<steel_registry::sound_event::SoundEventRef> {
+    fn hurt_sound(&self, source: &DamageSource) -> Option<SoundEventRef> {
         self.llama.hurt_sound(source)
     }
 
-    fn death_sound(&self) -> Option<steel_registry::sound_event::SoundEventRef> {
+    fn death_sound(&self) -> Option<SoundEventRef> {
         self.llama.death_sound()
     }
 
@@ -294,7 +333,7 @@ impl Animal for TraderLlamaEntity {
         self.llama.animal_base()
     }
 
-    fn is_food(&self, item_stack: &steel_registry::item_stack::ItemStack) -> bool {
+    fn is_food(&self, item_stack: &ItemStack) -> bool {
         Animal::is_food(&self.llama, item_stack)
     }
 }
@@ -324,7 +363,7 @@ impl Mob for TraderLlamaEntity {
         self.llama.custom_server_ai_step();
     }
 
-    fn ambient_sound(&self) -> Option<steel_registry::sound_event::SoundEventRef> {
+    fn ambient_sound(&self) -> Option<SoundEventRef> {
         self.llama.ambient_sound()
     }
 
@@ -341,11 +380,7 @@ impl Mob for TraderLlamaEntity {
         Mob::finalize_spawn(&self.llama, world, spawn_reason, group_data)
     }
 
-    fn mob_interact(
-        &self,
-        player: &Player,
-        hand: steel_utils::types::InteractionHand,
-    ) -> InteractionResult {
+    fn mob_interact(&self, player: &Player, hand: InteractionHand) -> InteractionResult {
         Mob::mob_interact(&self.llama, player, hand)
     }
 }

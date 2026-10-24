@@ -19,7 +19,7 @@ impl ChunkMap {
 
         let new_view = PlayerChunkView::new(current_chunk_pos, view_distance);
         let world = self.world_gen_context.world();
-        let owns_tickets = Self::player_owns_loading_tickets(player, world);
+        let owns_tickets = Self::player_owns_loading_tickets(player, &world);
         let player_id = player.gameprofile.id();
         let mut last_view_guard = player.last_tracking_view.lock();
 

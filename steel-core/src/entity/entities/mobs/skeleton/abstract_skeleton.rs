@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 
+use steel_registry::enchantment::table::EnchantmentRandom;
 use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::ItemRef;
@@ -21,11 +22,14 @@ use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::types::{Difficulty, InteractionHand};
 use steel_utils::{BlockPos, BlockStateId, Identifier};
 
+use std::iter;
+
 use crate::entity::ai::goal::{
     AvoidEntityGoal, FleeSunGoal, HurtByTargetGoal, LookAtPlayerGoal, MeleeAttackGoal,
     NearestAttackableTargetGoal, RandomLookAroundGoal, RangedAttackMob, RangedBowAttackGoal,
     RestrictSunGoal, WaterAvoidingRandomStrollGoal, is_goal,
 };
+use crate::entity::entities::mobs::spawn_equipment;
 use crate::entity::{
     ENTITIES, EntitySpawnReason, LivingEntityBase, Mob, MobBase, MobEffectInstance, Monster,
     SharedEntity, SpawnGroupData,
@@ -55,10 +59,6 @@ pub(crate) const DEFAULT_STEP_HEIGHT: f32 = 0.6;
 /// `arrow` factory this carries the vanilla per-type payload (`Arrow.addEffect` and
 /// `AbstractArrow.igniteForSeconds`) so each subclass' `get_arrow` override stays exact.
 #[derive(Debug, Clone, PartialEq)]
-#[expect(
-    clippy::derive_partial_eq_without_eq,
-    reason = "the vanilla payload carries f32 power and ignition seconds, which are not `Eq`"
-)]
 pub struct SkeletonArrow {
     /// Vanilla `AbstractArrow.setBaseDamageFromMob(power)`.
     pub power: f32,
@@ -107,10 +107,7 @@ pub trait AbstractSkeleton: Monster + RangedAttackMob {
 
         let mut target_selector = self.mob_base().target_selector().lock();
         // Vanilla `new HurtByTargetGoal(this)` alerts the same mob type.
-        target_selector.add_goal(
-            1,
-            HurtByTargetGoal::new().set_alert_others(std::iter::empty()),
-        );
+        target_selector.add_goal(1, HurtByTargetGoal::new().set_alert_others(iter::empty()));
         target_selector.add_goal(
             2,
             NearestAttackableTargetGoal::new_for_players(true, |_, _| true),
@@ -254,11 +251,9 @@ pub trait AbstractSkeleton: Monster + RangedAttackMob {
     /// Vanilla `AbstractSkeleton.populateDefaultEquipmentSlots`.
     fn populate_default_equipment_slots(&self, random: &mut impl Random, difficulty_modifier: f32) {
         // Vanilla calls `Mob.populateDefaultEquipmentSlots` first, then forces a bow.
-        crate::entity::entities::mobs::spawn_equipment::populate_default_equipment_slots(
-            self,
-            random,
-            difficulty_modifier,
-        );
+        if let Some(mob) = self.as_mob() {
+            spawn_equipment::populate_default_equipment_slots(mob, random, difficulty_modifier);
+        }
         self.living_base()
             .equipment()
             .lock()
@@ -269,14 +264,16 @@ pub trait AbstractSkeleton: Monster + RangedAttackMob {
     fn populate_default_equipment_enchantments(
         &self,
         _world: &World,
-        random: &mut (impl Random + steel_registry::enchantment::table::EnchantmentRandom),
+        random: &mut (impl Random + EnchantmentRandom),
         difficulty_modifier: f32,
     ) {
-        crate::entity::entities::mobs::spawn_equipment::populate_default_equipment_enchantments(
-            self,
-            random,
-            difficulty_modifier,
-        );
+        if let Some(mob) = self.as_mob() {
+            spawn_equipment::populate_default_equipment_enchantments(
+                mob,
+                random,
+                difficulty_modifier,
+            );
+        }
     }
 
     /// Vanilla `AbstractSkeleton.canUseNonMeleeWeapon`.

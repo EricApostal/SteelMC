@@ -18,7 +18,7 @@ use steel_utils::Identifier;
 
 use super::pack::{
     DATA_PACK_FORMAT, PackError, PackLocationInfo, PackMetadataSection, PackResources, PackSource,
-    PackType, PathPackResources, VanillaPackResources, builtin_pack_root,
+    PathPackResources, VanillaPackResources, builtin_pack_root,
 };
 
 /// File recording the enabled-pack selection, next to the world's `datapacks/`.
@@ -277,22 +277,50 @@ impl PackRepository {
         })
     }
 
-    /// Vanilla `PackRepository.reload`: re-runs every source and re-applies the
-    /// current selection.
+    /// Vanilla `PackRepository.reload`: re-runs every source and rebuilds the
+    /// selection from the previously selected ids.
     ///
     /// Packs that disappeared are dropped from the selection; packs that appeared
     /// (for example a directory added to the world's `datapacks/` while the server
-    /// runs) become available. Returns whether the available set changed.
+    /// runs) become available but stay unselected, matching vanilla's
+    /// `rebuildSelected`, which only re-adds `Pack.isRequired()` packs (none on the
+    /// server, where every `PackSelectionConfig` sets `required = false`). Returns
+    /// whether the available set or the selection changed.
     ///
     /// # Errors
     /// Propagates [`PackError`] from any source.
     pub(crate) fn rediscover(&mut self) -> Result<bool, PackError> {
+        self.rebuild_selection(false)
+    }
+
+    /// Vanilla `ReloadCommand.discoverNewPacks`, including the auto-add step of
+    /// `MinecraftServer.configurePackRepository`.
+    ///
+    /// `/reload` selects every available pack the persisted selection does not list
+    /// as disabled, so a pack dropped into the world's `datapacks/` while the
+    /// server runs becomes active on the next `/reload`.
+    ///
+    /// # Errors
+    /// Propagates [`PackError`] from any source.
+    pub(crate) fn discover_new_packs(&mut self) -> Result<bool, PackError> {
+        self.rebuild_selection(true)
+    }
+
+    /// Vanilla `PackRepository.rebuildSelected`: keep the previously selected ids
+    /// that still exist, in order, with the builtin pack first.
+    fn rebuild_selection(&mut self, enable_new: bool) -> Result<bool, PackError> {
         let previous_available = self.available_ids();
         let previous_enabled = self.enabled.clone();
         let (mut packs, _) = Self::assemble(&self.sources, None)?;
+        // The packs the operator turned off. Vanilla reads the world's disabled list
+        // the same way, so `/datapack disable` survives a reload and a restart.
+        let disabled = self
+            .selection_file
+            .as_deref()
+            .map(read_selection_file)
+            .unwrap_or_default()
+            .disabled;
 
-        // Vanilla `rebuildSelected`: keep the ids that still exist, in order, with
-        // the builtin pack first.
         let mut enabled: Vec<String> = Vec::new();
         if let Some(vanilla) = packs
             .iter()
@@ -305,11 +333,14 @@ impl PackRepository {
                 enabled.push(id.clone());
             }
         }
-        // Packs that are new to the repository and enabled by default join the
-        // selection, which is how a freshly dropped world pack becomes active.
-        for pack in &packs {
-            if pack.default_enabled() && !enabled.iter().any(|id| id == pack.id()) {
-                enabled.push(pack.id().to_owned());
+        if enable_new {
+            for pack in &packs {
+                if pack.default_enabled()
+                    && !disabled.iter().any(|id| id == pack.id())
+                    && !enabled.iter().any(|id| id == pack.id())
+                {
+                    enabled.push(pack.id().to_owned());
+                }
             }
         }
 
@@ -626,7 +657,7 @@ mod tests {
 
     #[test]
     fn world_pack_type_directory_is_data() {
-        assert_eq!(super::PackType::Server.directory(), "data");
+        assert_eq!(crate::datapack::pack::PackType::Server.directory(), "data");
     }
 
     #[test]
@@ -655,14 +686,69 @@ mod tests {
         )
         .unwrap();
 
+        // Vanilla `PackRepository.reload` only rebuilds the previous selection, so
+        // `/datapack list` shows the new pack as available.
         assert!(repository.rediscover().unwrap(), "the pack set changed");
         assert!(
             repository
                 .available_ids()
                 .contains(&"file/late_pack".to_owned())
         );
-        // World packs are enabled by default, so the new pack joins the selection.
+        assert!(!repository.is_enabled("file/late_pack"));
+
+        // Vanilla `ReloadCommand.discoverNewPacks` selects it, so a dropped pack
+        // becomes active on the next `/reload`.
+        assert!(repository.discover_new_packs().unwrap());
         assert!(repository.is_enabled("file/late_pack"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn reload_keeps_a_disabled_pack_disabled() {
+        let root = super::temp_dir("rediscover-disabled");
+        let packs = root.join("datapacks");
+        let pack = packs.join("my_pack");
+        std::fs::create_dir_all(pack.join("data/minecraft")).unwrap();
+        std::fs::write(
+            pack.join("pack.mcmeta"),
+            format!(
+                "{{\"pack\":{{\"min_format\":{format},\"max_format\":{format}}}}}",
+                format = super::DATA_PACK_FORMAT
+            ),
+        )
+        .unwrap();
+
+        let sources = || -> Vec<std::sync::Arc<dyn RepositorySource>> {
+            vec![
+                std::sync::Arc::new(super::BuiltinPackSource::new(root.clone())),
+                std::sync::Arc::new(WorldPackSource::new(packs.clone())),
+            ]
+        };
+        let selection = root.join(super::SELECTION_FILE);
+        let mut repository = PackRepository::new(sources(), Some(selection.clone())).unwrap();
+        assert!(repository.is_enabled("file/my_pack"));
+
+        // `/datapack disable file/my_pack` persists the operator's choice.
+        assert!(
+            repository
+                .set_selected("file/my_pack", false, PackInsert::Last)
+                .unwrap()
+        );
+        repository.save_selection().unwrap();
+
+        // `/reload` re-discovers and must not resurrect it.
+        repository.discover_new_packs().unwrap();
+        assert!(!repository.is_enabled("file/my_pack"));
+        assert!(
+            repository
+                .available_ids()
+                .contains(&"file/my_pack".to_owned())
+        );
+
+        // A restart reads the same selection file and stays disabled too.
+        let reopened = PackRepository::new(sources(), Some(selection)).unwrap();
+        assert!(!reopened.is_enabled("file/my_pack"));
 
         std::fs::remove_dir_all(&root).ok();
     }

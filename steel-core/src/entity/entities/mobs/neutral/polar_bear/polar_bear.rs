@@ -40,7 +40,6 @@ const PERSISTENT_ANGER_TIME_MAX: i64 = 39 * 20;
 const WARNING_SOUND_COOLDOWN: i32 = 40;
 /// Vanilla `PolarBearAttackPlayersGoal` attack range and standing gates.
 const STANDING_DISTANCE_MARGIN: f64 = 3.0;
-const STANDING_ATTACK_TICKS: i32 = 10;
 
 /// Vanilla `PolarBear`.
 #[entity_behavior(class = "PolarBear")]
@@ -188,7 +187,7 @@ struct PolarBearMeleeAttackGoal {
 }
 
 impl PolarBearMeleeAttackGoal {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             inner: MeleeAttackGoal::new(1.25, true),
         }
@@ -234,7 +233,7 @@ impl Goal for PolarBearMeleeAttackGoal {
         if let Some(bear) = Self::bear(mob)
             && let Some(target) = mob.target()
         {
-            let target_width = f64::from(target.bounding_box().width());
+            let target_width = target.bounding_box().width();
             let strike_distance = (target_width + STANDING_DISTANCE_MARGIN).powi(2);
             if mob.position().distance_squared(target.position()) < strike_distance {
                 bear.set_standing(true);

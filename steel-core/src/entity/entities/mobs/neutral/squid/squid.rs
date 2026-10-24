@@ -6,6 +6,7 @@
 //! `createNavigation`, so it keeps `GroundPathNavigation`; only the water pathfinding malus from
 //! `AgeableWaterCreature` is configured here.
 
+use std::f32::consts::{PI, TAU};
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -16,10 +17,12 @@ use steel_protocol::packets::game::SoundSource;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::fluid::FluidStateExt as _;
-use steel_registry::particle_type::ParticleData;
+use steel_registry::particle_type::{ParticleData, ParticleTypeRef};
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::SquidEntityData;
-use steel_registry::{sound_events, vanilla_attributes, vanilla_blocks};
+use steel_registry::{
+    sound_events, vanilla_attributes, vanilla_blocks, vanilla_mob_effects, vanilla_particle_types,
+};
 use steel_utils::Downcast as _;
 use steel_utils::entity_events::EntityStatus;
 use steel_utils::locks::SyncMutex;
@@ -61,8 +64,6 @@ pub(super) const SQUID_BABY_HEIGHT: f32 = 0.5;
 pub(super) const SQUID_BABY_EYE_HEIGHT: f32 = 0.37;
 /// Vanilla `Squid.spawnInk` particle count.
 const INK_PARTICLE_COUNT: i32 = 30;
-const TAU: f32 = f32::consts::TAU;
-
 /// Vanilla `Squid`.
 #[entity_behavior(class = "Squid")]
 pub struct SquidEntity {
@@ -196,19 +197,19 @@ impl SquidEntity {
 
     /// Vanilla `Squid.getSquirtSound`.
     #[must_use]
-    pub fn squirt_sound(&self) -> SoundEventRef {
+    pub fn squirt_sound() -> SoundEventRef {
         &sound_events::ENTITY_SQUID_SQUIRT
     }
 
     /// Vanilla `Squid.getInkParticle`.
     #[must_use]
-    pub fn ink_particle(&self) -> steel_registry::particle_type::ParticleTypeRef {
-        &steel_registry::vanilla_particle_types::SQUID_INK
+    pub fn ink_particle() -> ParticleTypeRef {
+        &vanilla_particle_types::SQUID_INK
     }
 
     /// Vanilla `Squid.spawnInk`: play the squirt sound and spray ink behind the squid.
     fn spawn_ink(&self) {
-        self.play_sound(self.squirt_sound(), self.sound_volume(), 1.0);
+        self.play_sound(Self::squirt_sound(), self.sound_volume(), 1.0);
         let Some(world) = self.level() else {
             return;
         };
@@ -220,9 +221,9 @@ impl SquidEntity {
                 -1.0,
                 f64::from(rand::random::<f32>() * 0.6 - 0.3),
             );
-            let offset = dir * (f64::from(ink_scale) + f64::from(rand::random::<f32>()) * 2.0);
+            let offset = dir * (ink_scale + f64::from(rand::random::<f32>()) * 2.0);
             world.send_particles(
-                ParticleData::simple(self.ink_particle()),
+                ParticleData::simple(Self::ink_particle()),
                 self.position() + DVec3::new(0.0, 0.5, 0.0),
                 0,
                 offset,
@@ -258,12 +259,10 @@ impl SquidEntity {
 
         if in_water {
             let tentacle_movement = *self.tentacle_movement.lock();
-            if tentacle_movement < f32::consts::PI {
-                let tentacle_scale = tentacle_movement / f32::consts::PI;
-                *self.tentacle_angle.lock() = (tentacle_scale * tentacle_scale * f32::consts::PI)
-                    .sin()
-                    * f32::consts::PI
-                    * 0.25;
+            if tentacle_movement < PI {
+                let tentacle_scale = tentacle_movement / PI;
+                *self.tentacle_angle.lock() =
+                    (tentacle_scale * tentacle_scale * PI).sin() * PI * 0.25;
                 if tentacle_scale > 0.75 {
                     let movement = self.movement_vector();
                     self.set_velocity(movement);
@@ -281,8 +280,7 @@ impl SquidEntity {
             // Vanilla keeps the body rotation aligned with the movement vector.
             let velocity = self.velocity();
             let horizontal = velocity.x.hypot(velocity.z);
-            let target_yaw =
-                -((velocity.x as f32).atan2(velocity.z as f32)) * (180.0 / f32::consts::PI);
+            let target_yaw = -((velocity.x as f32).atan2(velocity.z as f32)) * (180.0 / PI);
             let body_rot = self.y_body_rot();
             let new_body_rot = body_rot + (target_yaw - body_rot) * 0.1;
             self.set_y_body_rot(new_body_rot);
@@ -290,21 +288,17 @@ impl SquidEntity {
             self.set_rotation((new_body_rot, pitch));
 
             let rotate_speed = *self.rotate_speed.lock();
-            *self.z_body_rot.lock() += f32::consts::PI * rotate_speed * 1.5;
+            *self.z_body_rot.lock() += PI * rotate_speed * 1.5;
 
-            let target_pitch =
-                -((horizontal as f32).atan2(velocity.y as f32)) * (180.0 / f32::consts::PI);
+            let target_pitch = -((horizontal as f32).atan2(velocity.y as f32)) * (180.0 / PI);
             let x_body_rot = *self.x_body_rot.lock();
             *self.x_body_rot.lock() = x_body_rot + (target_pitch - x_body_rot) * 0.1;
         } else {
-            *self.tentacle_angle.lock() =
-                self.tentacle_movement.lock().sin().abs() * f32::consts::PI * 0.25;
+            *self.tentacle_angle.lock() = self.tentacle_movement.lock().sin().abs() * PI * 0.25;
 
             let velocity = self.velocity();
             let mut yd = velocity.y;
-            if let Some(levitation) =
-                self.mob_effect(&steel_registry::vanilla_mob_effects::LEVITATION)
-            {
+            if let Some(levitation) = self.mob_effect(vanilla_mob_effects::LEVITATION) {
                 yd = 0.05 * f64::from(levitation.amplifier() + 1);
             } else {
                 yd -= SQUID_GRAVITY;
@@ -467,7 +461,7 @@ impl Goal for SquidFleeGoal {
 
         if self.flee_ticks % 10 == 5 {
             world.send_particles(
-                ParticleData::simple(&steel_registry::vanilla_particle_types::BUBBLE),
+                ParticleData::simple(&vanilla_particle_types::BUBBLE),
                 squid.position(),
                 1,
                 DVec3::ZERO,
@@ -665,15 +659,23 @@ impl AgeableMob for SquidEntity {
 
 impl PathfinderMob for SquidEntity {
     fn get_walk_target_value(&self, pos: BlockPos) -> f32 {
-        // Vanilla `WaterAnimal.getWalkTargetValue` favors water.
-        if let Some(world) = self.level() {
-            if world.get_block_state(pos).get_fluid_state().is_water() {
-                return 10.0;
-            }
+        // Vanilla water creatures favor water.
+        if let Some(world) = self.level()
+            && world.get_block_state(pos).get_fluid_state().is_water()
+        {
+            return 10.0;
         }
-        // Vanilla `WaterAnimal.getWalkTargetValue` falls back to `PathfinderMob`'s default, which
-        // Steel exposes through the shared pathfinder helper.
-        PathfinderMob::get_walk_target_value(self, pos)
+        // `PathfinderMob::get_walk_target_value` cannot be reached from an override (a UFCS
+        // call on `self` re-enters this method), so its default body is inlined verbatim: it
+        // dispatches to the monster/animal helpers, falling back to `0.0` (the vanilla
+        // `PathfinderMob.getWalkTargetValue`) for a creature that is neither.
+        if let Some(monster) = self.as_monster() {
+            monster.get_walk_target_value_monster(pos)
+        } else if let Some(animal) = self.as_animal() {
+            animal.animal_walk_target_value(pos)
+        } else {
+            0.0
+        }
     }
 }
 
@@ -685,7 +687,7 @@ mod tests {
     use steel_registry::{init_vanilla_registry, vanilla_entities};
 
     use super::SquidEntity;
-    use crate::entity::{AgeableMob, Entity};
+    use crate::entity::{AgeableMob, Entity, PathfinderMob};
 
     #[test]
     fn squid_starts_without_a_movement_vector() {
@@ -694,5 +696,17 @@ mod tests {
         assert!(!squid.has_movement_vector());
         assert_eq!(squid.entity_type(), &vanilla_entities::SQUID);
         assert!(!AgeableMob::is_baby(&squid));
+    }
+
+    #[test]
+    fn squid_walk_target_falls_back_to_the_pathfinder_default_without_recursing() {
+        init_vanilla_registry();
+        let squid = SquidEntity::new(&vanilla_entities::SQUID, 1, DVec3::ZERO, Weak::new());
+        // `PathfinderMob::get_walk_target_value` — `0.0` for a creature that is neither a
+        // monster nor an animal — must be reached without re-entering this override.
+        assert_eq!(
+            squid.get_walk_target_value(steel_utils::BlockPos::ZERO),
+            0.0
+        );
     }
 }

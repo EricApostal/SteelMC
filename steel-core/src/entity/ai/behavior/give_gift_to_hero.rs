@@ -1,10 +1,11 @@
 //! Vanilla `GiveGiftToHero`.
 
 use std::array;
-use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use rand::SeedableRng as _;
+use rand::rngs::{StdRng, SysRng};
+use rustc_hash::FxHashMap;
 use steel_registry::equipment::EquipmentSlot;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::loot_table::{
@@ -39,8 +40,8 @@ const WALK_CLOSE_ENOUGH: i32 = 5;
 /// states (the armorer table is named `GAMEPLAY_HERO_OF_THE_VILLAGE_ARMORER_GIFT`,
 /// not `ARMORER_GIFT`); the map keys are the profession key paths instead of the
 /// vanilla `BuiltInLootTables` keys.
-static GIFTS: LazyLock<HashMap<&'static str, LootTableRef>> = LazyLock::new(|| {
-    HashMap::from([
+static GIFTS: LazyLock<FxHashMap<&'static str, LootTableRef>> = LazyLock::new(|| {
+    FxHashMap::from_iter([
         (
             "armorer",
             &vanilla_loot_tables::GAMEPLAY_HERO_OF_THE_VILLAGE_ARMORER_GIFT,
@@ -128,12 +129,11 @@ impl GiveGiftToHero {
 
     /// Vanilla `GiveGiftToHero.getNearestTargetableHero`.
     fn nearest_targetable_hero(ctx: &BehaviorContext<'_>) -> Option<SharedEntity> {
-        ctx.get_memory(&mem::NEAREST_VISIBLE_PLAYER)
-            .filter(|player| is_hero(player))
+        ctx.get_memory(&mem::NEAREST_VISIBLE_PLAYER).filter(is_hero)
     }
 
     /// Vanilla `GiveGiftToHero.throwGift`.
-    fn throw_gift(&self, ctx: &mut BehaviorContext<'_>, target: &SharedEntity) {
+    fn throw_gift(ctx: &mut BehaviorContext<'_>, target: &SharedEntity) {
         let Some(villager) = villager::as_villager(ctx.body) else {
             return;
         };
@@ -148,7 +148,7 @@ impl GiveGiftToHero {
 fn is_hero(player: &SharedEntity) -> bool {
     player
         .as_living_entity()
-        .is_some_and(|living| living.has_mob_effect(&vanilla_mob_effects::HERO_OF_THE_VILLAGE))
+        .is_some_and(|living| living.has_mob_effect(vanilla_mob_effects::HERO_OF_THE_VILLAGE))
 }
 
 /// Vanilla `GiveGiftToHero.isWithinThrowingDistance`: `BlockPos.closerThan(other, 5.0)`.
@@ -166,7 +166,7 @@ fn is_within_throwing_distance(villager: &SharedEntity, player: &SharedEntity) -
 fn loot_table_to_throw(villager: &VillagerEntity) -> LootTableRef {
     if villager
         .as_living_entity()
-        .is_some_and(|living| living.is_baby())
+        .is_some_and(LivingEntity::is_baby)
     {
         return &vanilla_loot_tables::GAMEPLAY_HERO_OF_THE_VILLAGE_BABY_GIFT;
     }
@@ -191,11 +191,11 @@ fn time_until_next_gift() -> i32 {
 fn roll_gift(ctx: &BehaviorContext<'_>, villager: &VillagerEntity) -> Vec<ItemStack> {
     let equipment: [ItemStack; EquipmentSlot::ALL.len()] = array::from_fn(|index| {
         let mut stack = ItemStack::empty();
-        ctx.body.as_living_entity().map(|living| {
+        if let Some(living) = ctx.body.as_living_entity() {
             living.with_equipment_slot(EquipmentSlot::ALL[index], &mut |slot| {
                 stack = slot.clone();
             });
-        });
+        }
         stack
     });
 
@@ -223,8 +223,8 @@ fn roll_gift(ctx: &BehaviorContext<'_>, villager: &VillagerEntity) -> Vec<ItemSt
     // has no per-level RNG visible from a behavior (`LegacyRandom` reseeds on
     // every `EntityBase` from the wall clock), so this seeds a throwaway from
     // the OS just like the seedable-path fallback in the loot pipeline.
-    let mut rng = rand::rngs::StdRng::try_from_rng(&mut rand::rngs::SysRng)
-        .unwrap_or_else(|_| rand::rngs::StdRng::seed_from_u64(next_entity_id() as u64));
+    let mut rng = StdRng::try_from_rng(&mut SysRng)
+        .unwrap_or_else(|_| StdRng::seed_from_u64(next_entity_id() as u64));
     let mut context = LootContext::new(&mut rng)
         .with_origin(position.x, position.y, position.z)
         .with_this_entity(entity_ref);
@@ -250,7 +250,7 @@ impl Behavior for GiveGiftToHero {
         self.time_since_start = ctx.timestamp;
 
         if let Some(player) = Self::nearest_targetable_hero(ctx) {
-            ctx.set_memory(&mem::INTERACTION_TARGET, player.clone());
+            ctx.set_memory(&mem::INTERACTION_TARGET, SharedEntity::clone(&player));
             utils::look_at_entity(ctx, &player);
         }
     }
@@ -274,7 +274,7 @@ impl Behavior for GiveGiftToHero {
         utils::look_at_entity(ctx, &player);
         if is_within_throwing_distance(ctx.body, &player) {
             if ctx.timestamp - self.time_since_start > HEAD_TURN_DELAY {
-                self.throw_gift(ctx, &player);
+                Self::throw_gift(ctx, &player);
                 self.gift_given_during_this_run = true;
             }
         } else {

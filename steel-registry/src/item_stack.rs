@@ -1710,7 +1710,14 @@ static EMPTY_NAME: TextComponent = TextComponent::new();
 ///
 /// Vanilla loot functions carry text components in their JSON form; Steel's
 /// generated loot data stores them as JSON strings.
+///
+/// Vanilla `ComponentSerialization.CODEC` accepts a bare JSON string as a literal component,
+/// so `"Custom"` becomes a plain component carrying `Custom` (without the quotes).
 fn parse_text_component(text: &str) -> TextComponent {
+    if let Ok(serde_json::Value::String(literal)) = serde_json::from_str::<serde_json::Value>(text)
+    {
+        return TextComponent::plain(literal);
+    }
     serde_json::from_str::<TextComponent>(text)
         .unwrap_or_else(|_| TextComponent::plain(text.to_owned()))
 }
@@ -2578,8 +2585,11 @@ mod component_setter_tests {
         let max_damage = stack.get_max_damage();
 
         stack.set_damage_fraction(0.25, false);
-        assert_eq!(stack.get_damage_value(), (0.75 * f32::from(max_damage as i16)) as i32
-            .max(stack.get_damage_value().min(max_damage)));
+        let expected_damage = i32::max(
+            (0.75 * f32::from(max_damage as i16)) as i32,
+            stack.get_damage_value().min(max_damage),
+        );
+        assert_eq!(stack.get_damage_value(), expected_damage);
         assert_eq!(
             stack.get_damage_value(),
             (0.75_f32 * max_damage as f32).floor() as i32
@@ -2794,13 +2804,7 @@ mod component_setter_tests {
         assert_eq!(layers[1].color(), crate::DyeColor::Red);
 
         stack.set_banner_pattern(&[], false);
-        assert!(
-            stack
-                .get(BANNER_PATTERNS)
-                .expect("patterns")
-                .layers()
-                .is_empty()
-        );
+        assert!(stack.get(BANNER_PATTERNS).expect("patterns").layers().is_empty());
     }
 
     #[test]
@@ -2904,13 +2908,7 @@ mod component_setter_tests {
         }));
 
         stack.set_attributes(&[], true, &mut rng);
-        assert!(
-            stack
-                .get(ATTRIBUTE_MODIFIERS)
-                .expect("modifiers present")
-                .modifiers
-                .is_empty()
-        );
+        assert!(stack.get(ATTRIBUTE_MODIFIERS).expect("modifiers present").modifiers.is_empty());
     }
 
     #[test]

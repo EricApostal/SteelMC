@@ -41,6 +41,10 @@ impl WorkAtPoi {
     }
 
     /// Vanilla `WorkAtPoi.start` without the `useWorkstation` hook.
+    #[expect(
+        clippy::unused_self,
+        reason = "kept as a method to mirror vanilla `WorkAtPoi.start`"
+    )]
     pub(super) fn start_common(&self, ctx: &mut BehaviorContext<'_>) {
         ctx.set_memory(&mem::LAST_WORKED_AT_POI, ctx.timestamp);
         if let Some(site) = ctx.get_memory(&mem::JOB_SITE) {
@@ -55,7 +59,11 @@ impl WorkAtPoi {
     }
 
     /// Vanilla `WorkAtPoi.useWorkstation`: a no-op for plain job sites.
-    fn use_workstation(&self, _ctx: &mut BehaviorContext<'_>) {}
+    #[expect(
+        clippy::unused_self,
+        reason = "kept as a method to mirror vanilla `WorkAtPoi.useWorkstation`"
+    )]
+    const fn use_workstation(&self, _ctx: &mut BehaviorContext<'_>) {}
 }
 
 impl Default for WorkAtPoi {

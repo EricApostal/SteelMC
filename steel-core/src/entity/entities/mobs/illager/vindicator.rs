@@ -4,7 +4,10 @@ use std::iter;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
+use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
+use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
+use steel_registry::enchantment::table::RandRngAdapter;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::equipment::EquipmentSlot;
 use steel_registry::item_stack::ItemStack;
@@ -231,7 +234,7 @@ impl Entity for VindicatorEntity {
             .unwrap_or(f64::from(DEFAULT_STEP_HEIGHT)) as f32
     }
 
-    fn save_additional(&self, nbt: &mut simdnbt::owned::NbtCompound) {
+    fn save_additional(&self, nbt: &mut NbtCompound) {
         self.save_mob(nbt);
         self.raider_base.save(nbt);
         if self.is_johnny() {
@@ -239,7 +242,7 @@ impl Entity for VindicatorEntity {
         }
     }
 
-    fn load_additional(&self, nbt: simdnbt::borrow::NbtCompound<'_, '_>) {
+    fn load_additional(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
         self.load_mob(nbt);
         if let Some(raid_id) = self.raider_base.load(&nbt) {
             self.rejoin_saved_raid(raid_id);
@@ -423,7 +426,7 @@ impl Raider for VindicatorEntity {
                 world
                     .current_difficulty_at(self.block_position())
                     .special_multiplier(),
-                &mut steel_registry::enchantment::table::RandRngAdapter(&mut rand::rng()),
+                &mut RandRngAdapter(&mut rand::rng()),
             );
         }
         self.living_base()

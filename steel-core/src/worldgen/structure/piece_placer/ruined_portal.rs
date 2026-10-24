@@ -10,7 +10,7 @@ use steel_utils::random::worldgen_random::WorldgenRandom;
 use steel_utils::{BlockPos, BoundingBox, Direction, types::UpdateFlags};
 
 use crate::chunk::heightmap::HeightmapType;
-use crate::world::{LevelAccessor as _, LevelReader as _};
+
 use crate::worldgen::template::TemplateLevelAccess;
 use steel_worldgen::structure::RuinedPortalProperties;
 

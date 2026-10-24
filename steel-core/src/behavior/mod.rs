@@ -24,6 +24,7 @@
 //! let behavior = BLOCK_BEHAVIORS.get_behavior(block);
 //! ```
 
+pub mod advancement_hooks;
 mod block;
 pub mod blocks;
 mod consume_effect;

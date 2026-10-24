@@ -38,6 +38,7 @@ use steel_registry::{
 };
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::{InteractionHand, UpdateFlags};
+use steel_utils::value_providers::UniformIntProvider;
 use steel_utils::{BlockPos, BlockStateId, Direction, DowncastType, DowncastTypeKey};
 
 use crate::behavior::InteractionResult;
@@ -54,8 +55,8 @@ use crate::entity::ai::brain::SensorType;
 use crate::entity::ai::brain::activity::Activity;
 use crate::entity::ai::brain::behavior::builder::BehaviorBuilder;
 use crate::entity::ai::brain::behavior::gate::RunOne;
-use crate::entity::ai::brain::memory::MemoryStatus;
 use crate::entity::ai::brain::memory::module_type as mem;
+use crate::entity::ai::brain::memory::{MemoryModuleTypeRef, MemoryStatus};
 use crate::entity::ai::brain::{ActivityData, Brain};
 use crate::entity::ai::path::PathType;
 use crate::entity::ai::sensing::villager as villager_sensors;
@@ -96,11 +97,10 @@ const TRANSPORT_ITEM_VERTICAL_SEARCH_RADIUS: i32 = 8;
 /// Vanilla `CopperGolemAi` look-target distance.
 const MAX_LOOK_DISTANCE: f32 = 6.0;
 /// Vanilla `SetEntityLookTargetSometimes.create(EntityTypes.PLAYER, 6.0F, UniformInt.of(40, 80))`.
-const LOOK_INTERVAL: steel_utils::value_providers::UniformIntProvider =
-    steel_utils::value_providers::UniformIntProvider {
-        min_inclusive: 40,
-        max_inclusive: 80,
-    };
+const LOOK_INTERVAL: UniformIntProvider = UniformIntProvider {
+    min_inclusive: 40,
+    max_inclusive: 80,
+};
 /// Vanilla `CopperGolemAi` random-stroll distances.
 const STROLL_HORIZONTAL_DISTANCE: i32 = 2;
 const STROLL_VERTICAL_DISTANCE: i32 = 2;
@@ -117,9 +117,13 @@ pub const EQUIPMENT_SLOT_ANTENNA: EquipmentSlot = EquipmentSlot::Saddle;
 /// Vanilla `WeatheringCopper.WeatherState` for a copper golem's synced oxidation level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WeatheringState {
+    /// Vanilla `WeatheringCopper.WeatherState.UNAFFECTED`.
     Unaffected,
+    /// Vanilla `WeatheringCopper.WeatherState.EXPOSED`.
     Exposed,
+    /// Vanilla `WeatheringCopper.WeatherState.WEATHERED`.
     Weathered,
+    /// Vanilla `WeatheringCopper.WeatherState.OXIDIZED`.
     Oxidized,
 }
 
@@ -234,10 +238,15 @@ pub struct CopperGolemSounds {
 /// Vanilla `CopperGolemState`, the synced interaction animation state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopperGolemState {
+    /// Vanilla `CopperGolemState.IDLE`.
     Idle,
+    /// Vanilla `CopperGolemState.GETTING_ITEM`.
     GettingItem,
+    /// Vanilla `CopperGolemState.GETTING_NO_ITEM`.
     GettingNoItem,
+    /// Vanilla `CopperGolemState.DROPPING_ITEM`.
     DroppingItem,
+    /// Vanilla `CopperGolemState.DROPPING_NO_ITEM`.
     DroppingNoItem,
 }
 
@@ -370,7 +379,7 @@ impl CopperGolemEntity {
     /// Returns the synced oxidation state.
     #[must_use]
     pub fn weather_state(&self) -> WeatheringState {
-        WeatheringState::from_id(self.entity_data.lock().weather_state.get())
+        WeatheringState::from_id(*self.entity_data.lock().weather_state.get())
     }
 
     /// Sets the synced oxidation state.
@@ -381,7 +390,7 @@ impl CopperGolemEntity {
     /// Returns the synced interaction state.
     #[must_use]
     pub fn state(&self) -> CopperGolemState {
-        CopperGolemState::from_id(self.entity_data.lock().copper_golem_state.get())
+        CopperGolemState::from_id(*self.entity_data.lock().copper_golem_state.get())
     }
 
     /// Sets the synced interaction state.
@@ -528,11 +537,13 @@ impl CopperGolemEntity {
         self.set_removed(RemovalReason::Discarded);
         self.play_sound(&sound_events::ENTITY_COPPER_GOLEM_BECOME_STATUE, 1.0, 1.0);
 
-        if self.is_leashed() {
+        if let Some(leashable) = self.as_leashable()
+            && leashable.is_leashed()
+        {
             if world.get_game_rule(&ENTITY_DROPS) {
-                self.drop_leash();
+                leashable.drop_leash();
             } else {
-                self.remove_leash();
+                leashable.remove_leash();
             }
         }
     }
@@ -560,10 +571,7 @@ impl CopperGolemEntity {
     pub fn ready_for_shearing(&self) -> bool {
         let equipment = self.living_base.equipment().lock();
         let stack = equipment.get_ref(EQUIPMENT_SLOT_ANTENNA);
-        !stack.is_empty()
-            && stack
-                .item()
-                .is_in_tag(&ItemTag::SHEARABLE_FROM_COPPER_GOLEM)
+        !stack.is_empty() && stack.item().has_tag(&ItemTag::SHEARABLE_FROM_COPPER_GOLEM)
     }
 
     /// Vanilla `CopperGolem.shear`: plays the shear sound, drops the antenna and clears the slot.
@@ -582,6 +590,10 @@ impl CopperGolemEntity {
 
     /// Vanilla `BehaviorUtils.throwItem` for the golem's held item.
     fn throw_held_item_at(&self, target: DVec3) {
+        /// Vanilla `BehaviorUtils.throwItem`'s `throwVelocity`.
+        const THROW_VELOCITY: f64 = 0.3;
+        /// Vanilla `BehaviorUtils.throwItem`'s `handYDistanceFromEye`.
+        const HAND_Y_DISTANCE_FROM_EYE: f64 = 0.3;
         let held = {
             let mut equipment = self.living_base.equipment().lock();
             let stack = equipment.get_ref(EquipmentSlot::MainHand).clone();
@@ -594,10 +606,6 @@ impl CopperGolemEntity {
         let Some(item_entity) = self.spawn_at_location(held, 0.0) else {
             return;
         };
-        /// Vanilla `BehaviorUtils.throwItem`'s `throwVelocity`.
-        const THROW_VELOCITY: f64 = 0.3;
-        /// Vanilla `BehaviorUtils.throwItem`'s `handYDistanceFromEye`.
-        const HAND_Y_DISTANCE_FROM_EYE: f64 = 0.3;
         let origin = self.position() + DVec3::new(0.0, HAND_Y_DISTANCE_FROM_EYE, 0.0);
         let mut velocity = target - origin;
         velocity = if velocity.length_squared() < 1.0e-5 {
@@ -651,7 +659,7 @@ impl CopperGolemEntity {
             return InteractionResult::Success;
         }
 
-        if held.item().is_in_tag(&ItemTag::AXES)
+        if held.item().has_tag(&ItemTag::AXES)
             && self.next_weathering_tick() == IGNORE_WEATHERING_TICK
         {
             world.play_sound_at(
@@ -676,7 +684,7 @@ impl CopperGolemEntity {
             return InteractionResult::Success;
         }
 
-        if held.item().is_in_tag(&ItemTag::AXES) {
+        if held.item().has_tag(&ItemTag::AXES) {
             let weather_state = self.weather_state();
             if weather_state != WeatheringState::Unaffected {
                 world.play_sound_at(
@@ -761,9 +769,12 @@ fn idle_activity() -> ActivityData {
             )),
             BehaviorBuilder::boxed(RunOne::with_entry_condition(
                 vec![
-                    (mem::WALK_TARGET, MemoryStatus::ValueAbsent),
                     (
-                        mem::TRANSPORT_ITEMS_COOLDOWN_TICKS,
+                        &mem::WALK_TARGET as MemoryModuleTypeRef,
+                        MemoryStatus::ValueAbsent,
+                    ),
+                    (
+                        &mem::TRANSPORT_ITEMS_COOLDOWN_TICKS as MemoryModuleTypeRef,
                         MemoryStatus::ValuePresent,
                     ),
                 ],

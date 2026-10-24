@@ -34,7 +34,7 @@ impl StructurePiecePlacer {
 }
 
 fn place_swamp_hut<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     data: &mut SwampHutPieceData,
 ) {
     let spruce_planks = vanilla_blocks::SPRUCE_PLANKS.default_state();
@@ -88,7 +88,7 @@ fn place_swamp_hut<L: TemplateLevelAccess>(
 }
 
 fn spawn_swamp_hut_mob<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     spawned: &mut bool,
     entity_type: EntityTypeRef,
 ) {

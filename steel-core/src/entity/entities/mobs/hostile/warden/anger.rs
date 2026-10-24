@@ -9,10 +9,10 @@
 //! table (`angerByUuid`) until the entity loads again.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::mem;
 use std::sync::Arc;
 
+use rustc_hash::FxHashMap;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_registry::sound_event::SoundEventRef;
@@ -120,7 +120,7 @@ pub(crate) struct AngerManagement {
     /// Vanilla `AngerManagement.suspects`, kept in vanilla's sorter order.
     suspects: Vec<Suspect>,
     /// Vanilla `AngerManagement.angerBySuspect`, keyed by suspect UUID.
-    anger_by_suspect: HashMap<Uuid, i32>,
+    anger_by_suspect: FxHashMap<Uuid, i32>,
     /// Vanilla `AngerManagement.angerByUuid`, the serialized suspects.
     anger_by_uuid: Vec<(Uuid, i32)>,
 }
@@ -139,7 +139,7 @@ impl AngerManagement {
             conversion_delay: rand::random_range(0..=CONVERSION_DELAY),
             highest_anger: 0,
             suspects: Vec::new(),
-            anger_by_suspect: HashMap::new(),
+            anger_by_suspect: FxHashMap::default(),
             anger_by_uuid: Vec::new(),
         }
     }
@@ -170,8 +170,7 @@ impl AngerManagement {
             let entity = suspect.entity.upgrade();
             let removal_reason = entity.as_ref().and_then(|entity| entity.removal_reason());
             let unloaded = entity.is_none();
-            let valid =
-                entity.as_ref().is_some_and(|entity| is_valid(entity)) && removal_reason.is_none();
+            let valid = entity.as_ref().is_some_and(&is_valid) && removal_reason.is_none();
 
             if anger > 1 && valid {
                 self.anger_by_suspect

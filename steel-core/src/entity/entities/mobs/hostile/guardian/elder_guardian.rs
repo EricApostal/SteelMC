@@ -10,7 +10,7 @@ use steel_protocol::packets::game::SoundSource;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::ElderGuardianEntityData;
-use steel_registry::{sound_events, vanilla_attributes, vanilla_mob_effects};
+use steel_registry::{sound_events, vanilla_attributes, vanilla_entities, vanilla_mob_effects};
 use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
@@ -107,8 +107,8 @@ impl ElderGuardianEntity {
             goal_selector.add_goal(
                 8,
                 LookAtPlayerGoal::new_for_living_entities(12.0, 0.01, |target, _world| {
-                    target.entity_type() == &steel_registry::vanilla_entities::GUARDIAN
-                        || target.entity_type() == &steel_registry::vanilla_entities::ELDER_GUARDIAN
+                    target.entity_type() == &vanilla_entities::GUARDIAN
+                        || target.entity_type() == &vanilla_entities::ELDER_GUARDIAN
                 }),
             );
             goal_selector.add_goal(9, RandomLookAroundGoal::new());
@@ -121,10 +121,10 @@ impl ElderGuardianEntity {
                     true,
                     false,
                     |target, _world| {
-                        target.entity_type() == &steel_registry::vanilla_entities::PLAYER
-                            || target.entity_type() == &steel_registry::vanilla_entities::SQUID
-                            || target.entity_type() == &steel_registry::vanilla_entities::GLOW_SQUID
-                            || target.entity_type() == &steel_registry::vanilla_entities::AXOLOTL
+                        target.entity_type() == &vanilla_entities::PLAYER
+                            || target.entity_type() == &vanilla_entities::SQUID
+                            || target.entity_type() == &vanilla_entities::GLOW_SQUID
+                            || target.entity_type() == &vanilla_entities::AXOLOTL
                     },
                 ),
             );
@@ -169,7 +169,7 @@ impl ElderGuardianEntity {
 
     /// Vanilla `ElderGuardian.getAttackDuration`.
     #[must_use]
-    pub fn attack_duration(&self) -> i32 {
+    pub const fn attack_duration() -> i32 {
         ELDER_ATTACK_DURATION
     }
 
@@ -190,7 +190,7 @@ impl ElderGuardianEntity {
 
     /// Vanilla `Guardian.getFlopSound`.
     #[must_use]
-    pub fn flop_sound(&self) -> SoundEventRef {
+    pub fn flop_sound() -> SoundEventRef {
         &sound_events::ENTITY_ELDER_GUARDIAN_FLOP
     }
 
@@ -203,7 +203,7 @@ impl ElderGuardianEntity {
 
         let center = self.position();
         let effect = MobEffectInstance::with_duration(
-            &vanilla_mob_effects::MINING_FATIGUE,
+            vanilla_mob_effects::MINING_FATIGUE,
             EFFECT_DURATION,
             EFFECT_AMPLIFIER,
         );
@@ -432,7 +432,7 @@ mod tests {
             Weak::new(),
         );
 
-        assert_eq!(elder.attack_duration(), 60);
+        assert_eq!(ElderGuardianEntity::attack_duration(), 60);
         assert!(elder.requires_custom_persistence());
         assert!(!elder.is_moving());
         assert_eq!(elder.entity_type(), &vanilla_entities::ELDER_GUARDIAN);

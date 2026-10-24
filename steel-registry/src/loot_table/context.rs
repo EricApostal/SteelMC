@@ -827,7 +827,7 @@ fn referenced<'r, R: rand::Rng>(
 
 /// Reads the score of a `minecraft:score` provider through the context's
 /// [`ScoreboardValueLookup`], if the server installed one.
-fn score_of<R: rand::Rng>(
+pub(super) fn score_of<R: rand::Rng>(
     ctx: &LootContext<'_, R>,
     target: &ScoreboardTarget,
     objective: &str,

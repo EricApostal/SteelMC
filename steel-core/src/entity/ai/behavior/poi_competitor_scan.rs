@@ -68,10 +68,10 @@ impl Trigger for PoiCompetitorScan {
             if other.profession().key != own_profession {
                 return false;
             }
-            if !other
+            if other
                 .profession()
                 .held_job_site
-                .is_some_and(|held| held.key == poi_type.key)
+                .is_none_or(|held| held.key != poi_type.key)
             {
                 return false;
             }

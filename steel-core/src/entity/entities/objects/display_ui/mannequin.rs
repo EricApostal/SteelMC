@@ -36,6 +36,7 @@ use steel_registry::entity_data::{EntityPose, HumanoidArm, ResolvableProfile};
 use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::vanilla_entity_data::MannequinEntityData;
 use steel_utils::locks::SyncMutex;
+use steel_utils::translations;
 use steel_utils::{DowncastType, DowncastTypeKey};
 use text_components::TextComponent;
 
@@ -47,8 +48,6 @@ use crate::world::World;
 
 /// Vanilla `Mannequin.ALL_LAYERS`: every `PlayerModelPart` mask bit.
 const ALL_LAYERS: i8 = 0b0111_1111;
-/// Vanilla `Mannequin.DEFAULT_DESCRIPTION` translation key.
-const DEFAULT_DESCRIPTION_KEY: &str = "entity.minecraft.mannequin.label";
 /// Vanilla `Mannequin.POSE_CODEC` accepted poses.
 const VALID_POSES: [EntityPose; 5] = [
     EntityPose::Standing,
@@ -222,11 +221,8 @@ impl MannequinEntity {
 }
 
 /// Vanilla `Mannequin.DEFAULT_DESCRIPTION`.
-fn default_description() -> TextComponent {
-    TextComponent::translated(text_components::translation::TranslatedMessage::new(
-        DEFAULT_DESCRIPTION_KEY,
-        None,
-    ))
+const fn default_description() -> TextComponent {
+    TextComponent::translated(translations::ENTITY_MINECRAFT_MANNEQUIN_LABEL.msg())
 }
 
 impl Entity for MannequinEntity {
@@ -357,19 +353,20 @@ fn parse_pose(value: &str) -> Option<EntityPose> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use simdnbt::owned::NbtCompound;
     use std::io::Cursor;
 
     /// Re-borrows owned NBT the way entity loading does from disk.
     fn with_reborrow<R>(
-        nbt: &simdnbt::owned::NbtCompound,
-        visitor: impl FnOnce(simdnbt::borrow::NbtCompound<'_, '_>) -> R,
+        nbt: &NbtCompound,
+        visitor: impl FnOnce(BorrowedNbtCompoundView<'_, '_>) -> R,
     ) -> R {
         use simdnbt::borrow::read_compound;
         let mut bytes = Vec::new();
         nbt.write(&mut bytes);
         let mut cursor = Cursor::new(bytes.as_slice());
         let base = read_compound(&mut cursor).expect("entity NBT should reborrow");
-        let borrowed: simdnbt::borrow::NbtCompound<'_, '_> = (&base).into();
+        let borrowed: BorrowedNbtCompoundView<'_, '_> = (&base).into();
         visitor(borrowed)
     }
     use steel_registry::vanilla_entities;
@@ -401,11 +398,11 @@ mod tests {
         mannequin.save_additional(&mut nbt);
         assert_eq!(nbt.byte("hidden_layers"), Some(ALL_LAYERS & !0b0100_0000));
         assert_eq!(
-            nbt.string("main_hand").map(|value| value.to_string()),
+            nbt.string("main_hand").map(ToString::to_string),
             Some("left".to_string())
         );
         assert_eq!(
-            nbt.string("pose").map(|value| value.to_string()),
+            nbt.string("pose").map(ToString::to_string),
             Some("crouching".to_string())
         );
         assert_eq!(nbt.byte("immovable"), Some(1));

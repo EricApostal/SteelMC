@@ -10,7 +10,7 @@ use steel_utils::types::{SignTextSlot, UpdateFlags};
 use crate::{
     behavior::{
         InteractionResult, ItemBehavior, SignApplicator, UseOnContext,
-        waxables::get_waxed_from_normal_variant,
+        advancement_hooks::raise_item_used_on_block, waxables::get_waxed_from_normal_variant,
     },
     block_entity::{
         BlockEntity,
@@ -34,8 +34,15 @@ impl ItemBehavior for HoneycombItem {
         // Try block waxing first
         let old_block_state = context.world.get_block_state(pos);
         if let Some(waxed_block) = get_waxed_from_normal_variant(old_block_state.get_block()) {
+            // Vanilla `HoneycombItem.useOn` raises `item_used_on_block` before
+            // consuming the honeycomb.
+            raise_item_used_on_block(
+                context.player,
+                context.world,
+                pos,
+                &context.inv.with_item(|item| item.clone()),
+            );
             context.inv.with_item(ItemStack::shrink_one);
-            // TODO: trigger CriteriaTriggers.ITEM_USED_ON_BLOCK advancement
             let waxed_state = REGISTRY
                 .blocks
                 .copy_matching_properties(old_block_state, waxed_block);

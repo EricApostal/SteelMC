@@ -739,14 +739,14 @@ fn get_minimal_look_behavior() -> (i32, Box<dyn BehaviorControl>) {
 /// Vanilla `VillagerGoalPackages.raidExistsAndActive`.
 ///
 /// Steel has no raid manager, so no raid can be active.
-fn raid_exists_and_active(_ctx: &mut BehaviorContext<'_>) -> bool {
+const fn raid_exists_and_active(_ctx: &mut BehaviorContext<'_>) -> bool {
     false
 }
 
 /// Vanilla `VillagerGoalPackages.raidExistsAndNotVictory`.
 ///
 /// Steel has no raid manager, so no raid can gate this package.
-fn raid_exists_and_not_victory(_ctx: &mut BehaviorContext<'_>) -> bool {
+const fn raid_exists_and_not_victory(_ctx: &mut BehaviorContext<'_>) -> bool {
     false
 }
 

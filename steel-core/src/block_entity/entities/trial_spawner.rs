@@ -12,15 +12,15 @@ use glam::DVec3;
 use rand::RngExt as _;
 use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
 use simdnbt::owned::{NbtCompound, NbtList};
+use steel_protocol::packets::game::SoundSource;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{BlockStateProperties, TrialSpawnerState};
 use steel_registry::item_stack::ItemStack;
+use steel_registry::level_events;
 use steel_registry::loot_table::LootContext;
 use steel_registry::sound_events;
-use steel_registry::vanilla_level_events;
 use steel_registry::vanilla_mob_effects;
 use steel_registry::{REGISTRY, RegistryExt as _, vanilla_block_entity_types, vanilla_game_events};
-use steel_protocol::packets::game::SoundSource;
 use steel_utils::entity_events::EntityStatus;
 use steel_utils::nbt::NbtNumeric as _;
 use steel_utils::types::{Difficulty, GameType, UpdateFlags};
@@ -33,8 +33,7 @@ use steel_utils::{
 use super::spawner::{SpawnData, SpawnPotential, spawn_aabb};
 use crate::block_entity::{BlockEntity, BlockEntityBase};
 use crate::entity::{
-    Entity as _, EntitySpawnReason, LivingEntity as _, Mob as _, RemovalReason,
-    create_entity_instance,
+    Entity as _, EntitySpawnReason, LivingEntity as _, RemovalReason, create_entity_instance,
 };
 use crate::world::game_event::GameEventContext;
 use crate::world::spawn::SpawnPlacements;
@@ -482,7 +481,9 @@ impl TrialSpawnerBlockEntity {
     /// Vanilla `TrialSpawnerStateData.countAdditionalPlayers`.
     fn count_additional_players(&self) -> i32 {
         let detected = self.state.lock().detected_players.len();
-        i32::try_from(detected.saturating_sub(1)).unwrap_or(0).max(0)
+        i32::try_from(detected.saturating_sub(1))
+            .unwrap_or(0)
+            .max(0)
     }
 
     /// Vanilla `TrialSpawnerStateData.tryDetectPlayers`.
@@ -511,18 +512,16 @@ impl TrialSpawnerBlockEntity {
         );
         let mut became_ominous = false;
         if !is_ominous && !in_line_of_sight.is_empty() {
-            if let Some((player, bad_omen)) = find_player_with_ominous_effect(world, &in_line_of_sight)
+            if let Some((player, bad_omen)) =
+                find_player_with_ominous_effect(world, &in_line_of_sight)
             {
                 if bad_omen {
                     transform_bad_omen_into_trial_omen(&player);
                 }
-                let eye_pos = DVec3::new(
-                    player.position().x,
-                    player.get_eye_y(),
-                    player.position().z,
-                );
+                let eye_pos =
+                    DVec3::new(player.position().x, player.get_eye_y(), player.position().z);
                 world.level_event(
-                    vanilla_level_events::PARTICLES_TRIAL_SPAWNER_BECOME_OMINOUS,
+                    level_events::PARTICLES_TRIAL_SPAWNER_BECOME_OMINOUS,
                     BlockPos::from(eye_pos),
                     0,
                     None,
@@ -565,9 +564,9 @@ impl TrialSpawnerBlockEntity {
                 .max(world.game_time() + DETECT_PLAYER_SPAWN_BUFFER);
             let detected = state_lock.detected_players.len() as i32;
             let event = if is_ominous {
-                vanilla_level_events::PARTICLES_TRIAL_SPAWNER_DETECT_PLAYER_OMINOUS
+                level_events::PARTICLES_TRIAL_SPAWNER_DETECT_PLAYER_OMINOUS
             } else {
-                vanilla_level_events::PARTICLES_TRIAL_SPAWNER_DETECT_PLAYER
+                level_events::PARTICLES_TRIAL_SPAWNER_DETECT_PLAYER
             };
             drop(state_lock);
             if !became_ominous {
@@ -594,7 +593,8 @@ impl TrialSpawnerBlockEntity {
             if in_range
                 && player.game_mode() != GameType::Creative
                 && !player.is_spectator()
-                && (!require_line_of_sight || in_line_of_sight(world, pos, player.get_eye_y(), player.position()))
+                && (!require_line_of_sight
+                    || in_line_of_sight(world, pos, player.get_eye_y(), player.position()))
             {
                 found.push(*uuid);
             }
@@ -612,7 +612,7 @@ impl TrialSpawnerBlockEntity {
             UpdateFlags::UPDATE_ALL,
         );
         world.level_event(
-            vanilla_level_events::PARTICLES_TRIAL_SPAWNER_BECOME_OMINOUS,
+            level_events::PARTICLES_TRIAL_SPAWNER_BECOME_OMINOUS,
             pos,
             1,
             None,
@@ -625,13 +625,13 @@ impl TrialSpawnerBlockEntity {
     }
 
     /// Vanilla `TrialSpawnerStateData.resetAfterBecomingOminous`.
-    fn reset_after_becoming_ominous(&self, world: &Arc<World>, pos: BlockPos) {
+    fn reset_after_becoming_ominous(&self, world: &Arc<World>, _pos: BlockPos) {
         let ominous_config = self.state.lock().ominous_config.config.clone();
         let mobs: Vec<uuid::Uuid> = self.state.lock().current_mobs.clone();
         for uuid in mobs {
             if let Some(entity) = world.get_entity_by_uuid(&uuid) {
                 world.level_event(
-                    vanilla_level_events::PARTICLES_TRIAL_SPAWNER_SPAWN_MOB_AT,
+                    level_events::PARTICLES_TRIAL_SPAWNER_SPAWN_MOB_AT,
                     entity.block_position(),
                     FlameParticle::Normal.encode(),
                     None,
@@ -646,7 +646,8 @@ impl TrialSpawnerBlockEntity {
         }
         state.total_mobs_spawned = 0;
         state.current_mobs.clear();
-        state.next_mob_spawns_at = world.game_time() + i64::from(ominous_config.ticks_between_spawn);
+        state.next_mob_spawns_at =
+            world.game_time() + i64::from(ominous_config.ticks_between_spawn);
         state.cooldown_ends_at = world.game_time() + TICKS_BETWEEN_ITEM_SPAWNERS;
         drop(state);
         self.mark_updated();
@@ -743,12 +744,7 @@ impl TrialSpawnerBlockEntity {
                     return TrialSpawnerState::Inactive;
                 }
                 let additional_players = self.count_additional_players();
-                self.try_detect_players(
-                    world,
-                    pos,
-                    TrialSpawnerState::Active,
-                    is_ominous,
-                );
+                self.try_detect_players(world, pos, TrialSpawnerState::Active, is_ominous);
 
                 let finished = self.state.lock().total_mobs_spawned
                     >= config.calculate_target_total_mobs(additional_players);
@@ -756,8 +752,7 @@ impl TrialSpawnerBlockEntity {
                     if self.state.lock().current_mobs.is_empty() {
                         let target_cooldown = self.state.lock().target_cooldown_length;
                         let mut state = self.state.lock();
-                        state.cooldown_ends_at =
-                            world.game_time() + i64::from(target_cooldown);
+                        state.cooldown_ends_at = world.game_time() + i64::from(target_cooldown);
                         state.total_mobs_spawned = 0;
                         state.next_mob_spawns_at = 0;
                         return TrialSpawnerState::WaitingForRewardEjection;
@@ -843,12 +838,7 @@ impl TrialSpawnerBlockEntity {
                 TrialSpawnerState::EjectingReward
             }
             TrialSpawnerState::Cooldown => {
-                self.try_detect_players(
-                    world,
-                    pos,
-                    TrialSpawnerState::Cooldown,
-                    is_ominous,
-                );
+                self.try_detect_players(world, pos, TrialSpawnerState::Cooldown, is_ominous);
                 if !self.state.lock().detected_players.is_empty() {
                     let mut state = self.state.lock();
                     state.total_mobs_spawned = 0;
@@ -964,13 +954,13 @@ impl TrialSpawnerBlockEntity {
             FlameParticle::Normal
         };
         world.level_event(
-            vanilla_level_events::PARTICLES_TRIAL_SPAWNER_SPAWN,
+            level_events::PARTICLES_TRIAL_SPAWNER_SPAWN,
             pos,
             flame.encode(),
             None,
         );
         world.level_event(
-            vanilla_level_events::PARTICLES_TRIAL_SPAWNER_SPAWN_MOB_AT,
+            level_events::PARTICLES_TRIAL_SPAWNER_SPAWN_MOB_AT,
             spawn_block_pos,
             flame.encode(),
             None,
@@ -1002,7 +992,7 @@ impl TrialSpawnerBlockEntity {
             dispense_item(world, item, pos);
         }
         world.level_event(
-            vanilla_level_events::ANIMATION_TRIAL_SPAWNER_EJECT_ITEM,
+            level_events::ANIMATION_TRIAL_SPAWNER_EJECT_ITEM,
             pos,
             0,
             None,
@@ -1042,10 +1032,7 @@ fn triangle(rng: &mut impl rand::Rng, min: f64, max: f64) -> f64 {
 }
 
 /// Vanilla `WeightedList.getRandom` for a `SpawnData` list.
-fn pick_weighted(
-    potentials: &[SpawnPotential],
-    rng: &mut impl rand::Rng,
-) -> Option<SpawnData> {
+fn pick_weighted(potentials: &[SpawnPotential], rng: &mut impl rand::Rng) -> Option<SpawnData> {
     let total: i32 = potentials.iter().map(|entry| entry.weight).sum();
     if total <= 0 {
         return None;
@@ -1221,7 +1208,10 @@ impl BlockEntity for TrialSpawnerBlockEntity {
 
     fn save_additional(&self, nbt: &mut NbtCompound) {
         let state = self.state.lock();
-        nbt.insert("registered_players", write_uuid_list(&state.detected_players));
+        nbt.insert(
+            "registered_players",
+            write_uuid_list(&state.detected_players),
+        );
         nbt.insert("current_mobs", write_uuid_list(&state.current_mobs));
         nbt.insert("cooldown_ends_at", state.cooldown_ends_at);
         nbt.insert("next_mob_spawns_at", state.next_mob_spawns_at);

@@ -1,6 +1,7 @@
 //! Vanilla `Zombie` base entity
 //! (`net.minecraft.world.entity.monster.zombie.Zombie`).
 
+use std::iter;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -9,6 +10,7 @@ use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+use steel_registry::enchantment::table::EnchantmentRandom;
 use steel_registry::entity_type::{
     EntityAttachmentPoint, EntityAttachments, EntityDimensions, EntityTypeRef,
 };
@@ -20,7 +22,7 @@ use steel_registry::{
     vanilla_items,
 };
 use steel_utils::locks::SyncMutex;
-use steel_utils::random::Random as _;
+use steel_utils::random::Random;
 use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::types::Difficulty;
 use steel_utils::{
@@ -36,6 +38,7 @@ use crate::entity::conversion::ConversionParams;
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::mobs::npc::VillagerEntity;
 use crate::entity::entities::mobs::npc::villager::VillagerDataHolder;
+use crate::entity::entities::mobs::spawn_equipment;
 use crate::entity::entities::mobs::zombie::ZombieVillagerEntity;
 use crate::entity::npc::trading::Merchant;
 use crate::entity::registry::ENTITIES;
@@ -217,10 +220,7 @@ impl ZombieEntity {
         // shared `MeleeAttackGoal`, which already drives the aggressive flag.
         {
             let mut target_selector = mob_base.target_selector().lock();
-            target_selector.add_goal(
-                1,
-                HurtByTargetGoal::new().set_alert_others(std::iter::empty()),
-            );
+            target_selector.add_goal(1, HurtByTargetGoal::new().set_alert_others(iter::empty()));
             target_selector.add_goal(
                 2,
                 NearestAttackableTargetGoal::new_for_players(true, |_, _| true),
@@ -258,11 +258,6 @@ impl ZombieEntity {
             drowning: SyncMutex::new(DrowningConversion::default()),
             variant,
         }
-    }
-
-    /// Which vanilla subclass this body behaves as.
-    pub(crate) fn variant(&self) -> ZombieVariant {
-        self.variant
     }
 
     /// Vanilla `Zombie.isBaby`.
@@ -323,12 +318,12 @@ impl ZombieEntity {
 
     /// Vanilla `Zombie.getSpawnAsBabyOdds`.
     #[must_use]
-    pub fn get_spawn_as_baby_odds(random: &mut impl steel_utils::random::Random) -> bool {
+    pub fn get_spawn_as_baby_odds(random: &mut impl Random) -> bool {
         random.next_f32() < SPAWN_AS_BABY_CHANCE
     }
 
     /// Vanilla `Zombie.getConversionSound`; `Husk` returns 1041.
-    pub fn conversion_sound(&self) -> i32 {
+    pub const fn conversion_sound(&self) -> i32 {
         match self.variant {
             ZombieVariant::Husk => level_events::SOUND_HUSK_TO_ZOMBIE,
             ZombieVariant::Zombie | ZombieVariant::Drowned => level_events::SOUND_ZOMBIE_TO_DROWNED,
@@ -500,7 +495,7 @@ impl ZombieEntity {
         &self,
         difficulty_modifier: f32,
         spawn_reason: EntitySpawnReason,
-        random: &mut impl steel_utils::random::Random,
+        random: &mut impl Random,
     ) {
         // Vanilla `Zombie.randomizeReinforcementsChance` runs before the other
         // `handleAttributes` rolls, so the draw stays first.
@@ -521,7 +516,7 @@ pub(crate) fn handle_zombie_spawn_attributes(
     mob: &dyn Mob,
     difficulty_modifier: f32,
     spawn_reason: EntitySpawnReason,
-    random: &mut impl steel_utils::random::Random,
+    random: &mut impl Random,
     set_can_break_doors: &dyn Fn(bool),
     reinforcement_chance: Option<f64>,
 ) {
@@ -600,14 +595,10 @@ pub(crate) fn handle_zombie_spawn_attributes(
 /// shared with `ZombieVillager`.
 pub(crate) fn populate_zombie_equipment_slots(
     mob: &dyn Mob,
-    random: &mut impl steel_utils::random::Random,
+    random: &mut impl Random,
     difficulty_modifier: f32,
 ) {
-    crate::entity::entities::mobs::spawn_equipment::populate_default_equipment_slots(
-        mob,
-        random,
-        difficulty_modifier,
-    );
+    spawn_equipment::populate_default_equipment_slots(mob, random, difficulty_modifier);
 
     let chance = if mob
         .level()
@@ -636,16 +627,10 @@ pub(crate) fn populate_zombie_equipment_slots(
 /// `ZombieVillager`.
 pub(crate) fn populate_zombie_equipment_enchantments(
     mob: &dyn Mob,
-    random: &mut (
-             impl steel_utils::random::Random + steel_registry::enchantment::table::EnchantmentRandom
-         ),
+    random: &mut (impl Random + EnchantmentRandom),
     difficulty_modifier: f32,
 ) {
-    crate::entity::entities::mobs::spawn_equipment::populate_default_equipment_enchantments(
-        mob,
-        random,
-        difficulty_modifier,
-    );
+    spawn_equipment::populate_default_equipment_enchantments(mob, random, difficulty_modifier);
 }
 
 impl ZombieEntity {
@@ -678,16 +663,7 @@ impl ZombieEntity {
         let entity_type = self.entity_type();
         let origin = self.block_position();
         for _ in 0..REINFORCEMENT_ATTEMPTS {
-            let x = origin.x()
-                + random.next_i32_between(REINFORCEMENT_RANGE_MIN, REINFORCEMENT_RANGE_MAX)
-                    * random.next_i32_between(-1, 1);
-            let y = origin.y()
-                + random.next_i32_between(REINFORCEMENT_RANGE_MIN, REINFORCEMENT_RANGE_MAX)
-                    * random.next_i32_between(-1, 1);
-            let z = origin.z()
-                + random.next_i32_between(REINFORCEMENT_RANGE_MIN, REINFORCEMENT_RANGE_MAX)
-                    * random.next_i32_between(-1, 1);
-            let spawn_pos = BlockPos::new(x, y, z);
+            let spawn_pos = Self::random_reinforcement_pos(origin, &mut random);
 
             if !<ZombieEntity as Monster>::check_monster_spawn_rules(
                 entity_type,
@@ -706,9 +682,9 @@ impl ZombieEntity {
             }
             if world
                 .nearest_player_distance_sqr(DVec3::new(
-                    f64::from(x) + 0.5,
-                    f64::from(y),
-                    f64::from(z) + 0.5,
+                    f64::from(spawn_pos.x()) + 0.5,
+                    f64::from(spawn_pos.y()),
+                    f64::from(spawn_pos.z()) + 0.5,
                 ))
                 .is_some_and(|distance| distance < REINFORCEMENT_CLEAR_PLAYER_RADIUS_SQR)
             {
@@ -718,7 +694,11 @@ impl ZombieEntity {
             let Some(reinforcement) = ENTITIES.create(
                 entity_type,
                 next_entity_id(),
-                DVec3::new(f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5),
+                DVec3::new(
+                    f64::from(spawn_pos.x()) + 0.5,
+                    f64::from(spawn_pos.y()),
+                    f64::from(spawn_pos.z()) + 0.5,
+                ),
                 Arc::downgrade(&world),
             ) else {
                 return;
@@ -735,32 +715,50 @@ impl ZombieEntity {
 
             reinforcement_mob.set_target(Some(&target));
             reinforcement_mob.finalize_spawn(&world, EntitySpawnReason::Reinforcement, None);
-
-            let caller_charge = self
-                .attributes()
-                .lock()
-                .required_value(vanilla_attributes::SPAWN_REINFORCEMENTS)
-                + REINFORCEMENT_CALLER_CHARGE_STEP;
-            self.attributes().lock().set_modifier(
-                vanilla_attributes::SPAWN_REINFORCEMENTS,
-                AttributeModifier {
-                    id: REINFORCEMENT_CALLER_CHARGE_ID,
-                    amount: caller_charge,
-                    operation: AttributeModifierOperation::AddValue,
-                },
-                true,
-            );
-            reinforcement_mob.attributes().lock().add_modifier(
-                vanilla_attributes::SPAWN_REINFORCEMENTS,
-                AttributeModifier {
-                    id: ZOMBIE_REINFORCEMENT_CALLEE_CHARGE_ID,
-                    amount: ZOMBIE_REINFORCEMENT_CALLEE_CHARGE_AMOUNT,
-                    operation: AttributeModifierOperation::AddValue,
-                },
-                true,
-            );
+            self.apply_reinforcement_charges(reinforcement_mob);
             break;
         }
+    }
+
+    /// Vanilla `Zombie.hurtServer` rolls a reinforcement candidate position inside
+    /// `REINFORCEMENT_RANGE_MIN..=REINFORCEMENT_RANGE_MAX` around `origin`.
+    fn random_reinforcement_pos(origin: BlockPos, random: &mut LegacyRandom) -> BlockPos {
+        let mut offset = || {
+            random.next_i32_between(REINFORCEMENT_RANGE_MIN, REINFORCEMENT_RANGE_MAX)
+                * random.next_i32_between(-1, 1)
+        };
+        BlockPos::new(
+            origin.x() + offset(),
+            origin.y() + offset(),
+            origin.z() + offset(),
+        )
+    }
+
+    /// Vanilla `Zombie.hurtServer` caller/callee reinforcement charges.
+    fn apply_reinforcement_charges(&self, reinforcement: &dyn Mob) {
+        let caller_charge = self
+            .attributes()
+            .lock()
+            .required_value(vanilla_attributes::SPAWN_REINFORCEMENTS)
+            + REINFORCEMENT_CALLER_CHARGE_STEP;
+        self.attributes().lock().set_modifier(
+            vanilla_attributes::SPAWN_REINFORCEMENTS,
+            AttributeModifier {
+                id: REINFORCEMENT_CALLER_CHARGE_ID,
+                amount: caller_charge,
+                operation: AttributeModifierOperation::AddValue,
+            },
+            true,
+        );
+        reinforcement.attributes().lock().add_modifier(
+            vanilla_attributes::SPAWN_REINFORCEMENTS,
+            AttributeModifier {
+                id: ZOMBIE_REINFORCEMENT_CALLEE_CHARGE_ID,
+                amount: ZOMBIE_REINFORCEMENT_CALLEE_CHARGE_AMOUNT,
+                operation: AttributeModifierOperation::AddValue,
+            },
+            true,
+        );
     }
 
     /// Vanilla `Zombie.getStepSound`; `Husk`/`Drowned` override it.
@@ -772,11 +770,7 @@ impl ZombieEntity {
         }
     }
 
-    fn populate_default_equipment_slots(
-        &self,
-        random: &mut impl steel_utils::random::Random,
-        difficulty_modifier: f32,
-    ) {
+    fn populate_default_equipment_slots(&self, random: &mut impl Random, difficulty_modifier: f32) {
         if self.variant == ZombieVariant::Drowned {
             // Vanilla `Drowned.populateDefaultEquipmentSlots`, which does not call
             // `Zombie`'s table.
@@ -801,9 +795,7 @@ impl ZombieEntity {
     /// override, so it is `Mob`'s weapon-then-armor pass.
     fn populate_default_equipment_enchantments(
         &self,
-        random: &mut (
-                 impl steel_utils::random::Random + steel_registry::enchantment::table::EnchantmentRandom
-             ),
+        random: &mut (impl Random + EnchantmentRandom),
         difficulty_modifier: f32,
     ) {
         populate_zombie_equipment_enchantments(self, random, difficulty_modifier);
@@ -833,7 +825,7 @@ impl ZombieEntity {
     }
 
     /// Vanilla baby-zombie chicken jockey roll (`Zombie.finalizeSpawn`).
-    fn try_spawn_jockey(&self, world: &Arc<World>, random: &mut impl steel_utils::random::Random) {
+    fn try_spawn_jockey(&self, world: &Arc<World>, random: &mut impl Random) {
         if random.next_f32() < JOCKEY_CHANCE {
             let nearby = world.nearest_entity_in_aabb_matching(
                 &self.bounding_box().inflate_xyz(5.0, 3.0, 5.0),
@@ -966,10 +958,10 @@ impl Entity for ZombieEntity {
 
         self.drowning.lock().affliction_time = nbt.int("InWaterTime").unwrap_or(0);
         let conversion_time = nbt.int("DrownedConversionTime").unwrap_or(-1);
-        if conversion_time != -1 {
-            self.start_drowning_conversion(conversion_time);
-        } else {
+        if conversion_time == -1 {
             self.entity_data.lock().drowned_conversion.set(false);
+        } else {
+            self.start_drowning_conversion(conversion_time);
         }
     }
 
@@ -993,11 +985,7 @@ impl Entity for ZombieEntity {
         let Some(world) = self.level() else {
             return true;
         };
-        if self.convert_villager_to_zombie_villager(&world, villager) {
-            return false;
-        }
-
-        true
+        !self.convert_villager_to_zombie_villager(&world, villager)
     }
 }
 

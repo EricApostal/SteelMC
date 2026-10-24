@@ -1,3 +1,5 @@
+//! Endermite implementation (vanilla `net.minecraft.world.entity.monster.Endermite`).
+
 use std::iter::empty;
 use std::sync::Weak;
 
@@ -12,6 +14,7 @@ use steel_registry::vanilla_entity_data::EndermiteEntityData;
 use steel_registry::{sound_events, vanilla_attributes};
 use steel_utils::locks::SyncMutex;
 use steel_utils::random::RandomSource;
+use steel_utils::types::GameType;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
 use crate::entity::ai::goal::{
@@ -171,10 +174,7 @@ impl EndermiteEntity {
                     f64::from(pos.z()) + 0.5,
                 ),
                 5.0,
-                |player| {
-                    !player.is_spectator()
-                        && player.game_mode() != steel_utils::types::GameType::Creative
-                },
+                |player| !player.is_spectator() && player.game_mode() != GameType::Creative,
             )
             .is_none()
     }

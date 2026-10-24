@@ -5,16 +5,19 @@ use std::sync::{Arc, Weak};
 use steel_macros::block_behavior;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
-use steel_registry::blocks::properties::{BlockStateProperties, BoolProperty, EnumProperty, Pose};
+use steel_registry::blocks::properties::{
+    BlockStateProperties, BoolProperty, EnumProperty, Pose, PropertyEnum as _,
+};
 use steel_registry::data_components::components::BlockItemStateProperties;
+use steel_registry::data_components::vanilla_components::BLOCK_STATE;
+use steel_registry::fluid::FluidStateExt as _;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::item::BlockHitResult;
 use steel_registry::vanilla_block_tags::BlockTag;
-use steel_registry::vanilla_components::BLOCK_STATE;
 use steel_registry::vanilla_item_tags::ItemTag;
 use steel_registry::{REGISTRY, sound_events, vanilla_game_events};
 use steel_utils::types::{InteractionHand, UpdateFlags};
-use steel_utils::{BlockPos, BlockStateId, Direction};
+use steel_utils::{BlockPos, BlockStateId, Direction, Downcast as _};
 
 use crate::behavior::InventoryAccess;
 use crate::behavior::block::{
@@ -23,9 +26,9 @@ use crate::behavior::block::{
 use crate::behavior::blocks::building::{WeatherState, WeatheringCopper};
 use crate::behavior::context::{BlockPlaceContext, InteractionResult};
 use crate::behavior::weathering::get_weather_state;
+use crate::block_entity::BLOCK_ENTITIES;
 use crate::block_entity::SharedBlockEntity;
 use crate::block_entity::entities::CopperGolemStatueBlockEntity;
-use crate::block_entity::{BLOCK_ENTITIES, BlockEntity};
 use crate::entity::ai::path::PathComputationType;
 use crate::player::Player;
 use crate::world::game_event::GameEventContext;
@@ -92,7 +95,7 @@ const fn pose_signal(pose: Pose) -> i32 {
 /// Vanilla `CopperGolemStatueBlock.updatePose`.
 fn update_pose(world: &Arc<World>, state: BlockStateId, pos: BlockPos, player: &Player) {
     world.play_block_sound(
-        &sound_events::BLOCK_COPPER_GOLEM_BECOME_STATUE,
+        &sound_events::ENTITY_COPPER_GOLEM_BECOME_STATUE,
         pos,
         1.0,
         1.0,
@@ -183,7 +186,7 @@ impl BlockBehavior for CopperGolemStatueBlock {
         _hit_result: &BlockHitResult,
         inv: &mut InventoryAccess,
     ) -> InteractionResult {
-        if inv.with_item(|stack| stack.item().is_in_tag(&ItemTag::AXES)) {
+        if inv.with_item(|stack| stack.item().has_tag(&ItemTag::AXES)) {
             return InteractionResult::Pass;
         }
 
@@ -289,7 +292,7 @@ impl BlockBehavior for WeatheringCopperGolemStatueBlock {
     ) -> InteractionResult {
         let (is_axe, is_honeycomb) = inv.with_item(|stack| {
             (
-                stack.item().is_in_tag(&ItemTag::AXES),
+                stack.item().has_tag(&ItemTag::AXES),
                 stack.is(&steel_registry::vanilla_items::HONEYCOMB),
             )
         });
@@ -313,12 +316,15 @@ impl BlockBehavior for WeatheringCopperGolemStatueBlock {
             return InteractionResult::Pass;
         };
 
-        let Some(golem) = statue.remove_statue() else {
-            return InteractionResult::Pass;
-        };
+        // Vanilla damages the axe before checking the converted golem, so a
+        // failed conversion still costs durability.
+        let golem = statue.remove_statue();
         inv.with_item(|stack| {
             stack.hurt_and_break(1, player.has_infinite_materials());
         });
+        let Some(golem) = golem else {
+            return InteractionResult::Pass;
+        };
         let _ = world.try_add_entity(golem);
         world.remove_block(pos, false);
         InteractionResult::Success

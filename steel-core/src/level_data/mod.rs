@@ -26,6 +26,16 @@ use crate::world::{MAX_SIZE, clock::WorldClockManager};
 mod game_time;
 pub use game_time::{GameTime, GameTimeSource};
 
+pub mod anvil;
+
+/// Returns the file-name-stem used as a vanilla `LevelName`, mirroring the world directory.
+fn level_name(world_dir: &Path) -> &str {
+    world_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("world")
+}
+
 /// Persistent world border data stored with Steel level data.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -403,6 +413,8 @@ pub struct LevelDataManager {
     data: LevelData,
     /// Whether data has been modified since last save.
     dirty: bool,
+    /// Whether vanilla `level.dat` and `data/*.dat` are mirrored on every save.
+    vanilla_level_dat: bool,
     primary_game_time: Option<Arc<GameTime>>,
     game_time: Arc<GameTime>,
 }
@@ -419,10 +431,10 @@ impl LevelDataManager {
         generation: WorldGenerationSettings,
         source: GameTimeSource,
     ) -> io::Result<Self> {
-        let (mut data, path, dirty) = if let Some(dir) = &world_dir {
+        let (mut data, path, dirty, vanilla_level_dat) = if let Some(dir) = &world_dir {
             let path = dir.as_ref().join("level.toml");
 
-            let (data, dirty) = if path.exists() {
+            let (data, dirty, vanilla_level_dat) = if path.exists() {
                 // Load existing level data (seed from file takes precedence)
                 let content = fs::read_to_string(&path).await?;
                 let mut table: toml::Table = toml::from_str(&content).map_err(|e| {
@@ -458,18 +470,29 @@ impl LevelDataManager {
                 (
                     loaded,
                     adopted_generation || initialized_clocks || removed_legacy_time,
+                    false,
                 )
             } else {
-                // Create new level data with the provided defaults.
+                // Create new level data with the provided defaults, or import a vanilla
+                // `level.dat` when the directory holds one (Anvil world).
+                let mut vanilla_level_dat = false;
                 let mut data = LevelData::new_with_seed_and_difficulty(seed, difficulty);
                 data.generation = Some(generation);
-                (data, true)
+                if let Some(vanilla) = anvil::read_level_dat(dir.as_ref())? {
+                    if let Some(seed) = anvil::read_seed(dir.as_ref())? {
+                        data.seed = seed;
+                    }
+                    anvil::apply_level_dat(&vanilla, dir.as_ref(), &mut data)?;
+                    anvil::warn_unmapped_level_dat();
+                    vanilla_level_dat = true;
+                }
+                (data, vanilla_level_dat, true)
             };
-            (data, Some(path), dirty)
+            (data, Some(path), dirty, vanilla_level_dat)
         } else {
             let mut data = LevelData::new_with_seed_and_difficulty(seed, difficulty);
             data.generation = Some(generation);
-            (data, None, false)
+            (data, None, false, false)
         };
 
         let (game_time, primary_game_time) = match source {
@@ -492,9 +515,18 @@ impl LevelDataManager {
             path,
             data,
             dirty,
+            vanilla_level_dat,
             primary_game_time,
             game_time,
         })
+    }
+
+    /// Mirrors level data into vanilla `level.dat` and `data/*.dat` on every save.
+    ///
+    /// Enabled for Anvil worlds so a vanilla server can open the world. Also turns on
+    /// import-on-load behaviour for worlds that already carry a `level.dat`.
+    pub const fn enable_vanilla_level_dat(&mut self) {
+        self.vanilla_level_dat = true;
     }
 
     /// Loads the saved world seed from `level.toml`, or returns the provided default.
@@ -566,6 +598,18 @@ impl LevelDataManager {
         let content = toml::to_string_pretty(&self.data)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         fs::write(world_path, content).await?;
+
+        if self.vanilla_level_dat
+            && let Some(world_dir) = world_path.parent()
+        {
+            let dimension = self.data.respawn.as_ref().map_or_else(
+                || Identifier::vanilla_static("overworld"),
+                |respawn| respawn.dimension().clone(),
+            );
+            anvil::write_level_dat(world_dir, &self.data, level_name(world_dir), &dimension)?;
+            anvil::write_dimension_saved_data(world_dir, &self.data)?;
+        }
+
         self.dirty = false;
 
         log::debug!("Saved level data to {}", world_path.display());

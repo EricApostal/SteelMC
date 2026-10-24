@@ -42,6 +42,7 @@ use crate::entity::entities::mobs::neutral::nautilus::abstract_nautilus::{
     self, AbstractNautilusParts, Nautilus,
 };
 use crate::entity::entities::mobs::neutral::nautilus::brain;
+use crate::entity::leash::Leashable;
 use crate::entity::{
     AgeableMob, AgeableMobBase, Animal, AnimalBase, Entity, EntityBase, EntityBaseLoad, EntityPose,
     EntitySpawnReason, EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase,
@@ -220,7 +221,7 @@ impl NautilusEntity {
     }
 
     /// Vanilla `AbstractNautilus.handleStopJump` is empty.
-    pub fn handle_stop_jump(&self) {
+    pub const fn handle_stop_jump() {
         abstract_nautilus::handle_stop_jump();
     }
 
@@ -303,7 +304,7 @@ impl NautilusEntity {
     /// Vanilla `Nautilus.getAmbientSound`.
     fn ambient_sound_for(&self) -> SoundEventRef {
         let underwater = self.is_under_water();
-        if self.is_baby() {
+        if AgeableMob::is_baby(self) {
             if underwater {
                 &sound_events::ENTITY_BABY_NAUTILUS_AMBIENT
             } else {
@@ -319,7 +320,7 @@ impl NautilusEntity {
     /// Vanilla `Nautilus.getHurtSound`.
     fn hurt_sound_for(&self) -> SoundEventRef {
         let underwater = self.is_under_water();
-        if self.is_baby() {
+        if AgeableMob::is_baby(self) {
             if underwater {
                 &sound_events::ENTITY_BABY_NAUTILUS_HURT
             } else {
@@ -335,7 +336,7 @@ impl NautilusEntity {
     /// Vanilla `Nautilus.getDeathSound`.
     fn death_sound_for(&self) -> SoundEventRef {
         let underwater = self.is_under_water();
-        if self.is_baby() {
+        if AgeableMob::is_baby(self) {
             if underwater {
                 &sound_events::ENTITY_BABY_NAUTILUS_DEATH
             } else {
@@ -431,7 +432,8 @@ impl Tameable for NautilusEntity {
     fn unable_to_move_to_owner(&self) -> bool {
         self.is_ordered_to_sit()
             || self.is_passenger()
-            || (self.can_be_leashed() && !self.is_leashed())
+            || (self.as_leashable().is_some_and(Leashable::can_be_leashed)
+                && !self.as_leashable().is_some_and(Leashable::is_leashed))
             || self
                 .owner_uuid()
                 .and_then(|uuid| self.level()?.players.get_by_uuid(&uuid))
@@ -499,7 +501,7 @@ impl Entity for NautilusEntity {
     }
 
     fn dimensions_for_pose(&self, _pose: EntityPose) -> EntityDimensions {
-        if self.is_baby() {
+        if AgeableMob::is_baby(self) {
             return BABY_DIMENSIONS;
         }
 
@@ -532,7 +534,7 @@ impl Entity for NautilusEntity {
 
     /// Vanilla `Nautilus.getSwimSound`.
     fn swim_sound(&self) -> SoundEventRef {
-        if self.is_baby() {
+        if AgeableMob::is_baby(self) {
             &sound_events::ENTITY_BABY_NAUTILUS_SWIM
         } else {
             &sound_events::ENTITY_NAUTILUS_SWIM
@@ -709,7 +711,7 @@ impl Animal for NautilusEntity {
 
     /// Vanilla `Nautilus.playEatingSound`.
     fn play_eating_sound(&self) {
-        let sound = if self.is_baby() {
+        let sound = if AgeableMob::is_baby(self) {
             &sound_events::ENTITY_BABY_NAUTILUS_EAT
         } else {
             &sound_events::ENTITY_NAUTILUS_EAT

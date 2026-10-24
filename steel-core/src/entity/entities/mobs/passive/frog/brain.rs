@@ -10,6 +10,7 @@
 //! `UniformInt.of(100, 140)` at spawn (`Frog.create`/`finalizeSpawn`), not from
 //! `makeBrain`; [`init_memories`] is exposed for those call sites.
 
+use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_blocks;
 use steel_registry::vanilla_entities;
 use steel_registry::vanilla_fluid_tags::FluidTag;
@@ -72,8 +73,7 @@ const MAX_JUMP_VELOCITY_MULTIPLIER: f32 = 3.571_428_8;
 ///
 /// The registry exposes it as a `const`, whose reference is a temporary; the
 /// long-jump behavior stores the key for its whole lifetime.
-static FROG_PREFER_JUMP_TO_TAG: steel_utils::Identifier =
-    steel_registry::vanilla_block_tags::BlockTag::FROG_PREFER_JUMP_TO;
+static FROG_PREFER_JUMP_TO_TAG: steel_utils::Identifier = BlockTag::FROG_PREFER_JUMP_TO;
 /// Vanilla `FrogAi` `SetEntityLookTargetSometimes.create(EntityTypes.PLAYER,
 /// 6.0F, UniformInt.of(30, 60))` arguments.
 const LOOK_DISTANCE: f32 = 6.0;

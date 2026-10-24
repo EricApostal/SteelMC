@@ -407,17 +407,23 @@ impl World {
                 continue;
             }
 
+            // Every argument must be evaluated before the guard is taken: the
+            // `PathfinderMob` accessors re-enter `navigation()` and `parking_lot`
+            // mutexes are not reentrant, so a call inside the guard self-deadlocks
+            // when the mob being visited is the one currently ticking.
+            let mob_position = pathfinder.position();
             let should_recompute = {
                 let navigation = pathfinder.mob_base().navigation().lock();
-                navigation.should_recompute_path(pos, pathfinder.position())
+                navigation.should_recompute_path(pos, mob_position)
             };
             if !should_recompute {
                 continue;
             }
 
+            let can_update_path = pathfinder.can_update_path();
             let request = {
                 let mut navigation = pathfinder.mob_base().navigation().lock();
-                navigation.request_recompute_path(game_time, pathfinder.can_update_path())
+                navigation.request_recompute_path(game_time, can_update_path)
             };
             if let Some(request) = request {
                 pathfinder.recompute_path(request);
@@ -786,5 +792,84 @@ impl World {
     pub fn mark_chunk_dirty(&self, chunk_pos: ChunkPos) {
         self.chunk_map
             .with_chunk_at_status(chunk_pos, ChunkStatus::Empty, Chunk::mark_dirty);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
+
+    use glam::DVec3;
+    use steel_registry::{REGISTRY, init_vanilla_registry, vanilla_blocks, vanilla_entities};
+    use steel_utils::{BlockPos, ChunkPos};
+
+    use super::World;
+    use crate::entity::init_entities;
+    use crate::entity::ai::node::Node;
+    use crate::entity::ai::path::Path;
+    use crate::entity::{PathfinderMob as _, add_spawned_entity, create_entity_instance};
+    use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
+
+    /// A block-collision change must not re-enter a mob's navigation mutex while it is held.
+    ///
+    /// `update_navigating_mobs_after_block_collision_change` visits navigating mobs and holds a
+    /// mob's `PathNavigation` guard while it decides whether to recompute; evaluating the
+    /// recompute request used to call `PathfinderMob::can_update_path` *inside* that guard, and
+    /// that accessor locks the same `parking_lot` mutex. When the visited mob is the one
+    /// currently ticking — a villager opening a door opened exactly this path — the thread
+    /// re-locked a mutex it already owned and the server tick froze.
+    #[test]
+    fn collision_change_does_not_reenter_the_visited_mobs_navigation_lock() {
+        init_vanilla_registry();
+        init_entities();
+        crate::behavior::init_behaviors();
+        let world_fixture = fresh_test_world("navigating_mob_recompute_no_deadlock");
+        let world = Arc::clone(&world_fixture.world);
+        insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
+
+        let mob_position = DVec3::new(0.5, 64.0, 0.5);
+        let entity = create_entity_instance(&world, &vanilla_entities::VILLAGER, mob_position)
+            .expect("villager entity factory");
+        add_spawned_entity(&world, Arc::clone(&entity)).expect("villager should join the world");
+
+        let pathfinder = entity
+            .as_pathfinder_mob()
+            .expect("villager is a pathfinder");
+        {
+            // A live two-node path whose end node sits at `(4, 64, 0)`: with the mob at
+            // `(0.5, 64, 0.5)` the recompute midpoint is `(2.25, 64, 0.25)`, so a change at
+            // `(2, 64, 0)` is inside the recompute radius and the request is reached.
+            let path = Path::new(
+                vec![Node::new(0, 64, 0), Node::new(4, 64, 0)],
+                BlockPos::new(4, 64, 0),
+                false,
+            );
+            pathfinder
+                .mob_base()
+                .navigation()
+                .lock()
+                .complete_recompute_path(Some(path), world.game_time());
+        }
+
+        let air = REGISTRY.blocks.get_base_state_id(&vanilla_blocks::AIR);
+        let stone = REGISTRY.blocks.get_default_state_id(&vanilla_blocks::STONE);
+        let changed = BlockPos::new(2, 64, 0);
+
+        // A hang would freeze the server tick, so bound the call: a regression fails here
+        // instead of stalling the test binary.
+        let (done, finished) = mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            world.update_navigating_mobs_after_block_collision_change(changed, air, stone);
+            let _ = done.send(());
+        });
+        let outcome = finished.recv_timeout(Duration::from_secs(10));
+        assert!(
+            outcome.is_ok(),
+            "block collision change re-entered the visited mob's navigation lock"
+        );
+        thread
+            .join()
+            .expect("collision change worker should not panic");
     }
 }

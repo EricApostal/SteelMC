@@ -9,6 +9,7 @@ use std::fs;
 use crate::generator_functions::{
     generate_identifier, generate_option, generate_sound_event_ref, generate_vec,
 };
+use crate::structure::{SpawnerCountJson, parse_spawner_count};
 use heck::ToShoutySnakeCase;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
@@ -71,11 +72,14 @@ pub struct BiomeJson {
 
     effects: BiomeEffects,
 
-    #[serde(default)]
+    /// Vanilla 1.21.4+ keeps `MobSpawnSettings` in the
+    /// `minecraft:gameplay/natural_mob_spawns` environment attribute, so these
+    /// three are derived from `attributes` rather than read from the top level.
+    #[serde(skip)]
     creature_spawn_probability: f32,
-    #[serde(default)]
+    #[serde(skip)]
     spawners: FxHashMap<String, Vec<SpawnerData>>,
-    #[serde(default)]
+    #[serde(skip)]
     spawn_costs: FxHashMap<Identifier, SpawnCost>,
 
     carvers: VecOrSingle<Identifier>,
@@ -152,13 +156,11 @@ impl From<BiomeEffectsJson> for BiomeEffects {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+/// Vanilla `MobSpawnSettings.SpawnerData` in the shape the generator emits.
 pub struct SpawnerData {
-    #[serde(rename = "type")]
     entity_type: Identifier,
     weight: i32,
-    #[serde(rename = "minCount")]
     min_count: i32,
-    #[serde(rename = "maxCount")]
     max_count: i32,
 }
 
@@ -166,6 +168,34 @@ pub struct SpawnerData {
 pub struct SpawnCost {
     energy_budget: f64,
     charge: f64,
+}
+
+/// Vanilla `MobSpawnSettings.DEFAULT_CREATURE_WORLD_GEN_SPAWN_PROBABILITY`.
+const DEFAULT_CREATURE_WORLD_GEN_SPAWN_PROBABILITY: f32 = 0.1;
+
+/// Vanilla `EnvironmentAttributes.NATURAL_MOB_SPAWNS`, carrying
+/// `MobSpawnSettings` inside the biome's environment attributes.
+#[derive(Deserialize, Debug)]
+struct NaturalMobSpawnsAttribute {
+    argument: NaturalMobSpawns,
+}
+
+/// Vanilla `MobSpawnSettings`: `spawns_by_category` and `spawn_costs`.
+#[derive(Deserialize, Debug, Default)]
+struct NaturalMobSpawns {
+    #[serde(default)]
+    spawns_by_category: FxHashMap<String, Vec<SpawnerDataAttributeJson>>,
+    #[serde(default)]
+    spawn_costs: FxHashMap<Identifier, SpawnCost>,
+}
+
+/// Vanilla `MobSpawnSettings.SpawnerData`, whose `count` is an `IntProvider`.
+#[derive(Deserialize, Debug)]
+struct SpawnerDataAttributeJson {
+    #[serde(rename = "type")]
+    entity_type: Identifier,
+    weight: i32,
+    count: SpawnerCountJson,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -262,6 +292,58 @@ struct AmbientParticle {
     probability: f32,
 }
 
+/// Populates the biome's spawn settings from vanilla's
+/// `minecraft:gameplay/natural_mob_spawns` environment attribute.
+///
+/// Vanilla moved `MobSpawnSettings` (`spawns_by_category` + `spawn_costs`) into
+/// that attribute; the extracted datapack tree only carries the attribute form,
+/// so an empty map here would silently disable every natural spawn list.
+fn extract_natural_mob_spawns(biome: &mut BiomeJson, biome_name: &str) {
+    biome.creature_spawn_probability = DEFAULT_CREATURE_WORLD_GEN_SPAWN_PROBABILITY;
+    if let Some(Value::Number(probability)) = biome
+        .attributes
+        .get("minecraft:gameplay/creature_world_gen_spawn_probability")
+    {
+        biome.creature_spawn_probability = probability.as_f64().unwrap_or_else(|| {
+            panic!("biome {biome_name}: creature_world_gen_spawn_probability is not a number")
+        }) as f32;
+    }
+
+    let value = biome
+        .attributes
+        .get("minecraft:gameplay/natural_mob_spawns")
+        .cloned()
+        .unwrap_or_else(|| {
+            panic!("biome {biome_name}: missing minecraft:gameplay/natural_mob_spawns attribute")
+        });
+    let attribute: NaturalMobSpawnsAttribute = serde_json::from_value(value).unwrap_or_else(|e| {
+        panic!("biome {biome_name}: failed to parse natural_mob_spawns attribute: {e}")
+    });
+
+    biome.spawners = attribute
+        .argument
+        .spawns_by_category
+        .into_iter()
+        .map(|(category, entries)| {
+            let data = entries
+                .into_iter()
+                .map(|entry| {
+                    let (min_count, max_count) =
+                        parse_spawner_count(&entry.count, &format!("biome {biome_name}"));
+                    SpawnerData {
+                        entity_type: entry.entity_type,
+                        weight: entry.weight,
+                        min_count,
+                        max_count,
+                    }
+                })
+                .collect();
+            (category, data)
+        })
+        .collect();
+    biome.spawn_costs = attribute.argument.spawn_costs;
+}
+
 fn extract_attributes_to_effects(
     effects: &mut BiomeEffects,
     attributes: &FxHashMap<String, Value>,
@@ -319,6 +401,94 @@ fn extract_attributes_to_effects(
             probability: particle.probability,
         });
     }
+}
+
+/// Build-time guard over the extracted spawn data.
+///
+/// When the reader stops matching vanilla's biome schema every biome silently
+/// ends up with no spawn list, which disables natural spawning in every
+/// dimension without any other symptom. These canaries turn that into a build
+/// failure: the total entry count proves the whole tree parsed, and the
+/// per-biome checks pin the category names and entity types of a nether, an
+/// overworld, and an end biome.
+fn validate_spawn_data(biomes: &[(String, BiomeJson)]) {
+    let total_entries: usize = biomes
+        .iter()
+        .map(|(_, biome)| biome.spawners.values().map(Vec::len).sum::<usize>())
+        .sum();
+    assert!(
+        total_entries >= 700,
+        "extracted biomes carry only {total_entries} spawn entries; \
+         the minecraft:gameplay/natural_mob_spawns reader is not matching vanilla"
+    );
+
+    let biome_named = |name: &str| -> &BiomeJson {
+        &biomes
+            .iter()
+            .find(|(biome_name, _)| biome_name == name)
+            .unwrap_or_else(|| panic!("expected biome {name} in the extracted tree"))
+            .1
+    };
+
+    let monster_types = |biome: &BiomeJson| {
+        let mut types: Vec<String> = biome
+            .spawners
+            .get("monster")
+            .unwrap_or_else(|| panic!("expected a monster spawn list"))
+            .iter()
+            .map(|data| data.entity_type.path.to_string())
+            .collect();
+        types.sort();
+        types
+    };
+
+    let nether_wastes = biome_named("nether_wastes");
+    assert_eq!(
+        monster_types(&nether_wastes),
+        vec![
+            "enderman",
+            "ghast",
+            "magma_cube",
+            "piglin",
+            "zombified_piglin"
+        ],
+        "nether_wastes monster list diverged from vanilla"
+    );
+    assert!(
+        nether_wastes
+            .spawners
+            .get("creature")
+            .is_some_and(|creatures| creatures
+                .iter()
+                .any(|data| data.entity_type.path == "strider")),
+        "nether_wastes should spawn striders as its creature category"
+    );
+
+    let the_end = biome_named("the_end");
+    assert_eq!(
+        monster_types(&the_end),
+        vec!["enderman"],
+        "the_end monster list diverged from vanilla"
+    );
+
+    let plains = biome_named("plains");
+    assert!(
+        plains
+            .spawners
+            .get("creature")
+            .is_some_and(|creatures| creatures.len() >= 6),
+        "plains should carry vanilla's passive creature list"
+    );
+
+    let enderman_cost = biome_named("warped_forest")
+        .spawn_costs
+        .get(&Identifier::vanilla_static("enderman"))
+        .unwrap_or_else(|| panic!("warped_forest should carry an enderman spawn cost"));
+    assert_eq!(
+        (enderman_cost.charge, enderman_cost.energy_budget),
+        (1.0, 0.12),
+        "warped_forest enderman spawn cost diverged from vanilla"
+    );
 }
 
 fn generate_temperature_modifier(modifier: &TemperatureModifier) -> TokenStream {
@@ -521,10 +691,13 @@ pub(crate) fn build() -> TokenStream {
 
             // Extract attributes and populate effects
             extract_attributes_to_effects(&mut biome.effects, &biome.attributes);
+            extract_natural_mob_spawns(&mut biome, &biome_name);
 
             biomes.push((biome_name, biome));
         }
     }
+
+    validate_spawn_data(&biomes);
 
     let mut stream = TokenStream::new();
 

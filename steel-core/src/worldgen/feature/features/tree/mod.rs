@@ -515,6 +515,7 @@ mod tests {
 
     const THREE_LAYERS: FeatureSize = FeatureSize::ThreeLayers(ThreeLayersFeatureSize {
         limit: 2,
+        lower_size: 0,
         middle_size: 1,
         upper_limit: 3,
         upper_size: 4,

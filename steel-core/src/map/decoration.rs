@@ -9,8 +9,7 @@ use steel_registry::{DyeColor, REGISTRY, RegistryExt as _, vanilla_map_decoratio
 use steel_utils::{BlockPos, Downcast as _, Identifier};
 use text_components::TextComponent;
 
-use crate::block_entity::entities::banner::BannerBlockEntity;
-use crate::entity::Entity as _;
+use crate::block_entity::entities::BannerBlockEntity;
 use crate::world::level_reader::LevelReader;
 
 /// Vanilla `MapDecoration`: one marker drawn on a map.

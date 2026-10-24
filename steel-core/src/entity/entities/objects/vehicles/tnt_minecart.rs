@@ -19,7 +19,10 @@ use steel_registry::items::ItemRef;
 use steel_registry::particle_type::ParticleData;
 use steel_registry::vanilla_damage_type_tags::DamageTypeTag;
 use steel_registry::vanilla_entity_data::{AbstractMinecartEntityData, TntMinecartEntityData};
-use steel_registry::{sound_events, vanilla_blocks, vanilla_game_rules, vanilla_items};
+use steel_registry::{
+    sound_events, vanilla_blocks, vanilla_damage_types, vanilla_game_rules, vanilla_items,
+    vanilla_particle_types,
+};
 use steel_utils::axis::Axis;
 use steel_utils::block_util::FoundRectangle;
 use steel_utils::entity_events::EntityStatus;
@@ -28,7 +31,7 @@ use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
 use crate::entity::damage::DamageSource;
 use crate::entity::{Entity, EntityBase, EntityBaseLoad, EntitySyncedData, RemovalReason};
-use crate::world::{LevelReader as _, World};
+use crate::world::World;
 
 use super::minecart_base::{self, Minecart, MinecartState};
 
@@ -209,10 +212,13 @@ impl TntMinecartEntity {
         self.set_removed(RemovalReason::Discarded);
     }
 
-    /// Vanilla `damageSourceIgnitesTnt`.
+/// Vanilla `MinecartTNT.damageSourceIgnitesTnt`.
+    ///
+    /// Vanilla tests `instanceof Projectile`, which covers more than abstract
+    /// arrows (for example a burning snowball or fireball still ignites TNT).
     fn damage_source_ignites_tnt(source: &DamageSource) -> bool {
         if let Some(direct) = source.direct_entity()
-            && direct.is_abstract_arrow()
+            && direct.as_projectile().is_some()
         {
             return direct.is_on_fire();
         }
@@ -234,10 +240,8 @@ impl TntMinecartEntity {
             .level()
             .and_then(|world| world.get_entity_by_id(self.id()))
         {
-            Some(entity) => {
-                DamageSource::direct(&steel_registry::vanilla_damage_types::EXPLOSION, entity)
-            }
-            None => DamageSource::environment(&steel_registry::vanilla_damage_types::EXPLOSION),
+            Some(entity) => DamageSource::direct(&vanilla_damage_types::EXPLOSION, entity),
+            None => DamageSource::environment(&vanilla_damage_types::EXPLOSION),
         };
         let ignition = source.causing_entity().map_or(ignition.clone(), |causing| {
             ignition.clone().with_causing_entity(Arc::clone(causing))
@@ -317,7 +321,7 @@ impl Entity for TntMinecartEntity {
             if let Some(world) = self.level() {
                 let position = self.position();
                 world.send_particles(
-                    ParticleData::simple(&steel_registry::vanilla_particle_types::SMOKE),
+                    ParticleData::simple(&vanilla_particle_types::SMOKE),
                     DVec3::new(position.x, position.y + 0.5, position.z),
                     1,
                     DVec3::ZERO,
@@ -424,5 +428,53 @@ impl Entity for TntMinecartEntity {
             .float("explosion_speed_factor")
             .unwrap_or(DEFAULT_EXPLOSION_SPEED_FACTOR)
             .clamp(0.0, EXPLOSION_FIELD_MAX);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Weak;
+
+    use steel_registry::vanilla_entities;
+
+    use crate::entity::entities::objects::SnowballEntity;
+    use crate::entity::{Entity, SharedEntity};
+
+    use super::*;
+
+    fn direct_source(entity: SharedEntity) -> DamageSource {
+        DamageSource::direct(&vanilla_damage_types::GENERIC, entity)
+    }
+
+    #[test]
+    fn burning_non_arrow_projectiles_ignite_tnt() {
+        // Vanilla `MinecartTNT.damageSourceIgnitesTnt` tests `instanceof
+        // Projectile`, so any burning projectile ignites TNT — not just arrows.
+        let snowball: SharedEntity = Arc::new(SnowballEntity::new(
+            &vanilla_entities::SNOWBALL,
+            1,
+            DVec3::ZERO,
+            Weak::new(),
+        ));
+        snowball.ignite_for_ticks(100);
+        assert!(snowball.is_on_fire());
+        assert!(TntMinecartEntity::damage_source_ignites_tnt(&direct_source(
+            snowball
+        )));
+    }
+
+    #[test]
+    fn cold_projectile_with_generic_damage_does_not_ignite() {
+        let snowball: SharedEntity = Arc::new(SnowballEntity::new(
+            &vanilla_entities::SNOWBALL,
+            2,
+            DVec3::ZERO,
+            Weak::new(),
+        ));
+        // GENERIC carries neither the `is_fire` nor the `is_explosion` tag, so a
+        // cold snowball must not ignite the cart.
+        assert!(!TntMinecartEntity::damage_source_ignites_tnt(&direct_source(
+            snowball
+        )));
     }
 }

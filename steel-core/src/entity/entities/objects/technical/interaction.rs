@@ -131,7 +131,7 @@ impl InteractionEntity {
     /// Mirrors the player half of vanilla `Interaction.getLastAttacker()`; player lookup
     /// stays with the caller since Steel has no `World.getPlayerByUUID` API yet.
     pub fn last_attacker_uuid(&self) -> Option<Uuid> {
-        self.attack.lock().as_ref().map(|action| action.player())
+        self.attack.lock().as_ref().map(PlayerAction::player)
     }
 
     /// Provides the latest interaction (right-click) on this entity, if it exists.
@@ -145,10 +145,7 @@ impl InteractionEntity {
     /// Mirrors the player half of vanilla `Interaction.getTarget()`; player lookup
     /// stays with the caller since Steel has no `World.getPlayerByUUID` API yet.
     pub fn last_target_uuid(&self) -> Option<Uuid> {
-        self.interaction
-            .lock()
-            .as_ref()
-            .map(|action| action.player())
+        self.interaction.lock().as_ref().map(PlayerAction::player)
     }
 }
 

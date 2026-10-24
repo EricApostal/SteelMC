@@ -6,7 +6,7 @@ use super::{
 use crate::worldgen::template::TemplateLevelAccess;
 
 pub(super) fn place_wing_room<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     main_design: i32,
 ) {
     if main_design == 0 {
@@ -84,9 +84,7 @@ pub(super) fn place_wing_room<L: TemplateLevelAccess>(
     }
 }
 
-pub(super) fn place_penthouse<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
-) {
+pub(super) fn place_penthouse<L: TemplateLevelAccess>(placer: &mut ScatteredFeaturePlacer<'_, L>) {
     placer.generate_box(2, -1, 2, 11, -1, 11, base_light(), base_light(), false);
     placer.generate_box(0, -1, 0, 1, -1, 11, base_gray(), base_gray(), false);
     placer.generate_box(12, -1, 0, 13, -1, 11, base_gray(), base_gray(), false);

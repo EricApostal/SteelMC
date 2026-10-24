@@ -40,7 +40,7 @@ impl StructurePiecePlacer {
     reason = "jungle temple placement is a direct port of vanilla's linear postProcess"
 )]
 fn place_jungle_temple<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     data: &mut JungleTemplePieceData,
     random: &mut WorldgenRandom,
 ) {
@@ -243,7 +243,7 @@ fn place_jungle_temple<L: TemplateLevelAccess>(
     reason = "mirrors vanilla StructurePiece.generateBox selector overload"
 )]
 fn moss_box<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     x0: i32,
     y0: i32,
     z0: i32,

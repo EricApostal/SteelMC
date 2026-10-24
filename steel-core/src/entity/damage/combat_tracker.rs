@@ -190,7 +190,7 @@ impl CombatTracker {
         self.last_damage_time = mob.tick_count();
         self.taking_damage = true;
         let mut entered_combat = false;
-        if !self.in_combat && mob.is_alive() && should_enter_combat(source) {
+        if !self.in_combat && Entity::is_alive(mob) && should_enter_combat(source) {
             self.in_combat = true;
             self.combat_start_time = mob.tick_count();
             self.combat_end_time = self.combat_start_time;
@@ -213,7 +213,7 @@ impl CombatTracker {
         match killing_source.damage_type.death_message_type {
             DeathMessageType::FallVariants => match knock_off_entry {
                 Some(knock_off_entry) => {
-                    self.get_fall_message(knock_off_entry, killing_source.causing_entity(), mob)
+                    Self::get_fall_message(knock_off_entry, killing_source.causing_entity(), mob)
                 }
                 None => killing_source.get_localized_death_message(mob),
             },
@@ -228,13 +228,12 @@ impl CombatTracker {
                     )));
                 death_message(format!("{key}.message"), vec![mob.display_name(), link])
             }
-            _ => killing_source.get_localized_death_message(mob),
+            DeathMessageType::Default => killing_source.get_localized_death_message(mob),
         }
     }
 
     /// Vanilla `CombatTracker.getFallMessage`.
     fn get_fall_message(
-        &self,
         knock_off_entry: &CombatEntry,
         killing_entity: Option<&SharedEntity>,
         mob: &dyn LivingEntity,
@@ -250,7 +249,7 @@ impl CombatTracker {
             if let Some(attacker_name) = attacker_name
                 && killer_name.as_ref() != Some(&attacker_name)
             {
-                return self.get_message_for_assisted_fall(
+                return Self::get_message_for_assisted_fall(
                     attacker_entity,
                     &attacker_name,
                     "death.fell.assist.item",
@@ -259,7 +258,7 @@ impl CombatTracker {
                 );
             }
             match killer_name {
-                Some(killer_name) => self.get_message_for_assisted_fall(
+                Some(killer_name) => Self::get_message_for_assisted_fall(
                     killing_entity,
                     &killer_name,
                     "death.fell.finish.item",
@@ -278,7 +277,6 @@ impl CombatTracker {
 
     /// Vanilla `CombatTracker.getMessageForAssistedFall`.
     fn get_message_for_assisted_fall(
-        &self,
         attacker_entity: Option<&SharedEntity>,
         attacker_name: &TextComponent,
         message_with_item: &'static str,
@@ -370,7 +368,8 @@ impl CombatTracker {
             RESET_DAMAGE_STATUS_TIME
         };
         if self.taking_damage
-            && (!mob.is_alive() || mob.tick_count().wrapping_sub(self.last_damage_time) > reset)
+            && (!Entity::is_alive(mob)
+                || mob.tick_count().wrapping_sub(self.last_damage_time) > reset)
         {
             let was_in_combat = self.in_combat;
             self.taking_damage = false;

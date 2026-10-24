@@ -116,14 +116,12 @@ impl Goal for OcelotAttackGoal {
 
         mob.move_to_pos(target_position, speed_modifier);
         self.attack_time = (self.attack_time - 1).max(0);
-        if !(distance_sqr > melee_radius_sqr) {
-            if self.attack_time <= 0 {
-                self.attack_time = ATTACK_INTERVAL_TICKS;
-                let Some(world) = mob.level() else {
-                    return;
-                };
-                mob.do_hurt_target(entity, &world, &target);
-            }
+        if distance_sqr <= melee_radius_sqr && self.attack_time <= 0 {
+            self.attack_time = ATTACK_INTERVAL_TICKS;
+            let Some(world) = mob.level() else {
+                return;
+            };
+            let _ = mob.do_hurt_target(entity, &world, &target);
         }
     }
 }

@@ -126,9 +126,9 @@ fn sample_area(
                 .wrapping_mul(31_287_121)
                 .wrapping_add(noise.wrapping_mul(11));
             let (block, amount) = if (noise >> 20) & 1 == 0 {
-                (vanilla_blocks::DIRT, 10)
+                (&vanilla_blocks::DIRT, 10)
             } else {
-                (vanilla_blocks::STONE, 100)
+                (&vanilla_blocks::STONE, 100)
             };
             add_count(&mut counts, block.default_state().map_color(), amount);
             return (counts, 100.0, 0);

@@ -11,7 +11,7 @@ use steel_utils::{BlockPos, BlockStateId, BoundingBox, Direction, types::UpdateF
 use crate::chunk::heightmap::HeightmapType;
 use crate::entity::SharedEntity;
 use crate::world::World;
-use crate::world::{LevelAccessor as _, LevelReader as _, ScheduledTickAccess as _};
+
 use crate::worldgen::template::{StructureTemplate, TemplateLevelAccess};
 
 use super::StructurePiecePlacer;
@@ -292,7 +292,7 @@ impl<'a, L: TemplateLevelAccess> ScatteredFeaturePlacer<'a, L> {
         self.clip
     }
 
-    pub(super) const fn sea_level(&self) -> i32 {
+    pub(super) fn sea_level(&self) -> i32 {
         self.region.sea_level()
     }
 

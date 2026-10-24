@@ -162,7 +162,7 @@ impl MemoryValueType for SharedEntity {
 
     fn from_memory_value(value: &MemoryValue) -> Option<Self> {
         match value {
-            MemoryValue::Entity(entity) => Some(entity.clone()),
+            MemoryValue::Entity(entity) => Some(SharedEntity::clone(entity)),
             _ => None,
         }
     }
@@ -227,7 +227,7 @@ impl MemoryValueType for Arc<dyn super::tracker::PositionTracker> {
 
     fn from_memory_value(value: &MemoryValue) -> Option<Self> {
         match value {
-            MemoryValue::PositionTracker(tracker) => Some(tracker.clone()),
+            MemoryValue::PositionTracker(tracker) => Some(Arc::clone(tracker)),
             _ => None,
         }
     }
@@ -243,7 +243,7 @@ struct MemorySlot {
 impl MemorySlot {
     const NEVER_EXPIRE: i64 = i64::MAX;
 
-    fn create() -> Self {
+    const fn create() -> Self {
         Self {
             value: None,
             time_to_live: Self::NEVER_EXPIRE,
@@ -274,7 +274,7 @@ impl MemorySlot {
         self.time_to_live = Self::NEVER_EXPIRE;
     }
 
-    fn has_value(&self) -> bool {
+    const fn has_value(&self) -> bool {
         self.value.is_some()
     }
 }

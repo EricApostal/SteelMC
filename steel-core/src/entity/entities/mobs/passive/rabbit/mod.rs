@@ -61,12 +61,13 @@ use steel_registry::{
 };
 use steel_utils::entity_events::EntityStatus;
 use steel_utils::locks::SyncMutex;
-use steel_utils::random::Random as _;
 use steel_utils::random::legacy_random::LegacyRandom;
+use steel_utils::random::{Random as _, RandomSource};
 use steel_utils::types::{InteractionHand, UpdateFlags};
-use steel_utils::{BlockPos, Downcast as _, DowncastType, DowncastTypeKey, Identifier};
+use steel_utils::{
+    BlockPos, Downcast as _, DowncastType, DowncastTypeKey, Identifier, translations,
+};
 use text_components::TextComponent;
-use text_components::translation::TranslatedMessage;
 
 use crate::behavior::InteractionResult;
 use crate::entity::ai::control::MoveControlOperation;
@@ -141,8 +142,6 @@ const RAID_RETRY_DELAY_TICKS: i32 = 10;
 const RAID_LOOK_SPEED: f32 = 10.0;
 /// Vanilla `CarrotBlock`'s maximum age (`CropBlock.getMaxAge`).
 const CARROT_MAX_AGE: u8 = 7;
-/// Vanilla `Rabbit`'s `entity.minecraft.killer_bunny` description id.
-const KILLER_BUNNY_TRANSLATION_KEY: &str = "entity.minecraft.killer_bunny";
 
 /// Vanilla `Rabbit.EVIL_ATTACK_POWER_MODIFIER`.
 const EVIL_ATTACK_POWER_MODIFIER: Identifier = Identifier::vanilla_static("evil");
@@ -336,10 +335,9 @@ impl RabbitEntity {
                 false,
             );
             if self.custom_name().is_none() {
-                self.set_custom_name(Some(TextComponent::translated(TranslatedMessage::new(
-                    KILLER_BUNNY_TRANSLATION_KEY,
-                    None,
-                ))));
+                self.set_custom_name(Some(TextComponent::translated(
+                    translations::ENTITY_MINECRAFT_KILLER_BUNNY.msg(),
+                )));
             }
             // A freshly evil rabbit attacks immediately instead of waiting out the hop delay.
             self.state.lock().jump_delay_ticks = 0;
@@ -368,7 +366,7 @@ impl RabbitEntity {
         level: &World,
         _spawn_reason: EntitySpawnReason,
         pos: BlockPos,
-        _random: &mut steel_utils::random::RandomSource,
+        _random: &mut RandomSource,
     ) -> bool {
         level
             .get_block_state(pos.below())
@@ -402,7 +400,7 @@ impl RabbitEntity {
     }
 
     /// Vanilla `Rabbit.getJumpSound`.
-    fn jump_sound(&self) -> SoundEventRef {
+    fn jump_sound() -> SoundEventRef {
         &sound_events::ENTITY_RABBIT_JUMP
     }
 
@@ -681,14 +679,14 @@ impl RaidGardenGoal {
         {
             let carrot_age = block_state.get_value(&BlockStateProperties::AGE_7);
             if carrot_age == 0 {
-                world.set_block_state(
+                world.set_block(
                     crops_pos,
                     vanilla_blocks::AIR.default_state(),
                     UpdateFlags::UPDATE_CLIENTS,
                 );
                 world.destroy_block(crops_pos, true);
             } else {
-                world.set_block_state(
+                world.set_block(
                     crops_pos,
                     block_state.set_value(&BlockStateProperties::AGE_7, carrot_age - 1),
                     UpdateFlags::UPDATE_CLIENTS,
@@ -967,7 +965,7 @@ impl LivingEntity for RabbitEntity {
         self.living_base.set_jumping(jumping);
         if jumping {
             let pitch = (rand::random::<f32>() - rand::random::<f32>()) * 0.2 + 1.0;
-            self.play_sound(self.jump_sound(), self.sound_volume(), pitch * 0.8);
+            self.play_sound(Self::jump_sound(), self.sound_volume(), pitch * 0.8);
         }
     }
 

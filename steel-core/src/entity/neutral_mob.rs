@@ -8,8 +8,6 @@
 //! time, the persistent anger target reference, the universal-anger game-rule checks, and the
 //! `anger_end_time`/`angry_at` save data.
 
-use std::any::try_as_dyn;
-
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_registry::vanilla_game_rules::{FORGIVE_DEAD_PLAYERS, UNIVERSAL_ANGER};
@@ -37,10 +35,16 @@ pub struct PersistentAnger {
     target: SyncMutex<Option<EntityReference>>,
 }
 
+impl Default for PersistentAnger {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PersistentAnger {
     /// Creates empty anger state: no timer and no target.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             end_time: SyncMutex::new(NO_ANGER_END_TIME),
             target: SyncMutex::new(None),
@@ -279,13 +283,4 @@ fn is_valid_player_target(target: &dyn LivingEntity) -> bool {
         && player
             .level()
             .is_none_or(|world| world.difficulty() != Difficulty::Peaceful)
-}
-
-/// Returns `entity` as a [`NeutralMob`] when it has persistent anger behavior.
-///
-/// TODO(integration): replaced by `Entity::as_neutral_mob()` once `entity/mod.rs` exposes the
-/// capability accessor alongside `as_player`/`is_monster`.
-#[must_use]
-pub fn as_neutral_mob(entity: &dyn Entity) -> Option<&dyn NeutralMob> {
-    try_as_dyn::<dyn Entity, dyn NeutralMob>(entity)
 }

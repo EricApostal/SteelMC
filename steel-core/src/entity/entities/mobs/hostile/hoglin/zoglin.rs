@@ -350,6 +350,7 @@ impl PathfinderMob for ZoglinEntity {}
 
 #[cfg(test)]
 mod tests {
+    use simdnbt::owned::NbtCompound;
     use std::sync::Weak;
 
     use glam::DVec3;
@@ -367,7 +368,7 @@ mod tests {
         zoglin.set_baby(true);
         assert!(zoglin.is_baby());
 
-        let mut nbt = simdnbt::owned::NbtCompound::new();
+        let mut nbt = NbtCompound::new();
         zoglin.save_additional(&mut nbt);
         assert_eq!(nbt.byte("IsBaby"), Some(1));
         assert_eq!(zoglin.entity_type(), &vanilla_entities::ZOGLIN);

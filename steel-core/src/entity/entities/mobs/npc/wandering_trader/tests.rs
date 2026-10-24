@@ -24,7 +24,7 @@ fn spawner_starts_with_vanilla_timers() {
 
 #[test]
 fn spawner_ticks_down_by_one_evaluation_per_minute() {
-    let mut spawner = WanderingTraderSpawner::new();
+    let spawner = WanderingTraderSpawner::new();
     let mut data = spawner.data();
     // Vanilla decrements `spawnDelay` by `DEFAULT_TICK_DELAY` per evaluation.
     data.set_spawn_delay(data.spawn_delay - DEFAULT_TICK_DELAY);

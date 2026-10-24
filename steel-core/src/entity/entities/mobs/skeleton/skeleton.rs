@@ -268,10 +268,10 @@ impl Entity for SkeletonEntity {
 
         self.freezing.lock().affliction_time = nbt.int("FreezingTime").unwrap_or(0);
         let conversion_time = nbt.int("StrayConversionTime").unwrap_or(-1);
-        if conversion_time != -1 {
-            self.start_conversion(conversion_time);
-        } else {
+        if conversion_time == -1 {
             self.entity_data.lock().stray_conversion.set(false);
+        } else {
+            self.start_conversion(conversion_time);
         }
 
         // Vanilla `AbstractSkeleton.readAdditionalSaveData` re-evaluates the weapon goal.
@@ -394,6 +394,7 @@ impl RangedAttackMob for SkeletonEntity {
 
 #[cfg(test)]
 mod tests {
+    use simdnbt::owned::NbtCompound;
     use std::sync::Weak;
 
     use glam::DVec3;
@@ -417,7 +418,7 @@ mod tests {
         skeleton.start_freeze_conversion(2);
         assert!(skeleton.is_converting());
 
-        let mut nbt = simdnbt::owned::NbtCompound::new();
+        let mut nbt = NbtCompound::new();
         skeleton.save_additional(&mut nbt);
         assert_eq!(nbt.int("StrayConversionTime"), Some(2));
     }

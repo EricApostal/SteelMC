@@ -57,6 +57,8 @@ struct ConduitState {
     destroy_target: Option<EntityReference>,
     /// Vanilla `nextAmbientSoundActivation`.
     next_ambient_sound_activation: i64,
+    /// Vanilla `effectBlocks`: the shell blocks captured by the last shape update.
+    effect_blocks: Vec<BlockPos>,
 }
 
 /// `ConduitBlockEntity`.
@@ -130,9 +132,9 @@ impl ConduitBlockEntity {
         }
 
         let mut effect_blocks = Vec::new();
-        for dx in -2..=2 {
-            for dy in -2..=2 {
-                for dz in -2..=2 {
+        for dx in -2_i32..=2 {
+            for dy in -2_i32..=2 {
+                for dz in -2_i32..=2 {
                     let ax = dx.abs();
                     let ay = dy.abs();
                     let az = dz.abs();

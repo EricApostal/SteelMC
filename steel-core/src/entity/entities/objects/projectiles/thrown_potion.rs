@@ -41,9 +41,7 @@ use steel_utils::types::UpdateFlags;
 
 use crate::behavior::MOB_EFFECT_BEHAVIORS;
 use crate::entity::damage::DamageSource;
-use crate::entity::{
-    Entity, Projectile, ProjectileHit, RemovalReason, SharedEntity, ThrowableItemProjectile,
-};
+use crate::entity::{Entity, ProjectileHit, RemovalReason, ThrowableItemProjectile};
 use crate::world::game_event::GameEventContext;
 use crate::world::{ClipHitResult, World};
 
@@ -63,7 +61,7 @@ pub const THROWN_ITEM_SPAWN_EYE_OFFSET: f64 = 0.1;
 const LIT: &BoolProperty = &BlockStateProperties::LIT;
 
 /// Vanilla `PotionContents.getColorOr`'s default potion color.
-pub const DEFAULT_POTION_COLOR: i32 = -13083194;
+pub const DEFAULT_POTION_COLOR: i32 = -13_083_194;
 
 /// Behavior shared by vanilla `AbstractThrownPotion` subclasses.
 pub trait AbstractThrownPotion: ThrowableItemProjectile {

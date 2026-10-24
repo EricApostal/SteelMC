@@ -10,6 +10,7 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::{NbtCompound, NbtTag};
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
+use steel_registry::biome::BiomeRef;
 use steel_registry::cat_sound_variant::{CatAge, CatSoundVariantRef};
 use steel_registry::cat_variant::{CatVariantRef, SpawnCondition};
 use steel_registry::data_components::vanilla_components::{
@@ -1107,7 +1108,7 @@ impl PathfinderMob for CatEntity {}
 /// carries is unaffected.
 fn pick_spawn_conditioned_cat_variant(
     world: &World,
-    biome: steel_registry::biome::BiomeRef,
+    biome: BiomeRef,
     random: &mut impl Random,
 ) -> Option<CatVariantRef> {
     let moon = moon_brightness(world.overworld_clock_time());
@@ -1150,7 +1151,7 @@ fn pick_spawn_conditioned_cat_variant(
 }
 
 /// Vanilla `SpawnCondition.Biome#test` for a `#tag`/`namespace:path` target.
-fn biome_condition_matches(target: &str, biome: steel_registry::biome::BiomeRef) -> bool {
+fn biome_condition_matches(target: &str, biome: BiomeRef) -> bool {
     let (is_tag, id) = match target.strip_prefix('#') {
         Some(tag) => (true, tag),
         None => (false, target),

@@ -376,7 +376,7 @@ impl ItemFrameEntity {
             // map-storage accessor on `World` (reported gap).
             return;
         }
-        if caused_player.is_some_and(|player| player.has_infinite_materials()) {
+        if caused_player.is_some_and(Player::has_infinite_materials) {
             // Vanilla `removeFramedMap(item)`: no map-storage accessor on
             // `World` (reported gap).
             return;
@@ -713,6 +713,7 @@ const fn direction_2d_data_value(direction: Direction) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use simdnbt::borrow::read_compound;
     use std::io::Cursor;
     use std::string::ToString;
     use steel_registry::{vanilla_entities, vanilla_items};
@@ -814,8 +815,7 @@ mod tests {
         let mut bytes = Vec::new();
         nbt.write(&mut bytes);
         let mut cursor = Cursor::new(bytes.as_slice());
-        let borrowed = simdnbt::borrow::read_compound(&mut cursor)
-            .expect("saved item frame data should reborrow");
+        let borrowed = read_compound(&mut cursor).expect("saved item frame data should reborrow");
         let view: BorrowedNbtCompoundView<'_, '_> = (&borrowed).into();
 
         let loaded = ItemFrameEntity::new_attached(

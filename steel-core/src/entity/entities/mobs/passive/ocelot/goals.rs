@@ -4,6 +4,7 @@
 //! classes. `OcelotAttackGoal` and `LeapAtTargetGoal` are shared goals and are used from
 //! `entity/ai/goal` instead.
 
+use steel_registry::item_stack::ItemStack;
 use steel_utils::Downcast as _;
 
 use crate::entity::ai::goal::{AvoidEntityGoal, Goal, GoalControls, TemptGoal};
@@ -70,7 +71,7 @@ pub(super) struct OcelotTemptGoal {
 impl OcelotTemptGoal {
     pub(super) fn new(
         speed_modifier: f64,
-        items: impl Fn(&steel_registry::item_stack::ItemStack) -> bool + Send + Sync + 'static,
+        items: impl Fn(&ItemStack) -> bool + Send + Sync + 'static,
     ) -> Self {
         Self {
             inner: TemptGoal::new(speed_modifier, items, true),

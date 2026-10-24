@@ -118,7 +118,7 @@ impl Trigger for BabyFollowAdult {
             &mem::WALK_TARGET,
             WalkTarget::new(
                 Arc::new(EntityTracker::with_target_eye_height(
-                    adult.clone(),
+                    SharedEntity::clone(&adult),
                     self.target_eye,
                     self.target_eye,
                 )),

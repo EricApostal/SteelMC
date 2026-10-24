@@ -10,8 +10,8 @@ pub mod swim_node_evaluator;
 
 pub use amphibious_node_evaluator::AmphibiousNodeEvaluator;
 pub use collision::WalkNodeCollision;
-pub use fly_node_evaluator::{FlightContext, FlyNeighbors, FlyNodeEvaluator};
-pub use node_evaluator::{AcceptedNodeRequest, WalkNeighbors, WalkNodeEvaluator};
+pub use fly_node_evaluator::FlyNodeEvaluator;
+pub use node_evaluator::{WalkNeighbors, WalkNodeEvaluator};
 pub use path_evaluator::WalkPathEvaluator;
 pub use settings::MobPathSettings;
 pub use swim_node_evaluator::SwimNodeEvaluator;
@@ -228,8 +228,8 @@ impl NodeEvaluator for MobNodeEvaluator {
     ) -> WalkNeighbors {
         match self {
             Self::Walk(evaluator) => evaluator.get_neighbors(context, collision, pos_hash),
-            Self::Fly(evaluator) => evaluator.get_neighbors(context, collision, pos_hash),
-            Self::Swim(evaluator) => evaluator.get_neighbors(context, collision, pos_hash),
+            Self::Fly(evaluator) => evaluator.get_neighbors(context, pos_hash),
+            Self::Swim(evaluator) => evaluator.get_neighbors(context, pos_hash),
             Self::Amphibious(evaluator) => evaluator.get_neighbors(context, collision, pos_hash),
         }
     }

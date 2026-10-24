@@ -170,7 +170,7 @@ fn baby_animals_drop_neither_loot_nor_experience() {
 
     // Vanilla `LivingEntity.shouldDropLoot`/`shouldDropExperience` both reject
     // babies, which covers the whole animal family.
-    assert!(dropped_item_stacks(world).is_empty());
+    assert_eq!(dropped_item_stacks(world).len(), 0);
     assert_eq!(experience_in(world), 0);
 }
 

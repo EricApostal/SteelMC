@@ -236,10 +236,8 @@ impl BlockBehavior for DecoratedPotBlock {
         pos: BlockPos,
         player: &Player,
     ) -> BlockStateId {
-        let destroyed_with = player
-            .inventory
-            .lock()
-            .get_item_in_hand(InteractionHand::MainHand);
+        let inventory = player.inventory.lock();
+        let destroyed_with = inventory.get_item_in_hand(InteractionHand::MainHand);
         if !destroyed_with
             .item()
             .has_tag(&vanilla_item_tags::ItemTag::BREAKS_DECORATED_POTS)
@@ -275,10 +273,10 @@ impl BlockBehavior for DecoratedPotBlock {
         // `World::destroy_block`) do not hand the block entity to the loot context.
         // Vanilla's `alternatives` entry picks the dynamic `sherds` drop for a cracked pot
         // regardless, so a missing block entity yields no items rather than the pot item.
+        let block_entity = context.world().get_block_entity(context.pos());
         Some(
-            context
-                .world()
-                .get_block_entity(context.pos())
+            block_entity
+                .as_ref()
                 .and_then(|block_entity| block_entity.downcast_ref::<DecoratedPotBlockEntity>())
                 .map_or_else(Vec::new, sherd_drops),
         )

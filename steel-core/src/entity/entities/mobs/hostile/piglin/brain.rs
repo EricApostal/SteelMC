@@ -9,6 +9,7 @@
 //! activity changed (same transition, outside the brain lock).
 
 use steel_registry::vanilla_entities;
+use steel_utils::Downcast as _;
 use steel_utils::GlobalPos;
 
 use crate::entity::ai::behavior::back_up_if_too_close::BackUpIfTooClose;
@@ -59,7 +60,8 @@ use crate::entity::ai::sensing::piglin_specific::PIGLIN_SPECIFIC_SENSOR;
 use crate::entity::ai::sensing::villager::{
     HURT_BY, NEAREST_ITEMS, NEAREST_LIVING_ENTITIES, NEAREST_PLAYERS,
 };
-use crate::entity::{Entity as _, LivingEntity as _, SharedEntity};
+use crate::entity::entities::mobs::hostile::piglin::PiglinBruteEntity;
+use crate::entity::{Entity, LivingEntity, Mob, SharedEntity};
 use crate::world::World;
 
 /// Vanilla `PiglinAi.initMemories`.
@@ -69,7 +71,7 @@ pub(crate) fn init_memories(brain: &mut Brain) {
 }
 
 /// Vanilla `PiglinBruteAi.initMemories`: the spawn position becomes `HOME`.
-pub(crate) fn init_brute_memories(brain: &mut Brain, level: &World, body: &SharedEntity) {
+pub(crate) fn init_brute_memories(brain: &mut Brain, level: &World, body: &dyn Entity) {
     brain.set_memory(
         &mem::HOME,
         Some(GlobalPos::new(level.key.clone(), body.block_position())),
@@ -187,6 +189,35 @@ pub(crate) fn update_piglin_brute_activity(brain: &mut Brain) -> PiglinActivityU
     }
 }
 
+/// Vanilla `PiglinBruteAi.ACTIVITY_SOUND_LIKELIHOOD_PER_TICK`.
+const BRUTE_ACTIVITY_SOUND_LIKELIHOOD_PER_TICK: f32 = 0.0125;
+
+/// Vanilla `PiglinBruteAi.maybePlayActivitySound`.
+///
+/// Runs outside the brain tick only (the activity sound), so it locks the brain
+/// itself.
+pub(crate) fn maybe_play_brute_activity_sound(body: &SharedEntity) {
+    if rand::random::<f32>() < BRUTE_ACTIVITY_SOUND_LIKELIHOOD_PER_TICK {
+        play_brute_activity_sound(body);
+    }
+}
+
+/// Vanilla `PiglinBruteAi.playActivitySound`.
+fn play_brute_activity_sound(body: &SharedEntity) {
+    let Some(brute) = body.downcast_ref::<PiglinBruteEntity>() else {
+        return;
+    };
+
+    let fighting = body
+        .as_mob()
+        .and_then(Mob::brain)
+        .and_then(|brain| brain.lock().get_active_non_core_activity())
+        .is_some_and(|activity| activity == Activity::Fight);
+    if fighting {
+        brute.play_angry_sound();
+    }
+}
+
 /// Vanilla `BehaviorBuilder.triggerIf(predicate, behavior)` over Steel's
 /// [`BehaviorControl`] tree, matching `hoglin::brain`'s helper.
 fn trigger_if_behavior(
@@ -262,7 +293,7 @@ fn piglin_idle_activity() -> ActivityData {
                 ai::find_nearest_valid_attack_target,
             )),
             BehaviorBuilder::boxed(trigger_if_behavior(
-                |ctx| ai::can_hunt(ctx.body),
+                |ctx| ai::can_hunt(ctx.body.as_entity_event_source()),
                 StartHuntingHoglin::create(),
             )),
             BehaviorBuilder::boxed(avoid_repellent()),
@@ -585,7 +616,7 @@ fn is_near_zombified(ctx: &mut BehaviorContext<'_>) -> bool {
 
 /// `PiglinAi.wantsToStopFleeing` as a `BehaviorContext` predicate.
 fn wants_to_stop_fleeing(ctx: &mut BehaviorContext<'_>) -> bool {
-    ai::wants_to_stop_fleeing(ctx.memories(), ctx.body)
+    ai::wants_to_stop_fleeing(ctx.memories(), ctx.body.as_entity_event_source())
 }
 
 /// `PiglinAi.doesntSeeAnyPlayerHoldingLovedItem` as a `BehaviorContext` predicate.
@@ -595,7 +626,7 @@ fn doesnt_see_any_player_holding_loved_item(ctx: &mut BehaviorContext<'_>) -> bo
 
 /// Vanilla `Piglin::isAdult` gate for `StartAttacking`.
 fn is_adult_for_attack(_ctx: &BehaviorContext<'_>, body: &SharedEntity) -> bool {
-    ai::is_adult(body)
+    ai::is_adult(body.as_entity_event_source())
 }
 
 /// Vanilla `PiglinBruteAi.getActivities`.

@@ -35,7 +35,7 @@ pub struct MerchantOffer {
 impl MerchantOffer {
     /// Vanilla `MerchantOffer(ItemCost, ItemStack, int maxUses, int xp, float priceMultiplier)`.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         buy: ItemCost,
         result: ItemStack,
         max_uses: i32,
@@ -47,7 +47,7 @@ impl MerchantOffer {
 
     /// Vanilla `MerchantOffer(ItemCost, Optional<ItemCost>, ItemStack, int, int, float)`.
     #[must_use]
-    pub fn with_second_cost(
+    pub const fn with_second_cost(
         buy_a: ItemCost,
         buy_b: Option<ItemCost>,
         result: ItemStack,
@@ -60,7 +60,7 @@ impl MerchantOffer {
 
     /// Vanilla `MerchantOffer(..., int uses, int maxUses, int xp, float priceMultiplier)`.
     #[must_use]
-    pub fn with_uses(
+    pub const fn with_uses(
         buy_a: ItemCost,
         buy_b: Option<ItemCost>,
         result: ItemStack,
@@ -86,7 +86,11 @@ impl MerchantOffer {
     /// The public vanilla constructors always set `rewardExp` to `true` and
     /// `specialPriceDiff` to `0`.
     #[must_use]
-    pub fn with_demand(
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "vanilla's public `MerchantOffer` constructor takes the same eight fields"
+    )]
+    pub const fn with_demand(
         buy_a: ItemCost,
         buy_b: Option<ItemCost>,
         result: ItemStack,
@@ -115,7 +119,7 @@ impl MerchantOffer {
         clippy::too_many_arguments,
         reason = "mirrors vanilla's private full `MerchantOffer` constructor"
     )]
-    fn from_parts(
+    const fn from_parts(
         buy_a: ItemCost,
         buy_b: Option<ItemCost>,
         result: ItemStack,
@@ -199,7 +203,7 @@ impl MerchantOffer {
     }
 
     /// Vanilla `MerchantOffer.updateDemand`.
-    pub fn update_demand(&mut self) {
+    pub const fn update_demand(&mut self) {
         self.demand = self.demand + self.uses - (self.max_uses - self.uses);
     }
 

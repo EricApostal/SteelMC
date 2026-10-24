@@ -181,7 +181,7 @@ impl EnderPearlEntity {
 
     /// Spawns the 5% endermite at the owner's position (vanilla
     /// `ThrownEnderpearl.onHit` spawn gate and `snapTo`).
-    fn spawn_teleport_endermite(&self, world: &Arc<World>, owner: &dyn Entity) {
+    fn spawn_teleport_endermite(world: &Arc<World>, owner: &dyn Entity) {
         if !world.get_game_rule(&SPAWN_MOBS)
             || !world.get_game_rule(&SPAWN_MONSTERS)
             || world.difficulty() == Difficulty::Peaceful
@@ -212,7 +212,7 @@ impl EnderPearlEntity {
         player: &Player,
         teleport_pos: DVec3,
     ) {
-        self.spawn_teleport_endermite(world, player);
+        Self::spawn_teleport_endermite(world, player);
 
         if self.is_on_portal_cooldown() {
             player.reset_portal_cooldown();

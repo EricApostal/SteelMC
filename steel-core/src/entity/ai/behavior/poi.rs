@@ -10,7 +10,7 @@ use std::sync::{Arc, LazyLock};
 use steel_registry::poi::PoiTypeRef;
 use steel_registry::registry::TaggedRegistryExt as _;
 use steel_registry::villager_profession::VillagerProfessionRef;
-use steel_registry::{REGISTRY, vanilla_poi_types};
+use steel_registry::{REGISTRY, vanilla_poi_type_tags::PoiTag, vanilla_poi_types};
 use steel_utils::{BlockPos, GlobalPos, Identifier};
 
 use super::super::path::Path;
@@ -24,7 +24,7 @@ pub use crate::poi::poi_storage::OccupationStatus as Occupancy;
 ///
 /// A closed enum keeps POI predicates comparable and `Copy` instead of boxing a
 /// closure per behavior instance.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoiPredicate {
     /// Matches every POI type, vanilla `p -> true`.
     Any,
@@ -48,7 +48,6 @@ impl PoiPredicate {
     }
 
     /// Vanilla `Holder<PoiType>` predicate for the POI storage queries.
-    #[must_use]
     pub fn as_query(self) -> impl Fn(PoiTypeRef) -> bool {
         move |poi_type| self.matches(poi_type)
     }
@@ -81,7 +80,7 @@ impl PoiMemory {
 /// the POI type sharing the profession's key (`armorer` → `PoiTypes.ARMORER`), and
 /// `PoiType.NONE` for `none`/`nitwit`.
 #[must_use]
-pub fn profession_held_job_site(profession: VillagerProfessionRef) -> PoiPredicate {
+pub const fn profession_held_job_site(profession: VillagerProfessionRef) -> PoiPredicate {
     match profession.held_job_site {
         Some(poi_type) => PoiPredicate::Type(poi_type),
         None => PoiPredicate::Never,
@@ -90,7 +89,7 @@ pub fn profession_held_job_site(profession: VillagerProfessionRef) -> PoiPredica
 
 /// Vanilla `VillagerProfession.ALL_ACQUIRABLE_JOBS`' `#minecraft:acquirable_job_site`.
 static ACQUIRABLE_JOB_SITE_TAG: LazyLock<Identifier> =
-    LazyLock::new(|| steel_registry::vanilla_poi_type_tags::PoiTag::ACQUIRABLE_JOB_SITE);
+    LazyLock::new(|| PoiTag::ACQUIRABLE_JOB_SITE);
 
 /// Vanilla `VillagerProfession.acquirableJobSite()`.
 ///

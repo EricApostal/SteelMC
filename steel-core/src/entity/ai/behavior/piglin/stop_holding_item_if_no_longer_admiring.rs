@@ -4,7 +4,6 @@ use steel_registry::data_components::vanilla_components::BLOCKS_ATTACKS;
 use steel_utils::types::InteractionHand;
 
 use super::ai;
-use crate::entity::LivingEntity as _;
 use crate::entity::ai::brain::behavior::{BehaviorContext, OneShot, Trigger};
 use crate::entity::ai::brain::memory::MemoryStatus;
 use crate::entity::ai::brain::memory::module_type as mem;
@@ -32,14 +31,19 @@ impl Trigger for StopHoldingItemIfNoLongerAdmiring {
             return false;
         };
         let off_hand = living.get_item_in_hand(InteractionHand::OffHand);
-        if off_hand.is_empty() || off_hand.has_component(&BLOCKS_ATTACKS.key) {
+        if off_hand.is_empty() || off_hand.has_component(BLOCKS_ATTACKS.key()) {
             return false;
         }
 
         let throw_target = ctx
             .get_memory(&mem::NEAREST_VISIBLE_PLAYER)
             .map(|player| player.position());
-        ai::stop_holding_off_hand_item(ctx.level, ctx.body, true, throw_target);
+        ai::stop_holding_off_hand_item(
+            ctx.level,
+            ctx.body.as_entity_event_source(),
+            true,
+            throw_target,
+        );
         true
     }
 }

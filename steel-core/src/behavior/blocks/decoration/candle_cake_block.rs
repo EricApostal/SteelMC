@@ -24,6 +24,7 @@ use crate::{
         blocks::{CakeBlock, CandleBlock},
     },
     block_entity::SharedBlockEntity,
+    entity::Entity,
     entity::projectile::Projectile,
     player::Player,
     world::{ClipHitResult, LevelReader, ScheduledTickAccess, World, game_event::GameEventContext},
@@ -53,7 +54,12 @@ impl CandleCakeBlock {
     /// Vanilla `AbstractCandleBlock.extinguish`: unlight the cake, emit the smoke
     /// particles at its particle offsets, play the extinguish sound and fire the
     /// block-change game event.
-    fn extinguish(world: &World, state: BlockStateId, pos: BlockPos, player: Option<&Player>) {
+    fn extinguish(
+        world: &Arc<World>,
+        state: BlockStateId,
+        pos: BlockPos,
+        player: Option<&dyn Entity>,
+    ) {
         world.set_block(pos, state.set_value(LIT, false), UpdateFlags::UPDATE_ALL);
         for particle_pos in PARTICLE_OFFSETS {
             world.send_particles(
@@ -113,7 +119,7 @@ impl BlockBehavior for CandleCakeBlock {
             && is_empty
             && state.get_value(LIT)
         {
-            Self::extinguish(world, state, pos, Some(player));
+            Self::extinguish(world, state, pos, Some(player as &dyn Entity));
             return InteractionResult::Success;
         }
         InteractionResult::TryEmptyHandInteraction

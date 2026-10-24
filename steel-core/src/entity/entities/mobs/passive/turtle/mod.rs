@@ -15,6 +15,7 @@
 //! calling vanilla's `hurtServer` directly, so the strike still passes through
 //! Steel's shared damage pipeline.
 
+use std::f64::consts::PI;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -449,7 +450,7 @@ impl Entity for TurtleEntity {
             "home_pos",
             NbtTag::IntArray(vec![home_pos.x(), home_pos.y(), home_pos.z()]),
         );
-        nbt.insert("has_egg", self.has_egg() as i8);
+        nbt.insert("has_egg", i8::from(self.has_egg()));
     }
 
     fn load_additional(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
@@ -692,9 +693,9 @@ impl PathfinderMob for TurtleEntity {
             return 0.0;
         };
 
-        if !self.is_going_home() && world.get_block_state(pos).get_fluid_state().is_water() {
-            10.0
-        } else if egg_on_sand(world.as_ref(), pos) {
+        if (!self.is_going_home() && world.get_block_state(pos).get_fluid_state().is_water())
+            || egg_on_sand(world.as_ref(), pos)
+        {
             10.0
         } else {
             world.pathfinding_cost_from_light_levels(pos)
@@ -759,7 +760,7 @@ struct TurtleRandomStrollGoal {
 }
 
 impl TurtleRandomStrollGoal {
-    fn new(speed_modifier: f64, interval: i32) -> Self {
+    const fn new(speed_modifier: f64, interval: i32) -> Self {
         Self {
             stroll: RandomStrollGoal::with_interval(speed_modifier, interval),
         }
@@ -892,9 +893,9 @@ impl Goal for TurtleGoHomeGoal {
             f64::from(home_pos.y()),
             f64::from(home_pos.z()) + 0.5,
         );
-        let mut next_pos = random_pos_towards(mob, 16, 3, home_center, f64::consts::PI / 10.0);
+        let mut next_pos = random_pos_towards(mob, 16, 3, home_center, PI / 10.0);
         if next_pos.is_none() {
-            next_pos = random_pos_towards(mob, 8, 7, home_center, f64::consts::PI / 2.0);
+            next_pos = random_pos_towards(mob, 8, 7, home_center, PI / 2.0);
         }
 
         if let Some(pos) = next_pos
@@ -905,7 +906,7 @@ impl Goal for TurtleGoHomeGoal {
                 .get_fluid_state()
                 .is_water()
         {
-            next_pos = random_pos_towards(mob, 16, 5, home_center, f64::consts::PI / 2.0);
+            next_pos = random_pos_towards(mob, 16, 5, home_center, PI / 2.0);
         }
 
         let Some(next_pos) = next_pos else {
@@ -1314,9 +1315,9 @@ impl Goal for TurtleTravelGoal {
             f64::from(travel_pos.y()),
             f64::from(travel_pos.z()) + 0.5,
         );
-        let mut next_pos = random_pos_towards(mob, 16, 3, target_center, f64::consts::PI / 10.0);
+        let mut next_pos = random_pos_towards(mob, 16, 3, target_center, PI / 10.0);
         if next_pos.is_none() {
-            next_pos = random_pos_towards(mob, 8, 7, target_center, f64::consts::PI / 2.0);
+            next_pos = random_pos_towards(mob, 8, 7, target_center, PI / 2.0);
         }
 
         // Vanilla rejects positions whose 34-block chunk neighborhood is unloaded.

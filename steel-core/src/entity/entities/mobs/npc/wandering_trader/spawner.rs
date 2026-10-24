@@ -7,6 +7,7 @@
 //! [`WanderingTraderSpawner::tick`] once per world tick and to load/save the
 //! counters through [`WanderingTraderSpawner::load`] / [`WanderingTraderSpawner::save`].
 
+use std::io;
 use std::sync::Arc;
 
 use glam::DVec3;
@@ -17,10 +18,12 @@ use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::vanilla_biome_tags::BiomeTag;
 use steel_registry::vanilla_game_rules::SPAWN_WANDERING_TRADERS;
 use steel_registry::{REGISTRY, RegistryExt as _, vanilla_entities};
+use steel_utils::saved_data::SavedDataName;
 use steel_utils::saved_data::names as saved_data_names;
 use steel_utils::{BlockPos, Downcast, Identifier, WorldAabb};
 
 use super::WanderingTraderEntity;
+use crate::behavior::BLOCK_BEHAVIORS;
 use crate::chunk::heightmap::HeightmapType;
 use crate::entity::entities::mobs::passive::llama::TraderLlamaEntity;
 use crate::entity::{
@@ -30,6 +33,7 @@ use crate::entity::{
 use crate::physics::{WorldCollisionProvider, has_block_collision};
 use crate::player::Player;
 use crate::poi::OccupationStatus;
+use crate::world::custom_spawner::{CustomSpawner, CustomSpawnerSaveFuture};
 use crate::world::{LevelReader, World};
 
 /// Vanilla `WanderingTraderSpawner.DEFAULT_TICK_DELAY`.
@@ -76,12 +80,12 @@ impl Default for WanderingTraderData {
 
 impl WanderingTraderData {
     /// Vanilla `WanderingTraderData.setSpawnDelay`.
-    pub fn set_spawn_delay(&mut self, spawn_delay: i32) {
+    pub const fn set_spawn_delay(&mut self, spawn_delay: i32) {
         self.spawn_delay = spawn_delay;
     }
 
     /// Vanilla `WanderingTraderData.setSpawnChance`.
-    pub fn set_spawn_chance(&mut self, spawn_chance: i32) {
+    pub const fn set_spawn_chance(&mut self, spawn_chance: i32) {
         self.spawn_chance = spawn_chance;
     }
 }
@@ -130,7 +134,7 @@ impl WanderingTraderSpawner {
     ///
     /// # Errors
     /// Propagates the saved-data I/O error.
-    pub async fn load(world: &World) -> std::io::Result<Self> {
+    pub async fn load(world: &World) -> io::Result<Self> {
         let data = world
             .saved_data
             .load_or_default::<WanderingTraderData>(saved_data_names::WANDERING_TRADER)
@@ -142,7 +146,7 @@ impl WanderingTraderSpawner {
     ///
     /// # Errors
     /// Propagates the saved-data I/O error.
-    pub async fn save(&self, world: &World) -> std::io::Result<()> {
+    pub async fn save(&self, world: &World) -> io::Result<()> {
         world
             .saved_data
             .save(saved_data_names::WANDERING_TRADER, &self.data)
@@ -172,13 +176,13 @@ impl WanderingTraderSpawner {
             (chance_to_spawn + SPAWN_CHANCE_INCREASE).clamp(MIN_SPAWN_CHANCE, MAX_SPAWN_CHANCE);
 
         // Vanilla `random.nextInt(100) <= chanceToSpawn`.
-        if rand::random_range(0..100) <= chance_to_spawn && self.spawn(world) {
+        if rand::random_range(0..100) <= chance_to_spawn && Self::spawn(world) {
             self.data.spawn_chance = MIN_SPAWN_CHANCE;
         }
     }
 
     /// Vanilla `WanderingTraderSpawner.spawn`.
-    fn spawn(&self, world: &Arc<World>) -> bool {
+    fn spawn(world: &Arc<World>) -> bool {
         let Some(player) = random_player(world) else {
             // Vanilla treats "no player" as a successful attempt.
             return true;
@@ -303,7 +307,7 @@ fn on_ground_spawn_position_ok(
 /// Vanilla `BlockState.isValidSpawn` for the block below a spawn position.
 fn is_valid_spawn_block(world: &Arc<World>, pos: BlockPos, entity_type: EntityTypeRef) -> bool {
     let state = world.get_block_state(pos);
-    crate::behavior::BLOCK_BEHAVIORS
+    BLOCK_BEHAVIORS
         .get_behavior(state.get_block())
         .is_valid_spawn(state, world.as_ref(), pos, entity_type)
 }
@@ -379,19 +383,16 @@ fn try_to_spawn_llama_for(world: &Arc<World>, trader: &SharedEntity, radius: i32
     leashable.set_leashed_to(trader);
 }
 
-impl crate::world::custom_spawner::CustomSpawner for WanderingTraderSpawner {
+impl CustomSpawner for WanderingTraderSpawner {
     fn tick(&mut self, world: &Arc<World>) {
         WanderingTraderSpawner::tick(self, world);
     }
 
-    fn saved_data_name(&self) -> Option<steel_utils::saved_data::SavedDataName> {
+    fn saved_data_name(&self) -> Option<SavedDataName> {
         Some(saved_data_names::WANDERING_TRADER)
     }
 
-    fn save<'a>(
-        &'a self,
-        world: &'a World,
-    ) -> crate::world::custom_spawner::CustomSpawnerSaveFuture<'a> {
+    fn save<'a>(&'a self, world: &'a World) -> CustomSpawnerSaveFuture<'a> {
         Box::pin(async move { WanderingTraderSpawner::save(self, world).await })
     }
 }

@@ -1,6 +1,7 @@
 use steel_registry::vanilla_game_rules::UNIVERSAL_ANGER;
 use steel_utils::{DowncastTypeKey, WorldAabb};
 
+use super::capabilities::Tameable;
 use super::selector::{Goal, GoalControls};
 use super::target_goal::{TargetGoalBase, follow_distance};
 use crate::entity::ai::targeting::TargetingConditions;
@@ -99,7 +100,7 @@ impl HurtByTargetGoal {
             if let Some(mob_owner) = mob_owner {
                 let other_owner = entity
                     .as_tameable()
-                    .and_then(|tameable| tameable.owner())
+                    .and_then(Tameable::owner)
                     .map(|owner| owner.uuid());
                 if other_owner != mob_owner {
                     return false;

@@ -24,7 +24,7 @@ use crate::entity::{
     LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, SharedEntity,
 };
 use crate::physics::MoveResult;
-use crate::world::World;
+use crate::world::{LevelReader, World};
 
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
 
@@ -234,7 +234,8 @@ impl PathfinderMob for GiantEntity {
     fn get_walk_target_value(&self, pos: BlockPos) -> f32 {
         // Vanilla `Giant.getWalkTargetValue` is the positive light-level cost, the opposite sign
         // of `Monster.getWalkTargetValue`.
-        self.level()
-            .map_or(0.0, |world| world.pathfinding_cost_from_light_levels(pos))
+        self.level().map_or(0.0, |world| {
+            LevelReader::pathfinding_cost_from_light_levels(world.as_ref(), pos)
+        })
     }
 }

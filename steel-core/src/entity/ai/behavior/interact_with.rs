@@ -164,8 +164,11 @@ impl Trigger for InteractWith {
         });
 
         if let Some(closest) = closest {
-            ctx.set_memory(self.target_memory, closest.clone());
-            utils::set_look_target(ctx, Arc::new(EntityTracker::new(closest.clone(), true)));
+            ctx.set_memory(self.target_memory, SharedEntity::clone(&closest));
+            utils::set_look_target(
+                ctx,
+                Arc::new(EntityTracker::new(SharedEntity::clone(&closest), true)),
+            );
             utils::set_walk_target(
                 ctx,
                 Arc::new(EntityTracker::new(closest, false)),

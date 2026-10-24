@@ -1,13 +1,24 @@
 //! Vanilla llama family: `Llama` (chested storage) and `TraderLlama` (the
 //! wandering trader's leashed llama with its own despawn clock).
 //!
-//! Scope: this wave implements the parts `TraderLlama` and the wandering-trader
-//! spawner depend on — chested storage (`ChestedHorse` + `Items` NBT, strength-sized
-//! inventory), strength/variant synced data, llama sounds, chest interaction and
-//! trader despawn/leash behaviour. The remaining vanilla llama behaviour
-//! (caravan following, spit ranged attack, taming/temper, breeding offspring,
-//! carpet decor, riding) is **not** implemented here and is listed as a gap in the
-//! wave report.
+//! Scope: chested storage (`ChestedHorse` + `Items` NBT, strength-sized
+//! inventory), strength/variant synced data, llama sounds, the full
+//! `AbstractChestedHorse.mobInteract` chain (chest equip, feeding, taming,
+//! riding), the shared `AbstractHorse` mount inventory screen
+//! (`ClientboundMountScreenOpenPacket` + `mount_menu`) and trader
+//! despawn/leash behaviour.
+//!
+//! The remaining vanilla llama behaviour (caravan following, spit ranged
+//! attack, breeding offspring identity, carpet decor) is **not** implemented
+//! here and is listed as a gap in the wave report.
+//!
+//! # Riding
+//!
+//! Vanilla `Llama` does not override any `AbstractHorse` riding method, so the
+//! shared equine helpers (`tick_ridden`, `ridden_input`, `ridden_speed`,
+//! `controlling_passenger`, `RunAroundLikeCrazyGoal`) apply unchanged: an
+//! untamed llama bucks its rider and slowly builds temper until it is tamed,
+//! exactly like the other equines.
 
 mod trader;
 
@@ -27,10 +38,10 @@ use steel_registry::entity_variant::LlamaVariant;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_attributes;
-use steel_registry::vanilla_entity_data::LlamaEntityData;
+use steel_registry::vanilla_entity_data::{AbstractHorseEntityData, LlamaEntityData};
 use steel_registry::vanilla_item_tags::ItemTag;
 use steel_registry::{REGISTRY, TaggedRegistryExt as _, sound_events, vanilla_items};
-use steel_utils::locks::SyncMutex;
+use steel_utils::locks::{Shared, SyncMutex};
 use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
@@ -40,20 +51,28 @@ use crate::entity::ai::goal::{
     TemptGoal, WaterAvoidingRandomStrollGoal,
 };
 use crate::entity::damage::DamageSource;
+use crate::entity::entities::mobs::passive::equine::{
+    AbstractHorseParts, Equine, FLAG_TAME, MountPanicGoal, RunAroundLikeCrazyGoal,
+    abstract_horse_mob_interact, can_parent, controlling_passenger, drop_carried_items, eating,
+    equip_chest, equip_sound, is_immobile_from_state, is_tamed, load_legacy_equipment, make_mad,
+    open_custom_inventory_screen, ridden_input, ridden_speed, save_legacy_equipment, set_flag,
+    stand_if_possible, tame_with_name, tick_abstract_horse, tick_ridden,
+};
 use crate::entity::npc::inventory_carrier::InventoryCarrier;
 use crate::entity::{
     AgeableMob, AgeableMobBase, Animal, AnimalBase, Entity, EntityBase, EntityBaseLoad, EntityPose,
     EntitySpawnReason, EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase,
     PathfinderMob, SharedEntity, SpawnGroupData,
 };
+use crate::inventory::equipment::EquipmentSlot;
 use crate::physics::MoveResult;
 use crate::player::Player;
 use crate::world::World;
 
 /// Vanilla `Llama.MAX_STRENGTH`.
 const MAX_STRENGTH: i32 = 5;
-/// Vanilla `AbstractMountInventoryMenu.getInventorySize`: columns × 3 rows.
-const INVENTORY_ROWS: usize = 3;
+/// Vanilla `Llama.getMaxTemper` (vanilla `AbstractHorse` uses 100).
+const LLAMA_MAX_TEMPER: i32 = 30;
 /// Vanilla `AbstractChestedHorse` baby passenger attachment/scale.
 const LLAMA_BABY_PASSENGER_ATTACHMENTS: [EntityAttachmentPoint; 1] =
     [EntityAttachmentPoint::new(0.0, 1.87 - 0.25, -0.3)];
@@ -78,8 +97,9 @@ pub struct LlamaEntity {
     ageable_base: AgeableMobBase,
     animal_base: AnimalBase,
     entity_data: SyncMutex<LlamaEntityData>,
-    /// Vanilla `AbstractHorse.inventory`; empty while the llama has no chest.
-    inventory: SyncMutex<InventoryCarrier>,
+    /// Vanilla `AbstractHorse` non-synchronized state: the mount inventory
+    /// (`AbstractHorse.inventory`), temper, owner and the animation counters.
+    parts: AbstractHorseParts,
 }
 
 // SAFETY: This key is owned by Steel and uniquely identifies `LlamaEntity`.
@@ -116,10 +136,12 @@ impl LlamaEntity {
         living_base.initialize_synced_data(&mut entity_data);
 
         {
-            // Vanilla `Llama.registerGoals`; caravan follow, ranged spit and
-            // `RunAroundLikeCrazyGoal` are the documented gaps (see module docs).
+            // Vanilla `Llama.registerGoals`; the caravan-follow and ranged-spit
+            // goals are the documented gaps (see module docs).
             let mut goal_selector = mob_base.goal_selector().lock();
             goal_selector.add_goal(0, FloatGoal::new(&mob_base));
+            goal_selector.add_goal(1, RunAroundLikeCrazyGoal::new(1.2));
+            goal_selector.add_goal(3, MountPanicGoal::new(1.2));
             goal_selector.add_goal(3, PanicGoal::new(1.2));
             goal_selector.add_goal(4, BreedGoal::new(1.0));
             goal_selector.add_goal(
@@ -140,6 +162,11 @@ impl LlamaEntity {
             goal_selector.add_goal(9, RandomLookAroundGoal::new());
         }
 
+        // Vanilla `AbstractChestedHorse` sets `canGallop = false`.
+        let mut parts = AbstractHorseParts::new(false);
+        parts.set_max_temper(LLAMA_MAX_TEMPER);
+        parts.create_inventory(0);
+
         Self {
             base,
             entity_type,
@@ -148,13 +175,13 @@ impl LlamaEntity {
             ageable_base,
             animal_base,
             entity_data: SyncMutex::new(entity_data),
-            inventory: SyncMutex::new(InventoryCarrier::new(0)),
+            parts,
         }
     }
 
     /// Vanilla `Llama.isTraderLlama`; overridden by [`TraderLlamaEntity`].
     #[must_use]
-    pub const fn is_trader_llama(&self) -> bool {
+    pub const fn is_trader_llama() -> bool {
         false
     }
 
@@ -240,41 +267,239 @@ impl LlamaEntity {
     /// Vanilla `AbstractHorse.getInventorySize` = `columns * 3`.
     #[must_use]
     pub fn inventory_size(&self) -> usize {
-        usize::try_from(self.inventory_columns()).unwrap_or(0) * INVENTORY_ROWS
+        AbstractHorseParts::inventory_size(self.inventory_columns())
     }
 
     /// Vanilla `AbstractHorse.createInventory`: rebuilds the storage, copying slots.
     fn create_inventory(&self) {
-        let size = self.inventory_size();
-        let mut inventory = self.inventory.lock();
-        let mut rebuilt = InventoryCarrier::new(size);
-        let copy_count = inventory.size().min(size);
-        for slot in 0..copy_count {
-            rebuilt.set_item(slot, inventory.get_item(slot).clone());
-        }
-        *inventory = rebuilt;
+        self.parts.create_inventory(self.inventory_size());
     }
 
     /// Returns the carried items (vanilla `AbstractHorse` inventory).
     #[must_use]
-    pub fn carried_items(&self) -> &SyncMutex<InventoryCarrier> {
-        &self.inventory
+    pub const fn carried_items(&self) -> &Shared<InventoryCarrier> {
+        self.parts.inventory()
+    }
+
+    /// Vanilla `AbstractHorse.isTamed`.
+    #[must_use]
+    pub fn is_tamed(&self) -> bool {
+        is_tamed(self.entity_data.lock().abstract_horse())
+    }
+
+    /// Vanilla `AbstractHorse.setTamed`.
+    pub fn set_tamed(&self, tamed: bool) {
+        set_flag(
+            self.entity_data.lock().abstract_horse_mut(),
+            FLAG_TAME,
+            tamed,
+        );
+    }
+
+    /// Vanilla `AbstractHorse.isEating`.
+    #[must_use]
+    pub fn is_eating(&self) -> bool {
+        is_tamed(self.entity_data.lock().abstract_horse())
+    }
+
+    /// Vanilla `AbstractHorse.getTemper`.
+    #[must_use]
+    pub fn temper(&self) -> i32 {
+        self.parts.temper()
+    }
+
+    /// Vanilla `AbstractHorse.getOwnerReference`, reduced to the owner UUID.
+    #[must_use]
+    pub fn owner(&self) -> Option<uuid::Uuid> {
+        self.parts.owner()
+    }
+
+    /// Runs a shared `equine` helper against a detached copy of the synchronized
+    /// `AbstractHorse` layer.
+    ///
+    /// Mirrors the equine entities: the helpers read health, age and level back
+    /// through the entity, which re-enters this entity's synced-data mutex, so
+    /// the `id_flags` byte is detached, mutated and merged back.
+    fn with_horse_data<R>(&self, f: impl FnOnce(&mut AbstractHorseEntityData) -> R) -> R {
+        let mut detached = AbstractHorseEntityData::new();
+        detached
+            .id_flags
+            .set(*self.entity_data.lock().abstract_horse().id_flags.get());
+        let result = f(&mut detached);
+        self.entity_data
+            .lock()
+            .abstract_horse_mut()
+            .id_flags
+            .set(*detached.id_flags.get());
+        result
+    }
+
+    /// Vanilla `Llama.canPerformRearing`: llamas never rear up.
+    const fn can_perform_rearing() -> bool {
+        false
+    }
+
+    /// Vanilla `Llama.isFood`: `ItemTags.LLAMA_FOOD`.
+    #[must_use]
+    pub fn is_food(item_stack: &ItemStack) -> bool {
+        REGISTRY
+            .items
+            .is_in_tag(item_stack.item(), &ItemTag::LLAMA_FOOD)
+    }
+
+    /// Vanilla `Llama.canParent`/`Llama.canMate` tail.
+    #[must_use]
+    pub fn can_parent(&self) -> bool {
+        self.with_horse_data(|data| can_parent(self, data))
+    }
+
+    /// Vanilla `AbstractHorse.openCustomInventoryScreen`.
+    pub fn open_custom_inventory_screen(&self, player: &Player) {
+        self.with_horse_data(|data| {
+            open_custom_inventory_screen(self, &self.parts, data, player, self.inventory_columns());
+        });
     }
 
     /// Vanilla `AbstractChestedHorse.equipChest`.
     fn equip_chest(&self, player: &Player, hand: InteractionHand) {
         self.set_chest(true);
-        self.play_sound(
+        equip_chest(
+            self,
+            &self.parts,
+            player,
+            hand,
             &sound_events::ENTITY_LLAMA_CHEST,
-            1.0,
-            (rand::random::<f32>() - rand::random::<f32>()) * 0.2 + 1.0,
+            self.inventory_columns(),
         );
-        let mut inventory = player.inventory.lock();
-        inventory
-            .get_item_in_hand_mut(hand)
-            .consume(1, player.has_infinite_materials());
-        drop(inventory);
-        self.create_inventory();
+    }
+
+    /// Vanilla `AbstractHorse.fedFood` over `Llama.handleEating`.
+    fn feed(&self, player: &Player, hand: InteractionHand) -> InteractionResult {
+        let item_stack = {
+            let inventory = player.inventory.lock();
+            let item_stack = inventory.get_item_in_hand(hand);
+            item_stack.copy_with_count(item_stack.count())
+        };
+
+        let ate_food =
+            self.with_horse_data(|data| self.handle_llama_eating(player, &item_stack, data));
+        if ate_food {
+            let mut inventory = player.inventory.lock();
+            inventory
+                .get_item_in_hand_mut(hand)
+                .consume(1, player.has_infinite_materials());
+            InteractionResult::SuccessServer
+        } else {
+            InteractionResult::Pass
+        }
+    }
+
+    /// Vanilla `Llama.handleEating`.
+    ///
+    /// Differs from `AbstractHorse.handleEating`: only wheat and hay blocks are
+    /// food, wheat ages a baby by 10 and hay by 90, hay starts love mode, and
+    /// `Llama.getMaxTemper` clamps the temper at 30.
+    fn handle_llama_eating(
+        &self,
+        player: &Player,
+        item_stack: &ItemStack,
+        data: &mut AbstractHorseEntityData,
+    ) -> bool {
+        let mut age_up = 0;
+        let mut temper = 0;
+        let mut heal = 0.0_f32;
+        let mut item_used = false;
+
+        if item_stack.is(&vanilla_items::WHEAT) {
+            age_up = 10;
+            temper = 3;
+            heal = 2.0;
+        } else if item_stack.is(&vanilla_items::HAY_BLOCK) {
+            age_up = 90;
+            temper = 6;
+            heal = 10.0;
+            if is_tamed(data) && self.get_age() == 0 && !self.is_in_love() {
+                item_used = true;
+                self.set_in_love(Some(player));
+            }
+        }
+
+        if self.get_health() < self.get_max_health() && heal > 0.0 {
+            self.heal(heal);
+            item_used = true;
+        }
+
+        if AgeableMob::is_baby(self) && age_up > 0 && !self.is_age_locked() {
+            self.age_up(age_up, false);
+            item_used = true;
+        }
+
+        if temper > 0
+            && (item_used || !is_tamed(data))
+            && self.parts.temper() < self.parts.max_temper()
+        {
+            self.parts.modify_temper(temper);
+            item_used = true;
+        }
+
+        if item_used {
+            eating(
+                self,
+                &self.parts,
+                data,
+                Some(&sound_events::ENTITY_LLAMA_EAT),
+            );
+        }
+
+        item_used
+    }
+
+    /// Vanilla `Llama.mobInteract` → `AbstractChestedHorse.mobInteract`.
+    fn chested_mob_interact(&self, player: &Player, hand: InteractionHand) -> InteractionResult {
+        let is_baby = AgeableMob::is_baby(self);
+        let should_open_inventory = !is_baby && self.is_tamed() && player.is_secondary_use_active();
+        let holding_golden_dandelion =
+            player.is_holding(&mut |stack| stack.is(&vanilla_items::GOLDEN_DANDELION));
+
+        if !self.is_vehicle() && !should_open_inventory && (!is_baby || !holding_golden_dandelion) {
+            let item_stack = {
+                let inventory = player.inventory.lock();
+                let item_stack = inventory.get_item_in_hand(hand);
+                item_stack.copy_with_count(item_stack.count())
+            };
+
+            if !item_stack.is_empty() {
+                if LlamaEntity::is_food(&item_stack) {
+                    return self.feed(player, hand);
+                }
+
+                if !self.is_tamed() {
+                    if let Some(world) = self.level()
+                        && let Some(entity) = world.get_entity_by_id(self.id())
+                    {
+                        self.make_mad(&entity);
+                    }
+                    return InteractionResult::Success;
+                }
+
+                if !self.has_chest() && item_stack.is(&vanilla_items::CHEST) {
+                    self.equip_chest(player, hand);
+                    return InteractionResult::Success;
+                }
+            }
+        }
+
+        // Vanilla `AbstractHorse.mobInteract` tail.
+        self.with_horse_data(|data| {
+            abstract_horse_mob_interact(
+                self,
+                &self.parts,
+                data,
+                player,
+                hand,
+                self.inventory_columns(),
+            )
+        })
     }
 
     fn update_dirty_mob_effect_entity_data(&self) {
@@ -325,6 +550,10 @@ impl Entity for LlamaEntity {
         Some(&self.entity_data)
     }
 
+    fn controlling_passenger(&self) -> Option<SharedEntity> {
+        controlling_passenger(self)
+    }
+
     fn update_data_before_sync(&self) {
         self.update_dirty_mob_effect_entity_data();
     }
@@ -348,6 +577,8 @@ impl Entity for LlamaEntity {
         self.save_mob(nbt);
         self.save_ageable_mob(nbt);
         self.save_animal(nbt);
+        self.parts
+            .save_abstract_horse(self.entity_data.lock().abstract_horse(), nbt);
 
         // Vanilla `Llama` + `AbstractChestedHorse` keys.
         // Vanilla `Llama.Variant.LEGACY_CODEC` stores the variant by name.
@@ -355,14 +586,17 @@ impl Entity for LlamaEntity {
         nbt.insert("Strength", self.strength());
         nbt.insert("ChestedHorse", i8::from(self.has_chest()));
         if self.has_chest() {
-            self.inventory.lock().write_to_tag(nbt);
+            self.parts.save_items(nbt);
         }
+        save_legacy_equipment(self, nbt);
     }
 
     fn load_additional(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
         self.load_mob(nbt);
         self.load_ageable_mob(nbt);
         self.load_animal(nbt);
+        self.parts
+            .load_abstract_horse(self.entity_data.lock().abstract_horse_mut(), &nbt);
 
         // Vanilla reads `Strength` before the super call and clamps through `setStrength`.
         if let Some(strength) = nbt.int("Strength") {
@@ -374,11 +608,13 @@ impl Entity for LlamaEntity {
         {
             self.set_variant(variant);
         }
-        if nbt.byte("ChestedHorse").is_some_and(|value| value != 0) {
-            self.set_chest(true);
-            self.create_inventory();
-            self.inventory.lock().read_from_tag(&nbt);
+        // Vanilla `AbstractChestedHorse.readAdditionalSaveData`.
+        self.set_chest(nbt.byte("ChestedHorse").is_some_and(|value| value != 0));
+        self.create_inventory();
+        if self.has_chest() {
+            self.parts.load_items(&nbt, self.inventory_size());
         }
+        load_legacy_equipment(self, &nbt);
     }
 }
 
@@ -405,6 +641,49 @@ impl LivingEntity for LlamaEntity {
         0.4
     }
 
+    /// Vanilla `Llama.canUseSlot`: llamas accept every equipment slot.
+    fn can_use_slot(&self, _slot: EquipmentSlot) -> bool {
+        true
+    }
+
+    fn can_dispenser_equip_into_slot(&self, slot: EquipmentSlot) -> bool {
+        let body_or_saddle = slot == EquipmentSlot::Body || slot == EquipmentSlot::Saddle;
+        (body_or_saddle && self.is_tamed()) || Mob::can_pick_up_loot(self)
+    }
+
+    fn equip_sound(&self, slot: EquipmentSlot, stack: &ItemStack) -> Option<SoundEventRef> {
+        // Vanilla `AbstractHorse.getEquipSound`: the saddle sound, otherwise the
+        // equippable component's own sound.
+        equip_sound(slot, stack)
+    }
+
+    /// Vanilla `AbstractChestedHorse.dropEquipment`: carried inventory stacks
+    /// plus the chest block drop.
+    fn drop_custom_death_loot(&self, _source: &DamageSource, _killed_by_player: bool) {
+        drop_carried_items(self, &self.parts);
+        if self.has_chest() {
+            let _ = self.spawn_at_location(ItemStack::new(&vanilla_items::CHEST), 0.0);
+            self.set_chest(false);
+        }
+    }
+
+    /// Vanilla `Llama.isImmobile`: `isDeadOrDying() || isEating()`.
+    fn is_immobile(&self) -> bool {
+        self.is_dead_or_dying() || is_immobile_from_state(self.entity_data.lock().abstract_horse())
+    }
+
+    fn tick_ridden(&self, controller: &Player, ridden_input: DVec3) {
+        tick_ridden(self, &self.parts, controller, ridden_input);
+    }
+
+    fn ridden_input(&self, controller: &Player, _self_input: DVec3) -> DVec3 {
+        self.with_horse_data(|data| ridden_input(self, &self.parts, data, controller))
+    }
+
+    fn ridden_speed(&self, _controller: &Player) -> f32 {
+        ridden_speed(self)
+    }
+
     fn hurt_sound(&self, _source: &DamageSource) -> Option<SoundEventRef> {
         Some(&sound_events::ENTITY_LLAMA_HURT)
     }
@@ -418,6 +697,9 @@ impl LivingEntity for LlamaEntity {
     }
 
     fn ai_step(&self, entity: &SharedEntity) -> Option<MoveResult> {
+        // Vanilla `Llama.canEatGrass` is false.
+        self.with_horse_data(|data| tick_abstract_horse(self, &self.parts, data, false));
+
         let result = Mob::mob_ai_step(self, entity);
         AgeableMob::tick_ageable_mob(self);
         Animal::tick_animal_love(self);
@@ -512,19 +794,60 @@ impl Mob for LlamaEntity {
     }
 
     fn mob_interact(&self, player: &Player, hand: InteractionHand) -> InteractionResult {
-        // Vanilla `AbstractChestedHorse.mobInteract`: a chest equips storage once tamed.
-        let holding_chest = player
-            .inventory
-            .lock()
-            .get_item_in_hand(hand)
-            .is(&vanilla_items::CHEST);
+        self.chested_mob_interact(player, hand)
+    }
 
-        if holding_chest && !self.has_chest() && !AgeableMob::is_baby(self) {
-            self.equip_chest(player, hand);
-            return InteractionResult::Success;
-        }
+    /// Vanilla `AbstractHorse.getMaxSpawnClusterSize`.
+    fn max_spawn_cluster_size(&self) -> i32 {
+        6
+    }
+}
 
-        InteractionResult::Pass
+impl Equine for LlamaEntity {
+    fn is_tamed(&self) -> bool {
+        LlamaEntity::is_tamed(self)
+    }
+
+    fn temper(&self) -> i32 {
+        self.parts.temper()
+    }
+
+    fn max_temper(&self) -> i32 {
+        self.parts.max_temper()
+    }
+
+    fn modify_temper(&self, amount: i32) -> i32 {
+        self.parts.modify_temper(amount)
+    }
+
+    fn tame_with_name(&self, player: &SharedEntity) {
+        self.with_horse_data(|data| {
+            tame_with_name(self, &self.parts, data, player);
+        });
+    }
+
+    fn make_mad(&self, _mob: &SharedEntity) {
+        let can_perform_rearing = Self::can_perform_rearing();
+        self.with_horse_data(|data| {
+            make_mad(
+                self,
+                &self.parts,
+                data,
+                can_perform_rearing,
+                Some(&sound_events::ENTITY_LLAMA_ANGRY),
+            );
+        });
+    }
+
+    fn stand_if_possible(&self) {
+        let can_perform_rearing = Self::can_perform_rearing();
+        self.with_horse_data(|data| {
+            stand_if_possible(self, &self.parts, data, can_perform_rearing);
+        });
+    }
+
+    fn ambient_stand_sound(&self) -> Option<SoundEventRef> {
+        Some(&sound_events::ENTITY_LLAMA_AMBIENT)
     }
 }
 

@@ -11,7 +11,7 @@ use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
-use steel_registry::entity_type::EntityTypeRef;
+use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::IronGolemEntityData;
@@ -209,7 +209,7 @@ impl IronGolemEntity {
     }
 
     /// Vanilla `IronGolem.doHurtTarget` damage roll: `base/2 + random.nextInt(base)`.
-    fn roll_attack_damage(&self, attack_damage: f32) -> f32 {
+    fn roll_attack_damage(attack_damage: f32) -> f32 {
         let base = attack_damage as i32;
         if base > 0 {
             attack_damage / 2.0 + rand::random_range(0..base) as f32
@@ -281,10 +281,7 @@ impl Entity for IronGolemEntity {
         Mob::base_tick_mob(self);
     }
 
-    fn dimensions_for_pose(
-        &self,
-        _pose: EntityPose,
-    ) -> steel_registry::entity_type::EntityDimensions {
+    fn dimensions_for_pose(&self, _pose: EntityPose) -> EntityDimensions {
         let scale = LivingEntity::get_scale(self);
         if self.entity_type.fixed {
             self.entity_type.dimensions
@@ -448,7 +445,7 @@ impl Mob for IronGolemEntity {
             .attributes()
             .lock()
             .required_value(vanilla_attributes::ATTACK_DAMAGE) as f32;
-        let damage = self.roll_attack_damage(attack_damage);
+        let damage = Self::roll_attack_damage(attack_damage);
         let source = self.mob_attack_damage_source(&ItemStack::empty(), entity);
         let hurt = target.hurt(world, &source, damage);
         if hurt {
@@ -476,6 +473,8 @@ impl Mob for IronGolemEntity {
 
         let health_before = self.get_health();
         self.heal(IRON_INGOT_HEAL_AMOUNT);
+        // Vanilla compares the health exactly.
+        #[expect(clippy::float_cmp, reason = "vanilla compares exactly")]
         if self.get_health() == health_before {
             return InteractionResult::Pass;
         }

@@ -722,10 +722,7 @@ mod tests {
 
         assert!(furnace.can_place_item(SLOT_FUEL, &wool_slab));
         assert!(!furnace.can_place_item(SLOT_RESULT, &wool_slab));
-        assert!(!furnace.can_place_item(
-            SLOT_FUEL,
-            &ItemStack::new(&vanilla_items::IRON_ORE)
-        ));
+        assert!(!furnace.can_place_item(SLOT_FUEL, &ItemStack::new(&vanilla_items::IRON_ORE)));
 
         furnace.set_item(SLOT_FUEL, wool_slab);
         assert_eq!(furnace.burn_duration(block_state(FurnaceKind::Furnace)), 50);

@@ -25,8 +25,8 @@ use crate::entity::entities::objects::projectiles::hurting::{
     ExplosionInteraction, ExplosionSpec, HurtingProjectile, HurtingProjectileState, explode,
 };
 use crate::entity::{
-    Entity, EntityBase, EntityBaseLoad, EntityEventSource as _, EntitySyncedData,
-    LivingEntity as _, Projectile, ProjectileBase, ProjectileHit, RemovalReason, SharedEntity,
+    Entity, EntityBase, EntityBaseLoad, EntityEventSource as _, EntitySyncedData, Projectile,
+    ProjectileBase, ProjectileHit, RemovalReason, SharedEntity,
 };
 use crate::world::{ClipHitResult, World};
 

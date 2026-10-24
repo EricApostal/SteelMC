@@ -224,7 +224,7 @@ impl BlockEntity for SculkCatalystBlockEntity {
         let mut charge = self.listener.charge.lock();
         charge.cursors.clear();
         if let Some(cursors) = nbt.list("cursors").and_then(|list| list.compounds()) {
-            for cursor in cursors.take(MAX_CURSORS) {
+            for cursor in cursors.into_iter().take(MAX_CURSORS) {
                 let Some(pos) = cursor.int_array("pos") else {
                     continue;
                 };

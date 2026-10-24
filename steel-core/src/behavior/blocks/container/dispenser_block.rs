@@ -34,7 +34,7 @@ use steel_utils::{BlockPos, BlockStateId, WorldAabb, translations};
 use text_components::TextComponent;
 
 use crate::behavior::block::{BlockBehavior, BlockEntityCreation};
-use crate::behavior::blocks::decoration::skull::WitherSkullBlock;
+use crate::behavior::blocks::WitherSkullBlock;
 use crate::behavior::blocks::portal::FireBlock;
 use crate::behavior::blocks::special::TntBlock;
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
@@ -586,7 +586,7 @@ fn dispense_flint_and_steel(
             &GameEventContext::new(None, Some(target_state)),
         );
     } else if target_state.get_block() == &vanilla_blocks::TNT {
-        if TntBlock::prime(world, target, None) {
+        if TntBlock::prime(world, target, None, &stack) {
             let _ = world.remove_block(target, false);
         } else {
             success = false;
@@ -671,7 +671,7 @@ fn dispense_tnt(
     }
 
     let target = source.target();
-    if !TntBlock::prime(source.world, target, None) {
+    if !TntBlock::prime(source.world, target, None, &stack) {
         return (stack, DispenseFeedback::Optional(false));
     }
 

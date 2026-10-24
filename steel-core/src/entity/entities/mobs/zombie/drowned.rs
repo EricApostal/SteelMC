@@ -6,6 +6,7 @@
 //! adds the drowned-only behaviour on top of it.
 
 use std::f64::consts::FRAC_PI_2;
+use std::iter;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
@@ -27,7 +28,7 @@ use steel_registry::{
     sound_events, vanilla_attributes, vanilla_blocks, vanilla_entities, vanilla_items,
 };
 use steel_utils::locks::SyncMutex;
-use steel_utils::random::Random as _;
+use steel_utils::random::Random;
 use steel_utils::random::RandomSource;
 use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::types::{Difficulty, InteractionHand};
@@ -42,7 +43,7 @@ use crate::entity::ai::goal::{
     NearestAttackableTargetGoal, RandomStrollGoal, RangedAttackGoal, RangedAttackMob,
     WaterAvoidingRandomStrollGoal, ZombieAttackGoal, is_goal,
 };
-use crate::entity::ai::path::PathType;
+use crate::entity::ai::path::{Path, PathType};
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::mobs::zombie::ZombieEntity;
 use crate::entity::entities::mobs::zombie::zombie::ZombieVariant;
@@ -134,7 +135,7 @@ impl DrownedEntity {
 
     /// The shared `Zombie` body carrying the drowned's state.
     #[must_use]
-    pub fn zombie(&self) -> &ZombieEntity {
+    pub const fn zombie(&self) -> &ZombieEntity {
         &self.zombie
     }
 
@@ -169,7 +170,7 @@ impl DrownedEntity {
             1,
             HurtByTargetGoal::new()
                 .with_ignored_damage_types([<DrownedEntity as DowncastType>::TYPE_KEY])
-                .set_alert_others(std::iter::empty()),
+                .set_alert_others(iter::empty()),
         );
         target_selector.add_goal(
             2,
@@ -226,7 +227,7 @@ impl DrownedEntity {
 
         self.zombie
             .target()
-            .and_then(|target| target.as_living_entity().map(|target| target.is_in_water()))
+            .and_then(|target| target.as_living_entity().map(Entity::is_in_water))
             .unwrap_or(false)
     }
 
@@ -246,7 +247,7 @@ impl DrownedEntity {
     fn close_to_next_pos(&self) -> bool {
         let target = {
             let navigation = self.zombie.mob_base().navigation().lock();
-            navigation.path().map(|path| path.target())
+            navigation.path().map(Path::target)
         };
         target.is_some_and(|pos| {
             self.distance_to_sqr(DVec3::new(
@@ -303,7 +304,7 @@ impl DrownedEntity {
         &self,
         world: &Arc<World>,
         spawn_reason: EntitySpawnReason,
-        random: &mut impl steel_utils::random::Random,
+        random: &mut impl Random,
     ) {
         if !matches!(
             spawn_reason,
@@ -513,7 +514,7 @@ struct DrownedTridentAttackGoal {
 }
 
 impl DrownedTridentAttackGoal {
-    fn new(speed_modifier: f64, attack_interval: i32, attack_radius: f32) -> Self {
+    const fn new(speed_modifier: f64, attack_interval: i32, attack_radius: f32) -> Self {
         Self {
             ranged: RangedAttackGoal::new(speed_modifier, attack_interval, attack_radius),
         }

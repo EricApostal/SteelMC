@@ -37,7 +37,7 @@ impl StrollThroughVillageGoal {
     }
 
     /// Vanilla `StrollThroughVillageGoal.moveRandomly`.
-    fn move_randomly(&self, mob: &dyn PathfinderMob, world: &World) {
+    fn move_randomly(mob: &dyn PathfinderMob, world: &World) {
         let pos = mob.block_position();
         let target = BlockPos::new(
             pos.x() - RANDOM_STEP_RADIUS + rand::random_range(0..2 * RANDOM_STEP_RADIUS),
@@ -140,7 +140,7 @@ impl Goal for StrollThroughVillageGoal {
             1.0,
         );
         if !moved {
-            self.move_randomly(mob, world.as_ref());
+            Self::move_randomly(mob, world.as_ref());
         }
     }
 }

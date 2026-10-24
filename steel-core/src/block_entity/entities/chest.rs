@@ -282,22 +282,22 @@ fn hinge_sound(state: BlockStateId, open: bool) -> SoundEventRef {
             || block == &vanilla_blocks::WAXED_WEATHERED_COPPER_CHEST
         {
             if open {
-                &sound_events::COPPER_CHEST_WEATHERED_OPEN
+                &sound_events::BLOCK_COPPER_CHEST_WEATHERED_OPEN
             } else {
-                &sound_events::COPPER_CHEST_WEATHERED_CLOSE
+                &sound_events::BLOCK_COPPER_CHEST_WEATHERED_CLOSE
             }
         } else if block == &vanilla_blocks::OXIDIZED_COPPER_CHEST
             || block == &vanilla_blocks::WAXED_OXIDIZED_COPPER_CHEST
         {
             if open {
-                &sound_events::COPPER_CHEST_OXIDIZED_OPEN
+                &sound_events::BLOCK_COPPER_CHEST_OXIDIZED_OPEN
             } else {
-                &sound_events::COPPER_CHEST_OXIDIZED_CLOSE
+                &sound_events::BLOCK_COPPER_CHEST_OXIDIZED_CLOSE
             }
         } else if open {
-            &sound_events::COPPER_CHEST_OPEN
+            &sound_events::BLOCK_COPPER_CHEST_OPEN
         } else {
-            &sound_events::COPPER_CHEST_CLOSE
+            &sound_events::BLOCK_COPPER_CHEST_CLOSE
         }
     } else if open {
         &sound_events::BLOCK_CHEST_OPEN

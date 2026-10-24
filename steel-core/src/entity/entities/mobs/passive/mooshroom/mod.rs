@@ -8,7 +8,7 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use simdnbt::{FromNbtTag as _, ToNbtTag as _};
 use steel_macros::entity_behavior;
-use steel_protocol::packets::game::SoundSource;
+use steel_protocol::packets::game::{RandomizationType, SoundSource};
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::data_components::components::SuspiciousStewEffects;
 use steel_registry::data_components::vanilla_components::{
@@ -19,7 +19,7 @@ use steel_registry::entity_type::{
 };
 use steel_registry::entity_variant::MooshroomVariant;
 use steel_registry::item_stack::ItemStack;
-use steel_registry::particle_type::ParticleData;
+use steel_registry::particle_type::{ParticleData, ParticleTypeRef, SpellParticleOption};
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entity_data::MooshroomEntityData;
@@ -342,19 +342,14 @@ impl MushroomCowEntity {
     ///
     /// Vanilla sends `ALTERNATIVE_WITH_SPEED` with `ySpeed = 0.2`; the `EFFECT` variant uses
     /// `SpellParticleOption.create(ParticleTypes.EFFECT, -1, 1.0F)`.
-    fn send_stew_particles(
-        &self,
-        world: &World,
-        particle_type: steel_registry::particle_type::ParticleTypeRef,
-        count: i32,
-    ) {
-        let particle = if ptr::eq(particle_type, &vanilla_particle_types::EFFECT) {
+    fn send_stew_particles(&self, world: &World, particle_type: ParticleTypeRef, count: i32) {
+        let particle = if ptr::eq(
+            particle_type,
+            ptr::from_ref(&vanilla_particle_types::EFFECT),
+        ) {
             ParticleData::new(
                 particle_type,
-                steel_registry::particle_type::SpellParticleOption::new(
-                    steel_utils::RgbColor::new(-1),
-                    1.0,
-                ),
+                SpellParticleOption::new(steel_utils::RgbColor::new(-1), 1.0),
             )
         } else {
             ParticleData::simple(particle_type)
@@ -371,7 +366,7 @@ impl MushroomCowEntity {
             count,
             DVec3::new(0.5, 0.0, 0.5),
             DVec3::new(0.0, 0.2, 0.0),
-            steel_protocol::packets::game::RandomizationType::AlternativeWithSpeed,
+            RandomizationType::AlternativeWithSpeed,
         );
     }
 

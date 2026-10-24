@@ -11,15 +11,13 @@
 use std::sync::Arc;
 
 use glam::DVec3;
-use rustc_hash::FxHashMap;
 use serde_json::Value;
 use steel_protocol::packets::game::{
-    CChangeDifficulty, CGameRuleValues, CSetHeldSlot, CSetPlayerInventory, CTagQuery,
-    CTestInstanceBlockStatus, RelativeMovement, SBlockEntityTagQuery, SBundleItemSelected,
-    SDebugSubscriptionRequest, SEditBook, SEntityTagQuery, SJigsawGenerate, SLockDifficulty,
-    SPaddleBoat, SPickItemFromEntity, SSetCommandBlock, SSetCommandMinecart, SSetGameRule,
-    SSetJigsawBlock, SSetStructureBlock, SSetTestBlock, STeleportToEntity,
-    STestInstanceBlockAction,
+    CChangeDifficulty, CSetHeldSlot, CSetPlayerInventory, CTagQuery, CTestInstanceBlockStatus,
+    RelativeMovement, SBlockEntityTagQuery, SBundleItemSelected, SDebugSubscriptionRequest,
+    SEditBook, SEntityTagQuery, SJigsawGenerate, SLockDifficulty, SPaddleBoat, SPickItemFromEntity,
+    SSetCommandBlock, SSetCommandMinecart, SSetGameRule, SSetJigsawBlock, SSetStructureBlock,
+    SSetTestBlock, STeleportToEntity, STestInstanceBlockAction,
 };
 use steel_registry::REGISTRY;
 use steel_registry::RegistryExt as _;
@@ -38,12 +36,15 @@ use steel_utils::Identifier;
 use steel_utils::serial::OptionalNbt;
 use steel_utils::translations;
 use steel_utils::types::GameType;
+use text_components::Modifier as _;
 use text_components::TextComponent;
 
-use crate::block_entity::BlockEntity as _;
+use crate::block_entity::entities::JigsawBlockEntity;
 use crate::entity::Entity;
 use crate::entity::SharedEntity;
-use crate::entity::entities::objects::{BoatEntity, ChestBoatEntity, ChestRaftEntity, RaftEntity};
+use crate::entity::entities::objects::{
+    BoatEntity, ChestBoatEntity, ChestRaftEntity, MannequinEntity, RaftEntity,
+};
 use crate::inventory::container::Container as _;
 use crate::permission::{PermissionExpr, PermissionLevel};
 use crate::player::Player;
@@ -167,7 +168,7 @@ impl Player {
     /// rotation, searching every level for the UUID. Steel applies the cross-world move
     /// through the ordinary within-domain world-change path; a target in another domain
     /// cannot be reached without the domain-switch workflow, so it is reported instead.
-    pub fn handle_teleport_to_entity(&self, packet: STeleportToEntity) {
+    pub fn handle_teleport_to_entity(self: &Arc<Self>, packet: STeleportToEntity) {
         if self.game_mode() != GameType::Spectator {
             return;
         }
@@ -367,7 +368,7 @@ impl Player {
         use crate::block_entity::entities::CommandBlockEntity;
 
         if !self.can_use_game_master_blocks() {
-            self.send_message(&translations::ADV_MODE_NOT_ALLOWED.msg());
+            self.send_message(&translations::ADV_MODE_NOT_ALLOWED.msg().component());
             return;
         }
 
@@ -438,7 +439,7 @@ impl Player {
         use crate::entity::entities::objects::CommandBlockMinecartEntity;
 
         if !self.can_use_game_master_blocks() {
-            self.send_message(&translations::ADV_MODE_NOT_ALLOWED.msg());
+            self.send_message(&translations::ADV_MODE_NOT_ALLOWED.msg().component());
             return;
         }
 
@@ -541,8 +542,6 @@ impl Player {
         use steel_registry::structure::template_pool::JointType;
         use steel_utils::types::UpdateFlags;
 
-        use crate::block_entity::entities::JigsawBlockEntity;
-
         if !self.can_use_game_master_blocks() {
             return;
         }
@@ -599,7 +598,7 @@ impl Player {
 
         structure.set_mode(packet.mode);
         structure.set_structure_name(&packet.name);
-        structure.set_pos((packet.offset.x, packet.offset.y, packet.offset.z));
+        structure.set_pos((packet.offset.x(), packet.offset.y(), packet.offset.z()));
         structure.set_size((packet.size.x, packet.size.y, packet.size.z));
         structure.set_mirror(packet.mirror as i32);
         structure.set_rotation(packet.rotation as i32);
@@ -630,7 +629,9 @@ impl Player {
                     );
                 }
                 StructureBlockUpdateType::ScanArea => {
-                    self.send_message(&translations::STRUCTURE_BLOCK_SIZE_FAILURE.msg());
+                    self.send_message(
+                        &translations::STRUCTURE_BLOCK_SIZE_FAILURE.msg().component(),
+                    );
                 }
             }
         } else {
@@ -699,7 +700,13 @@ impl Player {
 
                 if packet.action != TestInstanceBlockAction::Set {
                     self.send_message(
-                        &translations::TEST_INSTANCE_BLOCK_ERROR_NO_TEST_STRUCTURE.msg(),
+                        &translations::TEST_INSTANCE_BLOCK_ERROR_NO_TEST_STRUCTURE
+                            .message([
+                                packet.pos.x().to_string(),
+                                packet.pos.y().to_string(),
+                                packet.pos.z().to_string(),
+                            ])
+                            .component(),
                     );
                 }
 
@@ -768,7 +775,7 @@ impl Player {
 
         if packet.include_data && self.can_use_game_master_blocks() {
             if entity.downcast_ref::<MannequinEntity>().is_some() {
-                self.send_message(&fetch_profile_body(entity));
+                self.send_message(&fetch_profile_body(&entity));
             }
         }
     }
@@ -833,8 +840,8 @@ fn entity_pick_result(entity: &SharedEntity) -> Option<ItemStack> {
     use crate::entity::entities::objects::{
         BoatEntity, ChestBoatEntity, ChestMinecartEntity, ChestRaftEntity,
         CommandBlockMinecartEntity, EndCrystalEntity, FurnaceMinecartEntity, GlowItemFrameEntity,
-        HopperMinecartEntity, ItemFrameEntity, MannequinEntity, MinecartEntity, RaftEntity,
-        SpawnerMinecartEntity, TntMinecartEntity,
+        HopperMinecartEntity, ItemFrameEntity, MinecartEntity, RaftEntity, SpawnerMinecartEntity,
+        TntMinecartEntity,
     };
 
     // Vanilla `ItemFrame.getPickResult`: the framed stack, else the empty frame item carrying the
@@ -948,7 +955,9 @@ fn fetch_profile_body(entity: &SharedEntity) -> TextComponent {
     use steel_registry::resolvable_profile::ResolvableProfileContents;
 
     let Some(mannequin) = entity.downcast_ref::<MannequinEntity>() else {
-        return TextComponent::translated(translations::COMMANDS_FETCHPROFILE_NO_PROFILE.msg());
+        return TextComponent::translated(
+            translations::COMMANDS_FETCHPROFILE_NO_PROFILE.message([entity.display_name()]),
+        );
     };
 
     let (name, id) = match mannequin.profile().contents() {
@@ -983,7 +992,7 @@ fn spawn_egg_for(entity_type: &Identifier) -> Option<ItemRef> {
                 .iter()
                 .map(|(_, item)| item)
                 .filter_map(|item| {
-                    let entity_data: &EntityData = item.components.get(ENTITY_DATA)?;
+                    let entity_data: &EntityData = item.components.get_ref(ENTITY_DATA)?;
                     Some((entity_data.entity_type().key.clone(), item))
                 })
                 .collect()
@@ -1018,7 +1027,7 @@ fn describe_test_instance(test: &Identifier) -> TextComponent {
         TestInstance::Function(function) => (
             TextComponent::translated(translations::TEST_INSTANCE_TYPE_FUNCTION.msg()),
             Some(description_row(
-                translations::TEST_INSTANCE_DESCRIPTION_FUNCTION,
+                &translations::TEST_INSTANCE_DESCRIPTION_FUNCTION,
                 TextComponent::plain(function.function.to_string()),
             )),
             &function.info,
@@ -1030,22 +1039,24 @@ fn describe_test_instance(test: &Identifier) -> TextComponent {
         ),
     };
 
-    let mut description =
-        description_row(translations::TEST_INSTANCE_DESCRIPTION_TYPE, type_component);
+    let mut description = description_row(
+        &translations::TEST_INSTANCE_DESCRIPTION_TYPE,
+        type_component,
+    );
     if let Some(function_row) = function_row {
         description.children.push(function_row);
     }
     description.children.extend([
         description_row(
-            translations::TEST_INSTANCE_DESCRIPTION_STRUCTURE,
+            &translations::TEST_INSTANCE_DESCRIPTION_STRUCTURE,
             TextComponent::plain(info.structure.to_string()),
         ),
         description_row(
-            translations::TEST_INSTANCE_DESCRIPTION_BATCH,
+            &translations::TEST_INSTANCE_DESCRIPTION_BATCH,
             TextComponent::plain(info.environment.to_string()),
         ),
         description_row(
-            translations::TEST_INSTANCE_DESCRIPTION_DIMENSION,
+            &translations::TEST_INSTANCE_DESCRIPTION_DIMENSION,
             TextComponent::plain(info.dimension.to_string()),
         ),
     ]);
@@ -1054,7 +1065,7 @@ fn describe_test_instance(test: &Identifier) -> TextComponent {
 
 /// Vanilla `GameTestInstance.descriptionRow`: the translation with the blue value and a newline.
 fn description_row(
-    key: text_components::translation::Translation<1>,
+    key: &text_components::translation::Translation<1>,
     value: TextComponent,
 ) -> TextComponent {
     let mut row = key

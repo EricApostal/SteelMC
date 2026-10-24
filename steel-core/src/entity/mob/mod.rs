@@ -1927,6 +1927,7 @@ impl<T: Mob> Leashable for T {
     }
 }
 
+#[cfg(test)]
 fn can_attempt_equipment_drop(drop_chance: f32, preserve: bool, killed_by_player: bool) -> bool {
     drop_chance != 0.0 && (killed_by_player || preserve)
 }

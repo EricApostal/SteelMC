@@ -47,7 +47,7 @@ impl DoubleBounds {
 ///
 /// Advancement predicates accept a single key, a list of keys or a `#tag`;
 /// vanilla `HolderSet` first drawn from JSON uses the same set semantics.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HolderSet {
     /// A `#tag` reference.
     Tag(Identifier),
@@ -58,16 +58,6 @@ pub enum HolderSet {
 impl Default for HolderSet {
     fn default() -> Self {
         Self::Keys(&[])
-    }
-}
-
-impl HolderSet {
-    /// Tests a registry key against the exact-key arm of this set.
-    fn contains_key(&self, key: &Identifier) -> bool {
-        match self {
-            Self::Tag(_) => false,
-            Self::Keys(keys) => keys.iter().any(|candidate| candidate == &key.path.as_ref()),
-        }
     }
 }
 

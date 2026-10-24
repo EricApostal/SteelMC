@@ -51,6 +51,8 @@ impl Trigger for AssignProfessionFromJobSite {
             return true;
         }
 
+        // Vanilla assigns through `Villager.setVillagerData` + `Villager.refreshBrain`;
+        // `apply_profession_from_poi` performs both.
         if let Some(poi_type) = poi::poi_type_at(ctx.level, potential.pos) {
             let _ = villager.apply_profession_from_poi(poi_type);
         }

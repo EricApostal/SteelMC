@@ -14,7 +14,10 @@ use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::HoglinEntityData;
-use steel_registry::{sound_events, vanilla_attributes, vanilla_entities, vanilla_item_tags};
+use steel_registry::{
+    sound_events, vanilla_attributes, vanilla_blocks, vanilla_entities, vanilla_item_tags,
+    vanilla_mob_effects,
+};
 use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
@@ -179,7 +182,7 @@ impl HoglinEntity {
             ConversionParams::single(true, false),
             Some(&|converted| {
                 converted.add_mob_effect(MobEffectInstance::with_duration(
-                    &steel_registry::vanilla_mob_effects::NAUSEA,
+                    vanilla_mob_effects::NAUSEA,
                     200,
                     0,
                 ));
@@ -437,7 +440,7 @@ impl Mob for HoglinEntity {
         Self: Sized,
     {
         if level.get_block_state(pos.offset(0, -1, 0)).get_block()
-            == &steel_registry::vanilla_blocks::NETHER_WART_BLOCK
+            == &vanilla_blocks::NETHER_WART_BLOCK
         {
             return false;
         }
@@ -519,7 +522,7 @@ impl PathfinderMob for HoglinEntity {
             // brain/`HoglinSpecificSensor` half; without a memory read here only the terrain
             // preference is applied.
             if world.get_block_state(pos.offset(0, -1, 0)).get_block()
-                == &steel_registry::vanilla_blocks::CRIMSON_NYLIUM
+                == &vanilla_blocks::CRIMSON_NYLIUM
             {
                 return 10.0;
             }
@@ -530,14 +533,16 @@ impl PathfinderMob for HoglinEntity {
 
 #[cfg(test)]
 mod tests {
+    use simdnbt::owned::NbtCompound;
     use std::sync::Weak;
+    use steel_registry::vanilla_attributes;
 
     use glam::DVec3;
     use steel_registry::{init_vanilla_registry, vanilla_entities};
 
     use super::HoglinEntity;
     use crate::entity::ageable::AgeableMob;
-    use crate::entity::{Animal, Entity, LivingEntity};
+    use crate::entity::{Entity, LivingEntity};
 
     #[test]
     fn hoglin_age_boundary_updates_damage_and_nbt() {
@@ -551,12 +556,12 @@ mod tests {
             hoglin
                 .attributes()
                 .lock()
-                .get_value(steel_registry::vanilla_attributes::ATTACK_DAMAGE),
+                .get_value(vanilla_attributes::ATTACK_DAMAGE),
             Some(0.5)
         );
 
         hoglin.set_immune_to_zombification(true);
-        let mut nbt = simdnbt::owned::NbtCompound::new();
+        let mut nbt = NbtCompound::new();
         hoglin.save_additional(&mut nbt);
         assert_eq!(nbt.byte("IsImmuneToZombification"), Some(1));
         assert_eq!(hoglin.entity_type(), &vanilla_entities::HOGLIN);

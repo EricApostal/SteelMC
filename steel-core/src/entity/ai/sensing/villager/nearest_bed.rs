@@ -5,12 +5,13 @@ use steel_registry::vanilla_poi_types;
 use steel_utils::BlockPos;
 use steel_utils::locks::SyncMutex;
 
-use crate::entity::SharedEntity;
 use crate::entity::ai::behavior::poi::{self, Occupancy, PoiPredicate};
 use crate::entity::ai::brain::memory::MemoryModuleTypeRef;
 use crate::entity::ai::brain::memory::MemoryStore;
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::ai::brain::sensor::BrainSensor;
+use crate::entity::ai::path::Path;
+use crate::entity::{LivingEntity, SharedEntity};
 use crate::world::World;
 
 /// Vanilla `NearestBedSensor.CACHE_TIMEOUT`.
@@ -29,16 +30,9 @@ pub(crate) fn create() -> Box<dyn BrainSensor> {
 
 /// Vanilla `NearestBedSensor`: babies look for a home POI worth pathing to, with a
 /// retry cache that stops re-trying the same unreachable beds for a while.
+#[derive(Default)]
 pub(crate) struct NearestBedSensor {
     batch_cache: BatchCache,
-}
-
-impl Default for NearestBedSensor {
-    fn default() -> Self {
-        Self {
-            batch_cache: BatchCache::default(),
-        }
-    }
 }
 
 impl BrainSensor for NearestBedSensor {
@@ -52,10 +46,7 @@ impl BrainSensor for NearestBedSensor {
     }
 
     fn sense(&mut self, level: &World, entity: &SharedEntity, memories: &mut MemoryStore) {
-        if !entity
-            .as_living_entity()
-            .is_some_and(|living| living.is_baby())
-        {
+        if !entity.as_living_entity().is_some_and(LivingEntity::is_baby) {
             return;
         }
 
@@ -77,7 +68,7 @@ impl BrainSensor for NearestBedSensor {
             .as_pathfinder_mob()
             .and_then(|mob| poi::find_path_to_pois(mob, &pois));
 
-        if let Some(path) = path.filter(|path| path.can_reach()) {
+        if let Some(path) = path.filter(Path::can_reach) {
             let target_pos = path.target();
             if poi::poi_type_at(level, target_pos).is_some() {
                 memories.set(&mem::NEAREST_BED, target_pos);

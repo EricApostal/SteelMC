@@ -6,7 +6,7 @@ use super::{
 use crate::worldgen::template::TemplateLevelAccess;
 
 pub(super) fn place_double_x_room<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     west: OceanMonumentRoomData,
     east: OceanMonumentRoomData,
 ) {
@@ -60,7 +60,7 @@ pub(super) fn place_double_x_room<L: TemplateLevelAccess>(
 }
 
 pub(super) fn place_double_xy_room<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     west: OceanMonumentRoomData,
     east: OceanMonumentRoomData,
     west_up: OceanMonumentRoomData,
@@ -152,7 +152,7 @@ pub(super) fn place_double_xy_room<L: TemplateLevelAccess>(
 }
 
 pub(super) fn place_double_y_room<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     room: OceanMonumentRoomData,
     above: OceanMonumentRoomData,
 ) {
@@ -184,7 +184,7 @@ pub(super) fn place_double_y_room<L: TemplateLevelAccess>(
 }
 
 fn place_double_y_side_walls<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     room: OceanMonumentRoomData,
     y: i32,
 ) {
@@ -226,7 +226,7 @@ fn place_double_y_side_walls<L: TemplateLevelAccess>(
 }
 
 pub(super) fn place_double_yz_room<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     south: OceanMonumentRoomData,
     north: OceanMonumentRoomData,
     south_up: OceanMonumentRoomData,
@@ -314,7 +314,7 @@ pub(super) fn place_double_yz_room<L: TemplateLevelAccess>(
 }
 
 pub(super) fn place_double_z_room<L: TemplateLevelAccess>(
-    placer: &mut ScatteredFeaturePlacer<'_, '_, L>,
+    placer: &mut ScatteredFeaturePlacer<'_, L>,
     south: OceanMonumentRoomData,
     north: OceanMonumentRoomData,
 ) {

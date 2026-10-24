@@ -22,6 +22,7 @@ use steel_utils::random::RandomSource;
 use steel_utils::types::Difficulty;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
+use crate::behavior::BLOCK_BEHAVIORS;
 use crate::entity::ai::control::MoveControlOperation;
 use crate::entity::ai::goal::{Goal, GoalControls, NearestAttackableTargetGoal};
 use crate::entity::damage::DamageSource;
@@ -651,9 +652,19 @@ impl Mob for GhastEntity {
         if rand::random_range(0..GHAST_SPAWN_CHANCE_BOUND) != 0 {
             return false;
         }
-        // The non-peaceful gate lives in `Monster::check_mob_spawn_rules` via
-        // `is_spawn_allowed_on_difficulty`; `LevelReader` has no difficulty accessor here.
-        <Self as Mob>::check_mob_spawn_rules(entity_type, level, spawn_reason, pos)
+        // Inlined `Mob::check_mob_spawn_rules` default, which vanilla
+        // `Ghast.checkGhastSpawnRules` reaches through `checkMobSpawnRules`; Rust has no
+        // super-call, so the shared body is repeated here. The non-peaceful gate is
+        // applied by `Monster::check_monster_spawn_rules` via
+        // `is_spawn_allowed_on_difficulty`.
+        if spawn_reason.is_spawner() {
+            return true;
+        }
+        let below = pos.below();
+        let state = level.get_block_state(below);
+        BLOCK_BEHAVIORS
+            .get_behavior(state.get_block())
+            .is_valid_spawn(state, level, below, entity_type)
     }
 }
 
@@ -663,6 +674,7 @@ impl PathfinderMob for GhastEntity {}
 
 #[cfg(test)]
 mod tests {
+    use simdnbt::owned::NbtCompound;
     use std::sync::Weak;
 
     use glam::DVec3;
@@ -682,7 +694,7 @@ mod tests {
         ghast.set_charging(true);
         assert!(ghast.is_charging());
 
-        let mut nbt = simdnbt::owned::NbtCompound::new();
+        let mut nbt = NbtCompound::new();
         ghast.save_additional(&mut nbt);
         assert_eq!(nbt.byte("ExplosionPower"), Some(1));
         assert_eq!(ghast.entity_type(), &vanilla_entities::GHAST);

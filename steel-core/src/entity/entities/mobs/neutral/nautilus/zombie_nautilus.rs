@@ -46,6 +46,7 @@ use crate::entity::entities::mobs::neutral::nautilus::abstract_nautilus::{
     self, AbstractNautilusParts, Nautilus,
 };
 use crate::entity::entities::mobs::neutral::nautilus::brain;
+use crate::entity::leash::Leashable;
 use crate::entity::{
     AgeableMob, AgeableMobBase, Animal, AnimalBase, Entity, EntityBase, EntityBaseLoad, EntityPose,
     EntitySpawnReason, EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase,
@@ -216,7 +217,7 @@ impl ZombieNautilusEntity {
     }
 
     /// Vanilla `AbstractNautilus.handleStopJump` is empty.
-    pub fn handle_stop_jump(&self) {
+    pub const fn handle_stop_jump() {
         abstract_nautilus::handle_stop_jump();
     }
 
@@ -390,7 +391,8 @@ impl Tameable for ZombieNautilusEntity {
     fn unable_to_move_to_owner(&self) -> bool {
         self.is_ordered_to_sit()
             || self.is_passenger()
-            || (self.can_be_leashed() && !self.is_leashed())
+            || (self.as_leashable().is_some_and(Leashable::can_be_leashed)
+                && !self.as_leashable().is_some_and(Leashable::is_leashed))
             || self
                 .owner_uuid()
                 .and_then(|uuid| self.level()?.players.get_by_uuid(&uuid))

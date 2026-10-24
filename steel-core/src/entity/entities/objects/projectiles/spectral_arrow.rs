@@ -11,11 +11,12 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
+use steel_registry::MobEffectInstance;
 use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::ItemRef;
 use steel_registry::vanilla_entity_data::{AbstractArrowEntityData, SpectralArrowEntityData};
-use steel_registry::{sound_events, vanilla_entities, vanilla_items, vanilla_mob_effects};
+use steel_registry::{sound_events, vanilla_items, vanilla_mob_effects};
 use steel_utils::locks::SyncMutex;
 use steel_utils::{DowncastType, DowncastTypeKey};
 
@@ -199,11 +200,7 @@ impl AbstractArrow for SpectralArrowEntity {
         let Some(living) = mob.as_living_entity() else {
             return;
         };
-        let effect = steel_registry::MobEffectInstance::simple(
-            &vanilla_mob_effects::GLOWING,
-            self.duration(),
-            0,
-        );
+        let effect = MobEffectInstance::simple(vanilla_mob_effects::GLOWING, self.duration(), 0);
         living.add_mob_effect(to_runtime_instance(&effect, self.duration()));
     }
 }

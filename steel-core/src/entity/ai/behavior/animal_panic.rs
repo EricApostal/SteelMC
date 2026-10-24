@@ -72,6 +72,10 @@ impl AnimalPanic {
     }
 
     /// Vanilla `AnimalPanic.getPanicPos`.
+    #[expect(
+        clippy::unused_self,
+        reason = "kept as a method to mirror the vanilla `AnimalPanic` instance call site"
+    )]
     fn get_panic_pos(&self, ctx: &BehaviorContext<'_>) -> Option<DVec3> {
         let body = ctx.body;
         let mob = body.as_pathfinder_mob()?;

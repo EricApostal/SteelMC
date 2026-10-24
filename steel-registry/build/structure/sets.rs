@@ -150,7 +150,7 @@ struct SpawnerJson {
 /// (`ConstantInt` shorthand) or a `minecraft:uniform`/`minecraft:constant` object.
 #[derive(Deserialize, Debug)]
 #[serde(untagged)]
-enum SpawnerCountJson {
+pub(crate) enum SpawnerCountJson {
     Constant(i32),
     Object {
         #[serde(rename = "type")]
@@ -165,7 +165,7 @@ enum SpawnerCountJson {
 }
 
 /// Resolves a `SpawnerJson.count` `IntProvider` into an inclusive `(min, max)` range.
-fn parse_spawner_count(count: &SpawnerCountJson, context: &str) -> (i32, i32) {
+pub(crate) fn parse_spawner_count(count: &SpawnerCountJson, context: &str) -> (i32, i32) {
     match count {
         SpawnerCountJson::Constant(n) => (*n, *n),
         SpawnerCountJson::Object {

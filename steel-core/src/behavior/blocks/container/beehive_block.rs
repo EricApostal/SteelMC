@@ -53,7 +53,7 @@ use crate::behavior::{
 use crate::block_entity::entities::BeehiveBlockEntity;
 use crate::block_entity::{BLOCK_ENTITIES, BlockEntityTicker};
 use crate::entity::entities::BeeEntity;
-use crate::entity::{Entity, Mob, living_loot_equipment};
+use crate::entity::{Entity, living_loot_equipment};
 use crate::player::Player;
 use crate::player::advancement::triggers::{WorldLevelView, event_base, player_view, raise};
 use crate::player::player_inventory::Prediction;
@@ -138,8 +138,9 @@ impl BeehiveBlock {
         player: Option<&Player>,
     ) {
         self.reset_honey_level(world, state, pos);
-        if let Some(hive) = world
-            .get_block_entity(pos)
+        let block_entity = world.get_block_entity(pos);
+        if let Some(hive) = block_entity
+            .as_ref()
             .and_then(|entity| entity.downcast_ref::<BeehiveBlockEntity>())
         {
             hive.empty_all_living_from_hive(player, state, BeehiveBlockEntity::EMERGENCY);
@@ -366,6 +367,7 @@ impl BlockBehavior for BeehiveBlock {
             && world.get_game_rule(&steel_registry::vanilla_game_rules::BLOCK_DROPS)
             && let Some(hive) = world
                 .get_block_entity(pos)
+                .as_ref()
                 .and_then(|entity| entity.downcast_ref::<BeehiveBlockEntity>())
         {
             let honey_level = state.get_value(LEVEL_HONEY);
@@ -393,6 +395,7 @@ impl BlockBehavior for BeehiveBlock {
         if entity.is_some_and(is_destroying_explosive)
             && let Some(hive) = world
                 .get_block_entity(pos)
+                .as_ref()
                 .and_then(|block_entity| block_entity.downcast_ref::<BeehiveBlockEntity>())
         {
             hive.empty_all_living_from_hive(None, state, BeehiveBlockEntity::EMERGENCY);
@@ -407,8 +410,9 @@ impl BlockBehavior for BeehiveBlock {
         }
 
         let mut item = ItemStack::new(REGISTRY.items.by_block(self.block));
-        if let Some(hive) = world
-            .get_block_entity(pos)
+        let block_entity = world.get_block_entity(pos);
+        if let Some(hive) = block_entity
+            .as_ref()
             .and_then(|block_entity| block_entity.downcast_ref::<BeehiveBlockEntity>())
         {
             item.set(BEES, hive.collect_bees_component());
@@ -451,6 +455,7 @@ impl BlockBehavior for BeehiveBlock {
             || std::ptr::eq(neighbor, &steel_registry::vanilla_blocks::SOUL_FIRE))
             && let Some(hive) = world
                 .get_block_entity(pos)
+                .as_ref()
                 .and_then(|block_entity| block_entity.downcast_ref::<BeehiveBlockEntity>())
         {
             hive.empty_all_living_from_hive(None, state, BeehiveBlockEntity::EMERGENCY);

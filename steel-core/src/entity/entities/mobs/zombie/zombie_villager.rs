@@ -1,11 +1,12 @@
 //! Vanilla `ZombieVillager`
 //! (`net.minecraft.world.entity.monster.zombie.ZombieVillager`).
 
+use std::iter;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
-use simdnbt::owned::NbtCompound;
+use simdnbt::owned::{NbtCompound, NbtTag};
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
@@ -54,6 +55,7 @@ use crate::entity::{
 use crate::inventory::equipment::EquipmentSlot;
 use crate::physics::MoveResult;
 use crate::player::Player;
+use crate::player::advancement::triggers::raise_cured_zombie_villager;
 use crate::world::World;
 
 /// Vanilla `ZombieVillager.VILLAGER_CONVERSION_WAIT_MIN`.
@@ -164,10 +166,7 @@ impl ZombieVillagerEntity {
 
         {
             let mut target_selector = mob_base.target_selector().lock();
-            target_selector.add_goal(
-                1,
-                HurtByTargetGoal::new().set_alert_others(std::iter::empty()),
-            );
+            target_selector.add_goal(1, HurtByTargetGoal::new().set_alert_others(iter::empty()));
             target_selector.add_goal(
                 2,
                 NearestAttackableTargetGoal::new_for_players(true, |_, _| true),
@@ -314,7 +313,8 @@ impl ZombieVillagerEntity {
     }
 
     /// Vanilla `ZombieVillager.convertsInWater`.
-    pub fn converts_in_water(&self) -> bool {
+    #[must_use]
+    pub const fn converts_in_water() -> bool {
         false
     }
 
@@ -458,20 +458,18 @@ impl ZombieVillagerEntity {
                 mob.finalize_spawn(world, EntitySpawnReason::Conversion, None);
                 villager.refresh_brain();
 
-                if let Some(starter) = *self.conversion_starter.lock() {
-                    if let Some(player) = world.get_entity_by_uuid(&starter)
-                        && let Some(player) = player.as_player()
-                    {
-                        // Vanilla `ZombieVillager.finishConversion`:
-                        // `CriteriaTriggers.CURED_ZOMBIE_VILLAGER.trigger(player, this, villager)`.
-                        crate::player::advancement::triggers::raise_cured_zombie_villager(
-                            player, self, villager,
-                        );
-                        villager.on_reputation_event_from(
-                            ReputationEventType::ZOMBIE_VILLAGER_CURED,
-                            player,
-                        );
-                    }
+                let starter = *self.conversion_starter.lock();
+                if let Some(starter) = starter
+                    && let Some(player_entity) = world.get_entity_by_uuid(&starter)
+                    && let Some(player) = player_entity.as_player()
+                {
+                    // Vanilla `ZombieVillager.finishConversion`:
+                    // `CriteriaTriggers.CURED_ZOMBIE_VILLAGER.trigger(player, this, villager)`.
+                    raise_cured_zombie_villager(player, self, villager);
+                    villager.on_reputation_event_from(
+                        ReputationEventType::ZOMBIE_VILLAGER_CURED,
+                        Arc::clone(&player_entity),
+                    );
                 }
 
                 mob.add_mob_effect(MobEffectInstance::with_duration(
@@ -613,10 +611,11 @@ impl Entity for ZombieVillagerEntity {
                 NOT_CONVERTING
             },
         );
-        if let Some(starter) = *self.conversion_starter.lock() {
+        let starter = *self.conversion_starter.lock();
+        if let Some(starter) = starter {
             nbt.insert(
                 "ConversionPlayer",
-                simdnbt::owned::NbtTag::IntArray(starter.to_int_array().to_vec()),
+                NbtTag::IntArray(starter.to_int_array().to_vec()),
             );
         }
         nbt.insert("Xp", self.villager_xp());
@@ -629,7 +628,7 @@ impl Entity for ZombieVillagerEntity {
 
         let villager_data = nbt
             .compound("VillagerData")
-            .and_then(|compound| villager_data_from_nbt(&compound));
+            .map(|compound| villager_data_from_nbt(&compound));
         if villager_data.is_some() || nbt.byte("VillagerDataFinalized").is_some() {
             self.set_villager_data_finalized(true);
             self.entity_data
@@ -648,14 +647,14 @@ impl Entity for ZombieVillagerEntity {
         }
 
         let conversion_time = nbt.int("ConversionTime").unwrap_or(NOT_CONVERTING);
-        if conversion_time != NOT_CONVERTING {
+        if conversion_time == NOT_CONVERTING {
+            self.entity_data.lock().converting.set(false);
+            *self.villager_conversion_time.lock() = NOT_CONVERTING;
+        } else {
             let starter = nbt
                 .int_array("ConversionPlayer")
                 .and_then(|array| Uuid::from_int_array(&array));
             self.start_converting(starter, conversion_time);
-        } else {
-            self.entity_data.lock().converting.set(false);
-            *self.villager_conversion_time.lock() = NOT_CONVERTING;
         }
 
         *self.villager_xp.lock() = nbt.int("Xp").unwrap_or(DEFAULT_XP);
@@ -850,12 +849,14 @@ impl Mob for ZombieVillagerEntity {
             }
         }
 
+        let reinforcement_chance = random.next_f64() * 0.1;
         zombie::handle_zombie_spawn_attributes(
             self,
             difficulty_modifier,
             spawn_reason,
             &mut random,
             &|can_break_doors| self.set_can_break_doors(can_break_doors),
+            Some(reinforcement_chance),
         );
 
         self.finalize_spawn_mob_base(world, spawn_reason, group_data)
@@ -933,7 +934,7 @@ fn villager_data_to_nbt(data: VillagerData) -> NbtCompound {
     compound
 }
 
-fn villager_data_from_nbt(nbt: &BorrowedNbtCompoundView<'_, '_>) -> Option<VillagerData> {
+fn villager_data_from_nbt(nbt: &BorrowedNbtCompoundView<'_, '_>) -> VillagerData {
     let type_id = nbt
         .string("type")
         .and_then(|value| value.to_str().parse::<Identifier>().ok())
@@ -945,5 +946,5 @@ fn villager_data_from_nbt(nbt: &BorrowedNbtCompoundView<'_, '_>) -> Option<Villa
         .and_then(|key| REGISTRY.villager_professions.id_from_key(&key))
         .map_or_else(|| villager_profession_id("none"), |id| id as i32);
     let level = nbt.int("level").unwrap_or(1).max(1);
-    Some(VillagerData::new(type_id, profession_id, level))
+    VillagerData::new(type_id, profession_id, level)
 }

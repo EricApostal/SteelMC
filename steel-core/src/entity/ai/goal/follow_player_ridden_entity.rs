@@ -101,10 +101,10 @@ impl Goal for FollowPlayerRiddenEntityGoal {
     }
 
     fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
-        if let Some(following) = &self.following {
-            if Self::has_moved_horizontally_recently(following.as_ref()) {
-                return true;
-            }
+        if let Some(following) = &self.following
+            && Self::has_moved_horizontally_recently(following.as_ref())
+        {
+            return true;
         }
 
         self.nearby_ridden_entities(mob).iter().any(|entity| {
@@ -213,10 +213,11 @@ impl Goal for FollowPlayerRiddenEntityGoal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use steel_registry::vanilla_entities;
 
     #[test]
     fn follow_player_ridden_entity_goal_claims_no_controls_like_vanilla() {
-        let goal = FollowPlayerRiddenEntityGoal::new(&steel_registry::vanilla_entities::OAK_BOAT);
+        let goal = FollowPlayerRiddenEntityGoal::new(&vanilla_entities::OAK_BOAT);
 
         assert_eq!(goal.controls(), GoalControls::EMPTY);
         assert!(goal.is_interruptable());

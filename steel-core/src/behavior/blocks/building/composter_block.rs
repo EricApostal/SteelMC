@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use rand::Rng as _;
+use rand::RngExt as _;
 use steel_macros::block_behavior;
 use steel_registry::blocks::{
     BlockRef,
@@ -19,7 +19,7 @@ use steel_registry::items::item::BlockHitResult;
 use steel_registry::loot_table::LootContext;
 use steel_registry::stat::vanilla_stat_types;
 use steel_registry::{
-    REGISTRY, sound_events, vanilla_game_events, vanilla_items, vanilla_level_events,
+    REGISTRY, RegistryExt as _, level_events, sound_events, vanilla_game_events, vanilla_items,
 };
 use steel_utils::types::{InteractionHand, UpdateFlags};
 use steel_utils::{BlockPos, BlockStateId, Identifier};
@@ -32,9 +32,9 @@ use crate::world::game_event::GameEventContext;
 use crate::world::{LevelReader, World};
 
 /// Vanilla `ComposterBlock.READY`: the level that holds a finished bone meal.
-pub const COMPOSTER_READY: i32 = 8;
+pub const COMPOSTER_READY: u8 = 8;
 /// Vanilla `ComposterBlock.MAX_LEVEL`: the highest "filling" level.
-pub const COMPOSTER_MAX_LEVEL: i32 = 7;
+pub const COMPOSTER_MAX_LEVEL: u8 = 7;
 
 /// Vanilla composter behavior.
 #[block_behavior]
@@ -69,7 +69,10 @@ impl ComposterBlock {
             return state;
         }
 
-        let new_level = (fill_level + layers_to_add).clamp(0, COMPOSTER_MAX_LEVEL);
+        let layers_to_add = u8::try_from(layers_to_add).unwrap_or(u8::MAX);
+        let new_level = fill_level
+            .saturating_add(layers_to_add)
+            .min(COMPOSTER_MAX_LEVEL);
         let new_state = state.set_value(LEVEL_COMPOSTER, new_level);
         world.set_block(pos, new_state, UpdateFlags::UPDATE_ALL);
         world.game_event(
@@ -93,10 +96,10 @@ impl ComposterBlock {
         layers_key: &Identifier,
     ) -> Option<i32> {
         let entry = REGISTRY.context_int_providers.by_key(layers_key)?;
+        let equipment = source_entity.and_then(loot_equipment);
         let mut rng = rand::rng();
         let mut ctx = LootContext::new(&mut rng).with_block_state(state);
         if let Some(source_entity) = source_entity {
-            let equipment = loot_equipment(source_entity);
             ctx = ctx.with_interacting_entity(entity_loot_ref(source_entity, equipment.as_ref()));
         }
         Some(entry.provider.get_int(&mut ctx))
@@ -142,7 +145,7 @@ impl ComposterBlock {
         );
 
         let new_state = Self::empty(source_entity, state, world, pos);
-        world.play_block_sound(&sound_events::COMPOSTER_EMPTY, pos, 1.0, 1.0, None);
+        world.play_block_sound(&sound_events::BLOCK_COMPOSTER_EMPTY, pos, 1.0, 1.0, None);
         new_state
     }
 }
@@ -194,7 +197,7 @@ impl BlockBehavior for ComposterBlock {
         if fill_level < COMPOSTER_MAX_LEVEL {
             let new_state = Self::add_layer(Some(player), state, world, pos, &layers_key);
             world.level_event(
-                vanilla_level_events::COMPOSTER_FILL,
+                level_events::COMPOSTER_FILL,
                 pos,
                 i32::from(new_state != state),
                 Some(player.id()),
@@ -235,7 +238,7 @@ impl BlockBehavior for ComposterBlock {
             state.set_value(LEVEL_COMPOSTER, COMPOSTER_READY),
             UpdateFlags::UPDATE_ALL,
         );
-        world.play_block_sound(&sound_events::COMPOSTER_READY, pos, 1.0, 1.0, None);
+        world.play_block_sound(&sound_events::BLOCK_COMPOSTER_READY, pos, 1.0, 1.0, None);
     }
 
     fn has_analog_output_signal(&self, _state: BlockStateId) -> bool {

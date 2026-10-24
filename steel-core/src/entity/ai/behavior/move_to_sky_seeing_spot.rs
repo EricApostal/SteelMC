@@ -18,7 +18,7 @@ pub struct MoveToSkySeeingSpot {
 
 impl MoveToSkySeeingSpot {
     #[must_use]
-    pub fn new(speed_modifier: f32) -> Self {
+    pub const fn new(speed_modifier: f32) -> Self {
         Self { speed_modifier }
     }
 

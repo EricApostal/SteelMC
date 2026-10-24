@@ -215,7 +215,10 @@ mod tests {
 
         let mut heights: Vec<i32> = spikes.iter().map(|spike| spike.height).collect();
         heights.sort_unstable();
-        assert_eq!(heights, (0..10).map(|size| 76 + size * 3).collect::<Vec<_>>());
+        assert_eq!(
+            heights,
+            (0..10).map(|size| 76 + size * 3).collect::<Vec<_>>()
+        );
 
         let mut guarded = 0;
         for spike in &spikes {

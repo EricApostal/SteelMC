@@ -38,8 +38,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
-use steel_protocol::packets::game::SoundSource;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+use steel_registry::data_components::components::FoodProperties;
+use steel_registry::data_components::vanilla_components;
 use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::fluid::FluidStateExt as _;
 use steel_registry::item_stack::ItemStack;
@@ -47,10 +48,12 @@ use steel_registry::particle_type::ParticleData;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_item_tags::ItemTag;
 use steel_registry::{
-    REGISTRY, TaggedRegistryExt as _, vanilla_attributes, vanilla_blocks, vanilla_game_events,
-    vanilla_items, vanilla_mob_effects, vanilla_particle_types,
+    REGISTRY, TaggedRegistryExt as _, sound_events, vanilla_attributes, vanilla_blocks,
+    vanilla_game_events, vanilla_items, vanilla_mob_effects, vanilla_particle_types,
 };
+use steel_utils::entity_events::EntityStatus;
 use steel_utils::locks::{IntoShared, Shared, SyncMutex};
+use steel_utils::random::RandomSource;
 use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, UuidExt as _};
 use uuid::Uuid;
@@ -157,7 +160,7 @@ impl AbstractNautilusParts {
     /// Vanilla `AbstractNautilus.inventory` as a menu container.
     #[must_use]
     pub(crate) fn inventory_container(&self) -> ContainerRef {
-        ContainerRef::from(self.inventory.clone())
+        ContainerRef::from(Arc::clone(&self.inventory))
     }
 
     /// The rebuild token an open mount menu compares against.
@@ -300,7 +303,7 @@ pub(crate) trait Nautilus: Entity + Animal + Tameable {
 /// Vanilla `AbstractNautilus.isFood`.
 #[must_use]
 pub(crate) fn is_food<E: Nautilus>(entity: &E, item_stack: &ItemStack) -> bool {
-    if !entity.is_tame() && !entity.is_baby() {
+    if !entity.is_tame() && !AgeableMob::is_baby(entity) {
         REGISTRY
             .items
             .is_in_tag(item_stack.item(), &ItemTag::NAUTILUS_TAMING_ITEMS)
@@ -348,9 +351,9 @@ pub fn check_nautilus_spawn_rules(
     level: &World,
     _spawn_reason: EntitySpawnReason,
     pos: BlockPos,
-    _random: &mut steel_utils::random::RandomSource,
+    _random: &mut RandomSource,
 ) -> bool {
-    let sea_level = level.sea_level();
+    let sea_level = level.sea_level;
     let min_spawn_level = sea_level - 25;
     pos.y() >= min_spawn_level
         && pos.y() <= sea_level - 5
@@ -389,7 +392,7 @@ pub(crate) fn can_use_slot<E: Nautilus>(entity: &E, slot: EquipmentSlot) -> bool
     if slot != EquipmentSlot::Saddle && slot != EquipmentSlot::Body {
         return true;
     }
-    entity.is_alive() && !entity.is_baby() && entity.is_tame()
+    Entity::is_alive(entity) && !AgeableMob::is_baby(entity) && entity.is_tame()
 }
 
 /// Vanilla `AbstractNautilus.canDispenserEquipIntoSlot`.
@@ -472,9 +475,7 @@ pub(crate) fn tick_ridden<E: Nautilus>(entity: &E, controller: &Player) {
 
 /// Vanilla `AbstractNautilus.travelInWater`.
 pub(crate) fn travel_in_water(entity: &SharedEntity, input: DVec3) -> Option<MoveResult> {
-    let Some(living) = entity.as_living_entity() else {
-        return None;
-    };
+    let living = entity.as_living_entity()?;
     entity.move_relative(living.get_speed(), input);
     let result = Arc::clone(entity).move_entity(MoverType::SelfMovement, entity.velocity());
     entity.set_velocity(entity.velocity() * NAUTILUS_WATER_RESISTANCE);
@@ -517,7 +518,7 @@ pub(crate) fn restriction_radius<E: Nautilus>(entity: &E) -> i32 {
     entity.with_equipment_slot(EquipmentSlot::Saddle, &mut |stack| {
         saddle_empty = stack.is_empty();
     });
-    if !entity.is_baby() && saddle_empty {
+    if !AgeableMob::is_baby(entity) && saddle_empty {
         LARGE_RESTRICTION_RADIUS
     } else {
         SMALL_RESTRICTION_RADIUS
@@ -561,12 +562,12 @@ fn apply_effects<E: Nautilus>(entity: &E, world: &World) {
         return;
     };
 
-    let has_effect = player.has_mob_effect(&*vanilla_mob_effects::BREATH_OF_THE_NAUTILUS);
+    let has_effect = player.has_mob_effect(vanilla_mob_effects::BREATH_OF_THE_NAUTILUS);
     let should_refresh = world.game_time() % EFFECT_REFRESH_RATE == 0;
     if !has_effect || should_refresh {
         player.add_mob_effect(
             MobEffectInstance::with_duration(
-                &*vanilla_mob_effects::BREATH_OF_THE_NAUTILUS,
+                vanilla_mob_effects::BREATH_OF_THE_NAUTILUS,
                 EFFECT_DURATION,
                 0,
             )
@@ -707,7 +708,7 @@ pub(crate) fn get_jump_cooldown<E: Nautilus>(entity: &E) -> i32 {
 }
 
 /// Vanilla `AbstractNautilus.handleStopJump` is empty.
-pub(crate) fn handle_stop_jump() {}
+pub(crate) const fn handle_stop_jump() {}
 
 /// Vanilla `AbstractNautilus.isMobControlled`.
 #[must_use]
@@ -722,12 +723,6 @@ pub(crate) fn is_mob_controlled<E: Nautilus>(entity: &E) -> bool {
 pub(crate) fn is_aggravated<E: Nautilus>(entity: &E) -> bool {
     let brain = entity.brain_mutex().lock();
     brain.has_memory_value(&mem::ANGRY_AT) || brain.has_memory_value(&mem::ATTACK_TARGET)
-}
-
-/// Vanilla `AbstractNautilus.getInventorySize`.
-#[must_use]
-pub(crate) fn inventory_size<E: Nautilus>(entity: &E) -> usize {
-    get_inventory_size(entity.inventory_columns())
 }
 
 /// Vanilla `AbstractNautilus.openCustomInventoryScreen`.
@@ -786,7 +781,7 @@ pub(crate) fn mob_interact<E: Nautilus>(
         item_stack.copy_with_count(item_stack.count())
     };
 
-    if entity.is_baby() {
+    if AgeableMob::is_baby(entity) {
         return Animal::mob_interact_animal(entity, player, hand);
     }
 
@@ -833,8 +828,8 @@ pub(crate) fn mob_interact<E: Nautilus>(
 /// Vanilla `TamableAnimal.feed`.
 fn feed<E: Nautilus>(entity: &E, player: &Player, hand: InteractionHand, item_stack: &ItemStack) {
     let food_nutrition = item_stack
-        .get(steel_registry::data_components::vanilla_components::FOOD)
-        .map(|food| food.nutrition());
+        .get(vanilla_components::FOOD)
+        .map(FoodProperties::nutrition);
     use_player_item(entity, player, hand, item_stack);
     let heal = food_nutrition.map_or(FEED_DEFAULT_HEAL, |nutrition| {
         FEED_HEALING_FACTOR * nutrition as f32
@@ -848,9 +843,9 @@ pub(crate) fn try_to_tame<E: Nautilus>(entity: &E, player: &Player) {
     if rand::random_range(0..TAMING_ROLL_BOUND) == 0 {
         tame(entity, player);
         entity.mob_base().navigation().lock().stop();
-        entity.broadcast_entity_event(steel_utils::entity_events::EntityStatus::TamingSucceeded);
+        entity.broadcast_entity_event(EntityStatus::TamingSucceeded);
     } else {
-        entity.broadcast_entity_event(steel_utils::entity_events::EntityStatus::TamingFailed);
+        entity.broadcast_entity_event(EntityStatus::TamingFailed);
     }
 
     entity.play_eating_sound();
@@ -886,7 +881,7 @@ pub(crate) fn save_additional<E: Nautilus>(entity: &E, nbt: &mut NbtCompound) {
 
 /// Vanilla `AbstractNautilus.readAdditionalSaveData`, including the inherited
 /// `AgeableMob`/`Animal`/`TamableAnimal` fields.
-pub(crate) fn load_additional<E: Nautilus>(entity: &E, nbt: &BorrowedNbtCompoundView<'_, '_>) {
+pub(crate) fn load_additional<E: Nautilus>(entity: &E, nbt: BorrowedNbtCompoundView<'_, '_>) {
     entity.load_mob(nbt);
     entity.load_ageable_mob(nbt);
     entity.load_animal(nbt);
@@ -901,11 +896,8 @@ pub(crate) fn load_additional<E: Nautilus>(entity: &E, nbt: &BorrowedNbtCompound
     entity.parts().set_ordered_to_sit(ordered_to_sit);
     entity.set_in_sitting_pose(ordered_to_sit);
 
-    entity.parts().load_items(nbt);
+    entity.parts().load_items(&nbt);
 }
-
-/// The sound source every nautilus reports.
-pub(crate) const SOUND_SOURCE: SoundSource = SoundSource::Neutral;
 
 /// Vanilla `AbstractNautilus.getEquipSound`.
 pub(crate) fn equip_sound<E: Nautilus>(
@@ -915,9 +907,9 @@ pub(crate) fn equip_sound<E: Nautilus>(
 ) -> Option<SoundEventRef> {
     if slot == EquipmentSlot::Saddle {
         return Some(if entity.is_under_water() {
-            &steel_registry::sound_events::ITEM_NAUTILUS_SADDLE_UNDERWATER_EQUIP
+            &sound_events::ITEM_NAUTILUS_SADDLE_UNDERWATER_EQUIP
         } else {
-            &steel_registry::sound_events::ITEM_NAUTILUS_SADDLE_EQUIP
+            &sound_events::ITEM_NAUTILUS_SADDLE_EQUIP
         });
     }
 
@@ -932,7 +924,7 @@ pub(crate) fn equip_sound<E: Nautilus>(
 /// Vanilla `AbstractNautilus.canBeAffected`: poison is rejected.
 #[must_use]
 pub(crate) fn can_be_affected<E: Nautilus>(entity: &E, effect: &MobEffectInstance) -> bool {
-    if ptr::eq(effect.effect(), &*vanilla_mob_effects::POISON) {
+    if ptr::eq(effect.effect(), vanilla_mob_effects::POISON) {
         return false;
     }
 
@@ -941,7 +933,7 @@ pub(crate) fn can_be_affected<E: Nautilus>(entity: &E, effect: &MobEffectInstanc
 
 /// Vanilla `AbstractNautilus.removeWhenFarAway`.
 #[must_use]
-pub(crate) fn remove_when_far_away() -> bool {
+pub(crate) const fn remove_when_far_away() -> bool {
     true
 }
 

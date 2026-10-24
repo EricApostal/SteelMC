@@ -211,7 +211,7 @@ impl HorseEntity {
     }
 
     /// Vanilla `AbstractHorse.canPerformRearing` (never disabled for `Horse`).
-    const fn can_perform_rearing(&self) -> bool {
+    const fn can_perform_rearing() -> bool {
         true
     }
 
@@ -384,14 +384,14 @@ impl HorseEntity {
 
     /// Vanilla `AbstractHorse.hasInventoryChanged` successor: the mount inventory.
     #[must_use]
-    pub fn carried_items(&self) -> &Shared<InventoryCarrier> {
+    pub const fn carried_items(&self) -> &Shared<InventoryCarrier> {
         self.parts.inventory()
     }
 
     /// Vanilla `AbstractHorse.openCustomInventoryScreen`.
     pub fn open_custom_inventory_screen(&self, player: &Player) {
         self.with_horse_data(|data| {
-            open_custom_inventory_screen(self, &self.parts, data, player, 0)
+            open_custom_inventory_screen(self, &self.parts, data, player, 0);
         });
     }
 
@@ -610,7 +610,7 @@ impl LivingEntity for HorseEntity {
     fn equip_sound(&self, slot: EquipmentSlot, stack: &ItemStack) -> Option<SoundEventRef> {
         // Vanilla `AbstractHorse.getEquipSound`: the saddle sound, otherwise the
         // equippable component's own sound.
-        super::equip_sound(slot).or_else(|| LivingEntity::equip_sound(self, slot, stack))
+        super::equip_sound(slot, stack)
     }
 
     /// Vanilla `Horse.hurtArmor`: horse armor absorbs damage in the body slot.
@@ -783,14 +783,14 @@ impl Equine for HorseEntity {
                 self,
                 &self.parts,
                 data,
-                self.can_perform_rearing(),
+                Self::can_perform_rearing(),
                 Some(angry_sound),
             );
         });
     }
 
     fn stand_if_possible(&self) {
-        let can_perform_rearing = self.can_perform_rearing();
+        let can_perform_rearing = Self::can_perform_rearing();
         self.with_horse_data(|data| {
             stand_if_possible(self, &self.parts, data, can_perform_rearing);
         });
@@ -806,6 +806,11 @@ impl Equine for HorseEntity {
 }
 
 impl Mob for HorseEntity {
+    /// Vanilla `AbstractHorse.getMaxSpawnClusterSize`.
+    fn max_spawn_cluster_size(&self) -> i32 {
+        6
+    }
+
     fn mob_base(&self) -> &MobBase {
         &self.mob_base
     }
@@ -850,11 +855,6 @@ impl Mob for HorseEntity {
 
     fn mob_interact(&self, player: &Player, hand: InteractionHand) -> InteractionResult {
         self.horse_mob_interact(player, hand)
-    }
-
-    /// Vanilla `AbstractHorse.getMaxSpawnClusterSize`.
-    fn max_spawn_cluster_size(&self) -> i32 {
-        6
     }
 
     fn mob_flags(&self) -> i8 {

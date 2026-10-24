@@ -25,7 +25,7 @@ impl GameTime {
     }
 
     /// Advances the counter once; server coordination must finish all increments before dispatching workers.
-    pub(super) fn advance(&self) {
+    pub(crate) fn advance(&self) {
         self.ticks.fetch_add(1, Ordering::Relaxed);
     }
 }

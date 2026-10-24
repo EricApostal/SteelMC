@@ -17,7 +17,9 @@ use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::BeeEntityData;
-use steel_registry::{sound_events, vanilla_attributes, vanilla_item_tags};
+use steel_registry::{
+    sound_events, vanilla_attributes, vanilla_damage_types, vanilla_item_tags, vanilla_mob_effects,
+};
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::Difficulty;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
@@ -49,8 +51,7 @@ const BEE_FLAG_HAS_NECTAR: i8 = 8;
 const BEE_POISON_SECONDS_NORMAL: i32 = 10;
 const BEE_POISON_SECONDS_HARD: i32 = 18;
 const TICKS_PER_SECOND: i32 = 20;
-/// Vanilla `Bee.MAX_CROPS_GROWN_SINCE_POLLINATION`.
-const MAX_CROPS_GROWN: i32 = 10;
+
 /// Vanilla `Bee.MAX_TICKS_WITHOUT_NECTAR`.
 const MAX_TICKS_WITHOUT_NECTAR: i32 = 2400;
 
@@ -478,7 +479,7 @@ impl Mob for BeeEntity {
             .get_value(vanilla_attributes::ATTACK_DAMAGE)
             .unwrap_or(0.0) as f32;
         let sting_source =
-            DamageSource::direct(&steel_registry::vanilla_damage_types::STING, entity.clone());
+            DamageSource::direct(&vanilla_damage_types::STING, SharedEntity::clone(entity));
 
         let was_hurt = target.hurt(world, &sting_source, attack_damage);
         if was_hurt {
@@ -489,7 +490,7 @@ impl Mob for BeeEntity {
             };
             if poison_seconds > 0 {
                 target_living.add_mob_effect(MobEffectInstance::with_duration(
-                    &steel_registry::vanilla_mob_effects::POISON,
+                    vanilla_mob_effects::POISON,
                     poison_seconds * TICKS_PER_SECOND,
                     0,
                 ));
@@ -544,6 +545,7 @@ impl PathfinderMob for BeeEntity {}
 
 #[cfg(test)]
 mod tests {
+    use simdnbt::owned::NbtCompound;
     use std::sync::Weak;
 
     use glam::DVec3;
@@ -564,7 +566,7 @@ mod tests {
         assert!(bee.has_nectar());
         assert!(bee.has_stung());
 
-        let mut nbt = simdnbt::owned::NbtCompound::new();
+        let mut nbt = NbtCompound::new();
         bee.save_additional(&mut nbt);
         assert_eq!(nbt.byte("HasNectar"), Some(1));
         assert_eq!(nbt.byte("HasStung"), Some(1));

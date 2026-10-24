@@ -4,7 +4,6 @@ use steel_registry::vanilla_entity_type_tags::EntityTypeTag;
 use steel_registry::{REGISTRY, TaggedRegistryExt as _};
 use uuid::Uuid;
 
-use crate::entity::Entity as _;
 use crate::entity::SharedEntity;
 use crate::entity::ai::brain::memory::MemoryModuleTypeRef;
 use crate::entity::ai::brain::memory::MemoryStore;

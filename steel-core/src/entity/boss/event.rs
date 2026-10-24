@@ -33,7 +33,7 @@ pub struct BossEvent {
 impl BossEvent {
     /// Vanilla `BossEvent(UUID, Component, BossBarColor, BossBarOverlay)`.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         id: Uuid,
         name: TextComponent,
         color: BossBarColor,
@@ -59,7 +59,7 @@ impl BossEvent {
 
     /// Vanilla `BossEvent.getName`.
     #[must_use]
-    pub fn name(&self) -> &TextComponent {
+    pub const fn name(&self) -> &TextComponent {
         &self.name
     }
 
@@ -75,7 +75,7 @@ impl BossEvent {
     }
 
     /// Vanilla `BossEvent.setProgress`.
-    pub fn set_progress(&mut self, progress: f32) {
+    pub const fn set_progress(&mut self, progress: f32) {
         self.progress = progress;
     }
 
@@ -86,7 +86,7 @@ impl BossEvent {
     }
 
     /// Vanilla `BossEvent.setColor`.
-    pub fn set_color(&mut self, color: BossBarColor) {
+    pub const fn set_color(&mut self, color: BossBarColor) {
         self.color = color;
     }
 
@@ -97,7 +97,7 @@ impl BossEvent {
     }
 
     /// Vanilla `BossEvent.setOverlay`.
-    pub fn set_overlay(&mut self, overlay: BossBarOverlay) {
+    pub const fn set_overlay(&mut self, overlay: BossBarOverlay) {
         self.overlay = overlay;
     }
 
@@ -108,7 +108,7 @@ impl BossEvent {
     }
 
     /// Vanilla `BossEvent.setDarkenScreen`.
-    pub fn set_darken_screen(&mut self, darken_screen: bool) {
+    pub const fn set_darken_screen(&mut self, darken_screen: bool) {
         self.darken_screen = darken_screen;
     }
 
@@ -119,7 +119,7 @@ impl BossEvent {
     }
 
     /// Vanilla `BossEvent.setPlayBossMusic`.
-    pub fn set_play_boss_music(&mut self, play_boss_music: bool) {
+    pub const fn set_play_boss_music(&mut self, play_boss_music: bool) {
         self.play_boss_music = play_boss_music;
     }
 
@@ -130,7 +130,7 @@ impl BossEvent {
     }
 
     /// Vanilla `BossEvent.setCreateWorldFog`.
-    pub fn set_create_world_fog(&mut self, create_world_fog: bool) {
+    pub const fn set_create_world_fog(&mut self, create_world_fog: bool) {
         self.create_world_fog = create_world_fog;
     }
 }
@@ -141,6 +141,7 @@ impl BossEvent {
 /// that one player, while `setProgress` and friends go through `broadcast`, which targets every
 /// currently tracked player. Recording the target here keeps both shapes until
 /// [`ServerBossEvent::broadcast_pending`] runs.
+#[derive(Clone)]
 struct PendingBossPacket {
     packet: CBossEvent,
     /// `None` is vanilla `broadcast`: every player tracked when the drain runs.
@@ -165,7 +166,7 @@ pub struct ServerBossEvent {
 impl ServerBossEvent {
     /// Vanilla `ServerBossEvent(UUID, Component, BossBarColor, BossBarOverlay)`.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         id: Uuid,
         name: TextComponent,
         color: BossBarColor,
@@ -188,7 +189,7 @@ impl ServerBossEvent {
 
     /// Vanilla `BossEvent.getName`.
     #[must_use]
-    pub fn name(&self) -> &TextComponent {
+    pub const fn name(&self) -> &TextComponent {
         self.event.name()
     }
 
@@ -257,7 +258,7 @@ impl ServerBossEvent {
     }
 
     /// Vanilla `SavedData.setDirty`.
-    pub fn set_dirty(&mut self) {
+    pub const fn set_dirty(&mut self) {
         self.dirty = true;
     }
 
@@ -268,16 +269,20 @@ impl ServerBossEvent {
     }
 
     /// Vanilla `SavedData.save` completion.
-    pub fn mark_saved(&mut self) {
+    pub const fn mark_saved(&mut self) {
         self.dirty = false;
     }
 
     /// Vanilla `ServerBossEvent.setProgress`.
     pub fn set_progress(&mut self, progress: f32) {
+        #[expect(
+            clippy::float_cmp,
+            reason = "vanilla `ServerBossEvent.setProgress` compares the progress exactly"
+        )]
         if progress != self.event.progress() {
             self.event.set_progress(progress);
             self.set_dirty();
-            self.queue(CBossEvent::update_progress(self.event.id(), progress));
+            self.queue_broadcast(CBossEvent::update_progress(self.event.id(), progress));
         }
     }
 
@@ -286,7 +291,7 @@ impl ServerBossEvent {
         if name != *self.event.name() {
             self.event.set_name(name.clone());
             self.set_dirty();
-            self.queue(CBossEvent::update_name(self.event.id(), name));
+            self.queue_broadcast(CBossEvent::update_name(self.event.id(), name));
         }
     }
 
@@ -422,7 +427,7 @@ impl ServerBossEvent {
 
     /// Whether any packet is waiting to be drained.
     #[must_use]
-    pub fn has_pending_packets(&self) -> bool {
+    pub const fn has_pending_packets(&self) -> bool {
         !self.pending.is_empty()
     }
 

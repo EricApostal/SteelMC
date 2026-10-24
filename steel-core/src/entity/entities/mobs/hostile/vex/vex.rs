@@ -8,7 +8,7 @@
 //! applying the same delta-movement integration each tick.
 
 use std::iter::empty;
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 
 use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
@@ -24,6 +24,7 @@ use steel_registry::vanilla_entity_data::VexEntityData;
 use steel_registry::{sound_events, vanilla_attributes, vanilla_damage_types, vanilla_items};
 use steel_utils::locks::SyncMutex;
 use steel_utils::random::legacy_random::LegacyRandom;
+use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, Downcast as _, DowncastType, DowncastTypeKey};
 
 use crate::entity::ai::goal::{
@@ -146,7 +147,7 @@ impl VexEntity {
         // Vanilla `Vex.populateDefaultEquipmentSlots`: an iron sword that never
         // drops. Loading overwrites this from the saved equipment afterwards.
         entity.set_item_in_hand(
-            steel_utils::types::InteractionHand::MainHand,
+            InteractionHand::MainHand,
             ItemStack::new(&vanilla_items::IRON_SWORD),
         );
         entity.set_equipment_drop_chance(EquipmentSlot::MainHand, 0.0);
@@ -324,7 +325,8 @@ impl Entity for VexEntity {
 
     fn save_additional(&self, nbt: &mut NbtCompound) {
         self.save_mob(nbt);
-        if let Some(origin) = *self.bound_origin.lock() {
+        let bound_origin = *self.bound_origin.lock();
+        if let Some(origin) = bound_origin {
             // Vanilla `Vex.addAdditionalSaveData`: `bound_pos` as a `BlockPos`
             // int-array codec.
             nbt.insert(
@@ -332,7 +334,8 @@ impl Entity for VexEntity {
                 NbtTag::IntArray(vec![origin.x(), origin.y(), origin.z()]),
             );
         }
-        if *self.has_limited_life.lock() {
+        let has_limited_life = *self.has_limited_life.lock();
+        if has_limited_life {
             nbt.insert("life_ticks", *self.limited_life_ticks.lock());
         }
         if let Some(owner) = self.owner.lock().as_ref() {
@@ -450,7 +453,7 @@ impl Mob for VexEntity {
             .current_difficulty_at(self.block_position())
             .special_multiplier();
         self.set_item_in_hand(
-            steel_utils::types::InteractionHand::MainHand,
+            InteractionHand::MainHand,
             ItemStack::new(&vanilla_items::IRON_SWORD),
         );
         self.set_equipment_drop_chance(EquipmentSlot::MainHand, 0.0);
@@ -533,7 +536,7 @@ impl Goal for VexChargeAttackGoal {
         };
         if mob.is_within_melee_attack_range(living_target) {
             if let Some(world) = mob.level() {
-                mob.do_hurt_target(entity, &world, &target);
+                let _ = mob.do_hurt_target(entity, &world, &target);
             }
             vex.set_is_charging(false);
         } else if mob.distance_to_sqr(target.position()) < 9.0 {
@@ -572,7 +575,7 @@ impl Goal for VexCopyOwnerTargetGoal {
         let Some(owner) = vex.owner() else {
             return false;
         };
-        let Some(target) = owner.as_mob().and_then(|owner| owner.target()) else {
+        let Some(target) = owner.as_mob().and_then(Mob::target) else {
             return false;
         };
         if !target

@@ -4,6 +4,8 @@ use std::iter;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
+use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
+use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_math::fast_floor;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
@@ -36,7 +38,7 @@ use crate::entity::{
     LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, SharedEntity, aabb_contains_any_liquid,
 };
 use crate::physics::MoveResult;
-use crate::world::World;
+use crate::world::{ClipBlockShape, ClipFluid, World};
 
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
 const XP_REWARD: i32 = 20;
@@ -453,7 +455,7 @@ impl Entity for RavagerEntity {
             .unwrap_or(f64::from(DEFAULT_STEP_HEIGHT)) as f32
     }
 
-    fn save_additional(&self, nbt: &mut simdnbt::owned::NbtCompound) {
+    fn save_additional(&self, nbt: &mut NbtCompound) {
         self.save_mob(nbt);
         self.raider_base.save(nbt);
         nbt.insert("AttackTick", self.attack_tick());
@@ -461,7 +463,7 @@ impl Entity for RavagerEntity {
         nbt.insert("RoarTick", self.roar_tick());
     }
 
-    fn load_additional(&self, nbt: simdnbt::borrow::NbtCompound<'_, '_>) {
+    fn load_additional(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
         self.load_mob(nbt);
         if let Some(raid_id) = self.raider_base.load(&nbt) {
             self.rejoin_saved_raid(raid_id);
@@ -525,7 +527,15 @@ impl LivingEntity for RavagerEntity {
         if self.stunned_tick() > 0 || self.roar_tick() > 0 {
             return false;
         }
-        LivingEntity::has_line_of_sight(self, target)
+        // `LivingEntity::has_line_of_sight` cannot be reached from an override (a UFCS call on
+        // `self` re-enters this method); its default body — a collider clip from this entity's
+        // eyes to `target.get_eye_y()` — is inlined through the helper it delegates to.
+        self.has_line_of_sight_with(
+            target,
+            ClipBlockShape::Collider,
+            ClipFluid::None,
+            target.get_eye_y(),
+        )
     }
 
     fn server_ai_step(&self, entity: &SharedEntity) {
@@ -666,3 +676,46 @@ const _: () = {
     assert!(ATTACK_DURATION == 10);
     assert!(STUN_DURATION == 40);
 };
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use glam::DVec3;
+    use steel_registry::{init_vanilla_registry, vanilla_entities};
+
+    use super::RavagerEntity;
+    use crate::entity::LivingEntity;
+    use crate::test_support::fresh_test_world;
+
+    #[test]
+    fn ravager_line_of_sight_is_base_behaviour_except_while_stunned_or_roaring() {
+        init_vanilla_registry();
+        let world = fresh_test_world("ravager_line_of_sight");
+        let ravager = RavagerEntity::new(
+            &vanilla_entities::RAVAGER,
+            1,
+            DVec3::ZERO,
+            Arc::downgrade(&world.world),
+        );
+        let target = RavagerEntity::new(
+            &vanilla_entities::RAVAGER,
+            2,
+            DVec3::ZERO,
+            Arc::downgrade(&world.world),
+        );
+
+        // Vanilla `Ravager.hasLineOfSight` falls through to `LivingEntity.hasLineOfSight`
+        // (`ClipContext.Block.COLLIDER`, `ClipContext.Fluid.NONE`, target eye height). Before the
+        // fix the `LivingEntity::has_line_of_sight` UFCS fallback re-entered this override and
+        // stack-overflowed regardless of the stun state.
+        assert!(ravager.has_line_of_sight(&target));
+
+        ravager.set_stunned_tick(1);
+        assert!(!ravager.has_line_of_sight(&target));
+        ravager.set_stunned_tick(0);
+
+        ravager.set_roar_tick(1);
+        assert!(!ravager.has_line_of_sight(&target));
+    }
+}

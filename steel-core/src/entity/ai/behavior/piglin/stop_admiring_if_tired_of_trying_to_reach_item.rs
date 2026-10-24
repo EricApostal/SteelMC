@@ -5,8 +5,6 @@ use crate::entity::ai::brain::memory::MemoryStatus;
 use crate::entity::ai::brain::memory::module_type as mem;
 use steel_utils::types::InteractionHand;
 
-use crate::entity::{Entity as _, LivingEntity as _};
-
 /// Vanilla `StopAdmiringIfTiredOfTryingToReachItem`: gives up on an unreachable
 /// wanted item and disables walking to admire items for a while.
 pub struct StopAdmiringIfTiredOfTryingToReachItem {

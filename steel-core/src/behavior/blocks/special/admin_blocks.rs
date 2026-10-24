@@ -13,6 +13,7 @@
 use std::sync::{Arc, Weak};
 
 use steel_macros::block_behavior;
+use steel_registry::RegistryEntry as _;
 use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
@@ -27,7 +28,7 @@ use crate::behavior::{
     BlockBehavior, BlockEntityCreation, BlockHitResult, BlockPlaceContext, InteractionResult,
     InventoryAccess,
 };
-use crate::block_entity::{BLOCK_ENTITIES, BlockEntity as _, BlockEntityTicker};
+use crate::block_entity::{BLOCK_ENTITIES, BlockEntityTicker};
 use crate::player::Player;
 use crate::world::{LevelReader, SignalGetter as _, SignalQueryContext, World};
 
@@ -146,7 +147,7 @@ impl BlockBehavior for CommandBlock {
         };
         // Vanilla `ServerPlayer.openCommandBlock`: the editor opens on the client once it
         // receives the block entity's custom-only data.
-        player.connection.send_packet(CBlockEntityData {
+        player.send_packet(CBlockEntityData {
             pos,
             block_entity_type: entity.get_type().id() as i32,
             nbt: OptionalNbt(Some(entity.save_custom_only())),

@@ -738,7 +738,9 @@ mod tests {
         assert!(PistonMovingState::can_move_collided_entity(player.as_ref()));
 
         player.restore_game_modes(GameType::Spectator, None);
-        assert!(!PistonMovingState::can_move_collided_entity(player.as_ref()));
+        assert!(!PistonMovingState::can_move_collided_entity(
+            player.as_ref()
+        ));
 
         let entity = TestEntity::new(
             8_000,

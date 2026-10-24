@@ -49,6 +49,7 @@ use crate::entity::{
     SharedEntity, next_entity_id,
 };
 use crate::physics::{MoveResult, MoverType, WorldCollisionProvider, has_block_collision};
+use crate::player::Player;
 use crate::world::World;
 
 /// Vanilla `Painting.DEPTH`: painting thickness along the facing axis.
@@ -526,7 +527,7 @@ impl BlockAttachedEntity for PaintingEntity {
         self.play_sound(&sound_events::ENTITY_PAINTING_BREAK, 1.0, 1.0);
         let infinite = caused_by
             .and_then(|entity| entity.as_player())
-            .is_some_and(|player| player.has_infinite_materials());
+            .is_some_and(Player::has_infinite_materials);
         if infinite {
             return;
         }
@@ -574,6 +575,7 @@ const fn direction_3d_data_value(direction: Direction) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use simdnbt::owned::NbtCompound;
     use std::io::Cursor;
     use std::string::ToString;
     use steel_registry::vanilla_entities;
@@ -591,15 +593,15 @@ mod tests {
 
     /// Re-borrows owned NBT the way entity loading does from disk.
     fn with_reborrow<R>(
-        nbt: &simdnbt::owned::NbtCompound,
-        visitor: impl FnOnce(simdnbt::borrow::NbtCompound<'_, '_>) -> R,
+        nbt: &NbtCompound,
+        visitor: impl FnOnce(BorrowedNbtCompoundView<'_, '_>) -> R,
     ) -> R {
         use simdnbt::borrow::read_compound;
         let mut bytes = Vec::new();
         nbt.write(&mut bytes);
         let mut cursor = Cursor::new(bytes.as_slice());
         let base = read_compound(&mut cursor).expect("entity NBT should reborrow");
-        let borrowed: simdnbt::borrow::NbtCompound<'_, '_> = (&base).into();
+        let borrowed: BorrowedNbtCompoundView<'_, '_> = (&base).into();
         visitor(borrowed)
     }
 

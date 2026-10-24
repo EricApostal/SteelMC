@@ -50,8 +50,7 @@ use steel_registry::biome::{BiomeRef, TemperatureModifier};
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::{Axis, BlockStateProperties, Direction};
 use steel_registry::blocks::shapes::{
-    BooleanOp, OffsetVoxelShape, SupportType, VoxelShape, is_offset_face_full, is_shape_full_block,
-    join_is_not_empty,
+    BooleanOp, OffsetVoxelShape, SupportType, VoxelShape, is_shape_full_block, join_is_not_empty,
 };
 use steel_registry::fluid::{FluidRef, FluidState};
 use steel_registry::game_events::GameEventRef;
@@ -409,10 +408,10 @@ impl World {
             config.game_time_source,
         )
         .await?;
+
         if matches!(config.storage, WorldStorageConfig::Anvil { .. }) {
             level_data.enable_vanilla_level_dat();
         }
-
         if level_data.is_dirty() {
             level_data.save().await?;
         }

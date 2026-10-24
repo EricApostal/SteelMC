@@ -9,6 +9,8 @@
 //! and growl sounds, `getViewVector` interpolation on the client, phase
 //! `doClientTick` particles) is not ported because Steel has no client.
 
+use std::f32::consts as f32_consts;
+use std::f64::consts as f64_consts;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -53,10 +55,6 @@ use crate::world::{LevelReader, World};
 use super::ender_dragon_part::{EnderDragonPartEntity, EnderDragonPartKind};
 use super::phases::{EnderDragonPhase, EnderDragonPhaseManager};
 
-/// Vanilla `GROWL_INTERVAL_MIN`.
-const GROWL_INTERVAL_MIN: i32 = 200;
-/// Vanilla `GROWL_INTERVAL_MAX`.
-const GROWL_INTERVAL_MAX: i32 = 400;
 /// Vanilla `SITTING_ALLOWED_DAMAGE_PERCENTAGE`.
 const SITTING_ALLOWED_DAMAGE_PERCENTAGE: f32 = 0.25;
 /// Vanilla `DRAGON_DEATH_TIME_KEY`.
@@ -104,8 +102,6 @@ const REPEAT_KILL_EXPERIENCE: i32 = 500;
 const DEATH_ANIMATION_TICKS: i32 = 200;
 /// Vanilla `EnderDragon.getSoundVolume`.
 const DRAGON_SOUND_VOLUME: f32 = 5.0;
-/// Vanilla `EnderDragon` initial `growlTime`.
-const INITIAL_GROWL_TIME: i32 = 100;
 /// Vanilla `EnderDragon.getHeadYOffset` sitting offset.
 const SITTING_HEAD_Y_OFFSET: f32 = -1.0;
 /// Vanilla `EnderDragon.aiStep` death movement per tick.
@@ -134,7 +130,7 @@ pub(crate) struct DragonFlightHistory {
 
 impl DragonFlightHistory {
     /// Creates a history filled with vanilla's zero samples.
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             samples: [DragonFlightSample { y: 0.0, y_rot: 0.0 }; FLIGHT_HISTORY_LENGTH],
             head: -1,
@@ -142,7 +138,7 @@ impl DragonFlightHistory {
     }
 
     /// Vanilla `DragonFlightHistory.record`.
-    pub(crate) fn record(&mut self, y: f64, y_rot: f32) {
+    pub(crate) const fn record(&mut self, y: f64, y_rot: f32) {
         let sample = DragonFlightSample { y, y_rot };
         if self.head < 0 {
             self.samples = [sample; FLIGHT_HISTORY_LENGTH];
@@ -155,7 +151,7 @@ impl DragonFlightHistory {
     }
 
     /// Vanilla `DragonFlightHistory.get(int delay)`.
-    pub(crate) fn get(&self, delay: i32) -> DragonFlightSample {
+    pub(crate) const fn get(&self, delay: i32) -> DragonFlightSample {
         self.samples[((self.head - delay) & FLIGHT_HISTORY_MASK) as usize]
     }
 }
@@ -207,7 +203,7 @@ pub(crate) struct DragonPath {
 }
 
 impl DragonPath {
-    fn new(nodes: Vec<DragonNode>) -> Self {
+    const fn new(nodes: Vec<DragonNode>) -> Self {
         Self {
             nodes,
             next_node_index: 0,
@@ -244,7 +240,7 @@ struct DragonSearchNode {
 }
 
 impl DragonSearchNode {
-    fn new(node: DragonNode) -> Self {
+    const fn new(node: DragonNode) -> Self {
         Self {
             node,
             came_from: None,
@@ -276,8 +272,6 @@ struct DragonState {
     fight_origin: BlockPos,
     /// Vanilla `dragonFight != null`.
     dragon_fight_present: bool,
-    /// Vanilla `growlTime`.
-    growl_time: i32,
     /// Vanilla `sittingDamageReceived`.
     sitting_damage_received: f32,
     /// Vanilla `nodes`, built on first use from the world heightmap.
@@ -300,7 +294,6 @@ impl DragonState {
             nearest_crystal: None,
             fight_origin: BlockPos::ZERO,
             dragon_fight_present: false,
-            growl_time: INITIAL_GROWL_TIME,
             sitting_damage_received: 0.0,
             nodes: None,
             alive_crystals: 0,
@@ -331,7 +324,8 @@ pub(crate) struct EnderDragonParts {
 
 impl EnderDragonParts {
     fn new(world: Weak<World>) -> Self {
-        let make = |kind: EnderDragonPartKind| EnderDragonPartEntity::new(kind, world.clone());
+        let make =
+            |kind: EnderDragonPartKind| EnderDragonPartEntity::new(kind, Weak::clone(&world));
         Self {
             head: make(EnderDragonPartKind::Head),
             neck: make(EnderDragonPartKind::Neck),
@@ -345,7 +339,7 @@ impl EnderDragonParts {
     }
 
     /// Returns the parts in vanilla `subEntities` order.
-    pub(crate) fn iter(&self) -> [&EnderDragonPartEntity; 8] {
+    pub(crate) const fn sub_entities(&self) -> [&EnderDragonPartEntity; 8] {
         [
             &self.head,
             &self.neck,
@@ -360,7 +354,7 @@ impl EnderDragonParts {
 
     /// Binds every part to the owning dragon once it has a shared handle.
     fn bind_parent(&self, parent: &SharedEntity) {
-        for part in self.iter() {
+        for part in self.sub_entities() {
             part.bind_parent(parent);
         }
     }
@@ -389,7 +383,7 @@ impl EnderDragonEntity {
     #[must_use]
     pub fn new(entity_type: EntityTypeRef, id: i32, position: DVec3, world: Weak<World>) -> Self {
         Self::new_with_base(
-            EntityBase::new(id, position, entity_type.dimensions, world.clone()),
+            EntityBase::new(id, position, entity_type.dimensions, Weak::clone(&world)),
             entity_type,
             world,
         )
@@ -398,7 +392,7 @@ impl EnderDragonEntity {
     /// Loads a saved ender dragon.
     #[must_use]
     pub fn from_saved(entity_type: EntityTypeRef, load: EntityBaseLoad) -> Self {
-        let world = load.world.clone();
+        let world = Weak::clone(&load.world);
         Self::new_with_base(
             EntityBase::from_load(load, entity_type.dimensions),
             entity_type,
@@ -673,13 +667,13 @@ impl EnderDragonEntity {
     /// Vanilla `EnderDragonFight.getPodiumLocation` resolved through a heightmap.
     ///
     /// Vanilla's `END_PODIUM_LOCATION` is the zero block, so the podium is the
-    /// fight origin itself.
+    /// fight origin itself: this is the perch point the dragon lands on.
     pub(crate) fn podium_heightmap_pos(&self, world: &World, heightmap: HeightmapType) -> BlockPos {
-        let origin = self.fight_origin();
+        let podium = dragon_fight::EnderDragonFight::podium_location(self.fight_origin());
         BlockPos::new(
-            origin.x(),
-            LevelReader::height_at(world, heightmap, origin.x(), origin.z()),
-            origin.z(),
+            podium.x(),
+            LevelReader::height_at(world, heightmap, podium.x(), podium.z()),
+            podium.z(),
         )
     }
 
@@ -718,19 +712,9 @@ impl EnderDragonEntity {
         self.parts.body.bounding_box()
     }
 
-    /// Returns the vanilla `head` part.
-    pub(crate) const fn head_part(&self) -> &EnderDragonPartEntity {
-        &self.parts.head
-    }
-
     /// Vanilla `getRandom().nextInt(bound)`.
     pub(crate) fn random_i32_bounded(&self, bound: i32) -> i32 {
         self.state.lock().random.next_i32_bounded(bound)
-    }
-
-    /// Vanilla `getRandom().nextInt()`.
-    pub(crate) fn random_i32(&self) -> i32 {
-        self.state.lock().random.next_i32()
     }
 
     /// Vanilla `getRandom().nextFloat()`.
@@ -749,7 +733,8 @@ impl EnderDragonEntity {
 
     /// Returns the cached 24-node flight graph, building it on first use.
     fn dragon_nodes(&self) -> Option<[DragonNode; NODE_COUNT]> {
-        if let Some(nodes) = self.state.lock().nodes {
+        let cached = { self.state.lock().nodes };
+        if let Some(nodes) = cached {
             return Some(nodes);
         }
 
@@ -762,20 +747,20 @@ impl EnderDragonEntity {
             let node_z;
             if index < 12 {
                 let angle =
-                    2.0_f32 * (-f32::consts::PI + (f32::consts::PI / 12.0) * multiplier as f32);
+                    2.0_f32 * (-f32_consts::PI + (f32_consts::PI / 12.0) * multiplier as f32);
                 node_x = (60.0_f32 * angle.cos()).floor() as i32;
                 node_z = (60.0_f32 * angle.sin()).floor() as i32;
             } else if index < 20 {
                 multiplier -= 12;
                 let angle =
-                    2.0_f32 * (-f32::consts::PI + (f32::consts::PI / 8.0) * multiplier as f32);
+                    2.0_f32 * (-f32_consts::PI + (f32_consts::PI / 8.0) * multiplier as f32);
                 node_x = (40.0_f32 * angle.cos()).floor() as i32;
                 node_z = (40.0_f32 * angle.sin()).floor() as i32;
                 y_adjustment += 10;
             } else {
                 multiplier -= 20;
                 let angle =
-                    2.0_f32 * (-f32::consts::PI + (f32::consts::PI / 4.0) * multiplier as f32);
+                    2.0_f32 * (-f32_consts::PI + (f32_consts::PI / 4.0) * multiplier as f32);
                 node_x = (20.0_f32 * angle.cos()).floor() as i32;
                 node_z = (20.0_f32 * angle.sin()).floor() as i32;
             }
@@ -1039,8 +1024,8 @@ impl EnderDragonEntity {
     /// Vanilla `EnderDragon.knockBack`.
     fn knock_back(&self, world: &Arc<World>, self_entity: &SharedEntity, targets: &[SharedEntity]) {
         let body = self.body_box();
-        let xm = (body.min_x() + body.max_x()) / 2.0;
-        let zm = (body.min_z() + body.max_z()) / 2.0;
+        let xm = f64::midpoint(body.min_x(), body.max_x());
+        let zm = f64::midpoint(body.min_z(), body.max_z());
 
         for entity in targets {
             let Some(living) = entity.as_living_entity() else {
@@ -1065,12 +1050,7 @@ impl EnderDragonEntity {
     }
 
     /// Vanilla `EnderDragon.hurt(ServerLevel, List<Entity>)` head/neck contact damage.
-    fn hurt_contact(
-        &self,
-        world: &Arc<World>,
-        self_entity: &SharedEntity,
-        targets: &[SharedEntity],
-    ) {
+    fn hurt_contact(world: &Arc<World>, self_entity: &SharedEntity, targets: &[SharedEntity]) {
         for target in targets {
             if target.as_living_entity().is_none() {
                 continue;
@@ -1084,7 +1064,6 @@ impl EnderDragonEntity {
     /// Returns the entities inside `box` that vanilla's
     /// `EntitySelector.NO_CREATIVE_OR_SPECTATOR` accepts.
     fn contact_targets(
-        &self,
         world: &Arc<World>,
         self_entity: &SharedEntity,
         bounds: WorldAabb,
@@ -1203,13 +1182,13 @@ impl EnderDragonEntity {
             target.y - position.y,
             target.z - position.z,
         ));
-        let yaw_rad = f64::from(yaw) * f64::consts::PI / 180.0;
+        let yaw_rad = f64::from(yaw) * f64_consts::PI / 180.0;
         let dir = normalize_vec(DVec3::new(yaw_rad.sin(), self.velocity().y, -yaw_rad.cos()));
         let dot = ((dir.dot(aim) as f32 + 0.5) / 1.5).max(0.0);
 
         if xdd.abs() > 1.0e-5 || zdd.abs() > 1.0e-5 {
             let y_rot_d =
-                wrap_degrees(180.0 - (xdd.atan2(zdd) as f32) * 180.0 / f32::consts::PI - yaw)
+                wrap_degrees(180.0 - (xdd.atan2(zdd) as f32) * 180.0 / f32_consts::PI - yaw)
                     .clamp(-50.0, 50.0);
             let mut y_rot_a = self.y_rot_a() * 0.8;
             y_rot_a += y_rot_d * self.phases.turn_speed(self);
@@ -1244,7 +1223,7 @@ impl EnderDragonEntity {
     fn update_parts(&self) {
         let old_positions: Vec<DVec3> = self
             .parts
-            .iter()
+            .sub_entities()
             .into_iter()
             .map(Entity::position)
             .collect();
@@ -1254,12 +1233,12 @@ impl EnderDragonEntity {
             let state = self.state.lock();
             (state.flight_history.get(5).y - state.flight_history.get(10).y) as f32
                 * 10.0
-                * f32::consts::PI
+                * f32_consts::PI
                 / 180.0
         };
         let cc_tilt = history_tilt.cos();
         let ss_tilt = history_tilt.sin();
-        let rot1 = yaw * f32::consts::PI / 180.0;
+        let rot1 = yaw * f32_consts::PI / 180.0;
         let ss1 = rot1.sin();
         let cc1 = rot1.cos();
         self.tick_part(
@@ -1312,7 +1291,7 @@ impl EnderDragonEntity {
         };
         for (index, part) in tails.into_iter().enumerate() {
             let p0 = samples[index];
-            let rot = rot1 + wrap_degrees(p0.y_rot - p1.y_rot) * f32::consts::PI / 180.0;
+            let rot = rot1 + wrap_degrees(p0.y_rot - p1.y_rot) * f32_consts::PI / 180.0;
             let ss = rot.sin();
             let cc = rot.cos();
             let dd = (index + 1) as f32 * 2.0;
@@ -1324,7 +1303,7 @@ impl EnderDragonEntity {
             );
         }
 
-        for (part, old_position) in self.parts.iter().into_iter().zip(old_positions) {
+        for (part, old_position) in self.parts.sub_entities().into_iter().zip(old_positions) {
             part.set_old_position(old_position);
         }
     }
@@ -1342,14 +1321,14 @@ impl EnderDragonEntity {
             let box_ = wing
                 .inflate_xyz(WING_PUSH_INFLATION, 2.0, WING_PUSH_INFLATION)
                 .translate(DVec3::new(0.0, -2.0, 0.0));
-            let targets = self.contact_targets(world, entity, box_);
+            let targets = Self::contact_targets(world, entity, box_);
             self.knock_back(world, entity, &targets);
         }
 
-        let head_targets = self.contact_targets(world, entity, self.head_box().inflate(1.0));
-        self.hurt_contact(world, entity, &head_targets);
-        let neck_targets = self.contact_targets(world, entity, self.neck_box().inflate(1.0));
-        self.hurt_contact(world, entity, &neck_targets);
+        let head_targets = Self::contact_targets(world, entity, self.head_box().inflate(1.0));
+        Self::hurt_contact(world, entity, &head_targets);
+        let neck_targets = Self::contact_targets(world, entity, self.neck_box().inflate(1.0));
+        Self::hurt_contact(world, entity, &neck_targets);
     }
 
     /// Vanilla `Level.addParticle` for a single particle on the server.
@@ -1624,7 +1603,7 @@ impl LivingEntity for EnderDragonEntity {
         if let Err(error) = self.try_set_position(target) {
             log::debug!("failed to advance dying ender dragon: {error}");
         }
-        for part in self.parts.iter() {
+        for part in self.parts.sub_entities() {
             part.set_old_position(part.position());
             part.base().set_old_rotation(part.rotation());
             let target = part.position() + DEATH_MOVE;

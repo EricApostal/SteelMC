@@ -14,18 +14,20 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::{CTakeItemEntity, SoundSource};
-use steel_registry::data_components::vanilla_components::VILLAGER_FOOD;
+use steel_registry::data_components::vanilla_components::{VILLAGER_FOOD, VILLAGER_VARIANT};
 use steel_registry::entity_data::VillagerData;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::item_stack::ItemStack;
+use steel_registry::poi::PoiTypeRef;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::VillagerEntityData;
 use steel_registry::vanilla_item_tags::ItemTag;
 use steel_registry::villager_profession::VillagerProfessionRef;
 use steel_registry::villager_type::VillagerTypeRef;
 use steel_registry::{
-    REGISTRY, RegistryExt, TaggedRegistryExt, sound_events, vanilla_custom_stats,
-    vanilla_damage_types, vanilla_entities, vanilla_items, vanilla_mob_effects, vanilla_timelines,
+    REGISTRY, RegistryExt, TaggedRegistryExt, sound_events, vanilla_attributes,
+    vanilla_custom_stats, vanilla_damage_types, vanilla_entities, vanilla_items,
+    vanilla_mob_effects, vanilla_timelines,
 };
 use steel_utils::entity_events::EntityStatus;
 use steel_utils::locks::SyncMutex;
@@ -59,15 +61,18 @@ use crate::entity::npc::inventory_carrier::InventoryCarrier;
 use crate::entity::npc::npc::Npc;
 use crate::entity::npc::trading::{Merchant, MerchantOffer, MerchantOffers, MerchantOffersGuard};
 use crate::entity::{
-    AgeableMob, AgeableMobBase, AgeableMobGroupData, ConversionParams, Entity, EntityBase,
-    EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData, LivingEntity,
+    AgeableMob, AgeableMobBase, AgeableMobGroupData, ConversionParams, ENTITIES, Entity,
+    EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData, LivingEntity,
     LivingEntityBase, LivingEntitySyncedData, Mob, MobBase, MobEffectInstance, PathfinderMob,
-    RemovalReason, SharedEntity, SpawnGroupData,
+    RemovalReason, SharedEntity, SpawnGroupData, next_entity_id,
 };
 use crate::inventory::container::Container;
+use crate::physics::MoveResult;
 use crate::player::Player;
+use crate::player::advancement::triggers::raise_villager_trade;
 use crate::world::World;
 use crate::world::village::golem;
+use crate::world::village::reputation::WITNESS_SCAN_RADIUS;
 
 mod brain;
 mod data;
@@ -187,7 +192,7 @@ impl VillagerEntity {
             let follow_range = villager
                 .attributes()
                 .lock()
-                .get_value(steel_registry::vanilla_attributes::FOLLOW_RANGE)
+                .get_value(vanilla_attributes::FOLLOW_RANGE)
                 .unwrap_or(16.0);
             let mut navigation = villager.mob_base.navigation().lock();
             navigation.set_can_open_doors(true);
@@ -472,11 +477,7 @@ impl VillagerEntity {
         if let Some(trading_player) = self.merchant.trading_player()
             && let Some(player) = trading_player.as_player()
         {
-            crate::player::advancement::triggers::raise_villager_trade(
-                player,
-                self,
-                offer.result(),
-            );
+            raise_villager_trade(player, self, offer.result());
         }
     }
 
@@ -485,13 +486,13 @@ impl VillagerEntity {
         if self.mob_base.ambient_sound_time() > -self.ambient_sound_interval() + 20 {
             self.mob_base
                 .set_ambient_sound_time(-self.ambient_sound_interval());
-            self.make_sound(Some(self.trade_updated_sound(!stack.is_empty())));
+            self.make_sound(Some(Self::trade_updated_sound(!stack.is_empty())));
         }
     }
 
     /// Vanilla `AbstractVillager.getTradeUpdatedSound`.
     #[must_use]
-    pub fn trade_updated_sound(&self, valid_trade: bool) -> SoundEventRef {
+    pub fn trade_updated_sound(valid_trade: bool) -> SoundEventRef {
         if valid_trade {
             &sound_events::ENTITY_VILLAGER_YES
         } else {
@@ -567,7 +568,7 @@ impl VillagerEntity {
     ///
     /// `MerchantMenu` calls it after a trade, but `Villager.rewardTradeXp` already added
     /// the offer's xp (vanilla `AbstractVillager.overrideXp` is empty).
-    pub fn override_villager_xp(&self, _xp: i32) {}
+    pub const fn override_villager_xp(_xp: i32) {}
 
     // --- trading -------------------------------------------------------------------------
 
@@ -766,9 +767,9 @@ impl VillagerEntity {
             partner.villager_type()
         };
 
-        let child = crate::entity::registry::ENTITIES.create(
+        let child = ENTITIES.create(
             &vanilla_entities::VILLAGER,
-            crate::entity::next_entity_id(),
+            next_entity_id(),
             self.position(),
             Arc::downgrade(world),
         )?;
@@ -920,7 +921,7 @@ impl VillagerEntity {
 
     /// Vanilla `AssignProfessionFromJobSite`: adopt the first registered profession whose
     /// held job site matches `poi_type`.
-    pub fn apply_profession_from_poi(&self, poi_type: steel_registry::poi::PoiTypeRef) -> bool {
+    pub fn apply_profession_from_poi(&self, poi_type: PoiTypeRef) -> bool {
         let Some(profession) = (0..REGISTRY.villager_professions.len())
             .filter_map(|id| REGISTRY.villager_professions.by_id(id))
             .find(|profession| profession.is_held_job_site(poi_type))
@@ -929,6 +930,12 @@ impl VillagerEntity {
         };
 
         self.set_villager_data(self.villager_data().with_profession_ref(profession));
+        // Vanilla `AssignProfessionFromJobSite` assigns the profession and then calls
+        // `Villager.refreshBrain`, because the core/work packages and `ValidateNearbyPoi`
+        // capture the profession when they are built. Without the rebuild the villager
+        // keeps `profession_held_job_site(none) == never`, so its brand-new job site is
+        // validated away and `ResetProfession` drops it straight back to `none`.
+        self.refresh_brain();
         true
     }
 
@@ -1065,9 +1072,7 @@ impl Entity for VillagerEntity {
     }
 
     fn apply_implicit_item_components(&self, item_stack: &ItemStack) {
-        let Some(variant) =
-            item_stack.get(steel_registry::data_components::vanilla_components::VILLAGER_VARIANT)
-        else {
+        let Some(variant) = item_stack.get(VILLAGER_VARIANT) else {
             return;
         };
         self.set_villager_data(self.villager_data().with_type_ref(variant.value()));
@@ -1269,7 +1274,7 @@ impl LivingEntity for VillagerEntity {
                 ReputationEventType::VILLAGER_KILLED,
                 &murderer,
                 self.block_position(),
-                crate::world::village::reputation::WITNESS_SCAN_RADIUS,
+                WITNESS_SCAN_RADIUS,
             );
         }
 
@@ -1281,7 +1286,7 @@ impl LivingEntity for VillagerEntity {
         Mob::mob_server_ai_step(self, entity);
     }
 
-    fn ai_step(&self, entity: &SharedEntity) -> Option<crate::physics::MoveResult> {
+    fn ai_step(&self, entity: &SharedEntity) -> Option<MoveResult> {
         let result = Mob::mob_ai_step(self, entity);
         AgeableMob::tick_ageable_mob(self);
         result
@@ -1391,7 +1396,8 @@ impl Mob for VillagerEntity {
     }
 
     fn custom_server_ai_step(&self) {
-        if let Some(player) = self.last_traded_player.lock().take() {
+        let last_traded_player = self.last_traded_player.lock().take();
+        if let Some(player) = last_traded_player {
             if let Some(world) = self.level() {
                 world.on_reputation_event(ReputationEventType::TRADE, &player, self);
             }
@@ -1464,19 +1470,6 @@ impl Mob for VillagerEntity {
         }
 
         let no_offers = self.merchant.offers().is_empty();
-        // TEMP(diagnostic): remove once live trading is confirmed.
-        log::info!(
-            "villager {} interact: profession={}, type={}, level={}, offers={}, baby={}, sleeping={}, trading={}, finalized={}",
-            self.id(),
-            self.profession().key,
-            self.villager_type().key,
-            self.villager_level(),
-            self.merchant.offers().len(),
-            AgeableMob::is_baby(self),
-            LivingEntity::is_sleeping(self),
-            self.is_trading(),
-            self.villager_data_finalized(),
-        );
         if hand == InteractionHand::MainHand {
             if no_offers {
                 self.set_unhappy();
@@ -1610,7 +1603,7 @@ impl Merchant for VillagerEntity {
     }
 
     fn override_xp(&self, xp: i32) {
-        self.override_villager_xp(xp);
+        VillagerEntity::override_villager_xp(xp);
     }
 
     fn show_progress_bar(&self) -> bool {

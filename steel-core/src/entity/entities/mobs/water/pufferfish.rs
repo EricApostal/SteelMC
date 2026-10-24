@@ -15,7 +15,7 @@ use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::PufferfishEntityData;
 use steel_registry::vanilla_entity_type_tags::EntityTypeTag;
-use steel_registry::{MobEffectInstance, REGISTRY, TaggedRegistryExt, sound_events};
+use steel_registry::{REGISTRY, TaggedRegistryExt, sound_events};
 use steel_registry::{
     vanilla_attributes, vanilla_damage_types, vanilla_items, vanilla_mob_effects,
 };
@@ -29,7 +29,7 @@ use crate::entity::ai::targeting::TargetingConditions;
 use crate::entity::damage::DamageSource;
 use crate::entity::{
     Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySyncedData, LivingEntity,
-    LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity,
+    LivingEntityBase, Mob, MobBase, MobEffectInstance, PathfinderMob, SharedEntity,
 };
 use crate::physics::MoveResult;
 use crate::player::Player;
@@ -184,6 +184,10 @@ impl PufferfishEntity {
 
     /// Vanilla `AbstractFish.fromBucket`.
     #[must_use]
+    #[expect(
+        clippy::wrong_self_convention,
+        reason = "vanilla `AbstractFish.fromBucket` getter; the name is shared with the other bucketable fish entities"
+    )]
     pub fn from_bucket(&self) -> bool {
         *self.entity_data.lock().abstract_fish.from_bucket.get()
     }
@@ -199,19 +203,19 @@ impl PufferfishEntity {
 
     /// Vanilla `Pufferfish.getBucketItemStack`.
     #[must_use]
-    pub fn bucket_item_stack(&self) -> ItemStack {
+    pub fn bucket_item_stack() -> ItemStack {
         ItemStack::new(&vanilla_items::PUFFERFISH_BUCKET)
     }
 
     /// Vanilla `AbstractFish.getPickupSound`.
     #[must_use]
-    pub fn pickup_sound(&self) -> SoundEventRef {
+    pub fn pickup_sound() -> SoundEventRef {
         &sound_events::ITEM_BUCKET_FILL_FISH
     }
 
     /// Vanilla `Pufferfish.saveToBucketTag` (`Bucketable.saveDefaultDataToBucketTag`).
     fn create_bucket_stack(&self) -> ItemStack {
-        let mut stack = self.bucket_item_stack();
+        let mut stack = Self::bucket_item_stack();
         abstract_fish::save_default_bucket_data(self, &mut stack);
         stack
     }
@@ -223,7 +227,7 @@ impl PufferfishEntity {
 
     /// Vanilla `AbstractFish.mobInteract`'s bucket half (`Bucketable.bucketMobPickup`).
     fn try_bucket_pickup(&self, player: &Player, hand: InteractionHand) -> bool {
-        abstract_fish::try_bucket_pickup(self, player, hand, self.pickup_sound(), || {
+        abstract_fish::try_bucket_pickup(self, player, hand, Self::pickup_sound(), || {
             self.create_bucket_stack()
         })
     }
@@ -280,8 +284,8 @@ impl PufferfishEntity {
             return;
         };
         if living.hurt_server(world, &source, (1 + puff_state) as f32) {
-            living.add_mob_effect(MobEffectInstance::simple(
-                &vanilla_mob_effects::POISON,
+            living.add_mob_effect(MobEffectInstance::with_duration(
+                vanilla_mob_effects::POISON,
                 POISON_DURATION_PER_STATE * puff_state,
                 0,
             ));
@@ -294,7 +298,7 @@ impl PufferfishEntity {
     }
 
     /// Vanilla `Pufferfish.getScale`.
-    fn puff_scale(state: i32) -> f32 {
+    const fn puff_scale(state: i32) -> f32 {
         match state {
             STATE_SMALL => 0.5,
             STATE_MID => 0.7,
@@ -419,7 +423,8 @@ impl Entity for PufferfishEntity {
             return;
         };
 
-        let attacker: SharedEntity = Arc::clone(&self);
+        let attacker = Arc::clone(&self);
+        let attacker: SharedEntity = attacker;
         let source = DamageSource::environment(&vanilla_damage_types::MOB_ATTACK)
             .with_causing_entity(Arc::clone(&attacker))
             .with_direct_entity(attacker);
@@ -431,8 +436,8 @@ impl Entity for PufferfishEntity {
                     data: 0.0,
                 });
             }
-            player.add_mob_effect(MobEffectInstance::simple(
-                &vanilla_mob_effects::POISON,
+            player.add_mob_effect(MobEffectInstance::with_duration(
+                vanilla_mob_effects::POISON,
                 POISON_DURATION_PER_STATE * puff_state,
                 0,
             ));

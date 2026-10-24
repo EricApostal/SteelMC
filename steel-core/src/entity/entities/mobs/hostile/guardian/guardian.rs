@@ -4,6 +4,7 @@
 //! selects the water-bound navigation kind on its shared navigation and ticks the guardian
 //! move control in [`GuardianEntity`]/[`ElderGuardianEntity`]'s `tick_move_control`.
 
+use std::f64::consts::PI;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -24,6 +25,7 @@ use steel_utils::random::RandomSource;
 use steel_utils::types::Difficulty;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
+use crate::behavior::BLOCK_BEHAVIORS;
 use crate::entity::ai::control::{MoveControlOperation, rotate_towards};
 use crate::entity::ai::goal::{
     Goal, GoalControls, LookAtPlayerGoal, MoveTowardsRestrictionGoal, NearestAttackableTargetGoal,
@@ -50,8 +52,6 @@ const GUARDIAN_AMBIENT_INTERVAL: i32 = 160;
 const GUARDIAN_THORNS_DAMAGE: f32 = 2.0;
 /// Vanilla `Guardian.GuardianAttackSelector` minimum distance (squared).
 const GUARDIAN_MIN_TARGET_DISTANCE_SQR: f64 = 9.0;
-/// Vanilla `Guardian.checkGuardianSpawnRules` spawn roll bound.
-const GUARDIAN_SPAWN_CHANCE_BOUND: i32 = 20;
 /// Vanilla `Guardian.travelInWater` drag.
 const GUARDIAN_WATER_DRAG: f64 = 0.9;
 /// Vanilla `Guardian.travelInWater` sink acceleration when idle.
@@ -146,11 +146,10 @@ impl GuardianEntity {
                     true,
                     false,
                     |target, _world| {
-                        let is_prey = target.entity_type() == &vanilla_entities::PLAYER
+                        target.entity_type() == &vanilla_entities::PLAYER
                             || target.entity_type() == &vanilla_entities::SQUID
                             || target.entity_type() == &vanilla_entities::GLOW_SQUID
-                            || target.entity_type() == &vanilla_entities::AXOLOTL;
-                        is_prey
+                            || target.entity_type() == &vanilla_entities::AXOLOTL
                     },
                 ),
             );
@@ -195,7 +194,7 @@ impl GuardianEntity {
 
     /// Vanilla `Guardian.getAttackDuration`; elder guardians override it.
     #[must_use]
-    pub fn attack_duration(&self) -> i32 {
+    pub const fn attack_duration() -> i32 {
         GUARDIAN_ATTACK_DURATION
     }
 
@@ -212,7 +211,7 @@ impl GuardianEntity {
 
     /// Vanilla `Guardian.getFlopSound`.
     #[must_use]
-    pub fn flop_sound(&self) -> SoundEventRef {
+    pub fn flop_sound() -> SoundEventRef {
         &sound_events::ENTITY_GUARDIAN_FLOP
     }
 
@@ -366,7 +365,7 @@ impl Goal for GuardianAttackGoal {
             if !guardian.is_silent() {
                 guardian.broadcast_entity_event(EntityStatus::GuardianAttackSound);
             }
-        } else if self.attack_time >= guardian.attack_duration() {
+        } else if self.attack_time >= GuardianEntity::attack_duration() {
             let mut magic_damage = GUARDIAN_MAGIC_DAMAGE;
             if world.difficulty() == Difficulty::Hard {
                 magic_damage += GUARDIAN_MAGIC_DAMAGE_HARD;
@@ -376,9 +375,9 @@ impl Goal for GuardianAttackGoal {
             }
 
             let magic_source =
-                DamageSource::direct(&vanilla_damage_types::INDIRECT_MAGIC, entity.clone());
+                DamageSource::direct(&vanilla_damage_types::INDIRECT_MAGIC, Arc::clone(entity));
             let _ = target.hurt(&world, &magic_source, magic_damage);
-            Mob::do_hurt_target(guardian, entity, &world, &target);
+            let _ = Mob::do_hurt_target(guardian, entity, &world, &target);
             mob.set_target(None);
         }
     }
@@ -450,12 +449,10 @@ impl Entity for GuardianEntity {
             && !avoids_thorns
             && let Some(direct) = source.direct_entity()
             && let Some(attacker) = direct.as_living_entity()
+            && let Some(self_entity) = world.get_entity_by_id(self.id())
         {
-            if let Some(self_entity) = world.get_entity_by_id(self.id()) {
-                let thorns_source =
-                    DamageSource::direct(&vanilla_damage_types::THORNS, self_entity);
-                attacker.hurt(world, &thorns_source, GUARDIAN_THORNS_DAMAGE);
-            }
+            let thorns_source = DamageSource::direct(&vanilla_damage_types::THORNS, self_entity);
+            attacker.hurt(world, &thorns_source, GUARDIAN_THORNS_DAMAGE);
         }
 
         LivingEntity::hurt_server(self, world, source, amount)
@@ -592,7 +589,17 @@ impl Mob for GuardianEntity {
         {
             return false;
         }
-        <Self as Mob>::check_mob_spawn_rules(entity_type, level, spawn_reason, pos)
+        // Inlined `Mob::check_mob_spawn_rules` default, which vanilla
+        // `Guardian.checkGuardianSpawnRules` reaches through `checkMobSpawnRules`; Rust has
+        // no super-call, so the shared body is repeated here.
+        if spawn_reason.is_spawner() {
+            return true;
+        }
+        let below = pos.below();
+        let state = level.get_block_state(below);
+        BLOCK_BEHAVIORS
+            .get_behavior(state.get_block())
+            .is_valid_spawn(state, level, below, entity_type)
     }
 }
 
@@ -600,10 +607,10 @@ impl Monster for GuardianEntity {}
 
 impl PathfinderMob for GuardianEntity {
     fn get_walk_target_value(&self, pos: BlockPos) -> f32 {
-        if let Some(world) = self.level() {
-            if world.get_block_state(pos).get_fluid_state().is_water() {
-                return 10.0 + LevelReader::pathfinding_cost_from_light_levels(world.as_ref(), pos);
-            }
+        if let Some(world) = self.level()
+            && world.get_block_state(pos).get_fluid_state().is_water()
+        {
+            return 10.0 + LevelReader::pathfinding_cost_from_light_levels(world.as_ref(), pos);
         }
         Monster::get_walk_target_value_monster(self, pos)
     }
@@ -655,11 +662,11 @@ pub(super) fn tick_guardian_move_control<M: Mob + ?Sized>(mob: &M) -> bool {
     let new_speed = mob.get_speed() + (target_speed - mob.get_speed()) * GUARDIAN_SPEED_LERP;
     mob.set_mob_speed(new_speed);
 
-    let tick_phase = (mob.tick_count() + mob.id()) as f64 * 0.5;
+    let tick_phase = f64::from(mob.tick_count() + mob.id()) * 0.5;
     let push = tick_phase.sin() * GUARDIAN_PUSH;
-    let yaw_radians = f64::from(new_yaw) * (f64::consts::PI / 180.0);
+    let yaw_radians = f64::from(new_yaw) * (PI / 180.0);
     let (sin_yaw, cos_yaw) = yaw_radians.sin_cos();
-    let y_push = ((mob.tick_count() + mob.id()) as f64 * 0.75).sin() * GUARDIAN_PUSH;
+    let y_push = (f64::from(mob.tick_count() + mob.id()) * 0.75).sin() * GUARDIAN_PUSH;
     mob.set_velocity(
         mob.velocity()
             + DVec3::new(
@@ -687,7 +694,7 @@ pub(super) fn tick_guardian_move_control<M: Mob + ?Sized>(mob: &M) -> bool {
         (old, control.y_max_rot_speed(), control.x_max_rot_angle())
     };
     mob.mob_base().controls().lock().look_control.set_look_at(
-        old_look.lerp(new_look, GUARDIAN_SPEED_LERP),
+        old_look.lerp(new_look, f64::from(GUARDIAN_SPEED_LERP)),
         y_max_rot_speed,
         x_max_rot_angle,
     );
@@ -712,7 +719,7 @@ mod tests {
 
         assert!(!guardian.is_moving());
         assert!(!guardian.has_active_attack_target());
-        assert_eq!(guardian.attack_duration(), 80);
+        assert_eq!(GuardianEntity::attack_duration(), 80);
 
         guardian.set_moving(true);
         guardian.set_active_attack_target(42);

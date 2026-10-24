@@ -41,6 +41,7 @@ fn reload(context: &SteelCommandContext<CommandSource>) -> Result<i32, CommandSy
         Ok(summary) => {
             tracing::info!(
                 packs = summary.packs_loaded,
+                new_packs = ?summary.new_packs,
                 functions = summary.functions_loaded,
                 tags = summary.tags_loaded,
                 elapsed = ?summary.elapsed,

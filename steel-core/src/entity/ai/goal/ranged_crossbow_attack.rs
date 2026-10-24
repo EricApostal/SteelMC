@@ -64,7 +64,7 @@ impl RangedCrossbowAttackGoal {
 
     /// Vanilla `RangedCrossbowAttackGoal.isHoldingCrossbow`.
     fn is_holding_crossbow(mob: &dyn PathfinderMob) -> bool {
-        mob.is_holding(&mut |stack| ptr::eq(stack.item(), &*vanilla_items::CROSSBOW))
+        mob.is_holding(&mut |stack| ptr::eq(stack.item(), &raw const *vanilla_items::CROSSBOW))
     }
 
     /// Vanilla `RangedCrossbowAttackGoal.isValidTarget`.
@@ -137,12 +137,12 @@ impl Goal for RangedCrossbowAttackGoal {
             return;
         };
 
-        let has_line_of_sight = mob.has_line_of_sight_cached(target.as_ref());
-        let had_line_of_sight = self.see_time > 0;
-        if has_line_of_sight != had_line_of_sight {
+        let sees_target = mob.has_line_of_sight_cached(target.as_ref());
+        let saw_target = self.see_time > 0;
+        if sees_target != saw_target {
             self.see_time = 0;
         }
-        if has_line_of_sight {
+        if sees_target {
             self.see_time += 1;
         } else {
             self.see_time -= 1;
@@ -204,7 +204,7 @@ impl Goal for RangedCrossbowAttackGoal {
                 }
             }
             CrossbowState::ReadyToAttack => {
-                if has_line_of_sight {
+                if sees_target {
                     // Vanilla `CrossbowAttackMob.performCrossbowAttack` through
                     // `Mob.performRangedAttack(target, 1.0F)`. The `RangedAttackMob` bound of
                     // the vanilla goal is the capability Steel dispatches through; a mob

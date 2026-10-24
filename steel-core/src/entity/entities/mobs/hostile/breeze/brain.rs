@@ -40,9 +40,6 @@ use super::{long_jump, shoot, shoot_when_stuck, slide};
 
 /// Vanilla `BreezeAi` speeds and bounds.
 const SPEED_MULTIPLIER_WHEN_STROLLING: f32 = 0.6;
-/// Vanilla `BreezeAi.TICKS_TO_REMEMBER_SEEN_TARGET`, applied to `BREEZE_SHOOT`
-/// by `SlideToTargetSink.stop` in vanilla.
-const TICKS_TO_REMEMBER_SEEN_TARGET: i64 = 100;
 
 /// Vanilla `Breeze.BRAIN_PROVIDER` sensor list.
 static SENSOR_TYPES: [&SensorType; 4] = [
@@ -160,21 +157,12 @@ fn hurt_by_attacker(ctx: &BehaviorContext<'_>, _body: &SharedEntity) -> Option<S
 /// Vanilla `BreezeAi.SlideToTargetSink`: a `MoveToTargetSink` with a 20-40 tick
 /// window; the entity wrapper plays `BREEZE_SLIDE`, swaps to the `SLIDING` pose,
 /// and on stop swaps back and remembers `BREEZE_SHOOT` for
-/// [`TICKS_TO_REMEMBER_SEEN_TARGET`] ticks when an attack target is held.
+/// `TICKS_TO_REMEMBER_SEEN_TARGET` ticks when an attack target is held.
 ///
 /// The wall-clock never appears in Steel behaviors, and the breeze pose/sound
-/// helpers live on the entity; this wrapper keeps the vanilla timeouts and the
-/// `BREEZE_SHOOT` write, which is the brain-visible half.
+/// helpers live on the entity; this wrapper keeps the vanilla timeouts.
 fn slide_to_target_sink() -> MoveToTargetSink {
     MoveToTargetSink::with_range(20, 40)
-}
-
-/// Vanilla `SlideToTargetSink.stop` brain half: called by the entity after it
-/// restores the standing pose.
-pub(crate) fn on_slide_stop(brain: &mut Brain) {
-    if brain.has_memory_value(&mem::ATTACK_TARGET) {
-        brain.set_memory_with_expiry(&mem::BREEZE_SHOOT, (), TICKS_TO_REMEMBER_SEEN_TARGET);
-    }
 }
 
 /// Vanilla `BreezeAi.initFightActivity` first slot:
@@ -205,8 +193,6 @@ pub(crate) fn within_inner_circle_range(body: &SharedEntity, target: &SharedEnti
 pub(crate) const JUMP_CIRCLE_INNER_RADIUS: f32 = 4.0;
 /// Vanilla `BreezeAi.JUMP_CIRCLE_MIDDLE_RADIUS`.
 pub(crate) const JUMP_CIRCLE_MIDDLE_RADIUS: f32 = 8.0;
-/// Vanilla `BreezeAi.JUMP_CIRCLE_OUTER_RADIUS`.
-pub(crate) const JUMP_CIRCLE_OUTER_RADIUS: f32 = 24.0;
 /// Vanilla `Breeze.SPEED_MULTIPLIER_WHEN_SLIDING`.
 pub(crate) const SPEED_MULTIPLIER_WHEN_SLIDING: f32 = 0.6;
 

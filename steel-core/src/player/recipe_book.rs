@@ -22,7 +22,7 @@ use steel_registry::recipe::{
     RecipeBookCategoryKind, RecipeBookCategoryRef, ShapedRecipe, ShapelessRecipe, SmithingRecipe,
     StonecuttingRecipe, UntypedRecipeRef, vanilla_recipe_types,
 };
-use steel_registry::{REGISTRY, RegistryEntry as _, RegistryExt as _, vanilla_items};
+use steel_registry::{REGISTRY, vanilla_items};
 use steel_utils::Identifier;
 
 use crate::entity::{Entity as _, living_loot_equipment};

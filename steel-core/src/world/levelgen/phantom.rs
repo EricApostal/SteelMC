@@ -3,13 +3,11 @@
 
 use std::sync::Arc;
 
-use steel_registry::RegistryExt as _;
-use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::stat::vanilla_stat_types;
 use steel_registry::vanilla_custom_stats;
 use steel_registry::vanilla_entities;
 use steel_registry::vanilla_game_rules::SPAWN_PHANTOMS;
-use steel_utils::random::{Random as _, RandomSource};
+use steel_utils::random::Random as _;
 use steel_utils::types::Difficulty;
 
 use crate::entity::Entity as _;

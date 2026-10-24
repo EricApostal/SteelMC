@@ -9,13 +9,13 @@
 //! - [`experience_reward_with_enchantments`] — vanilla
 //!   `LivingEntity.getExperienceReward`, i.e. the base reward folded through the
 //!   killer's `minecraft:mob_experience` effects.
-//! - [`loot_level_view`] — the [`LevelView`] a loot table needs for
+//! - [`loot_level_view`] — the
+//!   [`LevelView`](steel_registry::advancement::predicates::LevelView) a loot table needs for
 //!   `minecraft:location_check`.
 
 use std::sync::Arc;
 
-use rand::Rng as _;
-use steel_registry::advancement::predicates::LevelView;
+use rand::{Rng, RngExt as _};
 use steel_registry::enchantment_effect::EnchantmentEffectComponent;
 use steel_utils::BlockPos;
 
@@ -34,10 +34,10 @@ use crate::world::World;
 /// sub-predicate (position, biomes, structures, dimension, light, block, fluid,
 /// `smokey`, `can_see_sky`) resolves against the live world.
 #[must_use]
-pub(crate) fn loot_level_view<'a>(
-    world: &'a Arc<World>,
+pub(crate) const fn loot_level_view(
+    world: &Arc<World>,
     origin: (f64, f64, f64),
-) -> WorldLevelView<'a> {
+) -> WorldLevelView<'_> {
     WorldLevelView::new(world, BlockPos::containing(origin.0, origin.1, origin.2))
 }
 

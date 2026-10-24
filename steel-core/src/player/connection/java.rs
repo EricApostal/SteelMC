@@ -482,7 +482,7 @@ impl ScheduledPlayPacket {
             ScheduledPlayPacketKind::RecipeBookSeenRecipe(packet) => {
                 player.handle_recipe_book_seen_recipe(&packet);
             }
-            ScheduledPlayPacketKind::ChatCommandSigned(packet) => {
+            ScheduledPlayPacketKind::ChatCommandSigned(_packet) => {
                 player.handle_awaiting_foundation(
                     "ServerboundChatCommandSignedPacket",
                     "signed-command verification (`SChatCommandSigned` now registered with `#[packet_id(Play = S_CHAT_COMMAND_SIGNED)]`; needs signature verification + dispatch like `handle_chat_command`)",

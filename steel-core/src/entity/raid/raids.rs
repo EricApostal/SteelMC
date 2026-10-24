@@ -106,6 +106,10 @@ impl RaidSnapshot {
     }
 
     /// Vanilla `Raid.getMaxRaidOmenLevel`.
+    #[expect(
+        clippy::unused_self,
+        reason = "vanilla `Raid.getMaxRaidOmenLevel` is an instance method returning a constant, and its callers live outside this slice"
+    )]
     #[must_use]
     pub const fn max_raid_omen_level(&self) -> i32 {
         DEFAULT_MAX_RAID_OMEN_LEVEL
@@ -133,7 +137,7 @@ pub struct Raids {
 impl Raids {
     /// Vanilla `Raids()`: a fresh manager starts with no raids and `nextId = 1`.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             raid_map: BTreeMap::new(),
             next_id: 1,
@@ -281,15 +285,18 @@ impl Raids {
 
             if !raids_enabled {
                 raid.stop();
-                raid.sync_bar(world);
             }
 
             if raid.is_stopped() {
+                // Vanilla `Raid.stop` queued the bar's `Remove` operations through
+                // `removeAllPlayers`; deliver them before the raid leaves the map.
+                raid.broadcast_pending();
                 stopped.push(id);
                 continue;
             }
 
             raid.tick(world, id);
+            raid.broadcast_pending();
         }
 
         for id in stopped {
@@ -343,7 +350,7 @@ impl Raids {
     }
 
     /// Vanilla `Raids.getUniqueId`.
-    fn unique_id(&mut self) -> i32 {
+    const fn unique_id(&mut self) -> i32 {
         self.next_id += 1;
         self.next_id
     }
@@ -360,6 +367,9 @@ impl Raids {
     ) {
         if let Some(raid) = self.raid_map.get_mut(&raid_id) {
             raid.join_raid(world, raid_id, group_number, raider, pos, exists);
+            // Vanilla sends the boss-bar operations from inside the setters; a joining
+            // raider refreshes the bar, so deliver it without waiting for the raid tick.
+            raid.broadcast_pending();
             self.dirty = true;
         }
     }
@@ -374,6 +384,9 @@ impl Raids {
     ) {
         if let Some(raid) = self.raid_map.get_mut(&raid_id) {
             raid.remove_from_raid(world, uuid, remove_from_total_health);
+            // Vanilla `Raid.removeFromRaid` refreshes the bar from the raiders' health and
+            // sends it immediately; this path runs off the raid tick.
+            raid.broadcast_pending();
             self.dirty = true;
         }
     }
@@ -453,7 +466,7 @@ impl Raids {
     }
 }
 
-fn block_distance_sqr(a: BlockPos, b: BlockPos) -> i32 {
+const fn block_distance_sqr(a: BlockPos, b: BlockPos) -> i32 {
     let dx = a.x() - b.x();
     let dy = a.y() - b.y();
     let dz = a.z() - b.z();
@@ -519,7 +532,7 @@ impl RaidRecord {
             group_count: raid.group_count(),
             status: raid.status().serialized_name().to_owned(),
             center: [center.x(), center.y(), center.z()],
-            heroes_of_the_village: raid.heroes_of_the_village().to_vec(),
+            heroes_of_the_village: raid.heroes_of_the_village(),
         }
     }
 }

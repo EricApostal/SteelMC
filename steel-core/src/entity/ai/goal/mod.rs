@@ -72,7 +72,7 @@ mod zombie_attack_goal;
 
 pub(crate) use avoid_entity::AvoidEntityGoal;
 pub(crate) use beg_goal::BegGoal;
-pub(crate) use break_door::{BreakDoorGoal, VindicatorBreakDoorGoal};
+pub(crate) use break_door::VindicatorBreakDoorGoal;
 pub(crate) use breath_air::BreathAirGoal;
 pub(crate) use breed_goal::BreedGoal;
 pub(crate) use capabilities::{
@@ -94,19 +94,15 @@ pub(crate) use golem_random_stroll_in_village::GolemRandomStrollInVillageGoal;
 pub(crate) use hold_ground_attack::HoldGroundAttackGoal;
 pub(crate) use hurt_by_target::HurtByTargetGoal;
 pub(crate) use illager_spells::{
-    IllusionerBlindnessSpell, IllusionerMirrorSpell, Spellcaster, SpellcasterCastingSpellGoal,
-    SpellcasterSpell, SpellcasterUseSpellGoal,
+    IllusionerBlindnessSpell, IllusionerMirrorSpell, SpellcasterCastingSpellGoal, SpellcasterSpell,
+    SpellcasterUseSpellGoal,
 };
 pub(crate) use interact::InteractGoal;
-pub(crate) use jump_goal::{DolphinJumpGoal, JumpGoal};
-pub(crate) use land_on_owners_shoulder::LandOnOwnersShoulderGoal;
+pub(crate) use jump_goal::DolphinJumpGoal;
 pub(crate) use leap_at_target::LeapAtTargetGoal;
-pub(crate) use llama_follow_caravan::LlamaFollowCaravanGoal;
 pub(crate) use look_at_player::LookAtPlayerGoal;
-pub(crate) use look_at_trading_player::LookAtTradingPlayerGoal;
 pub(crate) use melee_attack::MeleeAttackGoal;
 pub(crate) use move_back_to_village::MoveBackToVillageGoal;
-pub(crate) use move_through_village::MoveThroughVillageGoal;
 pub(crate) use move_to_block::MoveToBlockGoal;
 pub(crate) use move_towards_restriction::MoveTowardsRestrictionGoal;
 pub(crate) use move_towards_target::MoveTowardsTargetGoal;
@@ -114,7 +110,6 @@ pub(crate) use nearest_attackable_target::NearestAttackableTargetGoal;
 pub(crate) use non_tame_random_target::NonTameRandomTargetGoal;
 pub(crate) use ocelot_attack::OcelotAttackGoal;
 pub(crate) use offer_flower::OfferFlowerGoal;
-pub(crate) use open_door::OpenDoorGoal;
 pub(crate) use owner_targets::{OwnerHurtByTargetGoal, OwnerHurtTargetGoal};
 pub(crate) use panic_goal::PanicGoal;
 pub(crate) use pathfind_to_raid::PathfindToRaidGoal;
@@ -124,19 +119,14 @@ pub(crate) use raid_raider_goals::{
 };
 pub(crate) use random_look_around::RandomLookAroundGoal;
 pub(crate) use random_pos::default_random_pos_away;
-pub(crate) use random_stand::RandomStandGoal;
 pub(crate) use random_stroll::RandomStrollGoal;
 pub(crate) use random_swimming::RandomSwimmingGoal;
 pub(crate) use ranged_attack::RangedAttackGoal;
 pub(crate) use ranged_bow_attack::RangedBowAttackGoal;
 pub(crate) use ranged_crossbow_attack::RangedCrossbowAttackGoal;
-pub(crate) use remove_block_goal::RemoveBlockGoal;
 pub(crate) use restrict_sun::RestrictSunGoal;
-pub(crate) use run_around_like_crazy::RunAroundLikeCrazyGoal;
 pub(crate) use selector::{Goal, GoalControl, GoalControls, GoalSelector, is_goal};
 pub(crate) use sit_when_ordered_to::SitWhenOrderedToGoal;
-pub(crate) use spear_use_goal::SpearUseGoal;
-pub(crate) use stroll_through_village::StrollThroughVillageGoal;
 pub(crate) use swell_goal::SwellGoal;
 pub(crate) use target::{
     AngryAtPlayerTargetGoal, DefendVillageTargetGoal, ResetUniversalAngerTargetGoal,
@@ -144,7 +134,6 @@ pub(crate) use target::{
 pub(crate) use tempt_goal::TemptGoal;
 pub(crate) use try_find_water::TryFindWaterGoal;
 pub(crate) use use_item_goal::UseItemGoal;
-pub(crate) use water_avoiding_random_flying::WaterAvoidingRandomFlyingGoal;
 pub(crate) use water_avoiding_random_stroll::WaterAvoidingRandomStrollGoal;
 pub(crate) use witch_targets::{
     NearestAttackableWitchTargetGoal, NearestHealableRaiderTargetGoal, WitchTargetState,
