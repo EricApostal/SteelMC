@@ -34,13 +34,13 @@ pub fn is_block_in_line(
     to: DVec3,
     predicate: impl Fn(BlockStateId) -> bool,
 ) -> bool {
+    // Vanilla `traverseBlocks` endpoints: `Mth.lerp(-1.0E-7, to.x, from.x)` and the mirror
+    // start. `Mth.lerp(delta, start, end)` is `start + delta * (end - start)`.
+    const ADJUST: f64 = -1.0e-7;
     // Vanilla `Vec3.equals`: identical endpoints can never cross a block.
     if from == to {
         return false;
     }
-    // Vanilla `traverseBlocks` endpoints: `Mth.lerp(-1.0E-7, to.x, from.x)` and the mirror
-    // start. `Mth.lerp(delta, start, end)` is `start + delta * (end - start)`.
-    const ADJUST: f64 = -1.0e-7;
     let to_adjusted = DVec3::new(
         to.x + ADJUST * (from.x - to.x),
         to.y + ADJUST * (from.y - to.y),

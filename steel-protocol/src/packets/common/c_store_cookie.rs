@@ -8,7 +8,7 @@ use steel_utils::Identifier;
 /// Asks the client to store `payload` under `key`.
 ///
 /// Mirrors vanilla's `ClientboundStoreCookiePacket`: an identifier followed by
-/// `ByteBufCodecs.byteArray(5120)`, i.e. a VarInt byte count and the raw bytes.
+/// `ByteBufCodecs.byteArray(5120)`, i.e. a `VarInt` byte count and the raw bytes.
 #[derive(ClientPacket, WriteTo, Clone, Debug)]
 #[packet_id(Config = C_STORE_COOKIE, Play = PLAY_C_STORE_COOKIE)]
 pub struct CStoreCookie {

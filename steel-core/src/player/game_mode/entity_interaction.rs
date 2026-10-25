@@ -706,7 +706,40 @@ impl Player {
         }
 
         let animation = self.interact_animation(packet.hand);
+        // Vanilla `handleInteract` snapshots the hand stack before `interactOn`.
+        let item_before = {
+            let inventory = self.inventory.lock();
+            inventory.get_item_in_hand(packet.hand).clone()
+        };
         let result = self.interact_on(target.as_ref(), packet.hand, packet.location);
+
+        // Vanilla `ServerGamePacketListenerImpl.handleInteract` raises
+        // `player_interacted_with_entity` for any consuming `Success`, passing the
+        // pre-interaction stack only when the result `wasItemInteraction()` (i.e.
+        // vanilla `ItemContext.DEFAULT`: `SUCCESS`, `SUCCESS_SERVER`, `CONSUME`)
+        // and an empty stack for `Success.withoutItem()`.
+        match result {
+            InteractionResult::Success
+            | InteractionResult::SuccessServer
+            | InteractionResult::Consume => {
+                crate::behavior::advancement_hooks::raise_player_interacted_with_entity(
+                    self,
+                    target.as_ref(),
+                    &item_before,
+                );
+            }
+            InteractionResult::SuccessWithoutItem => {
+                crate::behavior::advancement_hooks::raise_player_interacted_with_entity(
+                    self,
+                    target.as_ref(),
+                    &ItemStack::empty(),
+                );
+            }
+            InteractionResult::Fail
+            | InteractionResult::Pass
+            | InteractionResult::TryEmptyHandInteraction => {}
+        }
+
         self.swing_after_interaction(packet.hand, animation, result);
         self.broadcast_inventory_changes();
     }

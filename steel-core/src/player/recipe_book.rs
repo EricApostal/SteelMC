@@ -520,12 +520,6 @@ struct DisplayIndex {
 
 static DISPLAY_INDEX: OnceLock<DisplayIndex> = OnceLock::new();
 
-/// The display index, or `None` while the recipe registry is still empty.
-///
-/// The index is built once and cached. A pre-registry call is not cached so a
-/// caller cannot freeze an empty index before `init_vanilla_registry`; that
-/// runtime guard is why this uses `OnceLock` instead of `LazyLock`.
-
 /// The `minecraft:update_recipes` payload, built once from the frozen recipe registry.
 ///
 /// Built once and cached for the same reason as [`DISPLAY_INDEX`]: a pre-registry call must
@@ -691,6 +685,11 @@ fn stonecutter_recipes() -> Vec<SelectableStonecutterRecipe> {
     entries
 }
 
+/// The display index, or `None` while the recipe registry is still empty.
+///
+/// The index is built once and cached. A pre-registry call is not cached so a
+/// caller cannot freeze an empty index before `init_vanilla_registry`; that
+/// runtime guard is why this uses `OnceLock` instead of `LazyLock`.
 #[must_use]
 fn display_index() -> Option<&'static DisplayIndex> {
     if let Some(index) = DISPLAY_INDEX.get() {

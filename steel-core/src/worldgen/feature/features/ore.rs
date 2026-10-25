@@ -415,6 +415,10 @@ impl FeatureDecorationRunner {
         false
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors vanilla OreFeature.canPlaceOre (region, registry, random, config, target, pos, state, block id)"
+    )]
     fn can_place_resolved_ore(
         region: &WorldGenRegion<'_>,
         registry: &Registry,
@@ -436,6 +440,10 @@ impl FeatureDecorationRunner {
         !Self::is_adjacent_to_air(region, registry, pos)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "bulk twin of can_place_resolved_ore; same vanilla parameter set"
+    )]
     fn can_place_resolved_ore_in_bulk(
         sections: &mut WorldGenBulkSectionAccess<'_, '_, '_>,
         registry: &Registry,

@@ -950,7 +950,7 @@ mod tests {
     #[test]
     fn piglin_barter_and_pickup_rules_match_vanilla() {
         let piglin = piglin();
-        let body = piglin.as_entity_event_source();
+        let _body = piglin.as_entity_event_source();
 
         assert!(ai::is_barter_currency(&ItemStack::new(
             &vanilla_items::GOLD_INGOT

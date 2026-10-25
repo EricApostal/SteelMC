@@ -15,6 +15,8 @@
 //! behaves like a vanilla type with no `SpawnPlacements` entry
 //! (`NO_RESTRICTIONS`, motion-blocking-no-leaves heightmap, no predicate).
 
+use std::ptr;
+
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::shapes::is_offset_shape_full_block;
 use steel_registry::entity_type::EntityTypeRef;
@@ -24,16 +26,19 @@ use steel_registry::vanilla_blocks;
 use steel_registry::vanilla_entities;
 use steel_registry::vanilla_fluids;
 use steel_utils::random::RandomSource;
+use steel_utils::types::Difficulty;
 use steel_utils::{BlockPos, BlockStateId};
 
 use crate::behavior::BLOCK_BEHAVIORS;
 use crate::chunk::heightmap::HeightmapType;
+use crate::chunk::light::LightLayer;
 use crate::entity::Animal;
 use crate::entity::EntitySpawnReason;
 use crate::entity::Mob;
 use crate::entity::Monster;
 use crate::entity::ai::path::PathComputationType;
 use crate::entity::ai::walk::WalkPathEvaluator;
+use crate::entity::entities::mobs::hostile::piglin::check_piglin_spawn_rules;
 use crate::entity::entities::{
     ArmadilloEntity, AxolotlEntity, BatEntity, CamelEntity, DolphinEntity, DrownedEntity,
     EndermiteEntity, FoxEntity, FrogEntity, GhastEntity, GlowSquidEntity, GoatEntity,
@@ -41,6 +46,7 @@ use crate::entity::entities::{
     PigEntity, SilverfishEntity, SkeletonHorseEntity, SlimeEntity, SquidEntity, StrayEntity,
     TurtleEntity, WolfEntity, ZombieEntity, ZombifiedPiglinEntity,
 };
+use crate::world::is_redstone_conductor as world_is_redstone_conductor;
 use crate::world::{LevelReader, World};
 
 /// Vanilla `SpawnPlacementType`.
@@ -51,6 +57,10 @@ pub enum SpawnPlacementType {
     /// Vanilla `SpawnPlacementTypes.IN_WATER`.
     InWater,
     /// Vanilla `SpawnPlacementTypes.IN_LAVA`.
+    #[expect(
+        dead_code,
+        reason = "vanilla selects this placement for striders; Steel has no lava placement row yet"
+    )]
     InLava,
     /// Vanilla `SpawnPlacementTypes.ON_GROUND`.
     OnGround,
@@ -136,7 +146,7 @@ pub fn is_valid_spawn_on_block(
 /// Vanilla `BlockState.isRedstoneConductor`.
 #[must_use]
 pub fn is_redstone_conductor(level: &dyn LevelReader, state: BlockStateId, pos: BlockPos) -> bool {
-    crate::world::is_redstone_conductor(level, state, pos)
+    world_is_redstone_conductor(level, state, pos)
 }
 
 /// Vanilla `EntityType.isBlockDangerous`.
@@ -523,7 +533,7 @@ fn check_piglin_placement_spawn_rules(
     pos: BlockPos,
     _random: &mut RandomSource,
 ) -> bool {
-    crate::entity::entities::mobs::hostile::piglin::check_piglin_spawn_rules(level, pos)
+    check_piglin_spawn_rules(level, pos)
 }
 
 /// Vanilla `ZombifiedPiglin.checkZombifiedPiglinSpawnRules`.
@@ -545,7 +555,7 @@ fn check_patrolling_monster_spawn_rules(
     pos: BlockPos,
     _random: &mut RandomSource,
 ) -> bool {
-    if level.light_value_at(crate::chunk::light::LightLayer::Block, pos) > 8 {
+    if level.light_value_at(LightLayer::Block, pos) > 8 {
         return false;
     }
     <ZombieEntity as Monster>::check_any_light_monster_spawn_rules(
@@ -1030,7 +1040,7 @@ impl SpawnPlacements {
     pub fn data_for(entity_type: EntityTypeRef) -> Option<&'static SpawnPlacementsData> {
         Self::DATA_BY_TYPE
             .iter()
-            .find(|data| std::ptr::eq(data.entity_type, entity_type))
+            .find(|data| ptr::eq(data.entity_type, entity_type))
     }
 
     /// Vanilla `SpawnPlacements.getPlacementType`.
@@ -1067,9 +1077,7 @@ impl SpawnPlacements {
         pos: BlockPos,
         random: &mut RandomSource,
     ) -> bool {
-        if !entity_type.allowed_in_peaceful
-            && level.difficulty() == steel_utils::types::Difficulty::Peaceful
-        {
+        if !entity_type.allowed_in_peaceful && level.difficulty() == Difficulty::Peaceful {
             return false;
         }
 

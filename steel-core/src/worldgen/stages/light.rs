@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::chunk::{
+    Chunk,
     chunk_generation_task::StaticCache2D,
     chunk_holder::ChunkHolder,
     chunk_pyramid::ChunkStep,
@@ -34,7 +35,7 @@ pub(crate) fn initialize(
     // persisted light-correct flag and drop any retained data.
     let pos = chunk.pos();
     let chunk_map = &context.world().chunk_map;
-    let range = chunk_light_range(&chunk);
+    let range = chunk_light_range(chunk);
     for section_y in range.min_chunk_section_y()..range.max_chunk_section_y_exclusive() {
         let Some(index) = range.chunk_section_index(section_y) else {
             continue;
@@ -54,7 +55,7 @@ pub(crate) fn initialize(
     chunk_map.retain_light_data(pos, false);
 }
 
-fn chunk_light_range(chunk: &crate::chunk::Chunk) -> LightSectionRange {
+fn chunk_light_range(chunk: &Chunk) -> LightSectionRange {
     LightSectionRange::from_world_height(chunk.min_y(), chunk.height())
         .expect("invalid world height for light stage")
 }

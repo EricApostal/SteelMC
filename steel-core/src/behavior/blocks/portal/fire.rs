@@ -27,6 +27,10 @@ use crate::world::{LevelReader, ScheduledTickAccess, World};
 /// Behavior for fire blocks.
 #[block_behavior]
 pub struct FireBlock {
+    #[expect(
+        dead_code,
+        reason = "kept for the conventional `new(block)` behavior constructor"
+    )]
     block: BlockRef,
 }
 
@@ -77,7 +81,7 @@ impl FireBlock {
     /// Matches vanilla's `FireBlock.canSurvive`: block below has a sturdy top face,
     /// or an adjacent block is flammable.
     fn can_survive_at<L: LevelReader + ?Sized>(world: &L, pos: BlockPos) -> bool {
-        crate::world::World::fire_can_survive_at(world, pos)
+        World::fire_can_survive_at(world, pos)
     }
 
     /// Matches vanilla's `BaseFireBlock.isPortal`: checks if placing fire here could form a portal.

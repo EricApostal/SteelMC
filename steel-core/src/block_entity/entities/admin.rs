@@ -4,6 +4,7 @@
 //! These are the admin-only block entities: they persist their editor configuration so a server
 //! restart keeps the setup, and the block behaviors drive them from redstone and use-interaction.
 
+use std::sync::Arc;
 use std::sync::Weak;
 
 use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
@@ -171,7 +172,7 @@ impl StructureBlockEntity {
 
     /// Vanilla `StructureBlockEntity.setStructureName`.
     pub fn set_structure_name(&self, name: &str) {
-        self.state.lock().name = name.to_owned();
+        name.clone_into(&mut self.state.lock().name);
     }
 
     /// Vanilla `StructureBlockEntity.hasStructureName`.
@@ -202,7 +203,7 @@ impl StructureBlockEntity {
 
     /// Vanilla `StructureBlockEntity.setMetaData`.
     pub fn set_metadata(&self, metadata: &str) {
-        self.state.lock().metadata = metadata.to_owned();
+        metadata.clone_into(&mut self.state.lock().metadata);
     }
 
     /// Vanilla `StructureBlockEntity.setIgnoreEntities`.
@@ -239,7 +240,7 @@ impl StructureBlockEntity {
     ///
     /// Only the redstone bookkeeping is a block-entity concern; the actual structure save/load
     /// requires the structure template manager.
-    pub fn trigger(&self, _world: &std::sync::Arc<World>, _pos: BlockPos) {
+    pub const fn trigger(_world: &Arc<World>, _pos: BlockPos) {
         // TODO(Worldgen): invoke structure save/load from `StructureTemplateManager` once that
         // runtime exists for the worldgen lane (vanilla `StructureBlockEntity.load`/`saveStructure`).
     }
@@ -253,18 +254,9 @@ impl BlockEntity for StructureBlockEntity {
     fn load_additional(&self, nbt: &BorrowedNbtCompound<'_>) {
         let view: NbtCompoundView<'_, '_> = nbt.into();
         let mut state = self.state.lock();
-        state.name = view
-            .string("name")
-            .map(|v| v.to_string())
-            .unwrap_or_default();
-        state.author = view
-            .string("author")
-            .map(|v| v.to_string())
-            .unwrap_or_default();
-        state.metadata = view
-            .string("metadata")
-            .map(|v| v.to_string())
-            .unwrap_or_default();
+        state.name = view.string("name").map_or_default(ToString::to_string);
+        state.author = view.string("author").map_or_default(ToString::to_string);
+        state.metadata = view.string("metadata").map_or_default(ToString::to_string);
         // Vanilla `StructureBlockEntity.loadAdditional`: flat `posX/Y/Z` and
         // `sizeX/Y/Z` keys, clamped to the editor's -48..48 / 0..48 ranges.
         state.pos = (
@@ -294,7 +286,7 @@ impl BlockEntity for StructureBlockEntity {
             });
         state.mode = view
             .string("mode")
-            .map_or_else(|| "DATA".into(), |v| v.to_string());
+            .map_or_else(|| "DATA".into(), ToString::to_string);
         state.ignore_entities = view.byte("ignoreEntities").unwrap_or(1) != 0;
         state.powered = view.byte("powered").unwrap_or(0) != 0;
         state.show_bounding_box = view.byte("showboundingbox").unwrap_or(1) != 0;
@@ -409,27 +401,27 @@ impl JigsawBlockEntity {
 
     /// Vanilla `JigsawBlockEntity.setName`.
     pub fn set_name(&self, name: &str) {
-        self.state.lock().name = name.to_owned();
+        name.clone_into(&mut self.state.lock().name);
     }
 
     /// Vanilla `JigsawBlockEntity.setTarget`.
     pub fn set_target(&self, target: &str) {
-        self.state.lock().target = target.to_owned();
+        target.clone_into(&mut self.state.lock().target);
     }
 
     /// Vanilla `JigsawBlockEntity.setPool`.
     pub fn set_pool(&self, pool: &str) {
-        self.state.lock().pool = pool.to_owned();
+        pool.clone_into(&mut self.state.lock().pool);
     }
 
     /// Vanilla `JigsawBlockEntity.setFinalState`.
     pub fn set_final_state(&self, final_state: &str) {
-        self.state.lock().final_state = final_state.to_owned();
+        final_state.clone_into(&mut self.state.lock().final_state);
     }
 
     /// Vanilla `JigsawBlockEntity.setJoint`.
     pub fn set_joint(&self, joint: &str) {
-        self.state.lock().joint = joint.to_owned();
+        joint.clone_into(&mut self.state.lock().joint);
     }
 
     /// Vanilla `JigsawBlockEntity.setPlacementPriority`.
@@ -455,16 +447,16 @@ impl BlockEntity for JigsawBlockEntity {
         // final state, and the joint derived from the block orientation.
         state.name = view
             .string("name")
-            .map_or_else(|| "minecraft:empty".into(), |v| v.to_string());
+            .map_or_else(|| "minecraft:empty".into(), ToString::to_string);
         state.target = view
             .string("target")
-            .map_or_else(|| "minecraft:empty".into(), |v| v.to_string());
+            .map_or_else(|| "minecraft:empty".into(), ToString::to_string);
         state.pool = view
             .string("pool")
-            .map_or_else(|| "minecraft:empty".into(), |v| v.to_string());
+            .map_or_else(|| "minecraft:empty".into(), ToString::to_string);
         state.final_state = view
             .string("final_state")
-            .map_or_else(|| "minecraft:air".into(), |v| v.to_string());
+            .map_or_else(|| "minecraft:air".into(), ToString::to_string);
         state.joint = view.string("joint").map_or_else(
             || {
                 let orientation = self
@@ -482,7 +474,7 @@ impl BlockEntity for JigsawBlockEntity {
                     "rollable".into()
                 }
             },
-            |v| v.to_string(),
+            ToString::to_string,
         );
         state.placement_priority = view.int("placement_priority").unwrap_or(0);
         state.selection_priority = view.int("selection_priority").unwrap_or(0);
@@ -584,7 +576,7 @@ impl TestBlockEntity {
 
     /// Vanilla `TestBlockEntity.setMessage`.
     pub fn set_message(&self, message: &str) {
-        self.state.lock().message = message.to_owned();
+        message.clone_into(&mut self.state.lock().message);
     }
 }
 
@@ -608,7 +600,7 @@ impl BlockEntity for TestBlockEntity {
                 });
         state.message = view
             .string("message")
-            .map_or_else(String::new, |v| v.to_string());
+            .map_or_else(String::new, ToString::to_string);
         state.powered = view.byte("powered").unwrap_or(0) != 0;
     }
 
@@ -735,11 +727,11 @@ impl BlockEntity for TestInstanceBlockEntity {
         if let Some(data) = view.compound("data") {
             state.test = data
                 .string("test")
-                .map_or_else(String::new, |v| v.to_string());
-            if let Some(size) = data.list("size").and_then(|list| list.ints()) {
-                if size.len() == 3 {
-                    state.size = (size[0], size[1], size[2]);
-                }
+                .map_or_else(String::new, ToString::to_string);
+            if let Some(size) = data.list("size").and_then(|list| list.ints())
+                && size.len() == 3
+            {
+                state.size = (size[0], size[1], size[2]);
             }
             state.rotation = data
                 .string("rotation")
@@ -752,8 +744,8 @@ impl BlockEntity for TestInstanceBlockEntity {
             state.ignore_entities = data.byte("ignore_entities").unwrap_or(0) != 0;
             state.status = data
                 .string("status")
-                .map_or_else(|| "cleared".into(), |v| v.to_string());
-            state.error = data.string("error_message").map(|v| v.to_string());
+                .map_or_else(|| "cleared".into(), ToString::to_string);
+            state.error = data.string("error_message").map(ToString::to_string);
         }
         state.error_markers.clear();
         if let Some(errors) = view.list("errors").and_then(|list| list.compounds()) {
@@ -768,7 +760,7 @@ impl BlockEntity for TestInstanceBlockEntity {
                     BlockPos::new(pos[0], pos[1], pos[2]),
                     marker
                         .string("text")
-                        .map_or_else(String::new, |v| v.to_string()),
+                        .map_or_else(String::new, ToString::to_string),
                 ));
             }
         }
@@ -829,7 +821,7 @@ impl BlockEntity for TestInstanceBlockEntity {
         world.send_block_updated(self.get_block_pos());
     }
 
-    fn tick(&self, _world: &std::sync::Arc<World>) {
+    fn tick(&self, _world: &Arc<World>) {
         // TODO(GameTest): run the bound test instance through Steel's game-test harness when that
         // runtime exists; vanilla `TestInstanceBlockEntity.tick` drives the runner state machine.
     }

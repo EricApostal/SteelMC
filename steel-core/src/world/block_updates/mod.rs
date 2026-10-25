@@ -103,7 +103,7 @@ impl World {
     }
 
     /// The level's raid manager (vanilla `ServerLevel.getRaids`).
-    pub fn raids(&self) -> &SyncMutex<Raids> {
+    pub const fn raids(&self) -> &SyncMutex<Raids> {
         &self.raids
     }
 
@@ -798,17 +798,18 @@ impl World {
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, mpsc};
+    use std::thread;
     use std::time::Duration;
 
     use glam::DVec3;
     use steel_registry::{REGISTRY, init_vanilla_registry, vanilla_blocks, vanilla_entities};
     use steel_utils::{BlockPos, ChunkPos};
 
-    use super::World;
+    use crate::behavior::init_behaviors;
     use crate::entity::ai::node::Node;
     use crate::entity::ai::path::Path;
     use crate::entity::init_entities;
-    use crate::entity::{PathfinderMob as _, add_spawned_entity, create_entity_instance};
+    use crate::entity::{add_spawned_entity, create_entity_instance};
     use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
 
     /// A block-collision change must not re-enter a mob's navigation mutex while it is held.
@@ -823,7 +824,7 @@ mod tests {
     fn collision_change_does_not_reenter_the_visited_mobs_navigation_lock() {
         init_vanilla_registry();
         init_entities();
-        crate::behavior::init_behaviors();
+        init_behaviors();
         let world_fixture = fresh_test_world("navigating_mob_recompute_no_deadlock");
         let world = Arc::clone(&world_fixture.world);
         insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
@@ -859,7 +860,7 @@ mod tests {
         // A hang would freeze the server tick, so bound the call: a regression fails here
         // instead of stalling the test binary.
         let (done, finished) = mpsc::channel();
-        let thread = std::thread::spawn(move || {
+        let thread = thread::spawn(move || {
             world.update_navigating_mobs_after_block_collision_change(changed, air, stone);
             let _ = done.send(());
         });

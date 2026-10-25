@@ -20,6 +20,7 @@ mod effect;
 mod enchant;
 mod execute;
 mod experience;
+mod fetchprofile;
 mod fill;
 mod fillbiome;
 mod fly;
@@ -80,6 +81,7 @@ mod title;
 mod transfer;
 mod trigger;
 mod version;
+mod waypoint;
 mod weather;
 mod whitelist;
 mod worldborder;
@@ -136,6 +138,7 @@ fn builtin_registrations()
         enchant::registration(),
         execute::registration(),
         experience::registration(),
+        fetchprofile::registration(),
         fill::registration(),
         fillbiome::registration(),
         fly::registration(),
@@ -199,6 +202,7 @@ fn builtin_registrations()
         transfer::registration(),
         trigger::registration(),
         version::registration(),
+        waypoint::registration(),
         weather::registration(),
         whitelist::registration(),
         worldborder::registration(),

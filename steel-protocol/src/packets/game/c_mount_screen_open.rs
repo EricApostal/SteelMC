@@ -9,7 +9,7 @@ use steel_utils::{codec::VarInt, serial::WriteTo};
 /// Opens the inventory screen of the entity the player is riding.
 ///
 /// Wire order mirrors vanilla's `ClientboundMountScreenOpenPacket`:
-/// `writeContainerId` (VarInt), `writeVarInt` for the column count and a plain
+/// `writeContainerId` (`VarInt`), `writeVarInt` for the column count and a plain
 /// `writeInt` for the entity id.
 #[derive(ClientPacket, Clone, Debug)]
 #[packet_id(Play = C_MOUNT_SCREEN_OPEN)]

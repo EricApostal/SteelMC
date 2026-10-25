@@ -2512,10 +2512,13 @@ mod component_setter_tests {
     use super::ItemStack;
     use crate::data_components::vanilla_components::{
         ATTRIBUTE_MODIFIERS, BANNER_PATTERNS, CONTAINER, CONTAINER_LOOT, CUSTOM_DATA, CUSTOM_NAME,
-        FIREWORK_EXPLOSION, FIREWORKS, ITEM_NAME, LORE, MAP_DECORATIONS, MAP_ID, POTION_CONTENTS,
-        PROFILE, SUSPICIOUS_STEW_EFFECTS, WRITABLE_BOOK_CONTENT, WRITTEN_BOOK_CONTENT,
+        FIREWORK_EXPLOSION, FIREWORKS, ITEM_NAME, ItemAttributeModifierEntry, LORE,
+        MAP_DECORATIONS, MAP_ID, POTION_CONTENTS, PROFILE, SUSPICIOUS_STEW_EFFECTS,
+        WRITABLE_BOOK_CONTENT, WRITTEN_BOOK_CONTENT,
     };
-    use crate::data_components::{CustomData, DataComponentMap};
+    use crate::data_components::{
+        BannerPatternLayer, CustomData, DataComponentMap, PotionContents,
+    };
     use crate::equipment::EquipmentSlotGroup;
     use crate::game_profile::GameProfile;
     use crate::item_stack_template::ItemStackTemplate;
@@ -2650,7 +2653,7 @@ mod component_setter_tests {
         assert_eq!(
             stack.get(ITEM_NAME),
             Some(&TextComponent::translated(
-                text_components::translation::TranslatedMessage::new("block.minecraft.stone", None)
+                steel_utils::translations::BLOCK_MINECRAFT_STONE.msg()
             ))
         );
 
@@ -2671,8 +2674,7 @@ mod component_setter_tests {
         let lines = |stack: &ItemStack| -> Vec<String> {
             stack
                 .get(LORE)
-                .map(|lore| lore.lines().iter().map(ToString::to_string).collect())
-                .unwrap_or_default()
+                .map_or_default(|lore| lore.lines().iter().map(ToString::to_string).collect())
         };
         assert_eq!(lines(&stack), ["a", "b"]);
 
@@ -2708,7 +2710,7 @@ mod component_setter_tests {
 
         stack.set_potion(&healing);
         assert_eq!(
-            stack.get(POTION_CONTENTS).and_then(|c| c.potion()),
+            stack.get(POTION_CONTENTS).and_then(PotionContents::potion),
             REGISTRY
                 .potions
                 .by_key(&healing)
@@ -2728,7 +2730,7 @@ mod component_setter_tests {
         // An unknown potion leaves the component untouched.
         stack.set_potion(&Identifier::vanilla_static("not_a_potion"));
         assert_eq!(
-            stack.get(POTION_CONTENTS).and_then(|c| c.potion()),
+            stack.get(POTION_CONTENTS).and_then(PotionContents::potion),
             REGISTRY
                 .potions
                 .by_key(&swiftness)
@@ -2811,12 +2813,9 @@ mod component_setter_tests {
         assert_eq!(layers[1].color(), crate::DyeColor::Red);
 
         stack.set_banner_pattern(&[], false);
-        assert!(
-            stack
-                .get(BANNER_PATTERNS)
-                .expect("patterns")
-                .layers()
-                .is_empty()
+        assert_eq!(
+            stack.get(BANNER_PATTERNS).expect("patterns").layers(),
+            [] as [BannerPatternLayer; 0]
         );
     }
 
@@ -2917,16 +2916,17 @@ mod component_setter_tests {
         let modifiers = stack.get(ATTRIBUTE_MODIFIERS).expect("modifiers present");
         assert_eq!(modifiers.modifiers.len(), base_count + 1);
         assert!(modifiers.modifiers.iter().any(|entry| {
-            entry.id == Identifier::vanilla_static("loot_speed") && entry.amount == 0.5
+            entry.id == Identifier::vanilla_static("loot_speed")
+                && (entry.amount - 0.5).abs() < f64::EPSILON
         }));
 
         stack.set_attributes(&[], true, &mut rng);
-        assert!(
+        assert_eq!(
             stack
                 .get(ATTRIBUTE_MODIFIERS)
                 .expect("modifiers present")
-                .modifiers
-                .is_empty()
+                .modifiers,
+            [] as [ItemAttributeModifierEntry; 0]
         );
     }
 
@@ -3071,8 +3071,7 @@ mod component_setter_tests {
         let mut rng = rng();
         let mut hooks = hooks();
         hooks.nbt.insert("existing", 1);
-        let mut list = simdnbt::owned::NbtList::Int(Vec::new());
-        list = simdnbt::owned::NbtList::Int(vec![1]);
+        let list = simdnbt::owned::NbtList::Int(vec![1]);
         hooks.nbt.insert("list", NbtTag::List(list));
         let ctx = LootContext::new(&mut rng).with_item_source(&hooks);
         let mut stack = ItemStack::new(&vanilla_items::STONE);

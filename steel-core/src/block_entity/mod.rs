@@ -531,7 +531,7 @@ pub trait BlockEntity: ErasedType + Send + Sync {
     /// Mirrors vanilla `ContainerOpenersCounter` ownership: block entities whose
     /// blocks sound off, light up, or emit redstone while open expose their
     /// counter so the menu open/close path can drive it without downcasting.
-    fn container_viewers(&self) -> Option<&dyn crate::block_entity::ContainerViewers> {
+    fn container_viewers(&self) -> Option<&dyn ContainerViewers> {
         None
     }
 

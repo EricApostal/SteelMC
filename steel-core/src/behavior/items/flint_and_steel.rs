@@ -1,5 +1,6 @@
 //! Flint and steel item behavior with portal ignition.
 
+use crate::behavior::advancement_hooks::raise_placed_block;
 use crate::behavior::blocks::FireBlock;
 use crate::behavior::context::{InteractionResult, UseOnContext};
 use crate::behavior::item::ItemBehavior;
@@ -64,6 +65,12 @@ impl ItemBehavior for FlintAndSteelItem {
             click_pos,
             &GameEventContext::new(Some(context.player.as_ref()), None),
         );
+
+        // Vanilla `FlintAndSteelItem.useOn` raises `placed_block` with the lit
+        // position and the held stack, before the durability damage. The
+        // campfire/candle branch (`try_light_block`) does not raise it.
+        let placed_item = context.inv.with_item(|item| item.clone());
+        raise_placed_block(context.player, context.world, fire_pos, &placed_item);
 
         let has_infinite_materials = context.player.has_infinite_materials();
         context

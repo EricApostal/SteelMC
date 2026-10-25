@@ -16,12 +16,12 @@ use steel_registry::data_components::vanilla_components::{
 };
 use steel_registry::item_stack::ItemStack;
 use steel_registry::{DyeColor, vanilla_block_entity_types};
+use steel_utils::translations;
 use steel_utils::{
     BlockPos, BlockStateId, DowncastType, DowncastTypeKey, locks::SyncMutex, types::SignTextSlot,
 };
-use text_components::{
-    Modifier, TextComponent, content::Content, format::Color, translation::TranslatedMessage,
-};
+use text_components::interactivity::ClickEvent;
+use text_components::{Modifier, TextComponent, content::Content, format::Color};
 use uuid::Uuid;
 
 use crate::block_entity::{BlockEntity, BlockEntityBase};
@@ -105,7 +105,7 @@ impl SignText {
         self.messages.iter().any(|line| {
             matches!(
                 line.interactions.click.as_ref(),
-                Some(text_components::interactivity::ClickEvent::RunCommand { .. })
+                Some(ClickEvent::RunCommand { .. })
             )
         })
     }
@@ -349,9 +349,7 @@ impl SignBlockEntity {
         let allow_op_features = self.allows_op_features();
         let mut found = false;
         for line in &text.messages {
-            let Some(text_components::interactivity::ClickEvent::RunCommand { command }) =
-                line.interactions.click.as_ref()
-            else {
+            let Some(ClickEvent::RunCommand { command }) = line.interactions.click.as_ref() else {
                 continue;
             };
             if allow_op_features {
@@ -367,11 +365,8 @@ impl SignBlockEntity {
         }
         if found && !allow_op_features {
             player.send_overlay_message(
-                &TextComponent::translated(TranslatedMessage::new(
-                    "sign.click_actions_disabled",
-                    None,
-                ))
-                .color(Color::Red),
+                &TextComponent::translated(translations::SIGN_CLICK_ACTIONS_DISABLED.msg())
+                    .color(Color::Red),
             );
         }
         found
@@ -545,11 +540,13 @@ impl BlockEntity for SignBlockEntity {
 mod tests {
     use std::{array, io::Cursor, sync::Arc};
 
-    use simdnbt::borrow::read_tag;
+    use simdnbt::borrow::{read_compound, read_tag};
     use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
     use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_items};
     use steel_utils::{BlockPos, translations, types::SignTextSlot};
-    use text_components::{Modifier as _, TextComponent};
+    use text_components::{
+        Modifier as _, TextComponent, content::Content, interactivity::ClickEvent,
+    };
     use uuid::Uuid;
 
     use super::{
@@ -707,20 +704,19 @@ mod tests {
     #[test]
     fn edited_sign_lines_keep_their_click_events() {
         let mut text = SignText::new();
-        text.messages[0] = TextComponent::plain("old").click_event(
-            text_components::interactivity::ClickEvent::run_command("/say hi"),
-        );
+        text.messages[0] =
+            TextComponent::plain("old").click_event(ClickEvent::run_command("/say hi"));
         text.set_message_preserving_style(0, "new");
 
         assert!(text.has_any_click_commands());
         let line = &text.messages[0];
         assert!(matches!(
             &line.content,
-            text_components::content::Content::Text { text } if text.as_ref() == "new"
+            Content::Text { text } if text.as_ref() == "new"
         ));
         assert!(matches!(
             line.interactions.click.as_ref(),
-            Some(text_components::interactivity::ClickEvent::RunCommand { .. })
+            Some(ClickEvent::RunCommand { .. })
         ));
         assert_eq!(text.filtered_messages[0], text.messages[0]);
     }

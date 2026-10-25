@@ -205,7 +205,6 @@ impl BlockBehavior for FlowerPotBlock {
 #[cfg(test)]
 mod tests {
     use glam::DVec3;
-    use steel_registry::blocks::block_state_ext::BlockStateExt as _;
     use steel_registry::{init_vanilla_registry, vanilla_items};
     use steel_utils::{ChunkPos, Direction};
 

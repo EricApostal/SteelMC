@@ -83,19 +83,19 @@ impl MerchantContainer {
 
     /// Index of the active offer in the merchant's list, if any.
     #[must_use]
-    fn active_offer(&self) -> Option<usize> {
+    const fn active_offer(&self) -> Option<usize> {
         self.active_offer
     }
 
     /// The xp the active offer would grant.
     #[must_use]
-    fn get_future_xp(&self) -> i32 {
+    const fn get_future_xp(&self) -> i32 {
         self.future_xp
     }
 
     /// The current trade selection hint.
     #[must_use]
-    fn selection_hint(&self) -> i32 {
+    const fn selection_hint(&self) -> i32 {
         self.selection_hint
     }
 
@@ -268,12 +268,8 @@ impl Slot for MerchantResultSlot {
         }
 
         let container_id = self.container.container_id();
-        let Some(container) = guard.get_typed_mut::<MerchantContainer>(container_id) else {
-            return None;
-        };
-        let Some(index) = container.active_offer() else {
-            return None;
-        };
+        let container = guard.get_typed_mut::<MerchantContainer>(container_id)?;
+        let index = container.active_offer()?;
 
         let mut buy_a = container.items[0].clone();
         let mut buy_b = container.items[1].clone();
@@ -282,9 +278,7 @@ impl Slot for MerchantResultSlot {
 
         {
             let mut offers = self.merchant.offers();
-            let Some(offer) = offers.get_mut(index) else {
-                return None;
-            };
+            let offer = offers.get_mut(index)?;
             xp = offer.xp();
             if offer.take(&mut buy_a, &mut buy_b) || offer.take(&mut buy_b, &mut buy_a) {
                 // Mutates the canonical offer in place: uses, demand and price.
@@ -328,7 +322,7 @@ pub fn merchant_menu(
             Box::new(MerchantResultSlot::new(
                 result_container_ref.clone(),
                 index,
-                result_merchant.clone(),
+                Arc::clone(&result_merchant),
             ))
         }),
     );
@@ -626,7 +620,7 @@ impl MenuKind for MerchantMenuKind {
 impl MerchantMenuKind {
     /// The container backing the payment and result slots.
     #[must_use]
-    pub fn container(&self) -> &Shared<MerchantContainer> {
+    pub const fn container(&self) -> &Shared<MerchantContainer> {
         &self.container
     }
 

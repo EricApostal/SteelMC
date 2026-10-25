@@ -267,6 +267,50 @@ pub fn raise_location(player: &Player, world: &Arc<World>, origin: BlockPos) {
     );
 }
 
+/// Raises `minecraft:started_riding` (`CriteriaTriggers.START_RIDING_TRIGGER`).
+///
+/// Vanilla `Entity.startRiding` fires this after the riding relationship is
+/// established, for the mounted player and for each of its indirect passengers
+/// that is a player.
+pub fn raise_started_riding(player: &Player) -> usize {
+    let world = player.get_world();
+    let origin = player.block_position();
+    let level = WorldLevelView::new(&world, origin);
+    let equipment = living_loot_equipment(player);
+    let known = player.recipe_book().unlocked_identifiers().to_vec();
+    let view = player_view(player, &level, Some(&equipment), &known);
+    raise(
+        player,
+        &Identifier::vanilla_static("started_riding"),
+        &TriggerEvent::StartRiding(event_base(&view, &level, origin)),
+    )
+}
+
+/// Raises `minecraft:levitation` (`CriteriaTriggers.LEVITATION`).
+///
+/// Vanilla `ServerPlayer.tick` fires this every tick while the levitation effect
+/// is active, with the position levitation began at and the ticks elapsed since.
+pub fn raise_levitation(
+    player: &Player,
+    level: &dyn LevelView,
+    start: glam::DVec3,
+    duration: i32,
+) -> usize {
+    let equipment = living_loot_equipment(player);
+    let known = player.recipe_book().unlocked_identifiers().to_vec();
+    let origin = player.block_position();
+    let view = player_view(player, level, Some(&equipment), &known);
+    raise(
+        player,
+        &Identifier::vanilla_static("levitation"),
+        &TriggerEvent::Levitation {
+            base: event_base(&view, level, origin),
+            start: (start.x, start.y, start.z),
+            duration,
+        },
+    )
+}
+
 /// Raises `minecraft:villager_trade` (`CriteriaTriggers.TRADE`).
 ///
 /// Vanilla `AbstractVillager.notifyTrade` fires this with the traded villager and

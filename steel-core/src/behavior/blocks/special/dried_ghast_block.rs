@@ -22,10 +22,11 @@ use steel_registry::blocks::properties::{
 use steel_registry::fluid::FluidState;
 use steel_registry::sound_events;
 use steel_registry::vanilla_entities;
+use steel_registry::vanilla_game_events;
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId};
 
-use crate::behavior::block::place_simple_waterlogged_liquid;
+use crate::behavior::block::{place_simple_waterlogged_liquid, schedule_water_tick_if_waterlogged};
 use crate::behavior::{BlockBehavior, BlockPlaceContext, PlacementSource};
 use crate::entity::ai::path::PathComputationType;
 use crate::entity::{ENTITIES, add_spawned_entity, create_entity_instance};
@@ -119,7 +120,7 @@ impl BlockBehavior for DriedGhastBlock {
         _neighbor_pos: BlockPos,
         _neighbor_state: BlockStateId,
     ) -> BlockStateId {
-        crate::behavior::block::schedule_water_tick_if_waterlogged(state, world, pos);
+        schedule_water_tick_if_waterlogged(state, world, pos);
         state
     }
 
@@ -181,7 +182,9 @@ impl BlockBehavior for DriedGhastBlock {
 
     fn tick(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
         if state.get_value(WATERLOGGED) {
-            if !Self::is_ready_to_spawn(state) {
+            if Self::is_ready_to_spawn(state) {
+                Self::spawn_ghastling(world, pos, state);
+            } else {
                 world.play_block_sound(
                     &sound_events::BLOCK_DRIED_GHAST_TRANSITION,
                     pos,
@@ -195,12 +198,10 @@ impl BlockBehavior for DriedGhastBlock {
                     UpdateFlags::UPDATE_CLIENTS,
                 );
                 world.game_event(
-                    &steel_registry::vanilla_game_events::BLOCK_CHANGE,
+                    &vanilla_game_events::BLOCK_CHANGE,
                     pos,
                     &crate::world::game_event::GameEventContext::new(None, Some(state)),
                 );
-            } else {
-                Self::spawn_ghastling(world, pos, state);
             }
             return;
         }
@@ -213,7 +214,7 @@ impl BlockBehavior for DriedGhastBlock {
                 UpdateFlags::UPDATE_CLIENTS,
             );
             world.game_event(
-                &steel_registry::vanilla_game_events::BLOCK_CHANGE,
+                &vanilla_game_events::BLOCK_CHANGE,
                 pos,
                 &crate::world::game_event::GameEventContext::new(None, Some(state)),
             );

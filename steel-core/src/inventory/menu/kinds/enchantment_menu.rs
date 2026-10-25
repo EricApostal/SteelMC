@@ -41,6 +41,7 @@ use steel_utils::{
     random::{Random as _, legacy_random::LegacyRandom},
 };
 
+use crate::behavior::advancement_hooks::raise_enchanted_item;
 use crate::behavior::blocks::EnchantingTableBlock;
 use crate::block_entity::BlockEntity as _;
 use crate::block_entity::entities::EnchantingTableBlockEntity;
@@ -529,6 +530,10 @@ impl MenuKind for EnchantmentKind {
         let Some(container) = guard.get_mut(container_id) else {
             return false;
         };
+        // Snapshot the enchanted stack so the raise happens after the container
+        // borrow ends; `run_unlocked` releases the menu containers first because
+        // the raise takes the player's equipment (inventory) lock.
+        let enchanted_item = enchanted.clone();
         container.set_item(0, enchanted);
         container.set_item(
             1,
@@ -540,6 +545,12 @@ impl MenuKind for EnchantmentKind {
         );
 
         player.award_custom_stat(&vanilla_custom_stats::ENCHANT_ITEM);
+
+        // Vanilla `EnchantmentMenu.clickMenuButton` raises `enchanted_item` with
+        // the enchanted stack and the offer's level cost right after the stat.
+        guard.run_unlocked(|| {
+            raise_enchanted_item(player, &enchanted_item, enchantment_cost);
+        });
 
         // Vanilla rerolls the seed in `Player.onEnchantmentPerformed`, so the
         // next offers differ; the table receives it when the menu closes.

@@ -38,7 +38,6 @@ pub(crate) trait SlotCollection {
     /// Vanilla `SlotCollection.modifySlots(modifier, selector)`.
     fn modify_slots(&self, modifier: &mut SlotModifier<'_>, selector: &mut dyn SlotSelector);
     /// Vanilla `SlotCollection.replaceSlotItems(provider)` (any selector).
-    #[allow(dead_code, reason = "vanilla SlotCollection API surface")]
     fn replace_all_slot_items(&self, provider: &mut dyn ItemProvider) -> usize {
         self.replace_slot_items(provider, &mut AnySelector)
     }
@@ -96,14 +95,11 @@ impl SlotCollection for SingleSlot<'_> {
         provider: &mut dyn ItemProvider,
         selector: &mut dyn SlotSelector,
     ) -> usize {
-        if provider.has_next()
-            && selector.try_select_slot(&self.access.get())
-            && self.access.set(provider.next())
-        {
-            1
-        } else {
-            0
-        }
+        usize::from(
+            provider.has_next()
+                && selector.try_select_slot(&self.access.get())
+                && self.access.set(provider.next()),
+        )
     }
 
     fn modify_slots(&self, modifier: &mut SlotModifier<'_>, selector: &mut dyn SlotSelector) {

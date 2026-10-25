@@ -191,7 +191,7 @@ impl ItemUsedOnBlockTriggerInstance {
     pub fn matches(&self, event: &TriggerEvent<'_>) -> bool {
         let (base, tool) = match *event {
             TriggerEvent::ItemUsedOnBlock { ref base, tool } => (base, Some(tool)),
-            TriggerEvent::PlacedBlock(ref base) => (base, None),
+            TriggerEvent::PlacedBlock { ref base, tool } => (base, Some(tool)),
             TriggerEvent::AllayDropItemOnBlock { ref base, tool } => (base, Some(tool)),
             _ => return false,
         };

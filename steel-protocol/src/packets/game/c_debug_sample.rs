@@ -28,7 +28,7 @@ pub struct CDebugSample {
 impl CDebugSample {
     /// Creates a new debug sample packet.
     #[must_use]
-    pub fn new(sample: Vec<i64>, debug_sample_type: RemoteDebugSampleType) -> Self {
+    pub const fn new(sample: Vec<i64>, debug_sample_type: RemoteDebugSampleType) -> Self {
         Self {
             sample,
             debug_sample_type,

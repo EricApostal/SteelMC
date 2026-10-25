@@ -143,7 +143,7 @@ mod tests {
 
     use super::*;
 
-    /// Standard LEB128 VarInt encoding, written independently of `steel_utils`
+    /// Standard LEB128 `VarInt` encoding, written independently of `steel_utils`
     /// so the expected buffer is not tautological.
     fn varint(value: i32) -> Vec<u8> {
         let mut value = value as u32;

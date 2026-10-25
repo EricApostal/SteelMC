@@ -23,7 +23,7 @@ use steel_utils::{BlockPos, WorldAabb};
 use crate::chunk::light::LightLayer;
 use crate::fluid::{get_fluid_state, is_water_fluid};
 use crate::world::game_event::GameEventContext;
-use crate::world::{HeightmapType, World};
+use crate::world::{HeightmapType, LevelReader, World};
 
 /// Vanilla `Biome.Precipitation`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,8 +102,8 @@ impl World {
     ) {
         let x = f64::from(pos.x());
         let z = f64::from(pos.z());
-        let bottom = f64::from(pos.y()) + f64::from(old_layers) / MAX_SNOW_LAYERS as f64;
-        let top = f64::from(pos.y()) + f64::from(new_layers) / MAX_SNOW_LAYERS as f64;
+        let bottom = f64::from(pos.y()) + f64::from(old_layers) / f64::from(MAX_SNOW_LAYERS);
+        let top = f64::from(pos.y()) + f64::from(new_layers) / f64::from(MAX_SNOW_LAYERS);
         let added_collision = WorldAabb::new(x, bottom, z, x + 1.0, top, z + 1.0);
 
         for entity in self.get_entities_in_aabb(&added_collision) {
@@ -222,7 +222,7 @@ impl World {
 
     /// Vanilla `SnowLayerBlock.canSurvive` for the default snow state.
     #[must_use]
-    fn snow_can_survive<L: crate::world::LevelReader + ?Sized>(world: &L, pos: BlockPos) -> bool {
+    fn snow_can_survive<L: LevelReader + ?Sized>(world: &L, pos: BlockPos) -> bool {
         let below = pos.below();
         let below_state = world.get_block_state(below);
         if world.is_face_sturdy(below_state, below, steel_utils::Direction::Up) {

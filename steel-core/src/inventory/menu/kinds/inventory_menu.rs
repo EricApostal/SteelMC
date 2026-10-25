@@ -12,6 +12,7 @@ use crate::player::player_inventory::Prediction;
 use std::sync::Arc;
 
 use steel_registry::item_stack::ItemStack;
+use steel_registry::recipe::UntypedRecipeRef;
 use steel_utils::locks::{IntoShared, Shared};
 
 use crate::inventory::container::{CraftingContainer, ResultContainer};
@@ -127,12 +128,6 @@ impl InventoryKind {
     /// Recomputes the result from the current grid contents.
     pub(crate) fn update_result(&self, guard: &mut ContainerLockGuard) {
         self.handler.update_result(guard);
-    }
-
-    /// Recomputes the result for a specific crafting player, applying the
-    /// `limited_crafting` gate (vanilla `slotChangedCraftingGrid`).
-    pub(crate) fn update_result_for(&self, guard: &mut ContainerLockGuard, player: &Player) {
-        self.handler.update_result_for(guard, Some(player));
     }
 
     /// Moves items between the main inventory and hotbar.
@@ -343,7 +338,7 @@ impl MenuKind for InventoryKind {
     fn handle_placement(
         &mut self,
         guard: &mut ContainerLockGuard,
-        recipe: steel_registry::recipe::UntypedRecipeRef,
+        recipe: UntypedRecipeRef,
         use_max_items: bool,
         allow_dropping_items_to_clear: bool,
         player: &Player,

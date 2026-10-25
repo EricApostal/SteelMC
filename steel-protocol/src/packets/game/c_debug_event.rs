@@ -26,7 +26,7 @@ pub struct DebugSubscriptionEvent<V: WriteTo> {
 impl<V: WriteTo> DebugSubscriptionEvent<V> {
     /// Creates an event for the given subscription (vanilla `DebugSubscription::packEvent`).
     #[must_use]
-    pub fn new(subscription_id: i32, value: V) -> Self {
+    pub const fn new(subscription_id: i32, value: V) -> Self {
         Self {
             subscription_id,
             value,
@@ -45,7 +45,7 @@ pub struct CDebugEvent<V: WriteTo> {
 impl<V: WriteTo> CDebugEvent<V> {
     /// Creates a new debug event packet.
     #[must_use]
-    pub fn new(event: DebugSubscriptionEvent<V>) -> Self {
+    pub const fn new(event: DebugSubscriptionEvent<V>) -> Self {
         Self { event }
     }
 }

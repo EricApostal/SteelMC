@@ -101,7 +101,7 @@ impl WriteTo for WaypointIcon {
 pub enum TrackedWaypointData {
     /// No payload (vanilla `EmptyWaypoint`).
     Empty,
-    /// A block position, written as three VarInts (vanilla `Vec3iWaypoint`).
+    /// A block position, written as three `VarInts` (vanilla `Vec3iWaypoint`).
     Position {
         /// Block X coordinate.
         x: i32,
@@ -110,7 +110,7 @@ pub enum TrackedWaypointData {
         /// Block Z coordinate.
         z: i32,
     },
-    /// A chunk column, written as two VarInts (vanilla `ChunkWaypoint`).
+    /// A chunk column, written as two `VarInts` (vanilla `ChunkWaypoint`).
     Chunk {
         /// Chunk X coordinate.
         x: i32,
@@ -176,7 +176,7 @@ impl WriteTo for TrackedWaypoint {
 
 /// Adds, updates, or removes a client-tracked waypoint.
 ///
-/// Wire order: VarInt operation ordinal, then the [`TrackedWaypoint`] encoding.
+/// Wire order: `VarInt` operation ordinal, then the [`TrackedWaypoint`] encoding.
 #[derive(ClientPacket, Clone, Debug)]
 #[packet_id(Play = C_WAYPOINT)]
 pub struct CWaypoint {

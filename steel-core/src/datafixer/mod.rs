@@ -31,12 +31,23 @@
 //!
 //! A future port of the fixer graph would grow a `Schema` table next to [`DataFixType`] and
 //! turn [`ensure_current`]'s "older" arm into a dispatch; nothing else here would change.
+//!
+//! # Error kind
+//!
+//! Refusals are `io::ErrorKind::Unsupported`, not `InvalidData`. The load paths treat
+//! `InvalidData` as "the payload is corrupt" and *replace* it — the Anvil backend clears the
+//! region slot and lets worldgen regenerate the chunk (`chunk_saver::anvil::storage`), and the
+//! native region backend drops the record and regenerates it (`chunk_saver::region_manager`).
+//! Applying that to a version refusal would destroy exactly the data the gate exists to
+//! protect, so the refusal has to be distinguishable and is propagated instead.
 
 use std::io;
 
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompound;
 use simdnbt::owned::NbtCompound;
-use steel_utils::version::{DATA_VERSION, MINECRAFT_VERSION};
+
+/// This build's vanilla `WorldVersion` constants.
+pub use steel_utils::version::{DATA_VERSION, MINECRAFT_VERSION};
 
 /// The `DataVersion` a stored record declares, following vanilla `NbtUtils.getDataVersion`.
 ///
@@ -77,6 +88,21 @@ pub const fn classify(found: i32) -> DataVersionRelation {
     }
 }
 
+/// The `io::ErrorKind` every refusal from this module carries.
+///
+/// See the module-level "Error kind" note: load paths must not mistake a refusal for a corrupt
+/// payload and replace the data.
+#[must_use]
+pub const fn refusal_kind() -> io::ErrorKind {
+    io::ErrorKind::Unsupported
+}
+
+/// Whether an error came from this module's gate rather than from a malformed payload.
+#[must_use]
+pub fn is_refusal(error: &io::Error) -> bool {
+    error.kind() == refusal_kind()
+}
+
 /// The kinds of stored data vanilla lists in `DataFixTypes`.
 ///
 /// Steel reads a subset of these; the enum exists so error messages name the domain and so a
@@ -98,7 +124,7 @@ pub enum DataFixType {
     Structure,
     /// A POI record — vanilla `DataFixTypes.POI`.
     Poi,
-    /// Any other SavedData payload.
+    /// Any other `SavedData` payload.
     SavedData,
 }
 
@@ -121,12 +147,12 @@ impl DataFixType {
 
 /// Refuses any vanilla-format record this build cannot prove it can read.
 ///
-/// [`DataVersionRelation::Current`] is accepted; both other relations are `InvalidData`
-/// errors. `what` names the specific record (for example the chunk position) so a single bad
-/// record is identifiable in a world of thousands.
+/// [`DataVersionRelation::Current`] is accepted; both other relations are [`refusal_kind`]
+/// errors. `what` names the specific record (for example the region file path plus the chunk
+/// position) so a single bad record is identifiable in a world of thousands.
 ///
 /// # Errors
-/// Returns `InvalidData` when `found` is not this build's [`DATA_VERSION`].
+/// Returns [`refusal_kind`] when `found` is not this build's [`DATA_VERSION`].
 pub fn ensure_current(found: i32, kind: DataFixType, what: &str) -> io::Result<()> {
     let kind = kind.as_str();
     match classify(found) {
@@ -152,10 +178,10 @@ pub fn ensure_current(found: i32, kind: DataFixType, what: &str) -> io::Result<(
 /// Steel's own formats (`.srg` region header, `level.toml`, `STLP` player payload) carry their
 /// own integer stamps rather than a Minecraft `DataVersion`. Older payloads are refused for
 /// the same reason as older vanilla records — there is no migration for them unless one is
-/// written explicitly — but the message points at Steel's formats rather than at DataFixers.
+/// written explicitly — but the message points at Steel's formats rather than at `DataFixers`.
 ///
 /// # Errors
-/// Returns `InvalidData` when `found` differs from `current`.
+/// Returns [`refusal_kind`] when `found` differs from `current`.
 pub fn ensure_steel_current(found: u64, current: u64, what: &str) -> io::Result<()> {
     if found == current {
         return Ok(());
@@ -170,7 +196,7 @@ pub fn ensure_steel_current(found: u64, current: u64, what: &str) -> io::Result<
 }
 
 fn invalid(message: String) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message)
+    io::Error::new(refusal_kind(), message)
 }
 
 #[cfg(test)]
@@ -209,8 +235,11 @@ mod tests {
         let error = ensure_current(DATA_VERSION + 1, DataFixType::Chunk, "chunk (3, -7)")
             .expect_err("a newer record must be refused");
         let message = error.to_string();
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert!(message.contains(&(DATA_VERSION + 1).to_string()), "{message}");
+        assert_eq!(error.kind(), refusal_kind());
+        assert!(
+            message.contains(&(DATA_VERSION + 1).to_string()),
+            "{message}"
+        );
         assert!(message.contains("newer"), "{message}");
         assert!(message.contains("chunk (3, -7)"), "{message}");
     }
@@ -220,7 +249,7 @@ mod tests {
         let error = ensure_current(DATA_VERSION - 1, DataFixType::Level, "level.dat")
             .expect_err("an older record must be refused");
         let message = error.to_string();
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(error.kind(), refusal_kind());
         assert!(message.contains("older"), "{message}");
         assert!(message.contains("DataFixers"), "{message}");
         assert!(message.contains(MINECRAFT_VERSION), "{message}");

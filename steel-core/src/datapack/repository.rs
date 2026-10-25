@@ -625,7 +625,26 @@ pub(crate) fn world_datapack_dir(save_path: &Path) -> PathBuf {
     save_path.join("datapacks")
 }
 
+/// Creates a unique empty temporary directory for repository tests.
+///
+/// Kept outside the `tests` module so the sibling `datapack` tests reuse it
+/// instead of duplicating the helper.
 #[cfg(test)]
+pub(crate) fn temp_dir(label: &str) -> PathBuf {
+    let base = std::env::temp_dir().join(format!(
+        "steel-datapack-{label}-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    fs::create_dir_all(&base).expect("temporary directory should be creatable");
+    base
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "these tests unwrap their own fixture data so failures point at the offending assertion"
+)]
 mod tests {
     use super::{PackInsert, PackRepository, RepositorySource, WorldPackSource};
 
@@ -786,19 +805,4 @@ mod tests {
 
         std::fs::remove_dir_all(&root).ok();
     }
-}
-
-/// Creates a unique empty temporary directory for repository tests.
-///
-/// Kept outside the `tests` module so the sibling `datapack` tests reuse it
-/// instead of duplicating the helper.
-#[cfg(test)]
-pub(crate) fn temp_dir(label: &str) -> PathBuf {
-    let base = std::env::temp_dir().join(format!(
-        "steel-datapack-{label}-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    fs::create_dir_all(&base).expect("temporary directory should be creatable");
-    base
 }

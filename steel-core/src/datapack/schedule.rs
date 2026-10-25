@@ -174,7 +174,7 @@ impl PartialOrd for ScheduledEntry {
 /// Returns the vanilla-shaped failure reason when the argument is unusable.
 pub(crate) fn parse_delay(argument: &str) -> Result<i64, String> {
     let (value, unit) = match argument.chars().last() {
-        Some('t') | Some('s') | Some('d') => argument.split_at(argument.len().saturating_sub(1)),
+        Some('t' | 's' | 'd') => argument.split_at(argument.len().saturating_sub(1)),
         _ => (argument, "t"),
     };
     let value: f64 = value
@@ -193,6 +193,10 @@ pub(crate) fn parse_delay(argument: &str) -> Result<i64, String> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "these tests unwrap their own fixture data so failures point at the offending assertion"
+)]
 mod tests {
     use super::{ScheduleMode, ScheduleRegistry, ScheduledCallback, parse_delay};
     use steel_utils::Identifier;

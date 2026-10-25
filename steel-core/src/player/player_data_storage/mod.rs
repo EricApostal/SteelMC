@@ -25,6 +25,7 @@ use super::player_data::{
 };
 use crate::chunk_saver::PersistentEntity;
 use crate::config::StorageSelection;
+use crate::datafixer::ensure_steel_current;
 use crate::level_data::RespawnData;
 use crate::permission::PermissionSubjectIndex;
 #[cfg(test)]
@@ -427,9 +428,9 @@ impl PlayerDataFile {
     }
 
     fn into_persistent(self) -> io::Result<PersistentPlayerData> {
-        crate::datafixer::ensure_steel_current(
+        ensure_steel_current(
             i64::from(self.data_version).max(0) as u64,
-            u64::from(PLAYER_DATA_VERSION),
+            PLAYER_DATA_VERSION.max(0) as u64,
             "player data payload",
         )?;
 
@@ -580,9 +581,10 @@ impl RecipeBookFile {
 /// `ServerRecipeBook.loadUntrusted` drops unregistered ones.
 fn parse_recipe_ids(ids: Vec<String>) -> Vec<Identifier> {
     ids.into_iter()
-        .filter_map(|raw| match raw.parse::<Identifier>() {
-            Ok(id) => Some(id),
-            Err(_) => {
+        .filter_map(|raw| {
+            if let Ok(id) = raw.parse::<Identifier>() {
+                Some(id)
+            } else {
                 log::error!("Tried to load unrecognized recipe: {raw}, removed now.");
                 None
             }
@@ -652,8 +654,8 @@ fn encode_player_file(file: &PlayerDataFile) -> io::Result<Vec<u8>> {
     )
 }
 
-fn decode_player_file(bytes: &[u8]) -> io::Result<PlayerDataFile> {
-    let payload = decode_file(PLAYER_MAGIC, PLAYER_STORAGE_VERSION, bytes)?;
+fn decode_player_file(bytes: &[u8], source: &str) -> io::Result<PlayerDataFile> {
+    let payload = decode_file(PLAYER_MAGIC, PLAYER_STORAGE_VERSION, bytes, source)?;
     wincode::deserialize(&payload)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
 }
@@ -666,8 +668,8 @@ fn encode_global_file(file: &GlobalPlayerDataFile) -> io::Result<Vec<u8>> {
     )
 }
 
-fn decode_global_file(bytes: &[u8]) -> io::Result<GlobalPlayerDataFile> {
-    let payload = decode_file(GLOBAL_MAGIC, GLOBAL_STORAGE_VERSION, bytes)?;
+fn decode_global_file(bytes: &[u8], source: &str) -> io::Result<GlobalPlayerDataFile> {
+    let payload = decode_file(GLOBAL_MAGIC, GLOBAL_STORAGE_VERSION, bytes, source)?;
     wincode::deserialize(&payload)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
 }
@@ -691,6 +693,7 @@ fn decode_file(
     expected_magic: [u8; 4],
     expected_version: u16,
     bytes: &[u8],
+    source: &str,
 ) -> io::Result<Vec<u8>> {
     if bytes.len() < 6 {
         return Err(io::Error::new(
@@ -705,10 +708,6 @@ fn decode_file(
         ));
     }
     let version = u16::from_le_bytes([bytes[4], bytes[5]]);
-    crate::datafixer::ensure_steel_current(
-        u64::from(version),
-        u64::from(expected_version),
-        "player data file",
-    )?;
+    ensure_steel_current(u64::from(version), u64::from(expected_version), source)?;
     zstd::decode_all(&bytes[6..])
 }

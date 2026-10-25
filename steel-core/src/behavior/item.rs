@@ -18,7 +18,10 @@ use steel_registry::{REGISTRY, RegistryEntry, RegistryExt, sound_events, vanilla
 use steel_utils::types::{InteractionHand, SignTextSlot};
 use text_components::TextComponent;
 
-use crate::behavior::items::{DefaultItemBehavior, SpawnEggItem, block_transformer};
+use crate::behavior::advancement_hooks::raise_consume_item;
+use crate::behavior::items::{
+    DefaultItemBehavior, ProjectileItem, SpawnEggItem, block_transformer,
+};
 use crate::behavior::{InteractionResult, InventoryTickContext, UseItemContext, UseOnContext};
 use crate::block_entity::entities::{SignBlockEntity, SignText};
 use crate::entity::MobEffectInstance;
@@ -285,7 +288,7 @@ pub trait ItemBehavior: Send + Sync {
 
     /// Returns this behavior as a projectile item when it can be dispensed as a
     /// projectile (vanilla `ProjectileItem`).
-    fn as_projectile_item(&self) -> Option<&dyn crate::behavior::items::ProjectileItem> {
+    fn as_projectile_item(&self) -> Option<&dyn ProjectileItem> {
         None
     }
 
@@ -343,7 +346,7 @@ fn play_kinetic_weapon_sound(stack: &ItemStack, context: &UseItemContext) {
 ///
 /// Vanilla's crumb step is `LivingEntity.spawnItemParticles` →
 /// `Level.addParticle`, which is a no-op on the server (`Level.java:487`) and is
-/// implemented only by `ClientLevel` (`ClientLevel.java:905`). SteelMC is a
+/// implemented only by `ClientLevel` (`ClientLevel.java:905`). `SteelMC` is a
 /// server, so only the sound belongs here; the client renders the crumbs from
 /// its own `ItemStack.onUseTick`.
 fn emit_consume_particles_and_sounds(
@@ -440,7 +443,7 @@ pub(crate) fn finish_consuming_stack(
         player.award_stat(&vanilla_stat_types::ITEM_USED, stack.item());
         // Vanilla `Consumable.onConsume` fires `CONSUME_ITEM` for the consuming
         // player right after awarding the `used` stat, before the consume effects.
-        crate::behavior::advancement_hooks::raise_consume_item(player, world, stack);
+        raise_consume_item(player, world, stack);
     }
 
     let mut used_stack = stack.copy_with_count(stack.count());

@@ -4,11 +4,12 @@
 //! shared `BaseCommandBlock`, plus the `powered`/`auto`/`conditionMet` flags on the entity. The
 //! three command-block kinds differ only by `Mode` (`REDSTONE`, `AUTO`, `SEQUENCE`).
 
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 
 use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
 use simdnbt::owned::NbtCompound;
 use simdnbt::{FromNbtTag as _, ToNbtTag as _};
+use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::BlockStateProperties;
 use steel_registry::{vanilla_block_entity_types, vanilla_blocks};
@@ -32,7 +33,7 @@ pub enum CommandBlockMode {
 }
 
 /// Vanilla `CommandBlock instanceof CommandBlock`: all three command-block kinds.
-fn is_command_block(block: steel_registry::blocks::BlockRef) -> bool {
+fn is_command_block(block: BlockRef) -> bool {
     block == &vanilla_blocks::COMMAND_BLOCK
         || block == &vanilla_blocks::REPEATING_COMMAND_BLOCK
         || block == &vanilla_blocks::CHAIN_COMMAND_BLOCK
@@ -114,7 +115,7 @@ impl CommandBlockEntity {
     }
 
     /// Vanilla `CommandBlockEntity.getMode`: the block kind determines the mode.
-    fn mode_for_block(block: steel_registry::blocks::BlockRef) -> CommandBlockMode {
+    fn mode_for_block(block: BlockRef) -> CommandBlockMode {
         if block == &vanilla_blocks::REPEATING_COMMAND_BLOCK {
             CommandBlockMode::Auto
         } else if block == &vanilla_blocks::CHAIN_COMMAND_BLOCK {
@@ -232,12 +233,12 @@ impl CommandBlockEntity {
 
     /// Vanilla `CommandBlockEntity.getCommandBlock().onUpdated`: re-sends the block and its
     /// update tag because the command data changed without a block state change.
-    pub fn on_updated(&self, world: &std::sync::Arc<World>) {
+    pub fn on_updated(&self, world: &Arc<World>) {
         world.send_block_updated(self.get_block_pos());
     }
 
     /// Vanilla `CommandBlockEntity.onModeSwitch`.
-    pub fn on_mode_switch(&self, _world: &std::sync::Arc<World>) {
+    pub fn on_mode_switch(&self, _world: &Arc<World>) {
         let (mode, powered, auto) = {
             let state = self.state.lock();
             (state.mode, state.powered, state.auto)
@@ -294,12 +295,7 @@ impl CommandBlockEntity {
     ///
     /// The command dispatch itself needs an `Arc<Server>` handle that `World` does not expose, so
     /// the execute calls are the one missing foundation (see the TODOs below).
-    pub fn server_tick(
-        &self,
-        world: &std::sync::Arc<World>,
-        pos: BlockPos,
-        block: steel_registry::blocks::BlockRef,
-    ) {
+    pub fn server_tick(&self, world: &Arc<World>, pos: BlockPos, block: BlockRef) {
         let (mode, was_condition_met, powered, auto) = {
             let state = self.state.lock();
             (state.mode, state.condition_met, state.powered, state.auto)
@@ -349,10 +345,7 @@ impl BlockEntity for CommandBlockEntity {
         {
             let mut state = self.state.lock();
             // Vanilla `BaseCommandBlock.load`.
-            state.command = view
-                .string("Command")
-                .map(|v| v.to_string())
-                .unwrap_or_default();
+            state.command = view.string("Command").map_or_default(ToString::to_string);
             state.success_count = view.int("SuccessCount").unwrap_or(0);
             state.track_output = view.byte("TrackOutput").unwrap_or(1) != 0;
             state.last_output = if state.track_output {

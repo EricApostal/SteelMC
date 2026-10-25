@@ -24,7 +24,10 @@ use steel_utils::BlockPos;
 use steel_utils::locks::SyncMutex;
 
 use super::{GameEventContext, GameEventDeliveryMode, GameEventListener};
+use crate::entity::Entity;
+use crate::entity::projectile::Projectile;
 use crate::world::World;
+use crate::world::vibration::{are_adjacent_chunks_ticking, is_occluded, notify_avoid_vibration};
 
 /// Builds Vanilla's `new VibrationParticleOption(positionSource, arrivalInTicks)` payload.
 fn vibration_particle(destination: PositionSource, arrival_in_ticks: i32) -> ParticleData {
@@ -228,7 +231,7 @@ impl VibrationInfo {
         event: GameEventRef,
         distance: f32,
         pos: DVec3,
-        source: Option<&dyn crate::entity::Entity>,
+        source: Option<&dyn Entity>,
     ) -> Self {
         let mut info = Self::new(event, distance, pos);
         if let Some(source) = source {
@@ -240,7 +243,7 @@ impl VibrationInfo {
 
     /// Vanilla `VibrationSystem.User.calculateTravelTimeInTicks`.
     #[must_use]
-    pub fn travel_time_in_ticks(&self) -> i32 {
+    pub const fn travel_time_in_ticks(&self) -> i32 {
         self.distance.floor() as i32
     }
 }
@@ -309,7 +312,7 @@ impl VibrationSelector {
     }
 
     /// Vanilla `VibrationSelector(VibrationInfo, long)`: restores a persisted candidate.
-    pub fn restore(&mut self, vibration: VibrationInfo, tick: i64) {
+    pub const fn restore(&mut self, vibration: VibrationInfo, tick: i64) {
         self.current_vibration = Some(SelectedVibration {
             event: vibration,
             tick,
@@ -317,7 +320,7 @@ impl VibrationSelector {
     }
 
     /// Vanilla `VibrationSelector.startOver`.
-    pub fn start_over(&mut self) {
+    pub const fn start_over(&mut self) {
         self.current_vibration = None;
     }
 }
@@ -334,23 +337,23 @@ pub struct VibrationListenerState {
 impl VibrationListenerState {
     /// Returns the vibration currently traveling toward the listener.
     #[must_use]
-    pub fn current_vibration(&self) -> Option<&VibrationInfo> {
+    pub const fn current_vibration(&self) -> Option<&VibrationInfo> {
         self.current_vibration.as_ref()
     }
 
     /// Replaces the in-flight vibration.
-    pub fn set_current_vibration(&mut self, vibration: Option<VibrationInfo>) {
+    pub const fn set_current_vibration(&mut self, vibration: Option<VibrationInfo>) {
         self.current_vibration = vibration;
     }
 
     /// Remaining travel time in game ticks.
     #[must_use]
-    pub fn travel_time_in_ticks(&self) -> i32 {
+    pub const fn travel_time_in_ticks(&self) -> i32 {
         self.travel_time_in_ticks
     }
 
     /// Sets remaining travel time in game ticks.
-    pub fn set_travel_time_in_ticks(&mut self, ticks: i32) {
+    pub const fn set_travel_time_in_ticks(&mut self, ticks: i32) {
         self.travel_time_in_ticks = ticks;
     }
 
@@ -371,7 +374,7 @@ impl VibrationListenerState {
     }
 
     /// Access to the candidate selector.
-    pub fn selector_mut(&mut self) -> &mut VibrationSelector {
+    pub const fn selector_mut(&mut self) -> &mut VibrationSelector {
         &mut self.selector
     }
 
@@ -440,7 +443,7 @@ pub trait VibrationCallback: Send + Sync {
                 if self.can_trigger_avoid_vibration()
                     && let Some(player) = source.as_player()
                 {
-                    crate::world::vibration::notify_avoid_vibration(player, world);
+                    notify_avoid_vibration(player, world);
                 }
                 return false;
             }
@@ -515,7 +518,7 @@ impl VibrationSystemListener {
 
     /// Shared listener state for persistence and arrival processing.
     #[must_use]
-    pub fn state(&self) -> &SyncMutex<VibrationListenerState> {
+    pub const fn state(&self) -> &SyncMutex<VibrationListenerState> {
         &self.state
     }
 
@@ -591,7 +594,7 @@ impl VibrationSystemListener {
         // vibration is retained (not delivered and not cleared) until the listener's 3x3 chunk
         // neighbourhood ticks, so the next tick retries with zero travel time left.
         if self.callback.requires_adjacent_chunks_to_be_ticking()
-            && !crate::world::vibration::are_adjacent_chunks_ticking(world, self.listener_pos)
+            && !are_adjacent_chunks_ticking(world, self.listener_pos)
         {
             drop(state);
             return;
@@ -671,7 +674,7 @@ impl GameEventListener for VibrationSystemListener {
 
         let destination = position_of(self.listener_pos);
         // Vanilla `VibrationSystem.Listener.isOccluded`.
-        if crate::world::vibration::is_occluded(world, source_pos, destination) {
+        if is_occluded(world, source_pos, destination) {
             return false;
         }
 
@@ -692,10 +695,10 @@ impl GameEventListener for VibrationSystemListener {
 /// Vanilla `VibrationInfo.getProjectileOwner`: the UUID of the entity that fired `source`,
 /// when `source` is a projectile with an owner.
 #[must_use]
-pub fn projectile_owner_uuid(source: &dyn crate::entity::Entity) -> Option<uuid::Uuid> {
+pub fn projectile_owner_uuid(source: &dyn Entity) -> Option<uuid::Uuid> {
     source
         .as_projectile()
-        .and_then(|projectile| projectile.get_owner())
+        .and_then(Projectile::get_owner)
         .map(|owner| owner.uuid())
 }
 

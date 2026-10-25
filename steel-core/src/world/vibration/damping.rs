@@ -6,6 +6,7 @@
 
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::vanilla_block_tags::BlockTag;
+use steel_registry::vanilla_entities;
 use steel_registry::vanilla_item_tags::ItemTag;
 use steel_utils::{BlockStateId, Downcast as _};
 
@@ -33,7 +34,7 @@ pub fn occludes_vibrations(state: BlockStateId) -> bool {
 /// trait method: the `ItemEntity` case reads the carried stack's `#dampens_vibrations` item tag.
 #[must_use]
 pub fn entity_dampens_vibrations(_world: &World, entity: &dyn Entity) -> bool {
-    if entity.entity_type() == &steel_registry::vanilla_entities::WARDEN {
+    if entity.entity_type() == &vanilla_entities::WARDEN {
         return true;
     }
     entity

@@ -9,7 +9,9 @@ use std::io::{self, Cursor, Read, Write};
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use simdnbt::borrow::{NbtCompound as BorrowedNbtCompound, NbtList as BorrowedNbtList};
+use simdnbt::borrow::{
+    NbtCompound as BorrowedNbtCompound, NbtList as BorrowedNbtList, read_compound,
+};
 use simdnbt::owned::NbtCompound;
 
 /// Collects the compounds of a borrowed list tag into an indexable `Vec`.
@@ -55,7 +57,7 @@ pub fn read_raw_nbt(bytes: &[u8]) -> io::Result<NbtCompound> {
         return Err(invalid("NBT payload is empty"));
     }
     let mut cursor = Cursor::new(bytes);
-    let borrowed = simdnbt::borrow::read_compound(&mut cursor)
+    let borrowed = read_compound(&mut cursor)
         .map_err(|error| invalid(format!("failed to parse NBT: {error:?}")))?;
     Ok(simdnbt::borrow::NbtCompound::from(&borrowed).to_owned())
 }

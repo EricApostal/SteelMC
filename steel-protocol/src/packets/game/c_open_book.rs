@@ -7,7 +7,7 @@ use steel_utils::types::InteractionHand;
 /// Opens the written book held in the given hand.
 ///
 /// Vanilla's `ClientboundOpenBookPacket` carries an `InteractionHand`, whose
-/// stream codec is a VarInt id mapper.
+/// stream codec is a `VarInt` id mapper.
 #[derive(ClientPacket, WriteTo, Clone, Debug)]
 #[packet_id(Play = C_OPEN_BOOK)]
 pub struct COpenBook {

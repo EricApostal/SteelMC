@@ -15,6 +15,7 @@ use steel_registry::blocks::{
     properties::{BlockStateProperties, Direction, IntProperty},
 };
 use steel_registry::data_components::vanilla_components;
+use steel_registry::item_stack::ItemStack;
 use steel_registry::items::item::BlockHitResult;
 use steel_registry::loot_table::LootContext;
 use steel_registry::stat::vanilla_stat_types;
@@ -141,7 +142,7 @@ impl ComposterBlock {
                 f64::from(pos.y()) + 1.01,
                 f64::from(pos.z()) + 0.5 + f64::from(z_offset),
             ),
-            steel_registry::item_stack::ItemStack::new(&vanilla_items::BONE_MEAL),
+            ItemStack::new(&vanilla_items::BONE_MEAL),
         );
 
         let new_state = Self::empty(source_entity, state, world, pos);

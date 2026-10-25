@@ -52,6 +52,7 @@ use crate::entity::{
 };
 use crate::physics::MoveResult;
 use crate::player::Player;
+use crate::player::advancement::triggers::raise_tame_animal;
 use crate::world::{LevelReader, World};
 
 /// Vanilla `ShoulderRidingEntity.RIDE_COOLDOWN`.
@@ -683,7 +684,7 @@ impl ParrotEntity {
     pub fn tame(&self, player: &Player) {
         self.set_tame(true);
         self.set_owner_uuid(Some(player.uuid()));
-        crate::player::advancement::triggers::raise_tame_animal(player, self);
+        raise_tame_animal(player, self);
     }
 
     /// Vanilla `Parrot.isFlying`.

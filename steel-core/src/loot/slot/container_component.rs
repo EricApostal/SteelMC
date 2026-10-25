@@ -174,12 +174,12 @@ impl<'a> ComponentSlots<'a> {
         selector: &mut dyn SlotSelector,
     ) -> usize {
         let mut replaced = 0;
-        for index in 0..items.len() {
+        for item in items.iter_mut() {
             if !provider.has_next() {
                 break;
             }
-            if selector.try_select_slot(&items[index]) {
-                items[index] = provider.next();
+            if selector.try_select_slot(item) {
+                *item = provider.next();
                 replaced += 1;
             }
         }
@@ -243,8 +243,8 @@ impl SlotCollection for ComponentSlots<'_> {
 
     fn modify_slots(&self, modifier: &mut SlotModifier<'_>, selector: &mut dyn SlotSelector) {
         let items = read_contents_or_empty(self.component, &self.stack.borrow());
-        for index in 0..items.len() {
-            if !selector.try_select_slot(&items[index]) {
+        for (index, item) in items.iter().enumerate() {
+            if !selector.try_select_slot(item) {
                 continue;
             }
             let access = ComponentSlotAccess { slots: self, index };

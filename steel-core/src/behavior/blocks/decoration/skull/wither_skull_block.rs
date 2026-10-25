@@ -9,7 +9,8 @@
 //! at the placement position, which is the same value and does not depend on the block entity
 //! having been created before `set_placed_by` runs.
 
-use std::sync::Arc;
+use std::ptr;
+use std::sync::{Arc, Weak};
 
 use glam::DVec3;
 use steel_macros::block_behavior;
@@ -17,6 +18,7 @@ use steel_registry::advancement::triggers::TriggerEvent;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::item_stack::ItemStack;
+use steel_registry::level_events;
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entities;
 use steel_registry::{vanilla_blocks, vanilla_items};
@@ -177,7 +179,7 @@ fn clear_pattern_blocks(world: &Arc<World>, found: &PatternMatch) {
         let state = world.get_block_state(pos);
         world.set_block(pos, air, UpdateFlags::UPDATE_CLIENTS);
         world.level_event(
-            steel_registry::level_events::PARTICLES_AND_SOUND_DESTROY_BLOCK,
+            level_events::PARTICLES_AND_SOUND_DESTROY_BLOCK,
             pos,
             i32::from(state.0),
             None,
@@ -291,8 +293,10 @@ impl WitherSkullBlock {
     /// complete a wither build? Used by the dispenser's skull behavior.
     #[must_use]
     pub fn can_spawn_mob(world: &Arc<World>, pos: BlockPos, stack: &ItemStack) -> bool {
-        std::ptr::eq(stack.item(), &*vanilla_items::WITHER_SKELETON_SKULL)
-            && pos.y() >= world.min_y() + 2
+        ptr::eq(
+            stack.item(),
+            &raw const *vanilla_items::WITHER_SKELETON_SKULL,
+        ) && pos.y() >= world.min_y() + 2
             && world.difficulty() != Difficulty::Peaceful
             && find(&WITHER_BASE_ROWS, world.as_ref(), pos).is_some()
     }
@@ -332,7 +336,7 @@ impl BlockBehavior for WitherSkullBlock {
 
     fn new_block_entity(
         &self,
-        level: std::sync::Weak<World>,
+        level: Weak<World>,
         pos: BlockPos,
         state: BlockStateId,
     ) -> BlockEntityCreation {

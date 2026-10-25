@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn op_entries_use_vanilla_json_shape_and_uuid_key() {
-        let list = OpList::in_memory();
+        let _list = OpList::in_memory();
         let uuid = Uuid::from_u128(7);
         let entry = ServerOpEntry::new(uuid, "Notch".to_owned(), PermissionLevel::Admins, true);
 

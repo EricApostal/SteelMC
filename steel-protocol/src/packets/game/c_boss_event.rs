@@ -46,7 +46,7 @@ pub enum BossBarOverlay {
 
 /// Boss bar operation, mirroring vanilla's private `Operation` union.
 ///
-/// Vanilla writes a VarInt discriminator (`OperationType` ordinal: `ADD` = 0,
+/// Vanilla writes a `VarInt` discriminator (`OperationType` ordinal: `ADD` = 0,
 /// `REMOVE` = 1, `UPDATE_PROGRESS` = 2, `UPDATE_NAME` = 3, `UPDATE_STYLE` = 4,
 /// `UPDATE_PROPERTIES` = 5) followed by the per-operation payload.
 #[derive(Clone, Debug)]
@@ -80,7 +80,7 @@ pub enum BossEventOperation {
         /// New title shown above the boss bar.
         name: TextComponent,
     },
-    /// Updates the bar color and overlay. Payload: two VarInt ordinals.
+    /// Updates the bar color and overlay. Payload: two `VarInt` ordinals.
     UpdateStyle {
         /// New bar color.
         color: BossBarColor,
@@ -100,7 +100,7 @@ pub enum BossEventOperation {
 
 /// Boss bar add/update/remove packet.
 ///
-/// Wire order: boss UUID (two big-endian `i64`), VarInt operation
+/// Wire order: boss UUID (two big-endian `i64`), `VarInt` operation
 /// discriminator, then the per-operation payload of [`BossEventOperation`].
 #[derive(ClientPacket, Clone, Debug)]
 #[packet_id(Play = C_BOSS_EVENT)]
@@ -127,6 +127,10 @@ impl CBossEvent {
 
     /// Creates an add-boss-bar packet.
     #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors vanilla ClientboundBossEventPacket.AddOperation, whose record carries these fields verbatim"
+    )]
     pub const fn add(
         id: Uuid,
         name: TextComponent,
@@ -196,7 +200,7 @@ impl CBossEvent {
 
 /// Packs the three boss bar property flags into one byte, mirroring vanilla's
 /// private `encodeProperties`: bit 0 darken, bit 1 music, bit 2 fog.
-fn encode_properties(darken_screen: bool, play_music: bool, create_world_fog: bool) -> u8 {
+const fn encode_properties(darken_screen: bool, play_music: bool, create_world_fog: bool) -> u8 {
     let mut flags = 0u8;
     if darken_screen {
         flags |= CBossEvent::FLAG_DARKEN;

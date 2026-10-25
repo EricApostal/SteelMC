@@ -1805,6 +1805,9 @@ mod tests {
                 .remove(&mut tag),
             1
         );
+        // Vanilla `IndexedElementNode.removeTag` resolves a negative index as
+        // `size + index`, so `[-1]` removes the last element (the `b` left by the
+        // predicate removal) and reports one change.
         assert_eq!(
             parse_nbt_path("items[-1]")
                 .expect("path parses")
@@ -1813,7 +1816,20 @@ mod tests {
         );
         assert_eq!(
             parse_nbt_path("items[]").expect("path parses").get(&tag),
-            vec![compound([("id", NbtTag::String("b".into()))])]
+            Vec::<NbtTag>::new()
+        );
+        // An already-empty selection removes nothing.
+        assert_eq!(
+            parse_nbt_path("items[-1]")
+                .expect("path parses")
+                .remove(&mut tag),
+            0
+        );
+        assert_eq!(
+            parse_nbt_path("items[0]")
+                .expect("path parses")
+                .remove(&mut tag),
+            0
         );
     }
 

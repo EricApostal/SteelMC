@@ -197,12 +197,6 @@ impl<'a> LiveLevel<'a> {
             random: runtime_random(),
         }
     }
-
-    /// Returns the wrapped world.
-    #[must_use]
-    pub(crate) const fn world(&self) -> &Arc<World> {
-        self.world
-    }
 }
 
 impl LevelReader for LiveLevel<'_> {

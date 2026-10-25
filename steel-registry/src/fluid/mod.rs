@@ -153,7 +153,11 @@ impl FluidState {
     /// Unlike [`Self::is_source`], a flowing state never matches — e.g. a falling
     /// full water block is not a source of type `minecraft:water`.
     #[must_use]
-    pub const fn is_source_of_type(&self, fluid_type: FluidRef) -> bool {
+    #[expect(
+        clippy::missing_const_for_fn,
+        reason = "the `Fluid` equality compared here cannot be const: `Cow<'static, str>` has no const `PartialEq`, so the suggested `const fn` does not compile"
+    )]
+    pub fn is_source_of_type(&self, fluid_type: FluidRef) -> bool {
         self.fluid_id == fluid_type && self.fluid_id.is_source
     }
 

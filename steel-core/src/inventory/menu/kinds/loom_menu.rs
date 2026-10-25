@@ -7,6 +7,7 @@
 //! - Slot 3: result
 //! - Slots 4-39: the player's 36 inventory slots
 
+use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
@@ -219,10 +220,7 @@ unsafe impl steel_utils::DowncastType for LoomKind {
 
 impl LoomKind {
     /// Mirrors vanilla `LoomMenu.getSelectablePatterns`.
-    fn get_selectable_patterns(
-        &self,
-        pattern_stack: &ItemStack,
-    ) -> Vec<RegistryHolder<BannerPattern>> {
+    fn get_selectable_patterns(pattern_stack: &ItemStack) -> Vec<RegistryHolder<BannerPattern>> {
         if pattern_stack.is_empty() {
             return REGISTRY
                 .banner_patterns
@@ -238,7 +236,7 @@ impl LoomKind {
             .map_or_else(Vec::new, expand_patterns)
     }
 
-    fn is_valid_pattern_index(&self, index: i32) -> bool {
+    const fn is_valid_pattern_index(&self, index: i32) -> bool {
         index >= 0 && (index as usize) < self.selectable_patterns.len()
     }
 
@@ -315,8 +313,8 @@ impl MenuKind for LoomKind {
 
         let selected = self.selected_pattern.get(behavior);
         let valid_index = self.is_valid_pattern_index(i32::from(selected));
-        let previous = std::mem::take(&mut self.selectable_patterns);
-        self.selectable_patterns = self.get_selectable_patterns(&pattern);
+        let previous = mem::take(&mut self.selectable_patterns);
+        self.selectable_patterns = Self::get_selectable_patterns(&pattern);
 
         let mut pattern_to_display: Option<RegistryHolder<BannerPattern>> =
             if self.selectable_patterns.len() == 1 {
@@ -327,18 +325,15 @@ impl MenuKind for LoomKind {
                 None
             } else {
                 let selected_value = previous.get(selected as usize).cloned();
-                match selected_value
+                if let Some(new_index) = selected_value
                     .and_then(|value| self.selectable_patterns.iter().position(|p| *p == value))
                 {
-                    Some(new_index) => {
-                        let value = self.selectable_patterns[new_index].clone();
-                        self.selected_pattern.set(behavior, new_index as i16);
-                        Some(value)
-                    }
-                    None => {
-                        self.selected_pattern.set(behavior, -1);
-                        None
-                    }
+                    let value = self.selectable_patterns[new_index].clone();
+                    self.selected_pattern.set(behavior, new_index as i16);
+                    Some(value)
+                } else {
+                    self.selected_pattern.set(behavior, -1);
+                    None
                 }
             };
 

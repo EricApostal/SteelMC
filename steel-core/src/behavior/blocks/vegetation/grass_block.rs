@@ -242,7 +242,6 @@ impl Bonemealable for GrassBlock {
 
 #[cfg(test)]
 mod tests {
-    use steel_registry::blocks::BlockRef;
     use steel_registry::blocks::block_state_ext::BlockStateExt;
     use steel_registry::blocks::properties::BlockStateProperties;
     use steel_registry::{init_vanilla_registry, vanilla_blocks};

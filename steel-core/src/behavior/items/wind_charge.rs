@@ -18,6 +18,7 @@ use crate::behavior::item::ItemBehavior;
 use crate::enchantment_helper;
 use crate::entity::entities::WindChargeEntity;
 use crate::entity::{Entity, Projectile, SharedEntity, next_entity_id};
+use crate::player::Player;
 
 /// Vanilla `WindChargeItem.PROJECTILE_SHOOT_POWER`.
 const SHOOT_POWER: f32 = 1.5;
@@ -51,7 +52,7 @@ impl ItemBehavior for WindChargeItem {
             position,
             Arc::downgrade(world),
         );
-        let owner: SharedEntity = Arc::<crate::player::Player>::clone(player);
+        let owner: SharedEntity = Arc::<Player>::clone(player);
         wind_charge.set_owner_entity(Some(&owner));
         let (yaw, pitch) = player.rotation();
         wind_charge.shoot_from_rotation(

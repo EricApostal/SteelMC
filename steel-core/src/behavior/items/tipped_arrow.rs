@@ -70,7 +70,6 @@ mod tests {
 
     use crate::behavior::ItemBehavior;
     use crate::behavior::items::{DispenseConfig, ProjectileItem};
-    use crate::entity::Entity as _;
     use crate::entity::entities::objects::projectiles::{AbstractArrow as _, ArrowEntity, Pickup};
 
     /// Vanilla `TippedArrowItem extends ArrowItem`: the dispensed projectile

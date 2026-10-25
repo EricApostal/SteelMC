@@ -18,7 +18,7 @@ use crate::behavior::items::ProjectileItem;
 use crate::entity::entities::objects::projectiles::{
     ARROW_SPAWN_EYE_OFFSET, AbstractArrow, ArrowEntity, Pickup, SpectralArrowEntity,
 };
-use crate::entity::{Entity as _, SharedEntity, next_entity_id};
+use crate::entity::{SharedEntity, next_entity_id};
 use crate::world::World;
 
 /// Behavior for the arrow item.

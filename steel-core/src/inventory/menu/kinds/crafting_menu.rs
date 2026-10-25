@@ -16,6 +16,7 @@ use crate::inventory::slots::CraftingHandler;
 use crate::player::player_inventory::PlayerInventory;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::item_stack::ItemStack;
+use steel_registry::recipe::UntypedRecipeRef;
 use steel_registry::vanilla_blocks;
 use steel_registry::vanilla_menu_types;
 use steel_utils::BlockPos;
@@ -113,7 +114,7 @@ impl MenuKind for CraftingKind {
     fn handle_placement(
         &mut self,
         guard: &mut ContainerLockGuard,
-        recipe: steel_registry::recipe::UntypedRecipeRef,
+        recipe: UntypedRecipeRef,
         use_max_items: bool,
         allow_dropping_items_to_clear: bool,
         player: &Player,

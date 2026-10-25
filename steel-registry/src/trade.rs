@@ -286,7 +286,10 @@ mod tests {
         assert!(trade.additional_wants.is_none());
         assert!(trade.variant_predicate.is_none());
         assert!(trade.given_item_modifier.is_empty());
-        assert!(trade.double_trade_price_enchantments.is_empty());
+        assert_eq!(
+            trade.double_trade_price_enchantments,
+            [] as [EnchantmentRef; 0]
+        );
 
         let set = &*FARMER_LEVEL_1;
         assert_eq!(set.key, Identifier::vanilla_static("farmer/level_1"));
@@ -324,7 +327,7 @@ mod tests {
             for (level, set) in profession.trade_sets_by_level {
                 let expected = format!("{}/level_{level}", profession.key.path);
                 assert_eq!(set.key.path.as_ref(), expected);
-                assert!(!set.trades.is_empty());
+                assert_ne!(set.trades, [] as [VillagerTradeRef; 0]);
             }
         }
     }

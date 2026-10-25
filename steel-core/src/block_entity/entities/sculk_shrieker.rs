@@ -15,6 +15,7 @@ use steel_protocol::packets::game::SoundSource;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{BlockStateProperties, BoolProperty};
 use steel_registry::game_events::GameEventRef;
+use steel_registry::level_events;
 use steel_registry::position_source::PositionSource;
 use steel_registry::sound_events;
 use steel_registry::{vanilla_block_entity_types, vanilla_game_events};
@@ -30,6 +31,7 @@ use crate::block_entity::{BlockEntity, BlockEntityBase};
 use crate::entity::Entity;
 use crate::entity::entities::ItemEntity;
 use crate::entity::entities::mobs::hostile::warden::WardenSpawnTracker;
+use crate::entity::projectile::Projectile;
 use crate::player::Player;
 use crate::world::game_event::vibration::{
     SHRIEKER_LISTENER_RADIUS, VibrationCallback, VibrationSystemListener, block_position_source,
@@ -56,9 +58,7 @@ fn try_get_player(world: &Arc<World>, source: &dyn Entity) -> Option<Arc<Player>
     {
         return world.players.get_by_entity_id(controller.id());
     }
-    if let Some(owner) = source
-        .as_projectile()
-        .and_then(|projectile| projectile.get_owner())
+    if let Some(owner) = source.as_projectile().and_then(Projectile::get_owner)
         && owner.as_player().is_some()
     {
         return world.players.get_by_entity_id(owner.id());
@@ -66,7 +66,7 @@ fn try_get_player(world: &Arc<World>, source: &dyn Entity) -> Option<Arc<Player>
     // Vanilla `ItemEntity.getOwner()` is a UUID, resolved through the level.
     let item_owner = source
         .downcast_ref::<ItemEntity>()
-        .and_then(|item| item.get_owner())
+        .and_then(ItemEntity::get_owner)
         .and_then(|uuid| world.get_entity_by_uuid(&uuid))?;
     if item_owner.as_player().is_some() {
         return world.players.get_by_entity_id(item_owner.id());
@@ -129,12 +129,7 @@ impl ShriekerCore {
         }
         SculkShriekerBlock::start_shriek(state.get_block(), world, self.pos, state);
         // Vanilla emits `LevelEvent 3007` (`PARTICLES_SCULK_SHRIEK`) while starting the shriek.
-        world.level_event(
-            steel_registry::level_events::PARTICLES_SCULK_SHRIEK,
-            self.pos,
-            0,
-            None,
-        );
+        world.level_event(level_events::PARTICLES_SCULK_SHRIEK, self.pos, 0, None);
         world.game_event(
             &vanilla_game_events::SHRIEK,
             self.pos,

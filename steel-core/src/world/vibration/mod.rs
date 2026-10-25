@@ -19,6 +19,7 @@ use steel_utils::Identifier;
 use steel_utils::{BlockPos, ChunkPos};
 
 use crate::entity::Entity as _;
+use crate::entity::living_loot_equipment;
 use crate::player::Player;
 use crate::player::advancement::triggers::{WorldLevelView, event_base, player_view, raise};
 use crate::world::World;
@@ -84,7 +85,7 @@ pub fn are_adjacent_chunks_ticking(world: &World, pos: BlockPos) -> bool {
 /// vibration on a listener whose user returns `canTriggerAvoidVibration` (the sculk sensors).
 pub fn notify_avoid_vibration(player: &Player, world: &Arc<World>) {
     let level = WorldLevelView::new(world, player.block_position());
-    let equipment = crate::entity::living_loot_equipment(player);
+    let equipment = living_loot_equipment(player);
     let known = player.recipe_book().unlocked_identifiers().to_vec();
     let view = player_view(player, &level, Some(&equipment), &known);
     raise(
@@ -101,6 +102,8 @@ mod tests {
     use steel_utils::types::UpdateFlags;
     use steel_utils::{BlockPos, ChunkPos};
 
+    use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
+
     use super::*;
 
     fn load_block_ticking_neighbourhood(world: &Arc<World>, pos: BlockPos) {
@@ -110,10 +113,7 @@ mod tests {
                 if dx == 0 && dz == 0 {
                     continue;
                 }
-                crate::test_support::insert_ready_full_chunk(
-                    world,
-                    ChunkPos::new(center.0.x + dx, center.0.y + dz),
-                );
+                insert_ready_full_chunk(world, ChunkPos::new(center.0.x + dx, center.0.y + dz));
             }
         }
     }
@@ -121,10 +121,10 @@ mod tests {
     #[test]
     fn vibration_is_occluded_only_when_every_offset_ray_hits_wool() {
         init_vanilla_registry();
-        let world_fixture = crate::test_support::fresh_test_world("vibration_occlusion");
+        let world_fixture = fresh_test_world("vibration_occlusion");
         let world = &world_fixture.world;
         let pos = BlockPos::new(8, 64, 8);
-        crate::test_support::insert_ready_full_chunk(world, ChunkPos::from_block_pos(pos));
+        insert_ready_full_chunk(world, ChunkPos::from_block_pos(pos));
         // The listener sits at `pos`; the vibration originates at `source`, two blocks away on Z.
         let center = DVec3::new(8.5, 64.5, 8.5);
         let source = DVec3::new(8.5, 64.5, 12.5);
@@ -157,10 +157,10 @@ mod tests {
     #[test]
     fn adjacent_chunks_require_block_ticking_readiness() {
         init_vanilla_registry();
-        let world_fixture = crate::test_support::fresh_test_world("vibration_adjacent_chunks");
+        let world_fixture = fresh_test_world("vibration_adjacent_chunks");
         let world = &world_fixture.world;
         let pos = BlockPos::new(8, 64, 8);
-        crate::test_support::insert_ready_full_chunk(world, ChunkPos::from_block_pos(pos));
+        insert_ready_full_chunk(world, ChunkPos::from_block_pos(pos));
 
         // The listener's own chunk ticks, but its neighbours are not loaded.
         assert!(!are_adjacent_chunks_ticking(world, pos));

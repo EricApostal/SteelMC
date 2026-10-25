@@ -44,6 +44,7 @@ use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier};
 
 use crate::behavior::InteractionResult;
+use crate::behavior::advancement_hooks::raise_filled_bucket;
 use crate::entity::ai::brain::Brain;
 use crate::entity::ai::brain::memory::module_type as mem;
 use crate::entity::damage::DamageSource;
@@ -339,12 +340,19 @@ impl AxolotlEntity {
 
         self.play_sound(&sound_events::ITEM_BUCKET_FILL_AXOLOTL, 1.0, 1.0);
         let bucket = self.create_bucket_stack();
+        let filled = bucket.clone();
         let overflow = {
             let mut inventory = player.inventory.lock();
             inventory.apply_filled_result(hand, bucket, player.has_infinite_materials(), false)
         };
         if !overflow.is_empty() {
             let _ = player.drop_item(overflow, false, Prediction::Predicted);
+        }
+
+        // Vanilla `Bucketable.bucketMobPickup` raises `filled_bucket` right after
+        // `ItemUtils.createFilledResult`.
+        if let Some(world) = Entity::level(self) {
+            raise_filled_bucket(player, &world, &filled);
         }
 
         self.set_removed(RemovalReason::Discarded);

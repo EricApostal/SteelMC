@@ -1048,7 +1048,7 @@ fn copy_state_function_copies_only_properties_the_block_declares() {
     // set (i.e. declared by `block`) that the looted state carries are written;
     // `bee_count` is not a `bee_nest` property, so it is dropped.
     LootFunction::CopyState {
-        block: block.clone(),
+        block,
         properties: &["honey_level", "bee_count"],
     }
     .apply(&mut stack, &mut ctx);
@@ -1129,9 +1129,9 @@ fn set_custom_model_data_starts_from_an_empty_component() {
     let data = stack
         .get(CUSTOM_MODEL_DATA)
         .expect("set_custom_model_data writes the component");
-    assert!(data.floats().is_empty());
+    assert_eq!(data.floats(), [] as [f32; 0]);
     assert_eq!(data.flags(), [true, false]);
-    assert!(data.strings().is_empty());
+    assert_eq!(data.strings(), [] as [String; 0]);
     assert_eq!(data.colors(), [0x11_22_33]);
 }
 
@@ -1261,7 +1261,7 @@ fn environment_attribute_check_compares_the_attribute_at_the_origin() {
     // Vanilla `EnvironmentAttributeCheck.test` compares for equality, so a
     // different configured value fails.
     let mismatched = LootCondition::EnvironmentAttributeCheck {
-        attribute: attribute.clone(),
+        attribute,
         value: 2.0,
     };
     let mut rng = test_rng();

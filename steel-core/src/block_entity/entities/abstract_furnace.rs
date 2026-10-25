@@ -77,7 +77,10 @@ impl FurnaceKind {
 /// the block entity, its centre and the container itself; only the block state
 /// is read by the vanilla `cooking/*` providers, whose `minecraft:block/fast_cooking`
 /// condition matches the smoker and blast furnace.
-fn cooking_fuel_context<R: rand::Rng>(rng: &mut R, state: BlockStateId) -> LootContext<'_, R> {
+const fn cooking_fuel_context<R: rand::Rng>(
+    rng: &mut R,
+    state: BlockStateId,
+) -> LootContext<'_, R> {
     let mut context = LootContext::new(rng);
     context.block_state = Some(state);
     context

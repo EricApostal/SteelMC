@@ -16,13 +16,22 @@ use steel_utils::{BlockPos, BlockStateId};
 use crate::entity::SharedEntity;
 use crate::entity::{EntitySpawnReason, create_entity_instance};
 use crate::world::World;
+use crate::world::spawn::natural::spawn_aabb_at;
 
 /// Vanilla `SpawnUtil.Strategy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpawnStrategy {
     /// Vanilla `SpawnUtil.Strategy.LEGACY_IRON_GOLEM`.
+    #[expect(
+        dead_code,
+        reason = "vanilla villagers select this strategy for iron golems; Steel's golem path has no caller yet"
+    )]
     LegacyIronGolem,
     /// Vanilla `SpawnUtil.Strategy.ON_TOP_OF_COLLIDER`.
+    #[expect(
+        dead_code,
+        reason = "vanilla raid and patrol spawners select this strategy; Steel has no caller yet"
+    )]
     OnTopOfCollider,
     /// Vanilla `SpawnUtil.Strategy.ON_TOP_OF_COLLIDER_NO_LEAVES`.
     OnTopOfColliderNoLeaves,
@@ -83,6 +92,10 @@ fn is_full_up(state: BlockStateId, pos: BlockPos) -> bool {
 }
 
 /// Vanilla `SpawnUtil.trySpawnMob`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors vanilla SpawnUtil.trySpawnMob plus Steel's explicit range and collision flags"
+)]
 pub fn try_spawn_mob(
     entity_type: EntityTypeRef,
     spawn_reason: EntitySpawnReason,
@@ -108,7 +121,7 @@ pub fn try_spawn_mob(
         }
 
         if check_collisions
-            && !world.no_collision(crate::world::spawn::natural::spawn_aabb_at(
+            && !world.no_collision(spawn_aabb_at(
                 entity_type,
                 f64::from(search_pos.x()) + 0.5,
                 f64::from(search_pos.y()),

@@ -28,6 +28,7 @@ pub const WITNESS_SCAN_RADIUS: f64 = 16.0;
 impl World {
     /// Applies a reputation event to one handler
     /// (vanilla `ServerLevel.onReputationEvent`).
+    #[expect(clippy::unused_self, reason = "this is an api function")]
     pub fn on_reputation_event(
         &self,
         event_type: ReputationEventType,

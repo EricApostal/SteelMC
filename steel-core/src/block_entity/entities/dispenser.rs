@@ -433,6 +433,9 @@ dispenser_block_entity!(DropperBlockEntity, DROPPER, "steel:block_entity/dropper
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
+    use simdnbt::borrow::read_compound;
     use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_items};
 
     use super::*;
@@ -509,8 +512,8 @@ mod tests {
     fn load_nbt(block_entity: &DispenserBlockEntity, nbt: &NbtCompound) {
         let mut bytes = Vec::new();
         nbt.write(&mut bytes);
-        let borrowed = simdnbt::borrow::read_compound(&mut std::io::Cursor::new(bytes.as_slice()))
-            .expect("test NBT should reborrow");
+        let borrowed =
+            read_compound(&mut Cursor::new(bytes.as_slice())).expect("test NBT should reborrow");
         block_entity.load_additional(&borrowed);
     }
 

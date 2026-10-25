@@ -24,6 +24,7 @@
 //! - Block-entity contents still do not drop on explosion removal (same gap as
 //!   `World::destroy_block_with_limit`).
 
+use std::mem::take;
 use std::sync::Arc;
 
 use glam::DVec3;
@@ -32,10 +33,13 @@ use steel_protocol::packets::game::{CExplode, ExplosionBlockParticle};
 use steel_protocol::utils::ConnectionProtocol;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::fluid::FluidState;
+use steel_registry::game_rules::GameRule;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::particle_type::{ParticleData, ParticleTypeRef};
 use steel_registry::sound_event::SoundEventHolder;
+use steel_registry::vanilla_attributes::EXPLOSION_KNOCKBACK_RESISTANCE;
 use steel_registry::vanilla_damage_types;
+use steel_registry::vanilla_entities::{BREEZE_WIND_CHARGE, WIND_CHARGE};
 use steel_registry::vanilla_entity_type_tags::EntityTypeTag;
 use steel_registry::vanilla_game_rules::{
     BLOCK_EXPLOSION_DROP_DECAY, MOB_EXPLOSION_DROP_DECAY, MOB_GRIEFING, TNT_EXPLOSION_DROP_DECAY,
@@ -48,11 +52,13 @@ use steel_utils::random::{Random as _, RandomSource, legacy_random::LegacyRandom
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId, Downcast as _, Identifier, WorldAabb};
 
+use crate::behavior::blocks::FireBlock;
 use crate::behavior::fluid::FLUID_BEHAVIORS;
 use crate::behavior::{BLOCK_BEHAVIORS, BlockLootContext};
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::objects::explosives::PrimedTntEntity;
 use crate::entity::{Entity, SharedEntity};
+use crate::player::Player;
 use crate::player::connection::NetworkConnection as _;
 use crate::world::game_event::GameEventContext;
 use crate::world::{ClipBlockShape, ClipFluid, World};
@@ -224,9 +230,7 @@ impl ExplosionDamageCalculator for SimpleExplosionDamageCalculator {
     }
 
     fn knockback_multiplier(&self, entity: &dyn Entity) -> f32 {
-        let creative_flying = entity
-            .as_player()
-            .is_some_and(|player| player.is_flying_player());
+        let creative_flying = entity.as_player().is_some_and(Entity::is_flying_player);
         if creative_flying {
             0.0
         } else {
@@ -253,7 +257,7 @@ pub fn base_block_explosion_resistance(state: BlockStateId, fluid: FluidState) -
 pub fn entity_damage_amount(radius: f32, distance: f64, exposure: f32) -> f32 {
     let double_radius = f64::from(radius) * 2.0;
     let power = (1.0 - distance) * f64::from(exposure);
-    ((power * power + power) / 2.0 * 7.0 * double_radius + 1.0) as f32
+    (f64::midpoint(power * power, power) * 7.0 * double_radius + 1.0) as f32
 }
 
 /// Vanilla `Explosion.getDefaultDamageSource`.
@@ -324,7 +328,7 @@ pub fn default_on_explosion_hit(
     let drop_experience = explosion.indirect_source.is_some_and(|source| {
         source
             .as_player()
-            .is_some_and(|player| player.has_infinite_materials())
+            .is_some_and(Player::has_infinite_materials)
     });
     let context = BlockLootContext::new(world, pos)
         .with_entity(explosion.source.map(AsRef::as_ref))
@@ -364,7 +368,7 @@ struct ServerExplosion<'a> {
     hit_players: Vec<(i32, DVec3)>,
 }
 
-impl<'a> ServerExplosion<'a> {
+impl ServerExplosion<'_> {
     fn info(&self) -> ExplosionInfo<'_> {
         ExplosionInfo {
             center: self.center,
@@ -392,9 +396,10 @@ impl<'a> ServerExplosion<'a> {
         if self.block_interaction != BlockInteraction::TriggerBlock {
             return false;
         }
-        let is_wind_charge = self.source.as_ref().is_some_and(|source| {
-            source.entity_type() == &steel_registry::vanilla_entities::BREEZE_WIND_CHARGE
-        });
+        let is_wind_charge = self
+            .source
+            .as_ref()
+            .is_some_and(|source| source.entity_type() == &BREEZE_WIND_CHARGE);
         if is_wind_charge {
             self.world.get_game_rule(&MOB_GRIEFING)
         } else {
@@ -406,8 +411,7 @@ impl<'a> ServerExplosion<'a> {
     fn should_affect_blocklike_entities(&self) -> bool {
         let mob_griefing = self.world.get_game_rule(&MOB_GRIEFING);
         let is_wind_charge = self.source.as_ref().is_some_and(|source| {
-            source.entity_type() == &steel_registry::vanilla_entities::BREEZE_WIND_CHARGE
-                || source.entity_type() == &steel_registry::vanilla_entities::WIND_CHARGE
+            source.entity_type() == &BREEZE_WIND_CHARGE || source.entity_type() == &WIND_CHARGE
         });
         if is_wind_charge {
             // Vanilla: wind charges never affect blocklike entities.
@@ -438,15 +442,16 @@ impl<'a> ServerExplosion<'a> {
 
     /// Vanilla `ServerExplosion.calculateExplodedPositions`.
     fn calculate_exploded_positions(&mut self) -> Vec<BlockPos> {
+        const STEP_SIZE: f32 = 0.3;
         let mut to_blow = Vec::new();
         let mut seen = rustc_hash::FxHashSet::default();
         for_each_shell_cell(&mut |xx, yy, zz| {
             if !(xx == 0 || xx == 15 || yy == 0 || yy == 15 || zz == 0 || zz == 15) {
                 return;
             }
-            let mut xd = (xx as f32 / 15.0 * 2.0 - 1.0) as f64;
-            let mut yd = (yy as f32 / 15.0 * 2.0 - 1.0) as f64;
-            let mut zd = (zz as f32 / 15.0 * 2.0 - 1.0) as f64;
+            let mut xd = f64::from(f32::from(xx) / 15.0 * 2.0 - 1.0);
+            let mut yd = f64::from(f32::from(yy) / 15.0 * 2.0 - 1.0);
+            let mut zd = f64::from(f32::from(zz) / 15.0 * 2.0 - 1.0);
             let d = (xd * xd + yd * yd + zd * zd).sqrt();
             xd /= d;
             yd /= d;
@@ -456,8 +461,6 @@ impl<'a> ServerExplosion<'a> {
             let mut xp = self.center.x;
             let mut yp = self.center.y;
             let mut zp = self.center.z;
-
-            const STEP_SIZE: f32 = 0.3;
 
             while remaining_power > 0.0 {
                 let pos = BlockPos::containing(xp, yp, zp);
@@ -560,9 +563,10 @@ impl<'a> ServerExplosion<'a> {
             }
 
             let knockback_resistance = entity.as_living_entity().map_or(0.0, |living| {
-                living.attributes().lock().required_value(
-                    steel_registry::vanilla_attributes::EXPLOSION_KNOCKBACK_RESISTANCE,
-                )
+                living
+                    .attributes()
+                    .lock()
+                    .required_value(EXPLOSION_KNOCKBACK_RESISTANCE)
             });
             let knockback_power = (1.0 - distance)
                 * f64::from(exposure)
@@ -619,7 +623,7 @@ impl<'a> ServerExplosion<'a> {
             if !self.world.get_block_state(below).is_solid_render() {
                 continue;
             }
-            let fire = crate::behavior::blocks::FireBlock::get_state(self.world.as_ref(), pos);
+            let fire = FireBlock::get_state(self.world.as_ref(), pos);
             self.world.set_block(pos, fire, UpdateFlags::UPDATE_ALL);
         }
     }
@@ -748,6 +752,10 @@ impl World {
     }
 
     /// Vanilla `Level.explode(source, x, y, z, r, fire, interaction)`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors vanilla Level.explode's parameter list, which this wrapper forwards verbatim"
+    )]
     pub fn explode_with_fire(
         self: &Arc<Self>,
         source: Option<SharedEntity>,
@@ -818,7 +826,7 @@ impl World {
 
         let block_count = explosion.explode();
         let is_small = explosion.is_small();
-        let hit_players = std::mem::take(&mut explosion.hit_players);
+        let hit_players = take(&mut explosion.hit_players);
         let source_is_silent = explosion
             .source
             .as_ref()
@@ -877,10 +885,7 @@ impl World {
     }
 
     /// Vanilla `ServerLevel.getDestroyType`.
-    fn explosion_destroy_type(
-        &self,
-        game_rule: &steel_registry::game_rules::GameRule<bool>,
-    ) -> BlockInteraction {
+    fn explosion_destroy_type(&self, game_rule: &GameRule<bool>) -> BlockInteraction {
         if self.get_game_rule(game_rule) {
             BlockInteraction::DestroyWithDecay
         } else {

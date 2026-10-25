@@ -5,10 +5,11 @@
 
 use std::sync::Weak;
 
-use simdnbt::borrow::BaseNbtCompound as BorrowedNbtCompound;
+use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
 use simdnbt::owned::NbtCompound;
 use simdnbt::{FromNbtTag, ToNbtTag};
 use steel_registry::data_components::components::BannerPatternLayers;
+use steel_registry::data_components::vanilla_components;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_block_entity_types;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, locks::SyncMutex};
@@ -69,15 +70,17 @@ impl BannerBlockEntity {
 
     /// Vanilla `BannerBlockEntity.applyImplicitComponents`: copies the
     /// `banner_patterns` and `custom_name` components from `item`.
+    #[expect(
+        clippy::wrong_self_convention,
+        reason = "vanilla applyImplicitComponents takes self"
+    )]
     pub fn from_item(&self, item: &ItemStack) {
         let patterns = item
-            .get(steel_registry::data_components::vanilla_components::BANNER_PATTERNS)
+            .get(vanilla_components::BANNER_PATTERNS)
             .cloned()
             .unwrap_or_else(BannerPatternLayers::empty);
         *self.patterns.lock() = patterns;
-        *self.custom_name.lock() = item
-            .get(steel_registry::data_components::vanilla_components::CUSTOM_NAME)
-            .cloned();
+        *self.custom_name.lock() = item.get(vanilla_components::CUSTOM_NAME).cloned();
     }
 }
 
@@ -87,7 +90,7 @@ impl BlockEntity for BannerBlockEntity {
     }
 
     fn load_additional(&self, nbt: &BorrowedNbtCompound<'_>) {
-        let nbt: simdnbt::borrow::NbtCompound<'_, '_> = nbt.into();
+        let nbt: NbtCompoundView<'_, '_> = nbt.into();
         let patterns = nbt
             .get("patterns")
             .and_then(BannerPatternLayers::from_nbt_tag)

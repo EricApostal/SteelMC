@@ -457,7 +457,6 @@ impl Entity for HopperMinecartEntity {
 mod tests {
     use std::sync::Weak;
 
-    use steel_registry::blocks::block_state_ext::BlockStateExt as _;
     use steel_registry::{
         init_vanilla_registry, item_stack::ItemStack, vanilla_blocks, vanilla_entities,
         vanilla_items,

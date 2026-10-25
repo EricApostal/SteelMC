@@ -12,7 +12,7 @@
 //! `RandomSource`; Steel has no per-level `RandomSource` (owner: `world`), so those picks use the
 //! process RNG.
 
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 
 use glam::DVec3;
 use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
@@ -120,7 +120,7 @@ impl ConduitBlockEntity {
     /// Vanilla `ConduitBlockEntity.updateShape`: requires the full 3×3×3 around the conduit to be
     /// water, then collects the `CONDUIT_EFFECT_BLOCK` blocks on the 5×5×5 shell. An empty result
     /// means the frame is invalid (vanilla returns `false`).
-    fn update_shape(world: &std::sync::Arc<World>, pos: BlockPos) -> Vec<BlockPos> {
+    fn update_shape(world: &Arc<World>, pos: BlockPos) -> Vec<BlockPos> {
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
@@ -162,7 +162,7 @@ impl ConduitBlockEntity {
 
     /// Vanilla `ConduitBlockEntity.applyEffects`: grants `Conduit Power` for 13 seconds to players
     /// within `frame_size / 7 * 16` blocks that are in water or rain.
-    fn apply_effects(world: &std::sync::Arc<World>, pos: BlockPos, frame_size: usize) {
+    fn apply_effects(world: &Arc<World>, pos: BlockPos, frame_size: usize) {
         let effect_range = i32::try_from(frame_size / 7 * 16).unwrap_or(i32::MAX);
         let range = f64::from(effect_range);
         let min = DVec3::new(f64::from(pos.x()), f64::from(pos.y()), f64::from(pos.z()));
@@ -184,7 +184,7 @@ impl ConduitBlockEntity {
             };
             player.add_mob_effect(
                 MobEffectInstance::with_duration(
-                    &vanilla_mob_effects::CONDUIT_POWER,
+                    vanilla_mob_effects::CONDUIT_POWER,
                     CONDUIT_EFFECT_DURATION * 20,
                     0,
                 )
@@ -196,12 +196,7 @@ impl ConduitBlockEntity {
 
     /// Vanilla `ConduitBlockEntity.updateAndAttackTarget`: resolves the hunting target, hurts it
     /// for 4 magic damage and resyncs the block entity when the target changed.
-    fn update_and_attack_target(
-        &self,
-        world: &std::sync::Arc<World>,
-        pos: BlockPos,
-        is_active: bool,
-    ) {
+    fn update_and_attack_target(&self, world: &Arc<World>, pos: BlockPos, is_active: bool) {
         let previous = self.state.lock().destroy_target.clone();
         let new_target = Self::update_destroy_target(previous.as_ref(), world, pos, is_active);
 
@@ -238,7 +233,7 @@ impl ConduitBlockEntity {
     /// Vanilla `ConduitBlockEntity.updateDestroyTarget`.
     fn update_destroy_target(
         target: Option<&EntityReference>,
-        world: &std::sync::Arc<World>,
+        world: &Arc<World>,
         pos: BlockPos,
         is_active: bool,
     ) -> Option<EntityReference> {
@@ -250,9 +245,7 @@ impl ConduitBlockEntity {
             return Self::select_new_target(world, pos);
         };
 
-        let Some(entity) = target.get_entity(world) else {
-            return None;
-        };
+        let entity = target.get_entity(world)?;
 
         (entity.is_alive()
             && Self::closer_than(pos, entity.block_position(), f64::from(CONDUIT_KILL_RANGE)))
@@ -261,7 +254,7 @@ impl ConduitBlockEntity {
 
     /// Vanilla `ConduitBlockEntity.selectNewTarget`: a random `Enemy` in water or rain within 8
     /// blocks of the conduit.
-    fn select_new_target(world: &std::sync::Arc<World>, pos: BlockPos) -> Option<EntityReference> {
+    fn select_new_target(world: &Arc<World>, pos: BlockPos) -> Option<EntityReference> {
         let min = DVec3::new(f64::from(pos.x()), f64::from(pos.y()), f64::from(pos.z()));
         // Vanilla `new AABB(worldPosition).inflate(8.0)`: the block cube grown by 8 on every side.
         let aabb = WorldAabb::from_min_max(
@@ -307,7 +300,7 @@ impl BlockEntity for ConduitBlockEntity {
     }
 
     /// Vanilla `ConduitBlockEntity.serverTick`.
-    fn tick(&self, world: &std::sync::Arc<World>) {
+    fn tick(&self, world: &Arc<World>) {
         let pos = self.get_block_pos();
         let game_time = world.game_time();
         let refreshed = game_time % CONDUIT_REFRESH_RATE == 0;

@@ -20,6 +20,7 @@ use steel_utils::{
 };
 
 use crate::behavior::BLOCK_BEHAVIORS;
+use crate::behavior::advancement_hooks::raise_generate_loot;
 use crate::block_entity::{BlockEntity, BlockEntityBase};
 use crate::entity::{LivingEntity as _, entity_loot_ref, living_loot_equipment};
 use crate::player::Player;
@@ -208,7 +209,7 @@ impl BrushableBlockEntity {
         };
         // Vanilla `BrushableBlockEntity.unpackLootTable` fires `GENERATE_LOOT` with the
         // block entity's loot table key before the loot is rolled.
-        crate::behavior::advancement_hooks::raise_generate_loot(player, world, &loot_table_key);
+        raise_generate_loot(player, world, &loot_table_key);
         let loot_table = REGISTRY.loot_tables.by_key(&loot_table_key);
 
         if state.loot_table_seed == 0 {

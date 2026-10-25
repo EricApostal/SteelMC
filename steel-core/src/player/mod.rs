@@ -31,7 +31,7 @@ mod spam_throttler;
 pub mod stats_counter;
 mod tick_state;
 mod title;
-mod waypoint;
+pub(crate) mod waypoint;
 
 use crate::player::player_inventory::Prediction;
 pub use abilities::{Abilities, DEFAULT_FLYING_SPEED};
@@ -71,11 +71,12 @@ use steel_protocol::packets::game::{
     CSetDefaultSpawnPosition, CSetHealth, CSetHeldSlot, CSetPassengers, ClientCommandAction,
     LookAtAnchor, RelativeMovement, SoundSource,
 };
-use steel_protocol::packets::game::{CLevelEvent, CSetEntityData, CSetExperience};
+use steel_protocol::packets::game::{CLevelEvent, CSetEntityData, CSetExperience, WaypointIcon};
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::entity_data::{EntityPose, HumanoidArm, ParticleList};
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::game_rules::GameRuleRef;
+use steel_registry::mob_effect::MobEffectRef;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entity_data::PlayerEntityData;
@@ -83,6 +84,7 @@ use steel_registry::vanilla_game_rules::{
     DROWNING_DAMAGE, FALL_DAMAGE, FIRE_DAMAGE, FREEZE_DAMAGE, IMMEDIATE_RESPAWN, KEEP_INVENTORY,
     PVP, SHOW_DEATH_MESSAGES,
 };
+use steel_registry::vanilla_mob_effects;
 use steel_registry::{
     level_events, sound_events, vanilla_attributes, vanilla_custom_stats, vanilla_damage_type_tags,
     vanilla_entities, vanilla_game_events,
@@ -244,6 +246,8 @@ pub struct Player {
     tick_state: SyncMutex<PlayerTickState>,
     /// Vanilla sleep/wake animation counter.
     sleep_state: SyncMutex<PlayerSleepState>,
+    /// Vanilla `ServerPlayer`'s levitation tracking for the `levitation` trigger.
+    levitation: SyncMutex<LevitationTracking>,
     /// Persisted personal bed or respawn-anchor target.
     respawn_config: SyncMutex<Option<PlayerRespawnConfig>>,
     /// Vanilla `ServerPlayer.raidOmenPosition`: where a pending raid omen converts into a
@@ -266,6 +270,9 @@ pub struct Player {
     /// Live locator-bar waypoint connections this player receives, keyed by transmitter UUID
     /// (vanilla `ServerWaypointManager.connections` row for this player).
     pub(crate) waypoint_tracks: SyncMutex<waypoint::WaypointTracks>,
+    /// Vanilla `LivingEntity.locatorBarIcon`: the waypoint icon this player
+    /// transmits on the locator bar, mutated by `/waypoint modify`.
+    pub(crate) locator_bar_icon: SyncMutex<WaypointIcon>,
 
     /// Vanilla `ServerPlayer.postEffects`: ordered client post-processing effect
     /// identifiers applied by `/posteffect add|remove|clear`.
@@ -672,6 +679,7 @@ impl Player {
             item_cooldowns: SyncMutex::new(ItemCooldowns::default()),
             tick_state: SyncMutex::new(PlayerTickState::new()),
             sleep_state: SyncMutex::new(PlayerSleepState::new()),
+            levitation: SyncMutex::new(LevitationTracking::default()),
             respawn_config: SyncMutex::new(None),
             raid_omen_position: SyncMutex::new(None),
             warden_spawn_tracker: SyncMutex::new(WardenSpawnTracker::fresh()),
@@ -679,6 +687,7 @@ impl Player {
             shoulder_entity_right: SyncMutex::new(NbtCompound::new()),
             time_entity_sat_on_shoulder: SyncMutex::new(0),
             waypoint_tracks: SyncMutex::new(waypoint::new_tracks()),
+            locator_bar_icon: SyncMutex::new(waypoint::new_icon()),
             post_effects: SyncMutex::new(Vec::new()),
             abilities: SyncMutex::new(Abilities::default()),
             block_breaking: SyncMutex::new(BlockBreakingManager::new()),
@@ -2025,6 +2034,71 @@ impl Entity for Player {
     }
 }
 
+/// Vanilla `ServerPlayer`'s levitation tracking: the position and tick count at
+/// which the levitation effect started, cleared once it ends.
+#[derive(Debug, Default)]
+struct LevitationTracking {
+    /// Vanilla `ServerPlayer.levitationStartPos`.
+    start_pos: Option<DVec3>,
+    /// Vanilla `ServerPlayer.levitationStartTime`.
+    start_time: i32,
+}
+
+impl LevitationTracking {
+    /// Vanilla `ServerPlayer.onEffectAdded`'s levitation branch.
+    fn begin(&mut self, position: DVec3, tick_count: i32) {
+        self.start_pos = Some(position);
+        self.start_time = tick_count;
+    }
+
+    /// Vanilla `ServerPlayer.onEffectsRemoved`'s levitation branch.
+    fn clear(&mut self) {
+        self.start_pos = None;
+    }
+
+    /// Vanilla `ServerPlayer.tick`'s levitation delta: the start position and the
+    /// ticks elapsed since it began, or nothing while levitation is inactive.
+    fn pending(&self, tick_count: i32) -> Option<(DVec3, i32)> {
+        self.start_pos
+            .map(|start| (start, tick_count - self.start_time))
+    }
+}
+
+impl Player {
+    /// Vanilla `ServerPlayer.onEffectAdded`: starts the levitation tracking when
+    /// the added effect is levitation, then raises `effects_changed`.
+    pub(crate) fn on_effect_added(&self, effect: MobEffectRef) {
+        if effect == vanilla_mob_effects::LEVITATION {
+            let mut tracking = self.levitation.lock();
+            tracking.begin(self.position(), Entity::tick_count(self));
+        }
+        self.raise_effects_changed();
+    }
+
+    /// Vanilla `ServerPlayer.onEffectUpdated`: raises `effects_changed` (and does
+    /// not restart the levitation tracking).
+    pub(crate) fn on_effect_updated(&self, _effect: MobEffectRef) {
+        self.raise_effects_changed();
+    }
+
+    /// Vanilla `ServerPlayer.onEffectsRemoved`: clears the levitation tracking for
+    /// a removed levitation effect, then raises `effects_changed`.
+    pub(crate) fn on_effects_removed(&self, effects: &[MobEffectRef]) {
+        if effects.contains(&vanilla_mob_effects::LEVITATION) {
+            self.levitation.lock().clear();
+        }
+        self.raise_effects_changed();
+    }
+
+    /// Raises `minecraft:effects_changed` with the player's current effects.
+    ///
+    /// Vanilla also passes the effect's source entity; Steel's effect API does
+    /// not carry one, so the event's source is always absent (reported as a gap).
+    fn raise_effects_changed(&self) {
+        crate::behavior::advancement_hooks::raise_effects_changed(self);
+    }
+}
+
 const fn protocol_look_at_anchor(anchor: EntityAnchor) -> LookAtAnchor {
     match anchor {
         EntityAnchor::Feet => LookAtAnchor::Feet,
@@ -2051,6 +2125,15 @@ impl LivingEntity for Player {
             // Vanilla `ServerPlayer.doTick` raises `LOCATION` every 20 ticks.
             if Entity::tick_count(self) % 20 == 0 {
                 crate::player::advancement::triggers::raise_location(self, &world, origin);
+            }
+            // Vanilla `ServerPlayer.tick` raises `LEVITATION` after `TICK` while the
+            // effect is active, with the start position and the ticks elapsed.
+            let tick_count = Entity::tick_count(self);
+            let pending = self.levitation.lock().pending(tick_count);
+            if let Some((start, duration)) = pending {
+                crate::player::advancement::triggers::raise_levitation(
+                    self, &level, start, duration,
+                );
             }
         }
         self.tick_item_cooldowns();

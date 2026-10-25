@@ -18,7 +18,7 @@ pub struct CCodeOfConduct {
 impl CCodeOfConduct {
     /// Creates a new code of conduct packet.
     #[must_use]
-    pub fn new(code_of_conduct: String) -> Self {
+    pub const fn new(code_of_conduct: String) -> Self {
         Self { code_of_conduct }
     }
 }

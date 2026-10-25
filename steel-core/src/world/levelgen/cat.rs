@@ -1,6 +1,7 @@
 //! Vanilla `CatSpawner`: periodically spawns a stray cat near a village or a
 //! swamp-hut/witch-hut structure.
 
+use std::ptr;
 use std::sync::Arc;
 
 use steel_registry::vanilla_entities;
@@ -27,8 +28,6 @@ const VILLAGE_RADIUS: i32 = 48;
 const VILLAGE_HOME_THRESHOLD: i64 = 4;
 /// Vanilla `CatSpawner.spawnInVillage` nearby-cat limit.
 const VILLAGE_CAT_LIMIT: usize = 5;
-/// Vanilla `CatSpawner.spawnInHut` radius.
-const HUT_RADIUS: f64 = 16.0;
 /// Vanilla `CatSpawner` cross-radius for the cat search box.
 const CAT_SEARCH_RADIUS_Y: f64 = 8.0;
 
@@ -88,12 +87,12 @@ impl CatSpawner {
         }
 
         if world.is_close_to_village(spawn_pos, 2) {
-            self.spawn_in_village(world, spawn_pos);
+            Self::spawn_in_village(world, spawn_pos);
         }
     }
 
     /// Vanilla `CatSpawner.spawnInVillage`.
-    fn spawn_in_village(&self, world: &Arc<World>, spawn_pos: BlockPos) {
+    fn spawn_in_village(world: &Arc<World>, spawn_pos: BlockPos) {
         let Some(home_type) = REGISTRY.poi_types.id_from_key(&vanilla_poi_types::HOME.key) else {
             return;
         };
@@ -112,9 +111,9 @@ impl CatSpawner {
         }
 
         let search = WorldAabb::new(
-            f64::from(spawn_pos.x()) - VILLAGE_RADIUS as f64,
+            f64::from(spawn_pos.x()) - f64::from(VILLAGE_RADIUS),
             f64::from(spawn_pos.y()) - CAT_SEARCH_RADIUS_Y,
-            f64::from(spawn_pos.z()) - VILLAGE_RADIUS as f64,
+            f64::from(spawn_pos.z()) - f64::from(VILLAGE_RADIUS),
             f64::from(spawn_pos.x()) + f64::from(VILLAGE_RADIUS) + 1.0,
             f64::from(spawn_pos.y()) + CAT_SEARCH_RADIUS_Y + 1.0,
             f64::from(spawn_pos.z()) + f64::from(VILLAGE_RADIUS) + 1.0,
@@ -122,15 +121,15 @@ impl CatSpawner {
         let cats = world
             .get_entities_in_aabb(&search)
             .into_iter()
-            .filter(|entity| std::ptr::eq(entity.entity_type(), &vanilla_entities::CAT))
+            .filter(|entity| ptr::eq(entity.entity_type(), &raw const vanilla_entities::CAT))
             .count();
         if cats < VILLAGE_CAT_LIMIT {
-            self.spawn_cat(world, spawn_pos, false);
+            Self::spawn_cat(world, spawn_pos, false);
         }
     }
 
     /// Vanilla `CatSpawner.spawnCat`.
-    fn spawn_cat(&self, world: &Arc<World>, spawn_pos: BlockPos, make_persistent: bool) {
+    fn spawn_cat(world: &Arc<World>, spawn_pos: BlockPos, make_persistent: bool) {
         let position = glam::DVec3::new(
             f64::from(spawn_pos.x()) + 0.5,
             f64::from(spawn_pos.y()),

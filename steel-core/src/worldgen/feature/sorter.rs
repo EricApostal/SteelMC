@@ -23,7 +23,7 @@ pub(crate) enum StagedFeature {
 impl StagedFeature {
     /// Creates a staged entry for a registry placed feature key.
     #[must_use]
-    pub(crate) fn registry(key: Identifier) -> Self {
+    pub(crate) const fn registry(key: Identifier) -> Self {
         Self::Registry(key)
     }
 }

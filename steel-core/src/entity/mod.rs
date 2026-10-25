@@ -837,8 +837,8 @@ pub(crate) use item_based_steering::{ItemBasedSteering, ItemSteerable};
 pub use item_frame::ItemFrame;
 pub use living_base::{
     ActiveItemUseState, ActiveMobEffect, DEATH_DURATION, DEFAULT_SWING_DURATION, LivingEntityBase,
-    LivingRotationState, LivingSwingState, LivingTravelInput, MobEffectInstance,
-    MobEffectSyncChange, MobEffectSyncPacket,
+    LivingRotationState, LivingSwingState, LivingTravelInput, MobEffectDurationTick,
+    MobEffectInstance, MobEffectSyncChange, MobEffectSyncPacket,
 };
 pub use living_entity::LivingEntity;
 pub use manager::{
@@ -962,7 +962,21 @@ pub(crate) fn start_riding_entities(
     {
         mob.drop_leash();
     }
-    // TODO: Emit ENTITY_MOUNT game event and riding advancement trigger once those foundations exist.
+    // Vanilla `Entity.startRiding` raises `START_RIDING` for the mounted entity
+    // and every indirect passenger of it that is a player. (The `ENTITY_MOUNT`
+    // game event vanilla emits just before is still not wired.)
+    let mut pending = vec![Arc::clone(passenger)];
+    let mut visited: Vec<i32> = Vec::new();
+    while let Some(entity) = pending.pop() {
+        if visited.contains(&entity.id()) {
+            continue;
+        }
+        visited.push(entity.id());
+        if let Some(player) = entity.as_player() {
+            crate::player::advancement::triggers::raise_started_riding(player);
+        }
+        pending.extend(entity.passengers());
+    }
     true
 }
 

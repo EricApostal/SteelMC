@@ -1,6 +1,8 @@
 //! Vanilla `DifficultyInstance` and `ServerLevel.getCurrentDifficultyAt`.
 
+use steel_registry::timeline::KeyframeValue;
 use steel_registry::vanilla_timelines;
+use steel_registry::vanilla_world_clocks;
 use steel_utils::types::Difficulty;
 use steel_utils::{BlockPos, ChunkPos};
 
@@ -61,7 +63,7 @@ impl DifficultyInstance {
     /// Vanilla `DifficultyInstance.isHard`.
     #[must_use]
     pub fn is_hard(self) -> bool {
-        self.effective_difficulty >= u8::from(Difficulty::Hard) as f32
+        self.effective_difficulty >= f32::from(u8::from(Difficulty::Hard))
     }
 
     /// Vanilla `DifficultyInstance.isHarderThan`.
@@ -143,7 +145,7 @@ pub fn moon_phase_index(total_ticks: i64) -> usize {
         if keyframe.ticks > ticks {
             break;
         }
-        if let steel_registry::timeline::KeyframeValue::String(name) = keyframe.value
+        if let KeyframeValue::String(name) = keyframe.value
             && let Some(found) = PHASE_NAMES.iter().position(|phase| *phase == name)
         {
             index = found;
@@ -175,7 +177,7 @@ impl World {
     /// Vanilla `Level.getOverworldClockTime`.
     #[must_use]
     pub fn overworld_clock_time(&self) -> i64 {
-        self.clock_total_ticks(&steel_registry::vanilla_world_clocks::OVERWORLD)
+        self.clock_total_ticks(&vanilla_world_clocks::OVERWORLD)
             .unwrap_or_else(|| self.game_time())
     }
 

@@ -21,7 +21,7 @@ pub struct CDebugChunkValue<V: WriteTo> {
 impl<V: WriteTo> CDebugChunkValue<V> {
     /// Creates a new debug chunk value packet.
     #[must_use]
-    pub fn new(chunk_pos: PackedChunkPos, update: DebugSubscriptionUpdate<V>) -> Self {
+    pub const fn new(chunk_pos: PackedChunkPos, update: DebugSubscriptionUpdate<V>) -> Self {
         Self { chunk_pos, update }
     }
 }

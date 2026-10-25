@@ -22,6 +22,7 @@
 //!   repeated there (owner: `world/explosion.rs`).
 
 use std::collections::BTreeMap;
+use std::ptr;
 use std::sync::{Arc, Weak};
 
 use steel_macros::block_behavior;
@@ -38,9 +39,11 @@ use steel_registry::data_components::vanilla_components::{BEES, BLOCK_STATE};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::item::BlockHitResult;
 use steel_registry::stat::vanilla_stat_types;
+use steel_registry::vanilla_enchantment_tags::EnchantmentTag;
+use steel_registry::vanilla_game_rules::BLOCK_DROPS;
 use steel_registry::{
     REGISTRY, RegistryExt, TaggedRegistryExt, sound_events, vanilla_block_entity_types,
-    vanilla_game_events, vanilla_items, vanilla_loot_tables,
+    vanilla_blocks, vanilla_game_events, vanilla_items, vanilla_loot_tables,
 };
 use steel_utils::types::{InteractionHand, UpdateFlags};
 use steel_utils::{BlockPos, BlockStateId, Downcast, Identifier, WorldAabb};
@@ -50,6 +53,7 @@ use crate::behavior::{
     BlockBehavior, BlockEntityCreation, BlockLootContext, BlockPlaceContext, InteractionResult,
     InventoryAccess,
 };
+use crate::block_entity::SharedBlockEntity;
 use crate::block_entity::entities::BeehiveBlockEntity;
 use crate::block_entity::{BLOCK_ENTITIES, BlockEntityTicker};
 use crate::entity::entities::BeeEntity;
@@ -137,7 +141,7 @@ impl BeehiveBlock {
         pos: BlockPos,
         player: Option<&Player>,
     ) {
-        self.reset_honey_level(world, state, pos);
+        Self::reset_honey_level(world, state, pos);
         let block_entity = world.get_block_entity(pos);
         if let Some(hive) = block_entity
             .as_ref()
@@ -148,7 +152,7 @@ impl BeehiveBlock {
     }
 
     /// Vanilla `BeehiveBlock.resetHoneyLevel`.
-    fn reset_honey_level(&self, world: &Arc<World>, state: BlockStateId, pos: BlockPos) {
+    fn reset_honey_level(world: &Arc<World>, state: BlockStateId, pos: BlockPos) {
         world.set_block(
             pos,
             state.set_value(LEVEL_HONEY, 0),
@@ -194,10 +198,9 @@ fn prevents_bee_spawns_when_mining(tool: &ItemStack) -> bool {
     };
     enchantments.iter().any(|(key, _)| {
         REGISTRY.enchantments.by_key(key).is_some_and(|ench| {
-            REGISTRY.enchantments.is_in_tag(
-                ench,
-                &steel_registry::vanilla_enchantment_tags::EnchantmentTag::PREVENTS_BEE_SPAWNS_WHEN_MINING,
-            )
+            REGISTRY
+                .enchantments
+                .is_in_tag(ench, &EnchantmentTag::PREVENTS_BEE_SPAWNS_WHEN_MINING)
         })
     })
 }
@@ -302,13 +305,13 @@ impl BlockBehavior for BeehiveBlock {
             return InteractionResult::TryEmptyHandInteraction;
         }
 
-        if !BeehiveBlockEntity::is_smokey_pos(world, pos) {
+        if BeehiveBlockEntity::is_smokey_pos(world, pos) {
+            Self::reset_honey_level(world, state, pos);
+        } else {
             if Self::hive_contains_bees(world, pos) {
                 Self::anger_nearby_bees(world, pos);
             }
             self.release_bees_and_reset_honey_level(world, state, pos, Some(player));
-        } else {
-            self.reset_honey_level(world, state, pos);
         }
 
         InteractionResult::Success
@@ -320,7 +323,7 @@ impl BlockBehavior for BeehiveBlock {
         player: &Player,
         pos: BlockPos,
         state: BlockStateId,
-        block_entity: Option<&crate::block_entity::SharedBlockEntity>,
+        block_entity: Option<&SharedBlockEntity>,
         tool: &ItemStack,
     ) {
         let Some(hive) =
@@ -364,7 +367,7 @@ impl BlockBehavior for BeehiveBlock {
         // Vanilla `BeehiveBlock.playerWillDestroy`: creative breaking drops the
         // hive with its occupants and honey level.
         if player.prevents_block_drops()
-            && world.get_game_rule(&steel_registry::vanilla_game_rules::BLOCK_DROPS)
+            && world.get_game_rule(&BLOCK_DROPS)
             && let Some(hive) = world
                 .get_block_entity(pos)
                 .as_ref()
@@ -428,7 +431,7 @@ impl BlockBehavior for BeehiveBlock {
         &self,
         block: BlockRef,
         state: BlockStateId,
-        _block_entity: Option<crate::block_entity::SharedBlockEntity>,
+        _block_entity: Option<SharedBlockEntity>,
         include_data: bool,
     ) -> Option<ItemStack> {
         let mut item = ItemStack::new(REGISTRY.items.by_block(block));
@@ -451,8 +454,8 @@ impl BlockBehavior for BeehiveBlock {
         _neighbor_state: BlockStateId,
     ) -> BlockStateId {
         let neighbor = world.get_block_state(neighbor_pos).get_block();
-        if (std::ptr::eq(neighbor, &steel_registry::vanilla_blocks::FIRE)
-            || std::ptr::eq(neighbor, &steel_registry::vanilla_blocks::SOUL_FIRE))
+        if (ptr::eq(neighbor, &raw const vanilla_blocks::FIRE)
+            || ptr::eq(neighbor, &raw const vanilla_blocks::SOUL_FIRE))
             && let Some(hive) = world
                 .get_block_entity(pos)
                 .as_ref()
@@ -509,9 +512,9 @@ impl BlockBehavior for BeehiveBlock {
 fn is_destroying_explosive(entity: &dyn Entity) -> bool {
     use steel_registry::vanilla_entities;
     let entity_type = entity.entity_type();
-    std::ptr::eq(entity_type, &vanilla_entities::TNT)
-        || std::ptr::eq(entity_type, &vanilla_entities::CREEPER)
-        || std::ptr::eq(entity_type, &vanilla_entities::WITHER_SKULL)
-        || std::ptr::eq(entity_type, &vanilla_entities::WITHER)
-        || std::ptr::eq(entity_type, &vanilla_entities::TNT_MINECART)
+    ptr::eq(entity_type, &raw const vanilla_entities::TNT)
+        || ptr::eq(entity_type, &raw const vanilla_entities::CREEPER)
+        || ptr::eq(entity_type, &raw const vanilla_entities::WITHER_SKULL)
+        || ptr::eq(entity_type, &raw const vanilla_entities::WITHER)
+        || ptr::eq(entity_type, &raw const vanilla_entities::TNT_MINECART)
 }

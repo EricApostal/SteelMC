@@ -135,7 +135,7 @@ fn provide_holder<'a>(
 mod tests {
     use std::cell::RefCell;
 
-    use steel_registry::item_stack::ItemStack;
+    use steel_registry::{item_stack::ItemStack, vanilla_items};
 
     use super::*;
     use crate::loot::slot::{ArrayItemProvider, FnSlotAccess, SlotAccess, SlotProvider};
@@ -176,7 +176,7 @@ mod tests {
     }
 
     fn stack(count: i32) -> ItemStack {
-        ItemStack::with_count(&steel_registry::vanilla_items::STONE, count)
+        ItemStack::with_count(&vanilla_items::STONE, count)
     }
 
     /// Vanilla `RangeSlotSource.slotRange(range).provide`: a literal slot
@@ -229,6 +229,6 @@ mod tests {
         let collection =
             provide_slot_range(name_to_range("weapon.mainhand").expect("range"), &context);
         assert_eq!(collection.size(), 0);
-        assert!(collection.item_copies().is_empty());
+        assert_eq!(collection.item_copies(), [] as [ItemStack; 0]);
     }
 }

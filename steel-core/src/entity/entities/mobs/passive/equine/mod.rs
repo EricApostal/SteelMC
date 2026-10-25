@@ -193,7 +193,7 @@ impl AbstractHorseParts {
     }
 
     /// Sets vanilla `getMaxTemper`; used by `Llama` (30 instead of 100).
-    pub(crate) fn set_max_temper(&mut self, max_temper: i32) {
+    pub(crate) const fn set_max_temper(&mut self, max_temper: i32) {
         self.max_temper = max_temper;
     }
 

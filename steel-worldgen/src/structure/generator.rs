@@ -1570,11 +1570,45 @@ mod tests {
         );
     }
 
+    /// Test provider claiming every biome the structure table references, so placement
+    /// eligibility depends only on a structure being registered.
+    struct UnionBiomesProvider(FxHashSet<Identifier>);
+
+    impl StructureBiomeProvider for UnionBiomesProvider {
+        fn possible_biomes(&self) -> FxHashSet<Identifier> {
+            self.0.clone()
+        }
+
+        /// Only ring placements search for a biome, and the tests using this provider
+        /// place with `RandomSpread`.
+        fn find_biome_horizontal(
+            &self,
+            _origin_x: i32,
+            _origin_z: i32,
+            _search_radius: i32,
+            _allowed: &dyn Fn(&Identifier) -> bool,
+            _rng: &mut LegacyRandom,
+        ) -> Option<(i32, i32)> {
+            None
+        }
+    }
+
     #[test]
     fn locate_candidates_retain_only_structures_for_their_placement_scan() {
-        let first_structure = Identifier::new("test", "first");
-        let second_structure = Identifier::new("test", "second");
-        let third_structure = Identifier::new("test", "third");
+        init_vanilla_registry();
+        // `possible_sets_and_placements` only indexes structures the registry can
+        // place, so synthetic ids can never produce a plan; pick registered ones.
+        let mut placeable: Vec<Identifier> = REGISTRY
+            .structures
+            .iter()
+            .filter(|(_, structure)| !structure.allowed_biomes.is_empty())
+            .map(|(_, structure)| structure.key.clone())
+            .collect();
+        placeable.sort();
+        let first_structure = placeable[0].clone();
+        let second_structure = placeable[1].clone();
+        let third_structure = placeable[2].clone();
+
         let mut first_set = test_structure_set(every_chunk_placement(None));
         first_set.structures[0].structure = first_structure.clone();
         first_set.structures.push(StructureSelectionEntry {
@@ -1585,10 +1619,31 @@ mod tests {
         second_placement.salt = 1;
         let mut second_set = test_structure_set(second_placement);
         second_set.structures[0].structure = second_structure.clone();
-        let generator = generator_with_sets(vec![
+        let mut generator = generator_with_sets(vec![
             (Identifier::new("test", "first_set"), first_set),
             (Identifier::new("test", "second_set"), second_set),
         ]);
+
+        // The shared helper builds a bare generator, so derive the searchable index
+        // exactly the way the production constructor does.
+        let structure_data: FxHashMap<Identifier, StructureRef> = REGISTRY
+            .structures
+            .iter()
+            .map(|(_, structure)| (structure.key.clone(), structure))
+            .collect();
+        let possible_biomes: FxHashSet<Identifier> = structure_data
+            .values()
+            .flat_map(|structure| structure.allowed_biomes.iter().cloned())
+            .collect();
+        let (possible_structure_sets, placements_for_structure) = possible_sets_and_placements(
+            &generator.structure_sets,
+            &structure_data,
+            &UnionBiomesProvider(possible_biomes),
+        );
+        generator.possible_structure_sets = possible_structure_sets;
+        generator.placements_for_structure = placements_for_structure;
+        generator.structure_data = structure_data;
+
         let Some(plan) = generator.locate_plan_for_structures(&[
             third_structure.clone(),
             first_structure.clone(),

@@ -176,22 +176,34 @@ fn baby_animals_drop_neither_loot_nor_experience() {
 
 #[test]
 fn baby_monsters_drop_loot_and_scaled_experience() {
+    const KILLS: i64 = 4;
+
     let world_fixture = death_loot_world("death_loot_baby_zombie");
     let world = &world_fixture.world;
     let player = player_holding(world, ItemStack::empty());
-    let zombie = spawn_zombie(world, true);
-    zombie.set_last_hurt_by_player(player.uuid(), 100);
-
-    assert_eq!(zombie.xp_reward(), 5);
-    zombie.die(&player_kill_source(&player));
 
     // Vanilla `Monster.shouldDropLoot` ignores `isBaby`, and
-    // `Zombie.getBaseExperienceReward` scales the reward by 2.5.
+    // `Zombie.getBaseExperienceReward` scales the reward by 2.5. A zombie's death
+    // table roll can legitimately come up empty (rotten flesh is a 0..2 uniform
+    // draw), so pin the loot seed per kill and assert across seeds rather than
+    // depending on one unseeded roll.
+    for loot_seed in 1..=KILLS {
+        let zombie = spawn_zombie(world, true);
+        zombie.set_death_loot_table_seed(loot_seed);
+        zombie.set_last_hurt_by_player(player.uuid(), 100);
+        assert_eq!(zombie.xp_reward(), 5);
+        zombie.die(&player_kill_source(&player));
+    }
+
     assert!(
         !dropped_item_stacks(world).is_empty(),
         "a baby monster still rolls its death table"
     );
-    assert_eq!(experience_in(world), 12, "5 * 2.5 truncates to 12");
+    assert_eq!(
+        experience_in(world),
+        12 * KILLS as i32,
+        "5 * 2.5 truncates to 12 per kill"
+    );
 }
 
 #[test]

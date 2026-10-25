@@ -69,8 +69,16 @@ pub(super) fn encode_known_players_file(file: &KnownPlayersFile) -> io::Result<V
     )
 }
 
-pub(super) fn decode_known_players_file(bytes: &[u8]) -> io::Result<KnownPlayersFile> {
-    let payload = decode_file(KNOWN_PLAYERS_MAGIC, KNOWN_PLAYERS_STORAGE_VERSION, bytes)?;
+pub(super) fn decode_known_players_file(
+    bytes: &[u8],
+    source: &str,
+) -> io::Result<KnownPlayersFile> {
+    let payload = decode_file(
+        KNOWN_PLAYERS_MAGIC,
+        KNOWN_PLAYERS_STORAGE_VERSION,
+        bytes,
+        source,
+    )?;
     wincode::deserialize(&payload)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
 }

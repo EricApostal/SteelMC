@@ -15,6 +15,10 @@
 //! * [`convert`] — whole-world import/export between Steel's `.srg` format and Anvil.
 //!
 //! `level.dat` lives in [`crate::level_data::anvil`] because it belongs to the level-data owner.
+//!
+//! Every record read here passes through [`crate::datafixer`]'s `DataVersion` gate: this build's
+//! version loads, and any other version is refused with an error naming the file instead of
+//! being read unfixed (see that module for why Steel has no fixer graph).
 
 mod chunk;
 mod compression;

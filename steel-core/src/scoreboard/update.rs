@@ -21,6 +21,10 @@ use super::{
 
 /// A scoreboard client packet.
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "each variant wraps one Clientbound*Scoreboard* packet, mirroring vanilla's per-mutation packet choice; boxing them would only add indirection at the encode boundary"
+)]
 pub enum ScoreboardPacket {
     /// `ClientboundSetObjectivePacket`.
     Objective(CSetObjective),
@@ -72,7 +76,7 @@ impl ScoreboardPacket {
     /// Both send `Optional.ofNullable(score.numberFormat())`: only the per-score override,
     /// never the objective's format, which travels in `ClientboundSetObjectivePacket`.
     #[must_use]
-    pub(crate) fn score_changed(owner: &str, objective: &str, score: &ScoreState) -> Self {
+    pub(super) fn score_changed(owner: &str, objective: &str, score: &ScoreState) -> Self {
         Self::Score(score_packet(owner, objective, score))
     }
 
@@ -188,7 +192,7 @@ fn team_parameters(team: &PlayerTeam) -> TeamParameters {
 }
 
 /// Vanilla `ObjectiveCriteria.RenderType` -> wire enum.
-fn wire_render_type(render_type: CoreRenderType) -> ObjectiveRenderType {
+const fn wire_render_type(render_type: CoreRenderType) -> ObjectiveRenderType {
     match render_type {
         CoreRenderType::Integer => ObjectiveRenderType::Integer,
         CoreRenderType::Hearts => ObjectiveRenderType::Hearts,
@@ -196,7 +200,7 @@ fn wire_render_type(render_type: CoreRenderType) -> ObjectiveRenderType {
 }
 
 /// Vanilla `DisplaySlot` -> wire enum.
-fn wire_display_slot(slot: CoreDisplaySlot) -> ScoreboardDisplaySlot {
+const fn wire_display_slot(slot: CoreDisplaySlot) -> ScoreboardDisplaySlot {
     match slot {
         CoreDisplaySlot::List => ScoreboardDisplaySlot::List,
         CoreDisplaySlot::Sidebar => ScoreboardDisplaySlot::Sidebar,
@@ -221,7 +225,7 @@ fn wire_display_slot(slot: CoreDisplaySlot) -> ScoreboardDisplaySlot {
 }
 
 /// Vanilla `TeamColor` -> wire enum.
-fn wire_team_color(color: TeamColor) -> WireTeamColor {
+const fn wire_team_color(color: TeamColor) -> WireTeamColor {
     match color {
         TeamColor::Black => WireTeamColor::Black,
         TeamColor::DarkBlue => WireTeamColor::DarkBlue,
@@ -243,7 +247,7 @@ fn wire_team_color(color: TeamColor) -> WireTeamColor {
 }
 
 /// Vanilla `Team.Visibility` -> wire enum.
-fn wire_visibility(visibility: TeamVisibility) -> NameTagVisibility {
+const fn wire_visibility(visibility: TeamVisibility) -> NameTagVisibility {
     match visibility {
         TeamVisibility::Always => NameTagVisibility::Always,
         TeamVisibility::Never => NameTagVisibility::Never,
@@ -253,7 +257,7 @@ fn wire_visibility(visibility: TeamVisibility) -> NameTagVisibility {
 }
 
 /// Vanilla `Team.CollisionRule` -> wire enum.
-fn wire_collision_rule(rule: super::CollisionRule) -> WireCollisionRule {
+const fn wire_collision_rule(rule: super::CollisionRule) -> WireCollisionRule {
     match rule {
         super::CollisionRule::Always => WireCollisionRule::Always,
         super::CollisionRule::Never => WireCollisionRule::Never,

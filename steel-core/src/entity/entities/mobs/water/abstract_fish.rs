@@ -45,6 +45,7 @@ use steel_utils::random::RandomSource;
 use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, Downcast as _};
 
+use crate::behavior::advancement_hooks::raise_filled_bucket;
 use crate::entity::ai::goal::{
     AvoidEntityGoal, FollowFlockLeaderGoal, Goal, GoalControls, PanicGoal, RandomSwimmingGoal,
     SchoolingFish,
@@ -274,8 +275,8 @@ pub(crate) fn tick_flop(entity: &dyn LivingEntity, flop_sound: SoundEventRef) {
 
 /// Vanilla `Bucketable.bucketMobPickup`: a water bucket captures this fish.
 ///
-/// Deviation: the `FILLED_BUCKET` advancement trigger and `Leashable.dropLeash` are not
-/// part of Steel's shared bucket path (same as `TadpoleEntity`/`AxolotlEntity`).
+/// Deviation: `Leashable.dropLeash` is not part of Steel's shared bucket path
+/// (same as `TadpoleEntity`/`AxolotlEntity`).
 pub(crate) fn try_bucket_pickup(
     entity: &dyn Entity,
     player: &Player,
@@ -295,12 +296,19 @@ pub(crate) fn try_bucket_pickup(
 
     entity.play_sound(pickup_sound, BUCKET_SOUND_VOLUME, BUCKET_SOUND_PITCH);
     let bucket = create_bucket_stack();
+    let filled = bucket.clone();
     let overflow = {
         let mut inventory = player.inventory.lock();
         inventory.apply_filled_result(hand, bucket, player.has_infinite_materials(), false)
     };
     if !overflow.is_empty() {
         let _ = player.drop_item(overflow, false, Prediction::Predicted);
+    }
+
+    // Vanilla `Bucketable.bucketMobPickup` raises `filled_bucket` with the
+    // captured-mob bucket right after `ItemUtils.createFilledResult`.
+    if let Some(world) = entity.level() {
+        raise_filled_bucket(player, &world, &filled);
     }
 
     entity.set_removed(RemovalReason::Discarded);

@@ -83,6 +83,7 @@ use steel_utils::{
 };
 use text_components::TextComponent;
 
+use crate::behavior::advancement_hooks::{raise_filled_bucket, raise_player_sheared_equipment};
 use crate::behavior::{BLOCK_BEHAVIORS, InteractionResult};
 use crate::entity::ageable::AgeableMobBase;
 use crate::entity::ai::control::rotate_towards;
@@ -1316,12 +1317,19 @@ impl SulfurCubeEntity {
 
         self.play_sound(Self::pickup_sound(), 1.0, 1.0);
         let bucket = self.create_bucket_stack();
+        let filled = bucket.clone();
         let overflow = {
             let mut inventory = player.inventory.lock();
             inventory.apply_filled_result(hand, bucket, player.has_infinite_materials(), false)
         };
         if !overflow.is_empty() {
             let _ = player.drop_item(overflow, false, Prediction::Predicted);
+        }
+
+        // Vanilla `Bucketable.bucketMobPickup` raises `filled_bucket` right after
+        // `ItemUtils.createFilledResult`, before `Leashable.dropLeash`.
+        if let Some(world) = Entity::level(self) {
+            raise_filled_bucket(player, &world, &filled);
         }
 
         self.drop_leash();
@@ -2094,6 +2102,10 @@ impl Mob for SulfurCubeEntity {
                         .get_item_in_hand_mut(hand)
                         .hurt_and_break(1, player.has_infinite_materials());
                 }
+                // Vanilla `SulfurCube.mobInteract` raises
+                // `player_sheared_equipment` with the shears and this cube, after
+                // the shears took their durability damage.
+                raise_player_sheared_equipment(player, self, &held_item);
                 return InteractionResult::Success;
             }
 

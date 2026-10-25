@@ -31,7 +31,7 @@ pub struct DebugSubscriptionUpdate<V: WriteTo> {
 impl<V: WriteTo> DebugSubscriptionUpdate<V> {
     /// Creates an update carrying a value (vanilla `DebugSubscription::packUpdate`).
     #[must_use]
-    pub fn new(subscription_id: i32, value: V) -> Self {
+    pub const fn new(subscription_id: i32, value: V) -> Self {
         Self {
             subscription_id,
             value: Some(value),
@@ -40,7 +40,7 @@ impl<V: WriteTo> DebugSubscriptionUpdate<V> {
 
     /// Creates an empty update for the given subscription (vanilla `DebugSubscription::emptyUpdate`).
     #[must_use]
-    pub fn empty(subscription_id: i32) -> Self {
+    pub const fn empty(subscription_id: i32) -> Self {
         Self {
             subscription_id,
             value: None,
@@ -61,7 +61,7 @@ pub struct CDebugBlockValue<V: WriteTo> {
 impl<V: WriteTo> CDebugBlockValue<V> {
     /// Creates a new debug block value packet.
     #[must_use]
-    pub fn new(block_pos: BlockPos, update: DebugSubscriptionUpdate<V>) -> Self {
+    pub const fn new(block_pos: BlockPos, update: DebugSubscriptionUpdate<V>) -> Self {
         Self { block_pos, update }
     }
 }

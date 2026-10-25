@@ -2,6 +2,8 @@ use crate::player::player_inventory::Prediction;
 use std::sync::Arc;
 
 use steel_registry::item_stack::ItemStack;
+use steel_registry::recipe::UntypedRecipeRef;
+use steel_registry::vanilla_game_rules::LIMITED_CRAFTING;
 use steel_utils::locks::Shared;
 
 use crate::inventory::container::{CraftingContainer, ResultContainer};
@@ -15,7 +17,7 @@ use crate::{
     player::Player,
 };
 
-use crate::player::recipe_book::raise_recipe_crafted;
+use crate::player::recipe_book::{is_special, raise_recipe_crafted};
 
 /// A Recipe Handler for Crafting Recipes
 #[derive(Clone)]
@@ -86,10 +88,8 @@ impl CraftingHandler {
 fn crafting_result(crafting: &CraftingContainer, player: Option<&Player>) -> ItemStack {
     if let Some(player) = player
         && let Some(recipe) = recipe_manager::find_recipe_ref(crafting)
-        && !crate::player::recipe_book::is_special(recipe)
-        && player
-            .get_world()
-            .get_game_rule(&steel_registry::vanilla_game_rules::LIMITED_CRAFTING)
+        && !is_special(recipe)
+        && player.get_world().get_game_rule(&LIMITED_CRAFTING)
         && !player.recipe_book().contains(recipe.key())
     {
         return ItemStack::empty();
@@ -122,8 +122,13 @@ impl ResultHandler for CraftingHandler {
     ) -> Option<ItemStack> {
         // Vanilla `ResultSlot.checkTakeAchievements` → `RecipeCraftingHolder.awardUsedRecipes`:
         // the crafting grid still holds the crafted pattern here, so the matching
-        // recipe is resolved before the slot-changed pass consumes the inputs.
-        award_crafted_recipe(guard, self.crafting_id(), player);
+        // recipe is resolved before the slot-changed pass consumes the inputs, then
+        // raised with the container locks released — a player's equipment *is* its
+        // inventory, which the guard already holds, so `raise_recipe_crafted` would
+        // self-deadlock underneath it.
+        if let Some((recipe, ingredients)) = crafted_recipe_from_guard(guard, self.crafting_id()) {
+            guard.run_unlocked(|| award_crafted_recipe(player, recipe, &ingredients));
+        }
 
         let mut remainder_overflow: Vec<ItemStack> = Vec::new();
 
@@ -218,20 +223,28 @@ impl ResultHandler for CraftingHandler {
 
 /// Vanilla `RecipeCraftingHolder.awardUsedRecipes` for a crafting grid.
 ///
+/// The crafted recipe and grid snapshot for `award_crafted_recipe`, resolved while
+/// the grid still holds the pattern the take just consumed.
+///
+/// Resolved separately because `raise_recipe_crafted` locks the player's equipment
+/// — which *is* the player's inventory — so it must run after the container guard is
+/// released (via [`ContainerLockGuard::run_unlocked`]).
+fn crafted_recipe_from_guard(
+    guard: &ContainerLockGuard,
+    crafting_id: ContainerId,
+) -> Option<(UntypedRecipeRef, Vec<ItemStack>)> {
+    let crafting = guard.get_typed::<CraftingContainer>(crafting_id)?;
+    let recipe = recipe_manager::find_recipe_ref(crafting)?;
+    let ingredients = crafting.items().to_vec();
+    Some((recipe, ingredients))
+}
+
 /// Raises `recipe_crafted` with the grid's items and unlocks the recipe. Vanilla's
 /// `RecipeCraftingHolder.setRecipeUsed` limited-crafting gate is not enforced here
 /// because `ResultHandler::update_result` has no player to consult.
-fn award_crafted_recipe(guard: &ContainerLockGuard, crafting_id: ContainerId, player: &Player) {
-    let Some(crafting) = guard.get_typed::<CraftingContainer>(crafting_id) else {
-        return;
-    };
-    let Some(recipe) = recipe_manager::find_recipe_ref(crafting) else {
-        return;
-    };
-    let ingredients = crafting.items().to_vec();
-
-    raise_recipe_crafted(player, recipe.key(), &ingredients);
-    if !crate::player::recipe_book::is_special(recipe) {
+fn award_crafted_recipe(player: &Player, recipe: UntypedRecipeRef, ingredients: &[ItemStack]) {
+    raise_recipe_crafted(player, recipe.key(), ingredients);
+    if !is_special(recipe) {
         player.award_recipes(&[recipe]);
     }
 }

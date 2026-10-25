@@ -1,5 +1,6 @@
 //! Vanilla `CustomSpawner`: per-level spawners ticked by the chunk cache.
 
+use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -8,8 +9,7 @@ use steel_utils::saved_data::SavedDataName;
 use crate::world::World;
 
 /// Future returned by [`CustomSpawner::save`].
-pub type CustomSpawnerSaveFuture<'a> =
-    Pin<Box<dyn Future<Output = std::io::Result<()>> + Send + 'a>>;
+pub type CustomSpawnerSaveFuture<'a> = Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'a>>;
 
 /// Vanilla `CustomSpawner`: a spawner driven once per level tick.
 ///

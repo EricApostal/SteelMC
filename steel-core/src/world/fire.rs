@@ -23,6 +23,7 @@ use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId, ChunkPos, Identifier};
 
 use crate::behavior::blocks::FireBlock;
+use crate::behavior::blocks::TntBlock;
 use crate::entity::Entity as _;
 use crate::world::{LevelReader, World};
 
@@ -31,7 +32,7 @@ const MAX_AGE: i32 = 15;
 
 /// Vanilla `FireBlock.getFireTickDelay`: `30 + random(10)`.
 #[must_use]
-pub fn fire_tick_delay(random_offset: i32) -> i32 {
+pub const fn fire_tick_delay(random_offset: i32) -> i32 {
     30 + random_offset.rem_euclid(10)
 }
 
@@ -393,7 +394,7 @@ impl World {
         if old_state.get_block() == &vanilla_blocks::TNT {
             // Vanilla primes TNT caught in a fire burnout; Steel's TntBlock.prime returns false
             // until the PrimedTnt entity lane registers a factory.
-            crate::behavior::blocks::TntBlock::prime(self, pos, None, &ItemStack::empty());
+            TntBlock::prime(self, pos, None, &ItemStack::empty());
         }
     }
 
@@ -438,7 +439,11 @@ impl World {
     /// Deliberate divergence: `steel_registry::Biome` does not expose the biome attribute map yet
     /// (the datapack carries `minecraft:gameplay/increased_fire_burnout`), so Steel keeps the
     /// attribute's default until the registry surfaces it.
-    fn increased_fire_burnout(&self, _pos: BlockPos) -> bool {
+    #[expect(
+        clippy::unused_self,
+        reason = "vanilla exposes the biome attribute through the level"
+    )]
+    const fn increased_fire_burnout(&self, _pos: BlockPos) -> bool {
         false
     }
 }

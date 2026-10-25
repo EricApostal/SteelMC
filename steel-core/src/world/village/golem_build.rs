@@ -30,6 +30,7 @@ use steel_registry::{
 use steel_utils::BlockPos;
 use steel_utils::types::UpdateFlags;
 
+use crate::behavior::advancement_hooks::raise_golem_summoned;
 use crate::entity::{
     ENTITIES, EntitySpawnReason, SharedEntity, add_spawned_entity, create_entity_instance,
 };
@@ -55,11 +56,11 @@ struct PatternMatch {
 }
 
 impl BlockPattern {
-    fn width(&self) -> i32 {
+    const fn width(&self) -> i32 {
         self.rows[0].len() as i32
     }
 
-    fn height(&self) -> i32 {
+    const fn height(&self) -> i32 {
         self.rows.len() as i32
     }
 
@@ -241,28 +242,28 @@ pub fn can_spawn_golem(level: &dyn LevelReader, top_pos: BlockPos) -> bool {
 ///
 /// Returns the spawned golem, if a pattern matched and Steel can build that golem kind.
 pub fn try_spawn_golem(level: &Arc<World>, top_pos: BlockPos) -> Option<SharedEntity> {
-    if let Some(found) = SNOW_GOLEM_FULL.find(level.as_ref(), top_pos) {
-        if let Some(golem) = spawn_golem_in_world(
+    if let Some(found) = SNOW_GOLEM_FULL.find(level.as_ref(), top_pos)
+        && let Some(golem) = spawn_golem_in_world(
             level,
             &found,
             &SNOW_GOLEM_FULL,
             &vanilla_entities::SNOW_GOLEM,
             found.block(0, 2, 0),
-        ) {
-            return Some(golem);
-        }
+        )
+    {
+        return Some(golem);
     }
 
-    if let Some(found) = IRON_GOLEM_FULL.find(level.as_ref(), top_pos) {
-        if let Some(golem) = spawn_golem_in_world(
+    if let Some(found) = IRON_GOLEM_FULL.find(level.as_ref(), top_pos)
+        && let Some(golem) = spawn_golem_in_world(
             level,
             &found,
             &IRON_GOLEM_FULL,
             &vanilla_entities::IRON_GOLEM,
             found.block(1, 2, 0),
-        ) {
-            return Some(golem);
-        }
+        )
+    {
+        return Some(golem);
     }
 
     // The copper golem build is not implemented: it also replaces the copper block with a
@@ -313,7 +314,7 @@ fn spawn_golem_in_world(
 
     // Vanilla `CarvedPumpkinBlock.spawnGolemInWorld` fires `SUMMONED_ENTITY` for every
     // player within 5 blocks of the golem once it has joined the level.
-    crate::behavior::advancement_hooks::raise_golem_summoned(level, golem.as_ref());
+    raise_golem_summoned(level, golem.as_ref());
 
     update_pattern_blocks(level, found, pattern);
     Some(golem)
@@ -347,6 +348,8 @@ fn update_pattern_blocks(level: &Arc<World>, found: &PatternMatch, pattern: &Blo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bootstrap::init_globals;
+    use crate::entity::entities::mobs::golem::IronGolemEntity;
     use steel_utils::Downcast as _;
 
     /// A pattern cell without a predicate would silently never match, so every declared
@@ -392,7 +395,7 @@ mod tests {
         use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
         use steel_utils::ChunkPos;
 
-        crate::bootstrap::init_globals();
+        init_globals();
 
         let fixture = fresh_test_world("pumpkin_iron_golem");
         let world = &fixture.world;
@@ -430,7 +433,7 @@ mod tests {
         );
         assert!(
             golem
-                .downcast_ref::<crate::entity::entities::mobs::golem::IronGolemEntity>()
+                .downcast_ref::<IronGolemEntity>()
                 .expect("iron golem downcast")
                 .is_player_created(),
             "a pumpkin-built golem is player-created"
@@ -456,7 +459,7 @@ mod tests {
         use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
         use steel_utils::ChunkPos;
 
-        crate::bootstrap::init_globals();
+        init_globals();
 
         let fixture = fresh_test_world("pumpkin_snow_golem");
         let world = &fixture.world;
@@ -495,7 +498,7 @@ mod tests {
         use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
         use steel_utils::ChunkPos;
 
-        crate::bootstrap::init_globals();
+        init_globals();
         let fixture = fresh_test_world("pumpkin_can_spawn");
         let world = &fixture.world;
         insert_ready_full_chunk(world, ChunkPos::new(1, 1));
@@ -572,7 +575,7 @@ mod tests {
         use crate::test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk};
         use steel_utils::ChunkPos;
 
-        crate::bootstrap::init_globals();
+        init_globals();
 
         let fixture = fresh_test_world("pumpkin_golem_summoned_entity");
         let world = &fixture.world;

@@ -6,6 +6,8 @@
 //! - Slots 36-44: hotbar (9)
 //! - Slot 45: preview result (display-only, always mirrors the current grid)
 
+use std::array;
+
 use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_menu_types;
 use steel_utils::locks::{IntoShared, Shared};
@@ -53,7 +55,7 @@ pub fn crafter(
     );
     let player = builder.player_inventory(&inventory);
     builder.section_with(result_ref, 1, SectionKind::Display);
-    let data = std::array::from_fn(|_| builder.data_slot(0));
+    let data = array::from_fn(|_| builder.data_slot(0));
 
     builder.route(grid, player.all(), FillDirection::Backward);
     builder.route(player.all(), grid, FillDirection::Forward);
@@ -201,7 +203,6 @@ impl MenuKind for CrafterKind {
 mod tests {
     use std::sync::Weak;
 
-    use steel_registry::blocks::block_state_ext::BlockStateExt as _;
     use steel_registry::{init_vanilla_registry, vanilla_blocks};
     use steel_utils::BlockPos;
 

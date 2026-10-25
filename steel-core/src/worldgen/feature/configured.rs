@@ -5,6 +5,7 @@ use crate::worldgen::template::{
 };
 use glam::IVec3;
 use steel_registry::structure::LiquidSettingsData;
+use steel_registry::structure_processor::StructureProcessorKind;
 use steel_utils::BoundingBox;
 use steel_worldgen::structure::{StructureBlockIgnore, StructureMirror};
 
@@ -439,7 +440,7 @@ fn place_template(
     let position = template_feature_position(context.origin, rotation, size);
     // Vanilla `TemplateFeature` adds every processor from the config's
     // `StructureProcessorList` before placing; the slice must outlive `settings`.
-    let processors: &[steel_registry::structure_processor::StructureProcessorKind] = config
+    let processors: &[StructureProcessorKind] = config
         .processors
         .as_ref()
         .map_or(&[], |list| list.processors.as_slice());

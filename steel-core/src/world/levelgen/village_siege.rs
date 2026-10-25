@@ -1,6 +1,8 @@
 //! Vanilla `VillageSiege`: after the `roll_village_siege` clock marker during a
 //! night, a village may be attacked by a wave of zombies spawned in its ring.
 
+use std::f32::consts::TAU;
+use std::ptr;
 use std::sync::Arc;
 
 use glam::DVec3;
@@ -17,11 +19,11 @@ use crate::entity::{EntitySpawnReason, create_entity_instance};
 use crate::world::World;
 use crate::world::custom_spawner::CustomSpawner;
 use crate::world::spawn::natural::runtime_random;
+use crate::world::spawn::placement::SpawnPlacements;
 
 /// Vanilla `VillageSiege.State`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SiegeState {
-    CanActivate,
     Tonight,
     Done,
 }
@@ -119,25 +121,24 @@ impl VillageSiege {
 
             let center = player.block_position();
             if !world.is_village(center)
-                || world.biome_at(center).is_some_and(|biome| {
-                    steel_registry::biome::Biome::has_tag(biome, &BiomeTag::WITHOUT_ZOMBIE_SIEGES)
-                })
+                || world
+                    .biome_at(center)
+                    .is_some_and(|biome| biome.has_tag(&BiomeTag::WITHOUT_ZOMBIE_SIEGES))
             {
                 continue;
             }
 
             for _ in 0..10 {
-                let angle = random.next_f32() * std::f32::consts::TAU;
+                let angle = random.next_f32() * TAU;
                 self.spawn_x = center.x() + (angle.cos() * 32.0) as i32;
                 self.spawn_y = center.y();
                 self.spawn_z = center.z() + (angle.sin() * 32.0) as i32;
-                if self
-                    .find_random_spawn_pos(
-                        world,
-                        BlockPos::new(self.spawn_x, self.spawn_y, self.spawn_z),
-                        random,
-                    )
-                    .is_some()
+                if Self::find_random_spawn_pos(
+                    world,
+                    BlockPos::new(self.spawn_x, self.spawn_y, self.spawn_z),
+                    random,
+                )
+                .is_some()
                 {
                     self.next_spawn_time = 0;
                     self.zombies_to_spawn = 20;
@@ -154,7 +155,7 @@ impl VillageSiege {
     /// Vanilla `VillageSiege.trySpawn`.
     fn try_spawn(&self, world: &Arc<World>) {
         let mut random = runtime_random();
-        let Some(spawn_pos) = self.find_random_spawn_pos(
+        let Some(spawn_pos) = Self::find_random_spawn_pos(
             world,
             BlockPos::new(self.spawn_x, self.spawn_y, self.spawn_z),
             &mut random,
@@ -175,7 +176,6 @@ impl VillageSiege {
 
     /// Vanilla `VillageSiege.findRandomSpawnPos`.
     fn find_random_spawn_pos(
-        &self,
         world: &Arc<World>,
         pos: BlockPos,
         random: &mut RandomSource,
@@ -189,7 +189,7 @@ impl VillageSiege {
                 continue;
             }
 
-            if crate::world::spawn::placement::SpawnPlacements::check_spawn_rules(
+            if SpawnPlacements::check_spawn_rules(
                 &vanilla_entities::ZOMBIE,
                 world,
                 EntitySpawnReason::Event,
@@ -219,7 +219,7 @@ impl CustomSpawner for VillageSiege {
 }
 
 /// Vanilla `ClockTimeMarkers.ROLL_VILLAGE_SIEGE`.
-fn roll_village_siege_marker() -> steel_utils::Identifier {
+const fn roll_village_siege_marker() -> steel_utils::Identifier {
     steel_utils::Identifier::vanilla_static("roll_village_siege")
 }
 
@@ -234,7 +234,7 @@ fn is_at_time_marker(
     };
 
     REGISTRY.timelines.iter().any(|(_, timeline)| {
-        std::ptr::eq(timeline.clock, clock)
+        ptr::eq(timeline.clock, clock)
             && timeline.time_markers.iter().any(|time_marker| {
                 time_marker.key == *marker
                     && timeline

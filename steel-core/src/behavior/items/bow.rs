@@ -140,18 +140,31 @@ pub fn power_for_time(time_held: i32) -> f32 {
 /// falling back to a plain arrow for infinite-materials players.
 #[must_use]
 pub fn find_ammo(player: &Player, _weapon: &ItemStack) -> ItemStack {
+    find_ammo_matching(player, is_supported_projectile)
+}
+
+/// Returns the first stack the player holds that satisfies `supported`, in
+/// vanilla `Player.getProjectile` order: both hands (`getHeldProjectile`), then
+/// the inventory, falling back to a plain arrow for infinite-materials players.
+///
+/// The predicate is the weapon's own supported-projectile set
+/// (`ProjectileWeaponItem.getSupportedHeldProjectiles` /
+/// `getAllSupportedProjectiles`): the bow uses the `minecraft:arrows` tag, the
+/// crossbow accepts firework rockets as well.
+#[must_use]
+pub fn find_ammo_matching(player: &Player, supported: impl Fn(&ItemStack) -> bool) -> ItemStack {
     let inventory = player.inventory.lock();
 
     let offhand = inventory.get_item(PlayerInventory::SLOT_OFFHAND);
-    if is_supported_projectile(offhand) {
+    if supported(offhand) {
         return offhand.clone();
     }
     let selected = inventory.get_selected_item();
-    if is_supported_projectile(selected) {
+    if supported(selected) {
         return selected.clone();
     }
     for stack in inventory.get_items() {
-        if is_supported_projectile(stack) {
+        if supported(stack) {
             return stack.clone();
         }
     }

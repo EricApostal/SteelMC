@@ -6,7 +6,7 @@
 //! `CopperGolem` and the statue. Steel keeps the custom-name component through the standard
 //! component map, so the entity only needs the golem conversion hooks.
 
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 
 use glam::DVec3;
 use simdnbt::borrow::BaseNbtCompound as BorrowedNbtCompound;
@@ -69,7 +69,7 @@ impl CopperGolemStatueBlockEntity {
             &vanilla_entities::COPPER_GOLEM,
             next_entity_id(),
             position,
-            std::sync::Arc::downgrade(&world),
+            Arc::downgrade(&world),
         )?;
 
         entity.set_custom_name(self.stored_components().get(CUSTOM_NAME));

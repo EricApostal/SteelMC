@@ -324,6 +324,20 @@ enum MobEffectTickResult {
     Expired,
 }
 
+/// Outcome of [`LivingEntityBase::tick_mob_effect_duration`], mirroring the
+/// vanilla `LivingEntity.tickEffects` branches that notify a `ServerPlayer`:
+/// a replaced instance (vanilla `onEffectUpdated`) or an expiry (vanilla
+/// `onEffectRemoved`). An ordinary duration tick reports [`Self::Unchanged`].
+pub enum MobEffectDurationTick {
+    /// The instance was replaced (downgraded to its hidden effect or refreshed),
+    /// carrying the effect that is now active.
+    Updated(ActiveMobEffect),
+    /// The effect expired and was removed from the active set.
+    Removed(MobEffectRef),
+    /// The duration ticked without replacing or removing the effect.
+    Unchanged,
+}
+
 /// A queued mob-effect packet change produced by living effect state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MobEffectSyncChange {
@@ -1161,11 +1175,17 @@ impl LivingEntityBase {
     }
 
     /// Ticks one active mob-effect duration after its server behavior has run.
-    pub(super) fn tick_mob_effect_duration(&self, effect_key: MobEffectRef) {
+    ///
+    /// Returns which vanilla `LivingEntity.tickEffects` branch the tick took so a
+    /// `ServerPlayer` can mirror `onEffectUpdated`/`onEffectRemoved`.
+    pub(super) fn tick_mob_effect_duration(
+        &self,
+        effect_key: MobEffectRef,
+    ) -> MobEffectDurationTick {
         let (updated, removed) = {
             let mut effects = self.active_mob_effects.lock();
             let Some(effect) = effects.get_mut(&effect_key) else {
-                return;
+                return MobEffectDurationTick::Unchanged;
             };
             match effect.tick_duration() {
                 MobEffectTickResult::Active { downgraded } => {
@@ -1181,9 +1201,10 @@ impl LivingEntityBase {
             self.refresh_effect_attribute_modifiers(&effect);
             self.mark_effects_dirty();
             self.queue_mob_effect_sync(MobEffectSyncChange::Update {
-                effect,
+                effect: effect.clone(),
                 blend_for_self: false,
             });
+            return MobEffectDurationTick::Updated(effect);
         }
 
         if let Some(effect) = removed {
@@ -1192,7 +1213,10 @@ impl LivingEntityBase {
             self.queue_mob_effect_sync(MobEffectSyncChange::Remove {
                 effect: effect.effect,
             });
+            return MobEffectDurationTick::Removed(effect.effect);
         }
+
+        MobEffectDurationTick::Unchanged
     }
 
     /// Drains pending mob-effect packet changes.

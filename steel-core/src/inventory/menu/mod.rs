@@ -28,6 +28,7 @@ use std::mem;
 use steel_registry::{item_stack::ItemStack, menu_type::MenuTypeRef, mob_effect::MobEffectRef};
 use steel_utils::Downcast as _;
 
+use crate::block_entity::ContainerViewers;
 use crate::inventory::container::CraftingContainer;
 use crate::inventory::menu::kinds::InventoryKind;
 use crate::{
@@ -286,7 +287,7 @@ impl Menu {
     fn for_each_viewed_block_entity(
         &self,
         player: &Player,
-        mut action: impl FnMut(&dyn crate::block_entity::ContainerViewers, &Player),
+        mut action: impl FnMut(&dyn ContainerViewers, &Player),
     ) {
         let mut seen = Vec::new();
         for container_ref in self.behavior.container_refs() {

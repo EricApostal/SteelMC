@@ -365,6 +365,16 @@ impl StructureTemplate {
             );
             let mut nbt = entity.nbt.clone();
             Self::transform_entity_additional_nbt(&mut nbt, settings.mirror, settings.rotation);
+            // Vanilla `StructureTemplate.placeEntities` rewrites `block_pos` with the
+            // transformed world position before creating the entity. Templates store it in
+            // template-local coordinates, and block-attached entities reject a `block_pos`
+            // more than sixteen blocks from their own position on load.
+            if nbt.remove("block_pos").is_some() {
+                nbt.insert(
+                    "block_pos",
+                    NbtTag::IntArray(vec![block_pos.x(), block_pos.y(), block_pos.z()]),
+                );
+            }
 
             let mut nbt_bytes = Vec::new();
             nbt.write(&mut nbt_bytes);

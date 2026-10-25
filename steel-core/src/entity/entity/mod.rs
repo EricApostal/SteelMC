@@ -4,6 +4,7 @@ use std::io::Cursor;
 use simdnbt::borrow::read_compound;
 
 use super::*;
+use crate::behavior::advancement_hooks::raise_player_sheared_equipment;
 use crate::entity::ai::goal::{
     AbstractHorse, CaravanLlama, CreeperLike, Feline, RangedAttackMob, SchoolingFish,
     ShoulderRiding, Tameable,
@@ -15,6 +16,7 @@ use crate::entity::npc::gossip::ReputationEventHandler;
 use crate::entity::npc::trading::Merchant;
 use crate::entity::raid::Raider;
 use crate::inventory::lock::ContainerRef;
+use crate::player::advancement::triggers::raise_entity_killed_player;
 use steel_math::DEGREE_90;
 
 /// Vanilla `Entity.refreshDimensions` small-entity limit: only entities at most
@@ -1350,7 +1352,15 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
                 .attachments
                 .get_average(EntityAttachment::Passenger, dimensions);
             let _ = self.spawn_at_location_with_offset(item_stack, spawn_offset);
-            // TODO: Trigger PLAYER_SHEARED_EQUIPMENT once advancement criteria exist.
+            // Vanilla `Mob.shearItem` raises `player_sheared_equipment` with the
+            // shears in hand and this mob, after the sheared gear was dropped.
+            // The held stack is snapshotted first so the raise does not run while
+            // the player's inventory (equipment) lock is held.
+            let held_item = {
+                let inventory = player.inventory.lock();
+                inventory.get_item_in_hand(hand).clone()
+            };
+            raise_player_sheared_equipment(player, self.as_entity_event_source(), &held_item);
             return true;
         }
 
@@ -3945,11 +3955,7 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
         // Vanilla `Entity.awardKillScore` raises `ENTITY_KILLED_PLAYER` when the
         // killed entity is a player, with the killer as the event entity.
         if let Some(player) = victim.as_player() {
-            crate::player::advancement::triggers::raise_entity_killed_player(
-                player,
-                self.as_entity_event_source(),
-                killing_blow,
-            );
+            raise_entity_killed_player(player, self.as_entity_event_source(), killing_blow);
         }
     }
 }

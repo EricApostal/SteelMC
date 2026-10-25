@@ -611,17 +611,16 @@ impl LootFunction {
                 item.set_potion(id);
             }
             LootFunction::SetRandomPotion { options } => {
-                let potion = match options {
-                    Some(options) => options.get_random(ctx.rng),
+                let potion = if let Some(options) = options {
+                    options.get_random(ctx.rng)
+                } else {
                     // Vanilla picks from the whole potion registry when no options are given.
-                    None => {
-                        let count = REGISTRY.potions.len();
-                        if count == 0 {
-                            None
-                        } else {
-                            let index = ctx.rng.random_range(0..count);
-                            REGISTRY.potions.by_id(index)
-                        }
+                    let count = REGISTRY.potions.len();
+                    if count == 0 {
+                        None
+                    } else {
+                        let index = ctx.rng.random_range(0..count);
+                        REGISTRY.potions.by_id(index)
                     }
                 };
                 if let Some(potion) = potion {

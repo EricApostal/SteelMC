@@ -6,11 +6,12 @@
 //! machine cycles connected players, ejects one loot item every 20 ticks and clears the
 //! display item when going inactive.
 
+use std::mem;
 use std::sync::{Arc, Weak};
 
 use rand::RngExt as _;
 use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
-use simdnbt::owned::{NbtCompound, NbtList};
+use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_protocol::packets::game::SoundSource;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{BlockStateProperties, VaultState};
@@ -24,6 +25,7 @@ use steel_utils::nbt::NbtNumeric as _;
 use steel_utils::uuid_ext::UuidExt as _;
 use steel_utils::{
     BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier, locks::SyncMutex,
+    types::UpdateFlags,
 };
 
 use crate::behavior::InventoryAccess;
@@ -163,7 +165,7 @@ impl VaultStateData {
     /// Vanilla `VaultSharedData.setDisplayItem` (only marks dirty on change).
     fn set_display_item(&mut self, item: ItemStack) {
         if !ItemStack::matches(&self.display_item, &item) {
-            self.display_item = item.clone();
+            self.display_item = item;
             self.shared_dirty = true;
         }
     }
@@ -247,7 +249,7 @@ impl VaultBlockEntity {
     /// Returns `true` when the key was accepted and consumed.
     pub fn try_insert_key(
         &self,
-        world: &std::sync::Arc<World>,
+        world: &Arc<World>,
         state: BlockStateId,
         player: &Player,
         inserted: &ItemStack,
@@ -311,7 +313,7 @@ impl VaultBlockEntity {
         world.set_block(
             self.get_block_pos(),
             state.set_value(&BlockStateProperties::VAULT_STATE, VaultState::Unlocking),
-            steel_utils::types::UpdateFlags::UPDATE_ALL,
+            UpdateFlags::UPDATE_ALL,
         );
         world.play_sound(
             &sound_events::BLOCK_VAULT_INSERT_ITEM,
@@ -565,12 +567,12 @@ impl BlockEntity for VaultBlockEntity {
             state.rewarded_players = read_uuid_list(&server_data, "rewarded_players");
             state.state_updating_resumes_at =
                 server_data.long("state_updating_resumes_at").unwrap_or(0);
-            if let Some(items) = server_data.list("items_to_eject") {
-                if let Some(compounds) = items.compounds() {
-                    for item in compounds {
-                        if let Some(stack) = ItemStack::from_borrowed_compound(&item) {
-                            state.items_to_eject.push(stack);
-                        }
+            if let Some(items) = server_data.list("items_to_eject")
+                && let Some(compounds) = items.compounds()
+            {
+                for item in compounds {
+                    if let Some(stack) = ItemStack::from_borrowed_compound(&item) {
+                        state.items_to_eject.push(stack);
                     }
                 }
             }
@@ -605,9 +607,9 @@ impl BlockEntity for VaultBlockEntity {
         let items: Vec<NbtCompound> = state
             .items_to_eject
             .iter()
-            .map(|item| item.to_nbt_tag_ref())
+            .map(ItemStack::to_nbt_tag_ref)
             .filter_map(|tag| match tag {
-                simdnbt::owned::NbtTag::Compound(compound) => Some(compound),
+                NbtTag::Compound(compound) => Some(compound),
                 _ => None,
             })
             .collect();
@@ -720,8 +722,8 @@ impl BlockEntity for VaultBlockEntity {
         let (server_dirty, shared_dirty) = {
             let mut data = self.state.lock();
             (
-                std::mem::replace(&mut data.server_dirty, false),
-                std::mem::replace(&mut data.shared_dirty, false),
+                mem::replace(&mut data.server_dirty, false),
+                mem::replace(&mut data.shared_dirty, false),
             )
         };
         if server_dirty || shared_dirty {

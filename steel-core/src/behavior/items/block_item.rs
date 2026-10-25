@@ -3,11 +3,13 @@
 use steel_macros::item_behavior;
 use steel_registry::{
     blocks::{BlockRef, block_state_ext::BlockStateExt, shapes::OffsetVoxelShape},
+    item_stack::ItemStack,
     sound_event::SoundEventRef,
     vanilla_blocks, vanilla_game_events,
 };
 use steel_utils::{BlockStateId, types::UpdateFlags};
 
+use crate::behavior::advancement_hooks::raise_placed_block;
 use crate::behavior::{BLOCK_BEHAVIORS, BlockCollisionContext, ItemBehavior};
 use crate::entity::Entity;
 use crate::fluid::{FluidStateExt as _, get_fluid_state};
@@ -138,6 +140,14 @@ impl BlockItem {
             }
             let placed_behavior = BLOCK_BEHAVIORS.get_behavior(placed_state.get_block());
             placed_behavior.set_placed_by(placed_state, context.world, place_pos, context.source());
+            // Vanilla `BlockItem.place` raises `placed_block` right after
+            // `Block.setPlacedBy`, for the placed position and the placed stack.
+            // The stack is snapshotted first so the raise does not run while the
+            // player's inventory (the placement source) is locked.
+            if let Some(player) = context.player() {
+                let placed_item = context.with_item(ItemStack::clone);
+                raise_placed_block(player, context.world, place_pos, &placed_item);
+            }
         }
 
         // Play place sound (exclude the placing player, they hear it client-side)

@@ -9,6 +9,8 @@
 //! Steel stores the connections on the receiving player, so the tracking state is
 //! dropped with the player and needs no separate manager owner.
 
+use std::sync::Arc;
+
 use glam::DVec3;
 use rustc_hash::FxHashMap;
 use steel_protocol::packets::game::{
@@ -17,11 +19,13 @@ use steel_protocol::packets::game::{
 };
 use steel_registry::vanilla_attributes;
 use steel_registry::vanilla_game_rules::LOCATOR_BAR;
-use steel_utils::{ChunkPos, Identifier};
+use steel_utils::{ChunkPos, Identifier, RgbColor};
 use uuid::Uuid;
 
 use crate::entity::{Entity as _, LivingEntity as _};
 use crate::player::Player;
+use crate::scoreboard::{ScoreHolder, TeamColor};
+use crate::world::World;
 
 /// Vanilla `WaypointTransmitter.REALLY_FAR_DISTANCE`: beyond this the client is
 /// given an azimuth instead of a position.
@@ -105,6 +109,68 @@ impl Player {
         self.waypoint_receive_range() > 0.0
     }
 
+    /// Vanilla `LivingEntity.waypointIcon`: the icon this player transmits.
+    #[must_use]
+    pub fn waypoint_icon(&self) -> WaypointIcon {
+        self.locator_bar_icon.lock().clone()
+    }
+
+    /// Vanilla `WaypointCommand.mutateIcon`: untrack this transmitter from every
+    /// receiver, apply `mutate` to its icon, then re-track it so each receiver is
+    /// sent a fresh `TRACK` carrying the new icon.
+    pub(crate) fn mutate_waypoint_icon(&self, mutate: impl FnOnce(&mut WaypointIcon)) {
+        let world = self.get_world();
+        let uuid = self.gameprofile.id();
+        let mut receivers = Vec::new();
+        world.players.iter_players(|receiver_uuid, receiver| {
+            if *receiver_uuid != uuid {
+                receivers.push(Arc::clone(receiver));
+            }
+            true
+        });
+
+        for receiver in &receivers {
+            receiver.untrack_waypoint(uuid);
+        }
+        mutate(&mut self.locator_bar_icon.lock());
+        for receiver in &receivers {
+            receiver.update_waypoint_connection(self);
+        }
+    }
+
+    /// Vanilla `Waypoint.Icon.cloneAndAssignStyle` for this transmitter: the
+    /// stored icon, with the transmitter's team colour filled in when it has no
+    /// explicit tint.
+    fn resolved_waypoint_icon(&self) -> WaypointIcon {
+        let icon = self.locator_bar_icon.lock().clone();
+        WaypointIcon {
+            style: icon.style,
+            color: icon.color.or_else(|| self.waypoint_team_color()),
+        }
+    }
+
+    /// Vanilla `LivingEntity.getTeam().getColor()` mapped into `Waypoint.Icon`'s
+    /// palette: black is brightened to `0x303030` so the tint stays visible.
+    fn waypoint_team_color(&self) -> Option<RgbColor> {
+        let server = self.server.upgrade()?;
+        let world = self.get_world();
+        let scoreboard = server.scoreboards.get(world.domain())?;
+        let team_name = scoreboard.holder_team_name(&ScoreHolder::new(self.gameprofile.name()))?;
+        let team = scoreboard.team(&team_name)?;
+        team.color().map(|color| match color {
+            TeamColor::Black => RgbColor::new(0x30_3030),
+            other => RgbColor::new(other.rgb()),
+        })
+    }
+
+    /// Vanilla `ServerWaypointManager.untrackWaypoint` for one transmitter: drop
+    /// the connection and tell the client to stop tracking it.
+    pub(crate) fn untrack_waypoint(&self, uuid: Uuid) {
+        if self.waypoint_tracks.lock().remove(&uuid).is_some() {
+            self.send_packet(CWaypoint::remove(uuid));
+        }
+    }
+
     /// Vanilla `ServerWaypointManager.updatePlayer` for a single receiver.
     ///
     /// Runs once per tick: connects new transmitters, updates existing
@@ -142,22 +208,14 @@ impl Player {
             .filter(|uuid| !seen.contains(uuid))
             .collect();
         for uuid in stale {
-            self.send_packet(CWaypoint::remove(uuid));
-            self.waypoint_tracks.lock().remove(&uuid);
+            self.untrack_waypoint(uuid);
         }
     }
 
     /// Vanilla `ServerWaypointManager.createConnection` + `updateConnection`.
     fn update_waypoint_connection(&self, transmitter: &Player) {
         let Some(desired) = self.desired_waypoint_connection(transmitter) else {
-            if self
-                .waypoint_tracks
-                .lock()
-                .remove(&transmitter.gameprofile.id())
-                .is_some()
-            {
-                self.send_packet(CWaypoint::remove(transmitter.gameprofile.id()));
-            }
+            self.untrack_waypoint(transmitter.gameprofile.id());
             return;
         };
 
@@ -169,7 +227,7 @@ impl Player {
         let angle = self.waypoint_azimuth(transmitter);
 
         let mut tracks = self.waypoint_tracks.lock();
-        let icon = waypoint_icon();
+        let icon = transmitter.resolved_waypoint_icon();
 
         match tracks.get_mut(&uuid) {
             None => {
@@ -304,8 +362,27 @@ fn rotate_clockwise_90(vector: DVec3) -> DVec3 {
     DVec3::new(-vector.z, vector.y, vector.x)
 }
 
-/// Vanilla `Waypoint.Icon` for a player with no team color or custom style.
-fn waypoint_icon() -> WaypointIcon {
+/// Vanilla `WaypointTransmitter`s of one level.
+///
+/// Only players implement the transmitter in Steel, so this is the level's
+/// transmitting players, ordered by entity id for stable command output.
+/// (Non-player transmitters drive `ServerWaypointManager.transmitters` in
+/// vanilla and are not tracked here.)
+pub(crate) fn level_transmitters(world: &World) -> Vec<Arc<Player>> {
+    let mut transmitters = Vec::new();
+    world.players.iter_players(|_, player| {
+        if player.is_transmitting_waypoint() {
+            transmitters.push(Arc::clone(player));
+        }
+        true
+    });
+    transmitters.sort_by_key(|player| player.id());
+    transmitters
+}
+
+/// Vanilla `LivingEntity.locatorBarIcon` initial state: the default style
+/// asset with no tint.
+pub(crate) fn new_icon() -> WaypointIcon {
     WaypointIcon {
         style: Identifier::vanilla_static("default"),
         color: None,

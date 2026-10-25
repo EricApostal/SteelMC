@@ -1,5 +1,7 @@
 use super::*;
-use crate::entity::{ENTITY_LOAD_MAX_HORIZONTAL_POSITION, ENTITY_LOAD_MAX_VERTICAL_POSITION};
+use crate::entity::{
+    ENTITIES, ENTITY_LOAD_MAX_HORIZONTAL_POSITION, ENTITY_LOAD_MAX_VERTICAL_POSITION,
+};
 use steel_registry::RegistryEntry as _;
 
 fn test_persistent_end_crystal(pos: DVec3) -> PersistentEntity {
@@ -300,7 +302,7 @@ fn unsupported_persistent_entity_is_dropped_after_load_and_resave() {
     // gains a factory as the port progresses, so the type is picked at runtime.
     let Some(unsupported_type) = (0..steel_registry::REGISTRY.entity_types.len())
         .filter_map(|id| steel_registry::REGISTRY.entity_types.by_id(id))
-        .find(|entity_type| !crate::entity::ENTITIES.has_factory(entity_type))
+        .find(|entity_type| !ENTITIES.has_factory(entity_type))
     else {
         return;
     };

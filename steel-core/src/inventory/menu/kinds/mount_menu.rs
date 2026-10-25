@@ -240,18 +240,13 @@ unsafe impl DowncastType for MountInventoryMenuKind {
 impl MountInventoryMenuKind {
     /// Publishes both equipment mirrors back to the mount's equipment slots.
     fn publish_equipment(&self, mount: &SharedEntity) {
-        self.publish_slot(mount, EquipmentSlot::Saddle, &self.saddle);
-        self.publish_slot(mount, EquipmentSlot::Body, &self.armor);
+        Self::publish_slot(mount, EquipmentSlot::Saddle, &self.saddle);
+        Self::publish_slot(mount, EquipmentSlot::Body, &self.armor);
     }
 
     /// Copies one mirror into the entity's equipment slot, playing the equip
     /// sound vanilla's `onEquipItem` plays when the item actually changed.
-    fn publish_slot(
-        &self,
-        mount: &SharedEntity,
-        slot: EquipmentSlot,
-        mirror: &Shared<SimpleContainer>,
-    ) {
+    fn publish_slot(mount: &SharedEntity, slot: EquipmentSlot, mirror: &Shared<SimpleContainer>) {
         let item = mirror.lock().get_item(0).clone();
         let Some(living) = mount.as_living_entity() else {
             return;

@@ -10,13 +10,16 @@
 //! `world::environment` and is private, so this entity reads the block state instead — the block's
 //! own `updateState` must supply the attribute; see the reported dependency.
 
+use std::mem;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
 use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
 use simdnbt::owned::{NbtCompound, NbtTag};
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
-use steel_registry::blocks::properties::{BlockStateProperties, CreakingHeartState, EnumProperty};
+use steel_registry::blocks::properties::{
+    BlockStateProperties, BoolProperty, CreakingHeartState, EnumProperty,
+};
 use steel_registry::particle_type::{ParticleData, TrailParticleOption};
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::{
@@ -33,12 +36,14 @@ use steel_utils::{
 
 use crate::behavior::blocks::{CreakingHeartBlock, multiface_face_property};
 use crate::block_entity::{BlockEntity, BlockEntityBase};
+use crate::entity::Mob;
 use crate::entity::entities::mobs::hostile::creaking::CreakingEntity;
 use crate::entity::{Entity as _, EntitySpawnReason, SharedEntity};
 use crate::world::World;
 use crate::world::game_event::GameEventContext;
 use crate::world::spawn::SpawnStrategy;
 use crate::world::spawn::natural::runtime_random;
+use crate::world::spawn::try_spawn_mob;
 
 /// Vanilla `CreakingHeartBlockEntity.PLAYER_DETECTION_RANGE`.
 const PLAYER_DETECTION_RANGE: f64 = 32.0;
@@ -75,8 +80,7 @@ const PARTICLE_COLOR_TOWARDS_CREAKING: RgbColor = RgbColor::new(16_545_810);
 const PARTICLE_COLOR_TOWARDS_HEART: RgbColor = RgbColor::new(6_250_335);
 
 const STATE: &EnumProperty<CreakingHeartState> = &BlockStateProperties::CREAKING_HEART_STATE;
-const WATERLOGGED: &steel_registry::blocks::properties::BoolProperty =
-    &BlockStateProperties::WATERLOGGED;
+const WATERLOGGED: &BoolProperty = &BlockStateProperties::WATERLOGGED;
 
 /// `CreakingHeartBlockEntity`.
 pub struct CreakingHeartBlockEntity {
@@ -242,7 +246,7 @@ impl CreakingHeartBlockEntity {
     /// Vanilla `CreakingHeartBlockEntity.spawnProtector`.
     fn spawn_protector(world: &Arc<World>, pos: BlockPos) -> Option<SharedEntity> {
         let mut random = runtime_random();
-        let spawned = crate::world::spawn::try_spawn_mob(
+        let spawned = try_spawn_mob(
             &vanilla_entities::CREAKING,
             EntitySpawnReason::Spawner,
             world,
@@ -380,7 +384,7 @@ impl CreakingHeartBlockEntity {
                 f64::from(pos.z()) + rand::random::<f64>(),
             );
             if towards_creaking {
-                std::mem::swap(&mut source, &mut destination);
+                mem::swap(&mut source, &mut destination);
             }
             world.send_particles_with_options(
                 ParticleData::new(
@@ -583,9 +587,7 @@ impl BlockEntity for CreakingHeartBlockEntity {
                 None,
             );
         } else if let Some(creaking) = self.get_creaking_protector(world) {
-            let persistence_required = creaking
-                .as_mob()
-                .is_some_and(crate::entity::Mob::is_persistence_required);
+            let persistence_required = creaking.as_mob().is_some_and(Mob::is_persistence_required);
             // TODO(Entities): Vanilla's `creaking.playerIsStuckInYou()` clause is the third despawn
             // trigger; `Creaking` has no equivalent hook yet.
             if (!Self::creaking_active(updated_state) && !persistence_required)

@@ -1,3 +1,4 @@
+use crate::datafixer::refusal_kind;
 use crate::entity::DEFAULT_MAX_AIR_SUPPLY;
 use crate::permission::PermissionSet;
 use crate::player::KnownPlayer;
@@ -427,8 +428,8 @@ fn known_player_cache_persists_vanillas_mru_limit() {
     let Ok(encoded) = encoded else {
         panic!("known player cache should encode");
     };
-    let decoded =
-        decode_known_players_file(&encoded).and_then(KnownPlayersFile::into_known_players);
+    let decoded = decode_known_players_file(&encoded, "test cache file")
+        .and_then(KnownPlayersFile::into_known_players);
     let Ok(decoded) = decoded else {
         panic!("known player cache should decode");
     };
@@ -443,7 +444,8 @@ fn player_file_roundtrip_preserves_domain_world_data() {
     let file = sample_player_file(PLAYER_DATA_VERSION);
 
     let encoded = encode_player_file(&file).expect("player file should encode");
-    let decoded = decode_player_file(&encoded).expect("player file should decode");
+    let decoded =
+        decode_player_file(&encoded, "test player file").expect("player file should decode");
 
     assert_eq!(
         u16::from_le_bytes([encoded[4], encoded[5]]),
@@ -466,7 +468,8 @@ fn player_file_roundtrip_preserves_absent_previous_game_mode() {
     file.prev_game_mode = None;
 
     let encoded = encode_player_file(&file).expect("player file should encode");
-    let decoded = decode_player_file(&encoded).expect("player file should decode");
+    let decoded =
+        decode_player_file(&encoded, "test player file").expect("player file should decode");
     let persistent = decoded
         .into_persistent()
         .expect("player file should convert");
@@ -482,7 +485,8 @@ fn global_file_roundtrip_preserves_last_active_domain() {
     };
 
     let encoded = encode_global_file(&file).expect("global file should encode");
-    let decoded = decode_global_file(&encoded).expect("global file should decode");
+    let decoded =
+        decode_global_file(&encoded, "test global file").expect("global file should decode");
 
     assert_eq!(
         u16::from_le_bytes([encoded[4], encoded[5]]),
@@ -564,7 +568,8 @@ fn player_file_roundtrip_preserves_root_vehicle() {
     });
 
     let encoded = encode_player_file(&file).expect("player file should encode");
-    let decoded = decode_player_file(&encoded).expect("player file should decode");
+    let decoded =
+        decode_player_file(&encoded, "test player file").expect("player file should decode");
     let persistent = decoded
         .into_persistent()
         .expect("player file should convert");
@@ -606,7 +611,8 @@ fn player_file_roundtrip_preserves_respawn_config() {
     ];
 
     let encoded = encode_player_file(&file).expect("player file should encode");
-    let decoded = decode_player_file(&encoded).expect("player file should decode");
+    let decoded =
+        decode_player_file(&encoded, "test player file").expect("player file should decode");
     let persistent = decoded
         .into_persistent()
         .expect("player file should convert");
@@ -647,7 +653,11 @@ fn stale_player_payload_version_is_rejected() {
         .into_persistent()
         .expect_err("stale payload should fail");
 
-    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    // Steel has no payload migration, so a version refusal is `Unsupported` (never
+    // `InvalidData`, which the load paths treat as corruption worth discarding).
+    assert_eq!(error.kind(), refusal_kind(), "stale payload error: {error}");
+    let message = error.to_string();
+    assert!(message.contains("older"), "{message}");
 }
 
 #[test]

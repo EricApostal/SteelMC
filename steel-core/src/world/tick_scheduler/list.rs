@@ -1,3 +1,5 @@
+use std::mem;
+
 use super::{
     BinaryHeap, BlockPos, FxHashSet, Ordering, SavedTick, ScheduledTick, ScheduledTickKey, TickKey,
     TickPriority,
@@ -268,7 +270,7 @@ impl<T: TickKey> TickList<T> {
         let Self {
             ticks, scheduled, ..
         } = self;
-        let heap = std::mem::take(ticks).into_vec();
+        let heap = mem::take(ticks).into_vec();
         let old_len = heap.len();
         let mut retained = Vec::with_capacity(old_len);
         for queued in heap {

@@ -5,6 +5,8 @@
 //! then run `spawnForChunk` over the entity-ticking chunks that have a player
 //! close enough to spawn for.
 
+use std::cell::RefCell;
+use std::ptr;
 use std::sync::Arc;
 
 use glam::DVec3;
@@ -16,6 +18,7 @@ use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::entity_type::{EntityTypeRef, MobCategory};
 use steel_registry::vanilla_biome_tags::BiomeTag;
 use steel_registry::vanilla_game_rules::{SPAWN_MOBS, SPAWN_MONSTERS};
+
 use steel_utils::random::{Random as _, RandomSource, legacy_random::LegacyRandom};
 use steel_utils::{BlockPos, ChunkPos, WorldAabb};
 
@@ -27,23 +30,19 @@ use super::structure_spawns::{
 use crate::chunk::full_chunk::FullChunkRef;
 use crate::chunk::heightmap::HeightmapType;
 use crate::entity::Entity as _;
+use crate::entity::Mob;
 use crate::entity::SharedEntity;
 use crate::entity::{EntitySpawnReason, create_entity_instance};
 use crate::physics::CollisionWorld as _;
 use crate::physics::collision::WorldCollisionProvider;
 use crate::world::LevelReader as _;
 use crate::world::World;
+use crate::world::is_redstone_conductor;
 use crate::worldgen::ChunkGeneratorType;
 use crate::worldgen::region::WorldGenRegion;
 
 /// Vanilla `NaturalSpawner.MIN_SPAWN_DISTANCE`.
 const MIN_SPAWN_DISTANCE: f64 = 24.0;
-/// Vanilla `NaturalSpawner.SPAWN_DISTANCE_CHUNK`.
-pub const SPAWN_DISTANCE_CHUNK: i32 = 8;
-/// Vanilla `NaturalSpawner.SPAWN_DISTANCE_BLOCK`.
-pub const SPAWN_DISTANCE_BLOCK: i32 = 128;
-/// Vanilla `NaturalSpawner.INSCRIBED_SQUARE_SPAWN_DISTANCE_CHUNK`.
-pub const INSCRIBED_SQUARE_SPAWN_DISTANCE_CHUNK: i32 = 5;
 /// Vanilla `NaturalSpawner.MAGIC_NUMBER`.
 const MAGIC_NUMBER: i32 = 289;
 /// Vanilla's per-attempt coordinate spread (`nextInt(6) - nextInt(6)`).
@@ -57,7 +56,7 @@ const PERSISTENT_SPAWN_INTERVAL: i64 = 400;
 
 /// Vanilla `NaturalSpawner.SPAWNING_CATEGORIES`.
 #[must_use]
-pub fn spawning_categories() -> [MobCategory; 7] {
+pub const fn spawning_categories() -> [MobCategory; 7] {
     [
         MobCategory::Monster,
         MobCategory::Creature,
@@ -129,7 +128,7 @@ pub struct SpawnState<'a> {
 }
 
 impl<'a> SpawnState<'a> {
-    fn new(
+    const fn new(
         spawnable_chunk_count: i32,
         mob_category_counts: FxHashMap<MobCategory, i32>,
         spawn_potential: PotentialCalculator,
@@ -169,7 +168,7 @@ impl<'a> SpawnState<'a> {
         let charge = if Some(pos) == self.last_checked_pos
             && self
                 .last_checked_type
-                .is_some_and(|checked| std::ptr::eq(checked, entity_type))
+                .is_some_and(|checked| ptr::eq(checked, entity_type))
         {
             self.last_charge
         } else {
@@ -181,18 +180,6 @@ impl<'a> SpawnState<'a> {
         *self.mob_category_counts.entry(category).or_insert(0) += 1;
         self.local_mob_cap_calculator
             .add_mob(ChunkPos::from_block_pos(pos), category);
-    }
-
-    /// Vanilla `SpawnState.getSpawnableChunkCount`.
-    #[must_use]
-    pub const fn spawnable_chunk_count(&self) -> i32 {
-        self.spawnable_chunk_count
-    }
-
-    /// Vanilla `SpawnState.getMobCategoryCounts`.
-    #[must_use]
-    pub const fn mob_category_counts(&self) -> &FxHashMap<MobCategory, i32> {
-        &self.mob_category_counts
     }
 
     /// Vanilla `SpawnState.canSpawnForCategoryGlobal`.
@@ -215,7 +202,7 @@ impl<'a> SpawnState<'a> {
 
 impl NaturalSpawner {
     /// Vanilla `NaturalSpawner.createState`.
-    pub fn create_state<'a>(world: &'a Arc<World>, spawnable_chunk_count: i32) -> SpawnState<'a> {
+    pub fn create_state(world: &Arc<World>, spawnable_chunk_count: i32) -> SpawnState<'_> {
         let mut spawn_potential = PotentialCalculator::new();
         let mut mob_counts: FxHashMap<MobCategory, i32> = FxHashMap::default();
         let mut local_mob_cap_calculator = LocalMobCapCalculator::new(world);
@@ -272,7 +259,7 @@ impl NaturalSpawner {
     pub fn spawn_for_chunk(
         world: &Arc<World>,
         chunk_pos: ChunkPos,
-        chunk: &FullChunkRef<'_>,
+        chunk: FullChunkRef<'_>,
         state: &mut SpawnState<'_>,
         categories: &[MobCategory],
         random: &mut RandomSource,
@@ -286,7 +273,7 @@ impl NaturalSpawner {
                 // `can_spawn` and `after_spawn` both take `&mut SpawnState`, and both
                 // callbacks stay alive for the whole spawn pass, so the state is shared
                 // through a `RefCell` instead of being borrowed twice.
-                let state_cell = std::cell::RefCell::new(&mut *state);
+                let state_cell = RefCell::new(&mut *state);
                 let mut extra_test = |entity_type, test_world: &World, pos| {
                     state_cell
                         .borrow_mut()
@@ -313,7 +300,7 @@ impl NaturalSpawner {
         category: MobCategory,
         world: &Arc<World>,
         chunk_pos: ChunkPos,
-        chunk: &FullChunkRef<'_>,
+        chunk: FullChunkRef<'_>,
         extra_test: &mut impl FnMut(EntityTypeRef, &World, BlockPos) -> bool,
         spawn_callback: &mut impl FnMut(&SharedEntity, &World),
         random: &mut RandomSource,
@@ -337,14 +324,15 @@ impl NaturalSpawner {
 
     /// Vanilla `NaturalSpawner.spawnCategoryForPosition`.
     #[expect(
+        clippy::too_many_arguments,
         clippy::too_many_lines,
-        reason = "mirrors vanilla's nested spawn-attempt loops one to one"
+        reason = "mirrors vanilla NaturalSpawner.spawnCategoryForPosition one to one"
     )]
     pub fn spawn_category_for_position(
         category: MobCategory,
         world: &Arc<World>,
         chunk_pos: ChunkPos,
-        chunk: &FullChunkRef<'_>,
+        chunk: FullChunkRef<'_>,
         start: BlockPos,
         extra_test: &mut impl FnMut(EntityTypeRef, &World, BlockPos) -> bool,
         spawn_callback: &mut impl FnMut(&SharedEntity, &World),
@@ -352,7 +340,7 @@ impl NaturalSpawner {
     ) {
         let y_start = start.y();
         let start_state = chunk.get_block_state(start);
-        if crate::world::is_redstone_conductor(world, start_state, start) {
+        if is_redstone_conductor(world, start_state, start) {
             return;
         }
 
@@ -365,8 +353,18 @@ impl NaturalSpawner {
             let mut group_data = None;
             let mut max = mth_ceil(random.next_f32() * 4.0);
             let mut group_size = 0;
+            let mut attempts = 0;
 
-            for _ in 0..max {
+            // Vanilla reads the attempt bound fresh each iteration: the first valid spawn
+            // replaces the `ceil` value with the sampled group size below, so the loop range
+            // updates while iterating. A Rust `for` range would freeze the bound instead.
+            loop {
+                if attempts >= max {
+                    break;
+                }
+                // For-update placement: increments before the body so `continue` still
+                // consumes the attempt, exactly like the Java loop.
+                attempts += 1;
                 x += random.next_i32_bounded(SPAWN_ATTEMPT_SPREAD)
                     - random.next_i32_bounded(SPAWN_ATTEMPT_SPREAD);
                 z += random.next_i32_bounded(SPAWN_ATTEMPT_SPREAD)
@@ -460,7 +458,7 @@ impl NaturalSpawner {
 }
 
 /// Vanilla `Mth.ceil(float)`.
-fn mth_ceil(value: f32) -> i32 {
+const fn mth_ceil(value: f32) -> i32 {
     #[expect(
         clippy::cast_possible_truncation,
         reason = "vanilla narrows the ceiling result to an int"
@@ -483,7 +481,7 @@ pub fn runtime_random() -> RandomSource {
 fn random_pos_within(
     world: &World,
     chunk_pos: ChunkPos,
-    chunk: &FullChunkRef<'_>,
+    chunk: FullChunkRef<'_>,
     random: &mut RandomSource,
 ) -> BlockPos {
     let x = (chunk_pos.0.x << 4) + random.next_i32_bounded(16);
@@ -643,8 +641,7 @@ fn check_instance_spawn_rules(
 
 /// Vanilla `Mob.getMaxSpawnClusterSize`.
 fn max_spawn_cluster_size(mob: &SharedEntity) -> i32 {
-    mob.as_mob()
-        .map_or(4, |mob_trait| mob_trait.max_spawn_cluster_size())
+    mob.as_mob().map_or(4, Mob::max_spawn_cluster_size)
 }
 
 /// Vanilla `Mob.isMaxGroupSizeReached`.
@@ -698,7 +695,7 @@ fn resolves_to(spawn: &SpawnerData, entity_type: EntityTypeRef) -> bool {
     REGISTRY
         .entity_types
         .by_key(&spawn.entity_type)
-        .is_some_and(|resolved| std::ptr::eq(resolved, entity_type))
+        .is_some_and(|resolved| ptr::eq(resolved, entity_type))
 }
 
 /// Vanilla `NaturalSpawner.getRandomSpawnMobAt`.
@@ -835,7 +832,11 @@ impl NaturalSpawner {
             let start_z = z;
 
             for _ in 0..count {
+                let mut spawned = false;
                 for _ in 0..CHUNK_GENERATION_ATTEMPTS {
+                    if spawned {
+                        break;
+                    }
                     let pos = top_non_colliding_pos(world, region, entity_type, x, z);
                     let width = f64::from(entity_type.dimensions.half_width());
                     let fx =
@@ -874,39 +875,26 @@ impl NaturalSpawner {
                                 EntitySpawnReason::ChunkGeneration,
                                 group_data,
                             );
-                            region.add_fresh_entity(entity);
-                            x += random.next_i32_bounded(5) - random.next_i32_bounded(5);
-                            z = bounce_into_chunk(x, z, start_x, start_z, xo, zo, random);
-                            x = start_x + random.next_i32_bounded(5) - random.next_i32_bounded(5);
-                            z = bounce_into_chunk(x, z, start_x, start_z, xo, zo, random);
-                            break;
+                            let _ = region.add_fresh_entity(entity);
+                            spawned = true;
                         }
                     }
 
+                    // Vanilla's post-attempt block: jitter the candidate, then re-roll *both*
+                    // coordinates from the attempt's start until the pair is back inside the
+                    // chunk. The pair must stay inside because `top_non_colliding_pos` reads it
+                    // through the worldgen region, whose dependency table only covers the chunk
+                    // and its direct-dependency neighbours.
                     x += random.next_i32_bounded(5) - random.next_i32_bounded(5);
-                    z = bounce_into_chunk(x, z, start_x, start_z, xo, zo, random);
+                    z += random.next_i32_bounded(5) - random.next_i32_bounded(5);
+                    while x < xo || x >= xo + 16 || z < zo || z >= zo + 16 {
+                        x = start_x + random.next_i32_bounded(5) - random.next_i32_bounded(5);
+                        z = start_z + random.next_i32_bounded(5) - random.next_i32_bounded(5);
+                    }
                 }
             }
         }
     }
-}
-
-/// Vanilla's inner re-roll loop keeping the candidate inside the chunk; returns
-/// the corrected `z` for the caller's `x`.
-fn bounce_into_chunk(
-    mut x: i32,
-    mut z: i32,
-    start_x: i32,
-    start_z: i32,
-    xo: i32,
-    zo: i32,
-    random: &mut RandomSource,
-) -> i32 {
-    while x < xo || x >= xo + 16 || z < zo || z >= zo + 16 {
-        z = start_z + random.next_i32_bounded(5) - random.next_i32_bounded(5);
-        x = start_x + random.next_i32_bounded(5) - random.next_i32_bounded(5);
-    }
-    z
 }
 
 /// Vanilla `NaturalSpawner.getTopNonCollidingPos`.
@@ -1019,7 +1007,7 @@ impl World {
                 NaturalSpawner::spawn_for_chunk(
                     self,
                     pos,
-                    &chunk,
+                    chunk,
                     &mut state,
                     &spawning_categories,
                     &mut random,

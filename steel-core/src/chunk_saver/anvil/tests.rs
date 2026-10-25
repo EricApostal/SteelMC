@@ -3,11 +3,13 @@
 //! `level.dat` round-tripping lives in [`crate::level_data::anvil`] because it needs access to
 //! private level-data fields.
 
+use std::env;
 use std::io;
 use std::path::PathBuf;
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use simdnbt::borrow::BaseNbtCompound;
 use simdnbt::borrow::read_compound as read_borrowed_compound;
 use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_registry::init_vanilla_registry;
@@ -23,12 +25,18 @@ use crate::chunk_saver::anvil::entities::{entity_from_nbt, entity_to_nbt};
 use crate::chunk_saver::anvil::nbt::{read_compressed_nbt, write_gzip_nbt, write_raw_nbt};
 use crate::chunk_saver::anvil::poi::{VanillaPoi, poi_from_nbt, poi_to_nbt};
 use crate::chunk_saver::anvil::region::AnvilRegionFile;
+use crate::chunk_saver::anvil::saved_data::{
+    game_rules_from_nbt, game_rules_to_nbt, raids_from_nbt, raids_to_nbt, weather_from_nbt,
+    weather_to_nbt,
+};
 use crate::chunk_saver::bit_pack::{pack_indices_from_iter, unpack_indices};
 use crate::chunk_saver::format::{
     PersistentBiomeData, PersistentBlockState, PersistentLightData, PersistentLightSection,
     PersistentSection, PersistentTick,
 };
 use crate::chunk_saver::{PersistentChunk, PersistentEntity, PersistentHeightmap, PersistentPoi};
+use crate::entity::raid::{RaidRecord, RaidsData};
+use crate::level_data::WeatherState;
 
 const MIN_Y: i32 = -64;
 const HEIGHT: i32 = 384;
@@ -37,7 +45,7 @@ static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
 fn test_directory(name: &str) -> PathBuf {
     let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("steel-anvil-{name}-{}-{sequence}", process::id()))
+    env::temp_dir().join(format!("steel-anvil-{name}-{}-{sequence}", process::id()))
 }
 
 /// A three-section chunk with blocks, biomes, light, a tick, a heightmap, an entity, and a POI.
@@ -150,7 +158,7 @@ fn sample_entity() -> PersistentEntity {
     }
 }
 
-fn reborrow(bytes: &[u8]) -> simdnbt::borrow::BaseNbtCompound<'_> {
+fn reborrow(bytes: &[u8]) -> BaseNbtCompound<'_> {
     read_borrowed_compound(&mut io::Cursor::new(bytes)).expect("test NBT should parse")
 }
 
@@ -202,7 +210,8 @@ fn chunk_nbt_round_trips_blocks_biomes_light_ticks_heightmaps_and_entities() {
 
     let borrowed = reborrow(&bytes);
     let view = simdnbt::borrow::NbtCompound::from(&borrowed);
-    let (decoded, status) = nbt_to_chunk(&view, pos, MIN_Y, HEIGHT).expect("chunk should decode");
+    let (decoded, status) =
+        nbt_to_chunk(&view, pos, MIN_Y, HEIGHT, "test chunk").expect("chunk should decode");
 
     assert_eq!(status, ChunkStatus::Full);
     assert_eq!(decoded.last_modified, chunk.last_modified);
@@ -261,8 +270,8 @@ fn chunk_nbt_round_trips_blocks_biomes_light_ticks_heightmaps_and_entities() {
     let inline_bytes = write_raw_nbt(&inline);
     let inline_borrowed = reborrow(&inline_bytes);
     let inline_view = simdnbt::borrow::NbtCompound::from(&inline_borrowed);
-    let (with_entities, _) =
-        nbt_to_chunk(&inline_view, pos, MIN_Y, HEIGHT).expect("chunk should decode");
+    let (with_entities, _) = nbt_to_chunk(&inline_view, pos, MIN_Y, HEIGHT, "test inline chunk")
+        .expect("chunk should decode");
     assert_eq!(with_entities.entities.len(), 1);
     assert_eq!(with_entities.entities[0].uuid, chunk.entities[0].uuid);
     assert_eq!(with_entities.entities[0].tags, vec!["steel".to_owned()]);
@@ -315,8 +324,7 @@ fn entity_nbt_round_trips_base_fields_and_type_data() {
         nbt.string("id").map(|id| id.to_str().into_owned()),
         Some("minecraft:item".to_owned())
     );
-    let mut passengers = Vec::new();
-    passengers.push(entity_to_nbt(&entity));
+    let passengers = vec![entity_to_nbt(&entity)];
 
     let bytes = write_raw_nbt(&nbt);
     let borrowed = reborrow(&bytes);
@@ -439,8 +447,8 @@ async fn region_container_treats_a_truncated_header_as_empty() {
 #[test]
 fn raids_weather_and_game_rule_payloads_round_trip() {
     init_vanilla_registry();
-    let raids = crate::entity::raid::RaidsData {
-        raids: vec![crate::entity::raid::RaidRecord {
+    let raids = RaidsData {
+        raids: vec![RaidRecord {
             id: 7,
             started: true,
             active: true,
@@ -458,21 +466,18 @@ fn raids_weather_and_game_rule_payloads_round_trip() {
         next_id: 8,
         tick: 999,
     };
-    let nbt = crate::chunk_saver::anvil::saved_data::raids_to_nbt(&raids);
-    assert_eq!(
-        crate::chunk_saver::anvil::saved_data::raids_from_nbt(&nbt),
-        raids
-    );
+    let nbt = raids_to_nbt(&raids);
+    assert_eq!(raids_from_nbt(&nbt), raids);
 
-    let weather = crate::level_data::WeatherState {
+    let weather = WeatherState {
         raining: true,
         rain_time: 5,
         thundering: false,
         thunder_time: 6,
         clear_weather_time: 7,
     };
-    let nbt = crate::chunk_saver::anvil::saved_data::weather_to_nbt(&weather);
-    let decoded = crate::chunk_saver::anvil::saved_data::weather_from_nbt(&nbt);
+    let nbt = weather_to_nbt(&weather);
+    let decoded = weather_from_nbt(&nbt);
     assert_eq!(decoded.raining, weather.raining);
     assert_eq!(decoded.rain_time, weather.rain_time);
     assert_eq!(decoded.clear_weather_time, weather.clear_weather_time);
@@ -480,8 +485,8 @@ fn raids_weather_and_game_rule_payloads_round_trip() {
     let mut rules = rustc_hash::FxHashMap::default();
     rules.insert("keep_inventory".to_owned(), serde_json::Value::Bool(true));
     rules.insert("random_tick_speed".to_owned(), serde_json::Value::from(3));
-    let nbt = crate::chunk_saver::anvil::saved_data::game_rules_to_nbt(&rules);
-    let decoded = crate::chunk_saver::anvil::saved_data::game_rules_from_nbt(&nbt);
+    let nbt = game_rules_to_nbt(&rules);
+    let decoded = game_rules_from_nbt(&nbt);
     assert_eq!(
         decoded.get("keep_inventory"),
         Some(&serde_json::Value::Bool(true))
@@ -509,4 +514,229 @@ fn compressed_nbt_reads_gzip_and_raw_payloads() {
         read_compressed_nbt(&raw).expect("raw should parse"),
         compound
     );
+}
+
+/// The version-gate regression guard: every vanilla-format reader must accept this build's
+/// `DataVersion` and refuse any other instead of loading data it cannot fix.
+mod version_gate {
+    use std::path::Path;
+
+    use steel_utils::version::DATA_VERSION;
+
+    use crate::chunk_saver::anvil::saved_data::read_saved_data_file;
+    use crate::chunk_saver::anvil::storage::decode_persistent_chunk;
+    use crate::level_data::LevelData;
+    use crate::level_data::anvil::apply_level_dat;
+
+    use super::*;
+
+    const SOURCE: &str = "region/r.0.0.mca at chunk (0, 0)";
+
+    /// Re-stamps a compound a Steel writer produced.
+    ///
+    /// `NbtCompound::insert` appends and a lookup returns the *first* matching tag, so a second
+    /// `insert` would leave the writer's own `DataVersion` in place and the gate would pass for
+    /// the wrong reason. (`take` does not remove either — it swaps the value for a `Byte(0)`.)
+    /// The existing `Int` tag has to be overwritten through `int_mut`.
+    fn restamp(nbt: &mut NbtCompound, version: i32) {
+        match nbt.int_mut("DataVersion") {
+            Some(current) => *current = version,
+            None => panic!("fixture must carry an Int DataVersion to re-stamp"),
+        }
+    }
+
+    /// Chunk NBT stamped with `chunk_version`, plus the entity and POI side records stamped with
+    /// `side_version`.
+    ///
+    /// The two are separate so a test can hold the chunk at this build's version and vary only
+    /// the record whose gate it means to exercise — otherwise the chunk gate fires first and
+    /// the test would pass without ever reaching the side-record gate.
+    fn fixtures(chunk_version: i32, side_version: i32) -> (Vec<u8>, Vec<u8>, Option<Vec<u8>>) {
+        let chunk = sample_chunk();
+        let pos = ChunkPos::new(0, 0);
+
+        let mut chunk_nbt = chunk_to_nbt(&chunk, pos, ChunkStatus::Full, MIN_Y, HEIGHT, false);
+        restamp(&mut chunk_nbt, chunk_version);
+
+        let mut entity_nbt = NbtCompound::new();
+        entity_nbt.insert("DataVersion", side_version);
+        entity_nbt.insert("Position", NbtTag::IntArray(vec![pos.0.x, pos.0.y]));
+        entity_nbt.insert(
+            "Entities",
+            NbtList::Compound(vec![entity_to_nbt(&sample_entity())]),
+        );
+
+        let mut poi_root = poi_to_nbt(&[VanillaPoi {
+            pos: [1, MIN_Y + 2, 2],
+            poi_type: Some(Identifier::vanilla_static("home")),
+            free_tickets: 3,
+        }]);
+        restamp(&mut poi_root, side_version);
+
+        (
+            write_raw_nbt(&chunk_nbt),
+            write_raw_nbt(&entity_nbt),
+            Some(write_raw_nbt(&poi_root)),
+        )
+    }
+
+    fn decode(
+        bytes: (&[u8], &[u8], Option<&[u8]>),
+    ) -> io::Result<(PersistentChunk<'static>, ChunkStatus)> {
+        let (chunk, entities, poi) = bytes;
+        decode_persistent_chunk(
+            chunk,
+            Some(entities),
+            poi,
+            ChunkPos::new(0, 0),
+            MIN_Y,
+            HEIGHT,
+            SOURCE,
+        )
+    }
+
+    #[test]
+    fn chunk_records_load_at_this_data_version_and_are_refused_otherwise() {
+        init_vanilla_registry();
+
+        let (chunk, entities, poi) = fixtures(DATA_VERSION, DATA_VERSION);
+        decode((&chunk, &entities, poi.as_deref()))
+            .expect("a chunk stamped with this build's data version must load");
+
+        for stale in [DATA_VERSION - 1, DATA_VERSION + 1] {
+            let (chunk, entities, poi) = fixtures(stale, stale);
+            let Err(error) = decode((&chunk, &entities, poi.as_deref())) else {
+                panic!("a chunk from data version {stale} must be refused");
+            };
+            assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+            let message = error.to_string();
+            assert!(message.contains("the chunk of"), "{message}");
+            assert!(message.contains(&stale.to_string()), "{message}");
+            assert!(message.contains(SOURCE), "{message}");
+        }
+    }
+
+    #[test]
+    fn entity_side_records_are_refused_at_another_data_version() {
+        init_vanilla_registry();
+
+        let (chunk, _, _) = fixtures(DATA_VERSION, DATA_VERSION);
+        let (_, entities, _) = fixtures(DATA_VERSION, DATA_VERSION - 1);
+        let Err(error) = decode_persistent_chunk(
+            &chunk,
+            Some(&entities),
+            None,
+            ChunkPos::new(0, 0),
+            MIN_Y,
+            HEIGHT,
+            SOURCE,
+        ) else {
+            panic!("an entity record from an older data version must be refused");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        let message = error.to_string();
+        assert!(message.contains("the entity of"), "{message}");
+        assert!(message.contains(SOURCE), "{message}");
+    }
+
+    #[test]
+    fn poi_side_records_are_refused_at_another_data_version() {
+        init_vanilla_registry();
+
+        let (chunk, _, poi) = fixtures(DATA_VERSION, DATA_VERSION + 1);
+        let Err(error) = decode_persistent_chunk(
+            &chunk,
+            None,
+            poi.as_deref(),
+            ChunkPos::new(0, 0),
+            MIN_Y,
+            HEIGHT,
+            SOURCE,
+        ) else {
+            panic!("a POI record from a newer data version must be refused");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        let message = error.to_string();
+        assert!(message.contains("the POI of"), "{message}");
+        assert!(message.contains(SOURCE), "{message}");
+
+        let (chunk, _, poi) = fixtures(DATA_VERSION, DATA_VERSION);
+        // The same chunk that was refused above now decodes, which is what isolates the gate to
+        // the POI record. The resolved `pois` set is not asserted: a record only survives when
+        // the chunk's block state at its position maps to a POI type (`storage.rs`), and the
+        // fixture chunk holds stone there.
+        let (_, _) = decode_persistent_chunk(
+            &chunk,
+            None,
+            poi.as_deref(),
+            ChunkPos::new(0, 0),
+            MIN_Y,
+            HEIGHT,
+            SOURCE,
+        )
+        .expect("a POI record stamped with this build's data version must load");
+    }
+
+    #[test]
+    fn level_dat_loads_at_this_data_version_and_is_refused_otherwise() {
+        init_vanilla_registry();
+        let directory = Path::new("/nonexistent-steel-level-dat-version-test");
+
+        let mut data = NbtCompound::new();
+        data.insert("DataVersion", DATA_VERSION);
+        let mut level = LevelData::new_with_seed(1);
+        apply_level_dat(&data, directory, &mut level)
+            .expect("a level.dat stamped with this build's data version must load");
+
+        // `insert` appends and the writer lookup returns the first tag, so a second `insert`
+        // would not change what the gate sees: build the stale record fresh.
+        let mut stale = NbtCompound::new();
+        stale.insert("DataVersion", DATA_VERSION - 1);
+        let Err(error) = apply_level_dat(&stale, directory, &mut level) else {
+            panic!("a level.dat from another data version must be refused");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        let message = error.to_string();
+        assert!(
+            message.contains(&(DATA_VERSION - 1).to_string()),
+            "{message}"
+        );
+        assert!(message.contains("level.dat"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn saved_data_files_load_at_this_data_version_and_are_refused_otherwise() {
+        let directory = test_directory("saved-data-version");
+        fs::create_dir_all(&directory)
+            .await
+            .expect("test directory should be created");
+        let path = directory.join("raids.dat");
+
+        for version in [DATA_VERSION, DATA_VERSION + 1] {
+            let mut root = NbtCompound::new();
+            root.insert("data", NbtTag::Compound(NbtCompound::new()));
+            root.insert("DataVersion", version);
+            fs::write(&path, write_gzip_nbt(&root).expect("root should encode"))
+                .await
+                .expect("saved data should be written");
+
+            if version == DATA_VERSION {
+                read_saved_data_file(&path)
+                    .expect("this build's saved data must load")
+                    .expect("the wrapper must carry a payload");
+                continue;
+            }
+            let Err(error) = read_saved_data_file(&path) else {
+                panic!("saved data from data version {version} must be refused");
+            };
+            assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+            let message = error.to_string();
+            assert!(message.contains(&version.to_string()), "{message}");
+            assert!(message.contains("raids.dat"), "{message}");
+        }
+
+        fs::remove_dir_all(directory)
+            .await
+            .expect("test directory should be removable");
+    }
 }

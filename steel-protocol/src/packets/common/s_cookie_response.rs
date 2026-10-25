@@ -59,7 +59,7 @@ impl ReadFrom for SCookieResponse {
 mod tests {
     use std::io::Cursor;
 
-    use steel_utils::serial::{ReadFrom as _, WriteTo as _};
+    use steel_utils::serial::WriteTo as _;
 
     use super::*;
 

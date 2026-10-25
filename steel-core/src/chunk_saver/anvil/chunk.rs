@@ -40,6 +40,7 @@ use crate::chunk_saver::format::{
     PersistentEntity, PersistentHeightmap, PersistentLightData, PersistentLightSection,
     PersistentPoi, PersistentSection, PersistentStructureReference, PersistentTick,
 };
+use crate::datafixer::{DataFixType, ensure_current, version_of_borrowed};
 
 use super::entities::{entity_from_nbt, entity_to_nbt};
 use super::nbt::{compound_list, read_raw_nbt, write_raw_nbt};
@@ -58,7 +59,7 @@ static WARNED_Y_POS: AtomicBool = AtomicBool::new(false);
 
 /// Returns the vanilla `Status` string for a Steel chunk status.
 #[must_use]
-pub(crate) fn status_name(status: ChunkStatus) -> &'static str {
+pub(crate) const fn status_name(status: ChunkStatus) -> &'static str {
     match status {
         ChunkStatus::Empty => "minecraft:empty",
         ChunkStatus::StructureStarts => "minecraft:structure_starts",
@@ -98,6 +99,10 @@ pub(crate) fn status_from_name(name: &str) -> Option<ChunkStatus> {
 /// full chunks have theirs written to `entities/*.mca` by the storage backend. `height` is the
 /// dimension height, needed to pick the vanilla heightmap bit width.
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "mirrors vanilla `SerializableChunkData.write` field-for-field; splitting it would obscure the tag-by-tag mapping"
+)]
 pub(crate) fn chunk_to_nbt(
     persistent: &PersistentChunk<'_>,
     pos: ChunkPos,
@@ -242,14 +247,24 @@ pub(crate) fn chunk_to_nbt(
 
 /// Decodes vanilla chunk NBT into a persistent chunk and its status.
 ///
+/// `source` identifies the record for the version gate — normally the region file path plus
+/// the chunk position — so a refused chunk says which file it came from.
+///
 /// # Errors
+/// Returns `Unsupported` when the record's `DataVersion` is not this build's
+/// (`crate::datafixer`); the caller must propagate that instead of regenerating the chunk.
 /// Returns `InvalidData` for structurally invalid payloads (bad palette widths, malformed
 /// records) so the caller can discard and regenerate the chunk.
+#[expect(
+    clippy::too_many_lines,
+    reason = "mirrors vanilla `SerializableChunkData.read` field-for-field; splitting it would obscure the tag-by-tag mapping"
+)]
 pub(crate) fn nbt_to_chunk(
     nbt: &BorrowedNbtCompound<'_, '_>,
     pos: ChunkPos,
     min_y: i32,
     height: i32,
+    source: &str,
 ) -> io::Result<(PersistentChunk<'static>, ChunkStatus)> {
     if height <= 0 || height % 16 != 0 || min_y % 16 != 0 {
         return Err(io::Error::new(
@@ -264,11 +279,7 @@ pub(crate) fn nbt_to_chunk(
         .string("Status")
         .and_then(|name| status_from_name(name.to_str().as_ref()))
         .unwrap_or(ChunkStatus::Empty);
-    crate::datafixer::ensure_current(
-        crate::datafixer::version_of_borrowed(nbt),
-        crate::datafixer::DataFixType::Chunk,
-        &format!("chunk {pos:?}"),
-    )?;
+    ensure_current(version_of_borrowed(nbt), DataFixType::Chunk, source)?;
     if let Some(y_pos) = nbt.int("yPos")
         && y_pos != min_y.div_euclid(16)
     {
@@ -432,8 +443,7 @@ pub(crate) fn nbt_to_chunk(
                 lists
                     .get(index)
                     .and_then(|list| list.shorts())
-                    .map(|values| values.iter().map(|value| *value as u16).collect())
-                    .unwrap_or_default(),
+                    .map_or_default(|values| values.iter().map(|value| *value as u16).collect()),
             );
         }
     }
@@ -629,12 +639,11 @@ fn read_vanilla_palette(
     // palette entry is the biome's id as a string.
     for name in palette.strings().unwrap_or_default() {
         let key = Identifier::from_str(name.to_str().as_ref()).ok();
-        let biome_id = match key.and_then(|key| REGISTRY.biomes.id_from_key(&key)) {
-            Some(biome) => biome,
-            None => {
-                tracing::warn!("Vanilla biome palette entry could not be resolved; using plains");
-                vanilla_biomes::PLAINS.id()
-            }
+        let biome_id = if let Some(biome) = key.and_then(|key| REGISTRY.biomes.id_from_key(&key)) {
+            biome
+        } else {
+            tracing::warn!("Vanilla biome palette entry could not be resolved; using plains");
+            vanilla_biomes::PLAINS.id()
         };
         indices.push(builder.biome_index(u16::try_from(biome_id).map_err(|_| {
             io::Error::new(io::ErrorKind::InvalidData, "biome id does not fit in u16")
@@ -784,9 +793,10 @@ fn block_states_to_nbt(chunk: &PersistentChunk<'_>, section: &PersistentSection)
     let entries = PaletteEntries::Blocks(
         palette
             .iter()
-            .map(|index| match chunk.block_states.get(usize::from(*index)) {
-                Some(state) => block_state_entry(state),
-                None => {
+            .map(|index| {
+                if let Some(state) = chunk.block_states.get(usize::from(*index)) {
+                    block_state_entry(state)
+                } else {
                     tracing::warn!(
                         "Block-state palette index {index} is missing from the chunk palette; using air"
                     );
@@ -821,9 +831,10 @@ fn biomes_to_nbt(chunk: &PersistentChunk<'_>, section: &PersistentSection) -> Nb
     let entries = PaletteEntries::Biomes(
         palette
             .iter()
-            .map(|index| match chunk.biomes.get(usize::from(*index)) {
-                Some(biome) => biome.to_string(),
-                None => {
+            .map(|index| {
+                if let Some(biome) = chunk.biomes.get(usize::from(*index)) {
+                    biome.to_string()
+                } else {
                     tracing::warn!(
                         "Biome palette index {index} is missing from the chunk palette; using plains"
                     );
@@ -866,7 +877,7 @@ enum PaletteEntries {
 }
 
 impl PaletteEntries {
-    fn len(&self) -> usize {
+    const fn len(&self) -> usize {
         match self {
             Self::Blocks(entries) => entries.len(),
             Self::Biomes(entries) => entries.len(),
@@ -976,23 +987,22 @@ fn block_entity_to_nbt(
     } else {
         read_raw_nbt(&entity.nbt_data).ok()?
     };
-    let block_entity_type = match &entity.entity_type {
-        Some(entity_type) => entity_type.clone(),
-        None => {
-            // Vanilla stores a *pending* tag for block entities that were never materialized.
-            // Steel's pending marker carries no type, so re-derive it from the block state.
-            let Some(derived) = block_entity_type_at(chunk, entity, min_y) else {
-                tracing::warn!(
-                    "Pending block entity at ({}, {}, {}) has no block entity type for its block; dropping it",
-                    entity.x,
-                    entity.y,
-                    entity.z
-                );
-                return None;
-            };
-            nbt.insert("keepPacked", NbtTag::Byte(1));
-            derived
-        }
+    let block_entity_type = if let Some(entity_type) = &entity.entity_type {
+        entity_type.clone()
+    } else {
+        // Vanilla stores a *pending* tag for block entities that were never materialized.
+        // Steel's pending marker carries no type, so re-derive it from the block state.
+        let Some(derived) = block_entity_type_at(chunk, entity, min_y) else {
+            tracing::warn!(
+                "Pending block entity at ({}, {}, {}) has no block entity type for its block; dropping it",
+                entity.x,
+                entity.y,
+                entity.z
+            );
+            return None;
+        };
+        nbt.insert("keepPacked", NbtTag::Byte(1));
+        derived
     };
     nbt.insert("id", block_entity_type.to_string());
     nbt.insert("x", pos.0.x * 16 + i32::from(entity.x));
@@ -1100,7 +1110,7 @@ struct PaletteBuilder {
 }
 
 impl PaletteBuilder {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             block_states: Vec::new(),
             biomes: Vec::new(),
@@ -1208,7 +1218,7 @@ fn pack_vanilla(indices: impl Iterator<Item = u32>, bits: u8, count: usize) -> V
     out
 }
 
-fn heightmap_key(map_type: HeightmapType) -> &'static str {
+const fn heightmap_key(map_type: HeightmapType) -> &'static str {
     match map_type {
         HeightmapType::WorldSurface => "WORLD_SURFACE",
         HeightmapType::MotionBlocking => "MOTION_BLOCKING",

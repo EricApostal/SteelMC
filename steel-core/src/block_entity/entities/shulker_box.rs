@@ -43,6 +43,7 @@ use crate::{
         BlockEntity, BlockEntityBase, BlockEntityLifecycleExt as _,
         entities::openers_counter::ContainerViewers,
     },
+    entity::Entity,
     inventory::{
         container::Container,
         lock::{ContainerRef, SharedContainer},
@@ -359,7 +360,7 @@ impl ShulkerBoxBlockEntity {
 
     /// Vanilla `ShulkerBoxBlockEntity.startOpen`/`stopOpen` sound: `0.5` volume
     /// with a randomized pitch, played at the block center.
-    fn play_sound(&self, world: &Arc<World>, pos: BlockPos, sound: SoundEventRef) {
+    fn play_sound(world: &Arc<World>, pos: BlockPos, sound: SoundEventRef) {
         world.play_sound_at(
             sound,
             SoundSource::Blocks,
@@ -525,9 +526,9 @@ impl ContainerViewers for ShulkerBoxBlockEntity {
             world.game_event(
                 &vanilla_game_events::CONTAINER_OPEN,
                 pos,
-                &GameEventContext::new(Some(player as &dyn crate::entity::Entity), None),
+                &GameEventContext::new(Some(player as &dyn Entity), None),
             );
-            self.play_sound(&world, pos, &sound_events::BLOCK_SHULKER_BOX_OPEN);
+            Self::play_sound(&world, pos, &sound_events::BLOCK_SHULKER_BOX_OPEN);
         }
     }
 
@@ -548,9 +549,9 @@ impl ContainerViewers for ShulkerBoxBlockEntity {
             world.game_event(
                 &vanilla_game_events::CONTAINER_CLOSE,
                 pos,
-                &GameEventContext::new(Some(player as &dyn crate::entity::Entity), None),
+                &GameEventContext::new(Some(player as &dyn Entity), None),
             );
-            self.play_sound(&world, pos, &sound_events::BLOCK_SHULKER_BOX_CLOSE);
+            Self::play_sound(&world, pos, &sound_events::BLOCK_SHULKER_BOX_CLOSE);
         }
     }
 

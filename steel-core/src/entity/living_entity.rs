@@ -28,6 +28,20 @@ const fn hand_slot(hand: InteractionHand) -> EquipmentSlot {
     }
 }
 
+/// Mirrors vanilla `ServerPlayer`'s `LivingEntity.tickEffects` notifications: a
+/// replaced instance raises `effects_changed` through `onEffectUpdated`, and an
+/// expiry through `onEffectsRemoved`.
+fn notify_player_effect_tick<E: LivingEntity + ?Sized>(entity: &E, outcome: MobEffectDurationTick) {
+    let Some(player) = entity.as_player() else {
+        return;
+    };
+    match outcome {
+        MobEffectDurationTick::Updated(effect) => player.on_effect_updated(effect.effect()),
+        MobEffectDurationTick::Removed(removed) => player.on_effects_removed(&[removed]),
+        MobEffectDurationTick::Unchanged => {}
+    }
+}
+
 /// A trait for living entities that can take damage, heal, and die.
 ///
 /// This trait provides the core functionality for entities that have health,
@@ -1470,6 +1484,9 @@ pub trait LivingEntity: Entity {
             return false;
         }
         let (effect_key, amplifier) = (effect.effect(), effect.amplifier());
+        // Vanilla `LivingEntity.addEffect` fires `onEffectAdded` for a new effect
+        // and `onEffectUpdated` when an existing instance was replaced.
+        let was_present = self.has_mob_effect(effect_key);
         let changed = self.living_base().add_mob_effect(effect);
         // Calls on_effect_started unconditionally, even when it didn't replace a stronger instance.
         let dyn_self = self
@@ -1478,6 +1495,13 @@ pub trait LivingEntity: Entity {
         MOB_EFFECT_BEHAVIORS
             .get_behavior(effect_key)
             .on_effect_started(dyn_self, amplifier);
+        if changed && let Some(player) = self.as_player() {
+            if was_present {
+                player.on_effect_updated(effect_key);
+            } else {
+                player.on_effect_added(effect_key);
+            }
+        }
         changed
     }
 
@@ -1492,7 +1516,13 @@ pub trait LivingEntity: Entity {
 
     /// Removes active vanilla mob-effect state.
     fn remove_mob_effect(&self, effect: MobEffectRef) -> bool {
-        self.living_base().remove_mob_effect(effect)
+        let removed = self.living_base().remove_mob_effect(effect);
+        // Vanilla `LivingEntity.removeEffect` notifies a `ServerPlayer` through
+        // `onEffectsRemoved` (which also clears the levitation tracking state).
+        if removed && let Some(player) = self.as_player() {
+            player.on_effects_removed(&[effect]);
+        }
+        removed
     }
 
     /// Ticks vanilla server-side mob-effect behavior and durations.
@@ -1503,7 +1533,8 @@ pub trait LivingEntity: Entity {
             .expect("Self implements LivingEntity");
         for effect in self.active_mob_effects() {
             if !effect.has_remaining_duration() {
-                self.living_base().tick_mob_effect_duration(effect.effect());
+                let outcome = self.living_base().tick_mob_effect_duration(effect.effect());
+                notify_player_effect_tick(self, outcome);
                 continue;
             }
 
@@ -1516,7 +1547,8 @@ pub trait LivingEntity: Entity {
                 continue;
             }
 
-            self.living_base().tick_mob_effect_duration(effect.effect());
+            let outcome = self.living_base().tick_mob_effect_duration(effect.effect());
+            notify_player_effect_tick(self, outcome);
         }
     }
 

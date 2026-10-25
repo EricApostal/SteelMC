@@ -16,6 +16,7 @@
 //!   [`Minecart::on_minecart_destroyed`] (`destroy`/`kill`), like the other
 //!   container carts.
 
+use std::mem;
 use std::str::FromStr;
 use std::sync::{Arc, Weak};
 
@@ -41,6 +42,7 @@ use steel_utils::{BlockStateId, DowncastType, DowncastTypeKey, Identifier, trans
 use text_components::TextComponent;
 
 use crate::behavior::InteractionResult;
+use crate::behavior::advancement_hooks::raise_generate_loot;
 use crate::block_entity::entities::{shuffle, shuffle_and_split_items};
 use crate::entity::damage::DamageSource;
 use crate::entity::{
@@ -202,14 +204,10 @@ impl ChestMinecartEntity {
         if let Some(player) = player
             && let Some(world) = self.level()
         {
-            crate::behavior::advancement_hooks::raise_generate_loot(
-                player,
-                &world,
-                &loot_table_key,
-            );
+            raise_generate_loot(player, &world, &loot_table_key);
         }
 
-        let seed = std::mem::take(&mut self.loot.lock().loot_table_seed);
+        let seed = mem::take(&mut self.loot.lock().loot_table_seed);
         self.loot.lock().loot_table = None;
         if seed == 0 {
             self.fill_from_loot_table(loot_table, &mut rand::rng(), player);
@@ -509,12 +507,10 @@ mod tests {
     use std::sync::{Arc, Weak};
 
     use simdnbt::borrow::read_compound as read_borrowed_compound;
-    use steel_registry::blocks::block_state_ext::BlockStateExt as _;
     use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_entities, vanilla_items};
 
     use super::*;
     use crate::entity::SharedEntity;
-    use crate::entity::entities::objects::vehicles::minecart_base::Minecart as _;
     use crate::test_support::fresh_test_world;
 
     fn test_cart(world: Weak<World>) -> ChestMinecartEntity {
@@ -594,7 +590,7 @@ mod tests {
 
         let stored = restored.inventory.lock();
         assert_eq!(stored.items().len(), CHEST_MINECART_SLOTS);
-        assert!(stored.get_item(5).item().key == vanilla_items::GOLD_INGOT.key);
+        assert_eq!(stored.get_item(5).item().key, vanilla_items::GOLD_INGOT.key);
         assert_eq!(stored.get_item(5).count(), 3);
         assert!(stored.get_item(0).is_empty());
         drop(stored);

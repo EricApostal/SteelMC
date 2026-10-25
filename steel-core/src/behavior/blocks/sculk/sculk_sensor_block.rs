@@ -14,16 +14,26 @@ use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{
-    BlockStateProperties, BoolProperty, Direction, IntProperty, SculkSensorPhase,
+    BlockStateProperties, BoolProperty, Direction, EnumProperty, IntProperty, SculkSensorPhase,
 };
+use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_block_tags::BlockTag;
+use steel_registry::vanilla_entities::WARDEN;
+use steel_registry::vanilla_game_events::SCULK_SENSOR_TENDRILS_CLICKING;
 use steel_registry::{sound_events, vanilla_block_entity_types, vanilla_game_events};
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId, value_providers::IntProvider};
 
+use crate::behavior::block::schedule_water_tick_if_waterlogged;
 use crate::behavior::blocks::NoteBlock;
 use crate::behavior::{BlockBehavior, BlockEntityCreation, BlockPlaceContext, try_drop_experience};
 use crate::block_entity::BlockEntityTicker;
+use crate::block_entity::entities::{CalibratedSculkSensorBlockEntity, SculkSensorBlockEntity};
+use crate::entity::Entity;
+use crate::entity::ai::path::PathComputationType;
+use crate::world::ScheduledTickAccess;
+use crate::world::game_event::GameEventContext;
+use crate::world::game_event::vibration::resonance_event_by_frequency;
 use crate::world::{LevelReader, SignalQueryContext, World};
 
 /// Vanilla `SculkSensorBlock.ACTIVE_TICKS`.
@@ -37,8 +47,7 @@ pub struct SculkSensorBlock {
     block: BlockRef,
 }
 
-const PHASE: &steel_registry::blocks::properties::EnumProperty<SculkSensorPhase> =
-    &BlockStateProperties::SCULK_SENSOR_PHASE;
+const PHASE: &EnumProperty<SculkSensorPhase> = &BlockStateProperties::SCULK_SENSOR_PHASE;
 const POWER: &IntProperty = &BlockStateProperties::POWER;
 const WATERLOGGED: &BoolProperty = &BlockStateProperties::WATERLOGGED;
 
@@ -74,7 +83,7 @@ impl SculkSensorBlock {
         state: BlockStateId,
         power: i32,
         vibration_frequency: i32,
-        source_entity: Option<&dyn crate::entity::Entity>,
+        source_entity: Option<&dyn Entity>,
         active_ticks: i32,
     ) {
         let active = state
@@ -86,9 +95,9 @@ impl SculkSensorBlock {
         world.update_neighbors_at(pos.below(), block);
         Self::try_resonate_vibration(source_entity, world, pos, vibration_frequency);
         world.game_event(
-            &steel_registry::vanilla_game_events::SCULK_SENSOR_TENDRILS_CLICKING,
+            &SCULK_SENSOR_TENDRILS_CLICKING,
             pos,
-            &crate::world::game_event::GameEventContext::new(source_entity, None),
+            &GameEventContext::new(source_entity, None),
         );
         if !state.get_value(WATERLOGGED) {
             // Vanilla `level.getRandom().nextFloat() * 0.2F + 0.8F`; ambient pitch jitter.
@@ -108,14 +117,12 @@ impl SculkSensorBlock {
     /// `#vibration_resonators` block receives the matching `RESONATE_n` game event and a
     /// pitch-bent `AMETHYST_BLOCK_RESONATE` sound.
     pub fn try_resonate_vibration(
-        source_entity: Option<&dyn crate::entity::Entity>,
+        source_entity: Option<&dyn Entity>,
         world: &Arc<World>,
         pos: BlockPos,
         vibration_frequency: i32,
     ) {
-        let Some(resonance_event) =
-            crate::world::game_event::vibration::resonance_event_by_frequency(vibration_frequency)
-        else {
+        let Some(resonance_event) = resonance_event_by_frequency(vibration_frequency) else {
             return;
         };
         // Vanilla `RESONANCE_PITCH_BEND`, built from `NoteBlock.getPitchFromNote` over the
@@ -137,10 +144,7 @@ impl SculkSensorBlock {
             world.game_event(
                 resonance_event,
                 relative_pos,
-                &crate::world::game_event::GameEventContext::new(
-                    source_entity,
-                    Some(relative_state),
-                ),
+                &GameEventContext::new(source_entity, Some(relative_state)),
             );
             world.play_sound(
                 &sound_events::BLOCK_AMETHYST_BLOCK_RESONATE,
@@ -227,26 +231,21 @@ impl SculkSensorBlock {
         state: BlockStateId,
         entity: &dyn crate::entity::Entity,
     ) {
-        if !Self::can_activate(state)
-            || entity.entity_type() == &steel_registry::vanilla_entities::WARDEN
-        {
+        if !Self::can_activate(state) || entity.entity_type() == &WARDEN {
             return;
         }
         let Some(block_entity) = world.get_block_entity(pos) else {
             return;
         };
         use steel_utils::Downcast as _;
-        let probe = crate::world::game_event::GameEventContext::new(None, Some(state));
-        let listener = if let Some(sensor) =
-            block_entity.downcast_ref::<crate::block_entity::entities::SculkSensorBlockEntity>()
-        {
+        let probe = GameEventContext::new(None, Some(state));
+        let listener = if let Some(sensor) = block_entity.downcast_ref::<SculkSensorBlockEntity>() {
             if !sensor.can_receive_vibration(world, pos, &vanilla_game_events::STEP, &probe) {
                 return;
             }
             Arc::clone(sensor.vibration_listener())
-        } else if let Some(sensor) = block_entity
-            .downcast_ref::<crate::block_entity::entities::CalibratedSculkSensorBlockEntity>(
-        ) {
+        } else if let Some(sensor) = block_entity.downcast_ref::<CalibratedSculkSensorBlockEntity>()
+        {
             if !sensor.can_receive_vibration(world, pos, &vanilla_game_events::STEP, &probe) {
                 return;
             }
@@ -257,7 +256,7 @@ impl SculkSensorBlock {
         listener.force_schedule_vibration(
             world,
             &vanilla_game_events::STEP,
-            &crate::world::game_event::GameEventContext::new(Some(entity), Some(state)),
+            &GameEventContext::new(Some(entity), Some(state)),
             entity.position(),
         );
     }
@@ -275,13 +274,13 @@ impl BlockBehavior for SculkSensorBlock {
     fn update_shape(
         &self,
         state: BlockStateId,
-        world: &dyn crate::world::ScheduledTickAccess,
+        world: &dyn ScheduledTickAccess,
         pos: BlockPos,
-        _direction: steel_registry::blocks::properties::Direction,
+        _direction: Direction,
         _neighbor_pos: BlockPos,
         _neighbor_state: BlockStateId,
     ) -> BlockStateId {
-        crate::behavior::block::schedule_water_tick_if_waterlogged(state, world, pos);
+        schedule_water_tick_if_waterlogged(state, world, pos);
         state
     }
 
@@ -332,7 +331,7 @@ impl BlockBehavior for SculkSensorBlock {
     fn is_pathfindable(
         &self,
         _state: BlockStateId,
-        _computation_type: crate::entity::ai::path::PathComputationType,
+        _computation_type: PathComputationType,
     ) -> bool {
         // Vanilla `SculkSensorBlock.isPathfindable` always returns `false`.
         false
@@ -353,11 +352,11 @@ impl BlockBehavior for SculkSensorBlock {
         state: BlockStateId,
         world: &dyn LevelReader,
         pos: BlockPos,
-        direction: steel_registry::blocks::properties::Direction,
+        direction: Direction,
         _context: SignalQueryContext,
     ) -> i32 {
         // Vanilla `getDirectSignal`: only upward.
-        if direction == steel_registry::blocks::properties::Direction::Up {
+        if direction == Direction::Up {
             self.get_signal(state, world, pos, direction, SignalQueryContext::DEFAULT)
         } else {
             0
@@ -373,7 +372,7 @@ impl BlockBehavior for SculkSensorBlock {
         state: BlockStateId,
         world: &dyn LevelReader,
         pos: BlockPos,
-        _direction: steel_registry::blocks::properties::Direction,
+        _direction: Direction,
     ) -> i32 {
         use steel_utils::Downcast as _;
         // Vanilla returns the BE's last vibration frequency while active.
@@ -384,7 +383,7 @@ impl BlockBehavior for SculkSensorBlock {
             return 0;
         };
         entity
-            .downcast_ref::<crate::block_entity::entities::SculkSensorBlockEntity>()
+            .downcast_ref::<SculkSensorBlockEntity>()
             .map_or(0, |sensor| sensor.last_vibration_frequency())
     }
 
@@ -394,9 +393,7 @@ impl BlockBehavior for SculkSensorBlock {
         pos: BlockPos,
         state: BlockStateId,
     ) -> BlockEntityCreation {
-        BlockEntityCreation::Created(Arc::new(
-            crate::block_entity::entities::SculkSensorBlockEntity::new(level, pos, state),
-        ))
+        BlockEntityCreation::Created(Arc::new(SculkSensorBlockEntity::new(level, pos, state)))
     }
 
     fn get_block_entity_ticker(
@@ -416,7 +413,7 @@ impl BlockBehavior for SculkSensorBlock {
         _state: BlockStateId,
         world: &Arc<World>,
         pos: BlockPos,
-        tool: &steel_registry::item_stack::ItemStack,
+        tool: &ItemStack,
         drop_experience: bool,
     ) {
         if drop_experience {
@@ -428,18 +425,16 @@ impl BlockBehavior for SculkSensorBlock {
 
 #[cfg(test)]
 mod tests {
-    use glam::DVec3;
     use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_game_events};
     use steel_utils::types::UpdateFlags;
     use steel_utils::{ChunkPos, Downcast as _};
 
     use super::*;
     use crate::behavior::init_behaviors;
-    use crate::block_entity::BlockEntity as _;
-    use crate::block_entity::entities::SculkSensorBlockEntity;
-    use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
-    use crate::world::game_event::vibration::VibrationCallback as _;
-    use crate::world::game_event::{GameEventContext, GameEventListener as _};
+    use crate::test_support::{
+        advance_test_game_time_to, fresh_test_world, insert_ready_full_chunk,
+    };
+    use crate::world::game_event::GameEventContext;
 
     /// Places a sculk sensor with its block entity in a ticking test chunk whose 3x3 chunk
     /// neighbourhood is loaded, as `VibrationUser.requiresAdjacentChunksToBeTicking` demands
@@ -491,7 +486,7 @@ mod tests {
         );
         // `VibrationSelector.chosenCandidate` only releases a candidate on a later game tick than
         // the one it was buffered on.
-        crate::test_support::advance_test_game_time_to(world, world.game_time() + 1);
+        advance_test_game_time_to(world, world.game_time() + 1);
 
         // One tick to schedule the two blocks of travel time, then the arrival tick that
         // activates the sensor.

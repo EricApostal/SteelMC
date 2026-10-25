@@ -1,3 +1,4 @@
+use crate::behavior::advancement_hooks::raise_fishing_rod_hooked;
 use crate::entity::entities::{ExperienceOrbEntity, ItemEntity};
 use crate::entity::loot::loot_level_view;
 use crate::entity::projectile::triangle_random;
@@ -537,7 +538,18 @@ impl FishingHookEntity {
 
                 if let Some(hooked_in) = hooked_in {
                     self.pull_entity(&hooked_in);
-                    // TODO: criteria triggers (advancements)
+                    // Vanilla `FishingHook.retrieve` raises `fishing_rod_hooked`
+                    // with the hooked entity and no loot once the entity is pulled.
+                    if let Some(world) = self.level() {
+                        raise_fishing_rod_hooked(
+                            player,
+                            &world,
+                            rod,
+                            self,
+                            Some(hooked_in.as_ref()),
+                            &[],
+                        );
+                    }
                     self.broadcast_entity_event(EntityStatus::FishingRodReelIn);
                     damage = if hooked_in.as_ref().is::<ItemEntity>() {
                         DMG_ITEM_ENTITY
@@ -573,7 +585,10 @@ impl FishingHookEntity {
                         let items =
                             vanilla_loot_tables::GAMEPLAY_FISHING.get_random_items(&mut loot_ctx);
 
-                        // TODO: criteria triggers (advancements)
+                        // Vanilla `FishingHook.retrieve` raises `fishing_rod_hooked`
+                        // with the fished loot and the hook as the entity context,
+                        // before the caught items are spawned.
+                        raise_fishing_rod_hooked(player, &world, rod, self, None, &items);
 
                         self.spawn_loot_award_stat(items, &world, owner.as_ref());
 

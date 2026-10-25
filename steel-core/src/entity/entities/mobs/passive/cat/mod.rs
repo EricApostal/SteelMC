@@ -55,6 +55,7 @@ use crate::entity::{
 };
 use crate::physics::MoveResult;
 use crate::player::Player;
+use crate::player::advancement::triggers::raise_tame_animal;
 use crate::world::World;
 use crate::world::spawn::difficulty::moon_brightness;
 
@@ -463,7 +464,7 @@ impl CatEntity {
         self.set_tame(true);
         self.set_owner_uuid(Some(player.uuid()));
         // Vanilla `TamableAnimal.tame` raises `TAME_ANIMAL` for the taming player.
-        crate::player::advancement::triggers::raise_tame_animal(player, self);
+        raise_tame_animal(player, self);
     }
 
     /// Vanilla `Cat.tryToTame`: one chance in three, otherwise the smoke event.

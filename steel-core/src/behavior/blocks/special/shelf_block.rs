@@ -4,6 +4,7 @@
 //! adjacent powered wooden shelves connect into chains of up to three parts, and
 //! a powered shelf swaps the player's hotbar across the whole chain.
 
+use std::mem;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -15,6 +16,7 @@ use steel_registry::blocks::properties::{
     BlockStateProperties, BoolProperty, Direction, EnumProperty, SideChainPart,
 };
 use steel_registry::item_stack::ItemStack;
+use steel_registry::sound_event::SoundEvent;
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::{REGISTRY, sound_events, vanilla_block_entity_types, vanilla_game_events};
 use steel_utils::types::{InteractionHand, UpdateFlags};
@@ -176,11 +178,7 @@ impl ShelfBlock {
         Some(Self::section(relative_x, SHELF_COLUMNS) as usize)
     }
 
-    fn play_sound(
-        world: &Arc<World>,
-        pos: BlockPos,
-        sound: &'static steel_registry::sound_event::SoundEvent,
-    ) {
+    fn play_sound(world: &Arc<World>, pos: BlockPos, sound: &'static SoundEvent) {
         world.play_block_sound(sound, pos, 1.0, 1.0, None);
     }
 
@@ -527,7 +525,7 @@ impl BlockBehavior for ShelfBlock {
         let Some(block_entity) = world.get_block_entity(pos) else {
             return InteractionResult::Pass;
         };
-        let Some(shelf) = block_entity.downcast_ref::<ShelfBlockEntity>() else {
+        let Some(shelf_entity) = block_entity.downcast_ref::<ShelfBlockEntity>() else {
             return InteractionResult::Pass;
         };
         let Some(slot) = Self::hit_slot(state, hit_result) else {
@@ -544,8 +542,8 @@ impl BlockBehavior for ShelfBlock {
         }
 
         let removed = inv.with_item(|held| {
-            let placed = std::mem::replace(held, ItemStack::empty());
-            let removed = shelf.swap_item(slot, placed.copy_with_count(placed.count()));
+            let placed = mem::replace(held, ItemStack::empty());
+            let removed = shelf_entity.swap_item(slot, placed.copy_with_count(placed.count()));
             *held = if player.has_infinite_materials() && removed.is_empty() {
                 placed
             } else {
@@ -555,7 +553,12 @@ impl BlockBehavior for ShelfBlock {
         });
 
         let held_is_empty = inv.with_item(|held| held.is_empty());
-        if !removed.is_empty() {
+        if removed.is_empty() {
+            if held_is_empty {
+                return InteractionResult::Pass;
+            }
+            world.play_block_sound(&sound_events::BLOCK_SHELF_PLACE_ITEM, pos, 1.0, 1.0, None);
+        } else {
             world.play_block_sound(
                 if held_is_empty {
                     &sound_events::BLOCK_SHELF_TAKE_ITEM
@@ -567,14 +570,9 @@ impl BlockBehavior for ShelfBlock {
                 1.0,
                 None,
             );
-        } else {
-            if held_is_empty {
-                return InteractionResult::Pass;
-            }
-            world.play_block_sound(&sound_events::BLOCK_SHELF_PLACE_ITEM, pos, 1.0, 1.0, None);
         }
 
-        shelf.mark_changed(world, Some(&vanilla_game_events::ITEM_INTERACT_FINISH));
+        shelf_entity.mark_changed(world, Some(&vanilla_game_events::ITEM_INTERACT_FINISH));
         InteractionResult::SuccessServer
     }
 
@@ -595,13 +593,13 @@ impl BlockBehavior for ShelfBlock {
         let Some(block_entity) = world.get_block_entity(pos) else {
             return 0;
         };
-        let Some(shelf) = block_entity.downcast_ref::<ShelfBlockEntity>() else {
+        let Some(shelf_entity) = block_entity.downcast_ref::<ShelfBlockEntity>() else {
             return 0;
         };
 
         let mut signal = 0;
         for slot in 0..SHELF_COLUMNS as usize {
-            if !shelf.item(slot).is_empty() {
+            if !shelf_entity.item(slot).is_empty() {
                 signal |= 1 << slot;
             }
         }

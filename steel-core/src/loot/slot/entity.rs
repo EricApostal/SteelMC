@@ -38,6 +38,7 @@
 //!   `AbstractHorseParts` private and never rebuilds the mount storage, so no
 //!   mount inventory is addressable.
 
+use std::slice;
 use std::sync::Arc;
 
 use steel_registry::item_stack::ItemStack;
@@ -50,7 +51,7 @@ use crate::entity::entities::{
     SkeletonHorseEntity, VillagerEntity, ZombieHorseEntity,
 };
 use crate::entity::npc::InventoryCarrier;
-use crate::entity::{Entity, container_of_entity};
+use crate::entity::{Entity, LivingEntity, container_of_entity};
 use crate::inventory::container::{Container, CraftingContainer};
 use crate::inventory::equipment::EquipmentSlot;
 use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
@@ -392,7 +393,7 @@ fn chest_slot(horse: &dyn ChestedHorse) -> Box<dyn SlotAccess + '_> {
 fn container_slot(container: ContainerRef, slot: i32) -> Option<Box<dyn SlotAccess + 'static>> {
     let index = usize::try_from(slot).ok()?;
     let size = {
-        let guard = ContainerLockGuard::lock_all(std::slice::from_ref(&container));
+        let guard = ContainerLockGuard::lock_all(slice::from_ref(&container));
         guard.get(container.container_id())?.get_container_size()
     };
     if index >= size {
@@ -403,7 +404,7 @@ fn container_slot(container: ContainerRef, slot: i32) -> Option<Box<dyn SlotAcce
     let set_container = container;
     Some(Box::new(FnSlotAccess::new(
         move || {
-            let guard = ContainerLockGuard::lock_all(std::slice::from_ref(&get_container));
+            let guard = ContainerLockGuard::lock_all(slice::from_ref(&get_container));
             guard
                 .get(get_container.container_id())
                 .map_or_else(ItemStack::empty, |container| {
@@ -411,7 +412,7 @@ fn container_slot(container: ContainerRef, slot: i32) -> Option<Box<dyn SlotAcce
                 })
         },
         move |stack: ItemStack| {
-            let mut guard = ContainerLockGuard::lock_all(std::slice::from_ref(&set_container));
+            let mut guard = ContainerLockGuard::lock_all(slice::from_ref(&set_container));
             guard.set_item(set_container.container_id(), index, stack)
         },
     )))
@@ -434,10 +435,7 @@ const fn equipment_slot(slot: i32) -> Option<EquipmentSlot> {
 
 /// Vanilla `createEquipmentSlotAccess`: one live equipment-rack slot with its
 /// write gate.
-fn equipment_access(
-    living: &dyn crate::entity::LivingEntity,
-    slot: EquipmentSlot,
-) -> Box<dyn SlotAccess + '_> {
+fn equipment_access(living: &dyn LivingEntity, slot: EquipmentSlot) -> Box<dyn SlotAccess + '_> {
     Box::new(FnSlotAccess::new(
         move || {
             let mut item = ItemStack::empty();
@@ -553,7 +551,10 @@ mod tests {
         let slots = EntitySlots::new(&cow);
         assert!(slots.get_slot(1).is_none());
         assert_eq!(slots.get_slots_from_range(&[1]).size(), 0);
-        assert!(slots.get_slots_from_range(&[1]).item_copies().is_empty());
+        assert_eq!(
+            slots.get_slots_from_range(&[1]).item_copies(),
+            [] as [ItemStack; 0]
+        );
 
         let fixture = fresh_test_world("entity_slot_provider_unsupported");
         let player = TestPlayerBuilder::new(Arc::clone(&fixture.world), "SlotTester", 9).build();
@@ -562,11 +563,11 @@ mod tests {
         let mob_inventory = name_to_range("mob.inventory.0").expect("vanilla mob.inventory.0");
         assert_eq!(mob_inventory.slots(), [300]);
         assert!(slots.get_slot(300).is_none());
-        assert!(
+        assert_eq!(
             slots
                 .get_slots_from_range(mob_inventory.slots())
-                .item_copies()
-                .is_empty()
+                .item_copies(),
+            [] as [ItemStack; 0]
         );
 
         // `player.cursor` has no Steel accessor today; vanilla's answer for a
@@ -652,11 +653,11 @@ mod tests {
         // Vanilla `AbstractHorse.getSlot` bounds the offset by the inventory
         // size, and Steel's unchested horse inventory is empty.
         assert!(slots.get_slot(500).is_none());
-        assert!(
+        assert_eq!(
             slots
                 .get_slots_from_range(horse_range.slots())
-                .item_copies()
-                .is_empty()
+                .item_copies(),
+            [] as [ItemStack; 0]
         );
         assert!(slots.get_slot(499).is_none());
     }

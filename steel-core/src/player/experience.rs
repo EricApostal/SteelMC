@@ -141,9 +141,14 @@ impl Experience {
         }
 
         self.progress += additional_points as f32 / Self::points_for_level(self.level) as f32;
-        // Vanilla `Mth.clamp(this.totalExperience + i, 0, Integer.MAX_VALUE)`:
-        // saturation gives the same result as the wide clamp in both directions.
-        self.total_points = self.total_points.saturating_add(additional_points).max(0);
+        // Vanilla `Mth.clamp(this.totalExperience + i, 0, Integer.MAX_VALUE)`: the
+        // `+` is Java's 32-bit wrapping addition (bytecode: `iadd` then `Mth.clamp`),
+        // so an overflowing sum wraps negative before the clamp floors it at 0.
+        // Saturating here would pin the total at `i32::MAX` instead, which is not vanilla.
+        self.total_points = self
+            .total_points
+            .wrapping_add(additional_points)
+            .clamp(0, i32::MAX);
 
         while self.progress < 0.0 {
             let remaining = self.progress * Self::points_for_level(self.level) as f32;
@@ -346,13 +351,15 @@ pub(super) fn first_point_level_up_sound(
 mod tests {
     use super::Experience;
 
-    /// Vanilla `Player.giveExperiencePoints` clamps the total to
-    /// `[0, i32::MAX]` instead of wrapping.
+    /// Vanilla `Player.giveExperiencePoints` is `Mth.clamp(totalExperience + amount, 0, i32::MAX)`
+    /// where the `+` is Java's 32-bit wrapping `iadd` (bytecode order: `iadd`, `iconst_0`,
+    /// `ldc 2147483647`, `Mth.clamp`). An overflowing sum therefore wraps negative and the
+    /// clamp floors it at 0; it never saturates at `i32::MAX`.
     #[test]
-    fn total_points_clamp_matches_vanilla_mth_clamp() {
+    fn total_points_uses_wrapping_addition_before_the_clamp() {
         let mut almost_max = Experience::from_parts(0, 0.0, i32::MAX - 1);
         almost_max.add_points(100);
-        assert_eq!(almost_max.total_points(), i32::MAX);
+        assert_eq!(almost_max.total_points(), 0);
 
         let mut almost_zero = Experience::from_parts(0, 0.5, 1);
         almost_zero.add_points(-100);

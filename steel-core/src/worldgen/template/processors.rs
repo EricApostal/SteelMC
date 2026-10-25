@@ -135,7 +135,7 @@ impl StructureTemplate {
             StructureProcessorKind::Gravity { heightmap, offset } => Some(Self::process_gravity(
                 region, original, current, *heightmap, *offset,
             )),
-            StructureProcessorKind::Nop => Some(current),
+            StructureProcessorKind::Nop | StructureProcessorKind::Capped { .. } => Some(current),
             StructureProcessorKind::JigsawReplacement => {
                 Self::replace_jigsaw_block(registry, current)
             }
@@ -175,7 +175,6 @@ impl StructureTemplate {
             StructureProcessorKind::BlackstoneReplace => {
                 Some(Self::process_blackstone_replace(registry, current))
             }
-            StructureProcessorKind::Capped { .. } => Some(current),
         }
     }
 

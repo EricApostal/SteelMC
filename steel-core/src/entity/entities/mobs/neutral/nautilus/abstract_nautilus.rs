@@ -72,6 +72,7 @@ use crate::inventory::lock::ContainerRef;
 use crate::inventory::menu::kinds::{get_inventory_size, mount_inventory_menu};
 use crate::physics::{MoveResult, MoverType};
 use crate::player::Player;
+use crate::player::advancement::triggers::raise_tame_animal;
 use crate::player::player_inventory::Prediction;
 use crate::world::World;
 use steel_protocol::packets::game::RandomizationType;
@@ -857,7 +858,7 @@ pub(crate) fn try_to_tame<E: Nautilus>(entity: &E, player: &Player) {
 pub(crate) fn tame<E: Nautilus>(entity: &E, player: &Player) {
     entity.set_tame_flag(true);
     entity.set_owner_uuid(Some(player.uuid()));
-    crate::player::advancement::triggers::raise_tame_animal(player, entity);
+    raise_tame_animal(player, entity);
 }
 
 /// Vanilla `AbstractNautilus.requiresCustomPersistence`.

@@ -351,6 +351,10 @@ mod tests {
     fn ominous_item_spawner_round_trips_saved_fields() {
         use std::io::Cursor;
 
+        // Every registry-backed type is resolved at entity construction, so seed the
+        // registry even when the filter excludes the tests that normally win the race.
+        steel_registry::init_vanilla_registry();
+
         let spawner = OminousItemSpawnerEntity::new(
             &vanilla_entities::OMINOUS_ITEM_SPAWNER,
             1,

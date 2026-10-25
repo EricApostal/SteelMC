@@ -12,13 +12,13 @@ use text_components::TextComponent;
 ///
 /// Wire order mirrors vanilla's `ClientboundTestInstanceBlockStatus` record:
 /// the status component, then `ByteBufCodecs.optional(Vec3i.STREAM_CODEC)` - a
-/// presence boolean followed by three VarInts.
+/// presence boolean followed by three `VarInts`.
 #[derive(ClientPacket, Clone, Debug)]
 #[packet_id(Play = C_TEST_INSTANCE_BLOCK_STATUS)]
 pub struct CTestInstanceBlockStatus {
     /// Human-readable status of the test instance block.
     pub status: TextComponent,
-    /// Optional test structure size, written as three VarInts when present.
+    /// Optional test structure size, written as three `VarInts` when present.
     pub size: Option<IVec3>,
 }
 

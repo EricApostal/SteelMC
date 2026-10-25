@@ -12,15 +12,18 @@
 use std::sync::Arc;
 
 use glam::DVec3;
+use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::Direction;
+use steel_registry::level_events::PARTICLES_ELECTRIC_SPARK;
+use steel_registry::poi::PoiTypeRef;
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_blocks;
 use steel_registry::vanilla_entities;
 use steel_registry::vanilla_game_events::LIGHTNING_STRIKE;
 use steel_registry::vanilla_game_rules::SPAWN_MOBS;
 use steel_registry::vanilla_poi_types;
-use steel_utils::types::UpdateFlags;
+use steel_utils::types::{Difficulty, UpdateFlags};
 use steel_utils::{BlockPos, ChunkPos, Downcast as _, WorldAabb};
 use uuid::Uuid;
 
@@ -37,7 +40,7 @@ use crate::world::game_event::GameEventContext;
 use crate::world::{HeightmapType, LevelReader, World};
 
 /// Every vanilla block class that extends `LightningRodBlock`.
-static LIGHTNING_ROD_VARIANTS: [steel_registry::blocks::BlockRef; 8] = [
+static LIGHTNING_ROD_VARIANTS: [BlockRef; 8] = [
     &vanilla_blocks::LIGHTNING_ROD,
     &vanilla_blocks::EXPOSED_LIGHTNING_ROD,
     &vanilla_blocks::WEATHERED_LIGHTNING_ROD,
@@ -146,9 +149,8 @@ impl World {
     #[must_use]
     pub fn find_lightning_rod(&self, center: BlockPos) -> Option<BlockPos> {
         let storage = self.poi_storage.lock();
-        let is_lightning_rod = |poi_type: steel_registry::poi::PoiTypeRef| {
-            poi_type.key == vanilla_poi_types::LIGHTNING_ROD.key
-        };
+        let is_lightning_rod =
+            |poi_type: PoiTypeRef| poi_type.key == vanilla_poi_types::LIGHTNING_ROD.key;
         storage
             .get_in_range(&is_lightning_rod, center, 128, OccupationStatus::Any)
             .into_iter()
@@ -215,10 +217,7 @@ impl World {
             return;
         }
 
-        if matches!(
-            self.difficulty(),
-            steel_utils::types::Difficulty::Normal | steel_utils::types::Difficulty::Hard
-        ) {
+        if matches!(self.difficulty(), Difficulty::Normal | Difficulty::Hard) {
             self.lightning_spawn_fire(pos, 4);
         }
 
@@ -295,9 +294,7 @@ impl World {
     }
 
     /// Vanilla `WeatheringCopper.getFirst`: the unoxidised variant of a weathering copper block.
-    fn copper_unaffected_variant(
-        block: steel_registry::blocks::BlockRef,
-    ) -> Option<steel_registry::blocks::BlockRef> {
+    fn copper_unaffected_variant(block: BlockRef) -> Option<BlockRef> {
         let mut current = block;
         while let Some(previous) = previous_copper_stage(current) {
             current = previous;
@@ -324,12 +321,7 @@ impl World {
             };
             self.set_block(candidate, cleaned.default_state(), UpdateFlags::UPDATE_ALL);
             // Vanilla emits level event 3002 (`PARTICLES_ELECTRIC_SPARK`) for cleaned copper.
-            self.level_event(
-                steel_registry::level_events::PARTICLES_ELECTRIC_SPARK,
-                candidate,
-                -1,
-                None,
-            );
+            self.level_event(PARTICLES_ELECTRIC_SPARK, candidate, -1, None);
             return Some(candidate);
         }
         None

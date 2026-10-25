@@ -58,7 +58,7 @@ pub(super) const fn nether_portal_frame_offset_pos(
 ///
 /// Vanilla steps `direction` once to check the world border and then steps back,
 /// so the scan column keeps the spiral column's X/Z and only takes the new Y.
-pub(super) fn nether_portal_creation_scan_origin(
+pub(super) const fn nether_portal_creation_scan_origin(
     column_pos: BlockPos,
     _direction: Direction,
     height: i32,

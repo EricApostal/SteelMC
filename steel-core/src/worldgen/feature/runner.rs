@@ -150,8 +150,8 @@ impl FeatureDecorationRunner {
         stages: Vec<Vec<StagedFeature>>,
         registry: &Registry,
     ) -> Self {
-        let staged = vec![(biome, stages)];
-        Self::from_staged_biomes(&staged, registry)
+        let staged_biomes = vec![(biome, stages)];
+        Self::from_staged_biomes(&staged_biomes, registry)
     }
 
     fn from_staged_biomes(
@@ -476,7 +476,7 @@ impl FeatureDecorationRunner {
                         registry,
                         random,
                         origin,
-                        *entry,
+                        entry,
                         biome_zoom_seed,
                     ),
                     PlacedFeatureRef::Inline(_) => Self::place_placed_feature_ref(

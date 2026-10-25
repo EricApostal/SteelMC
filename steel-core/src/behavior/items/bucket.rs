@@ -5,6 +5,7 @@
 //! Mirrors vanilla's `BucketItem(Fluid fluid)`: `fluid_block = None` = empty bucket,
 //! `Some(block)` = filled bucket. Logic is dispatched in `use_item`.
 //!
+use crate::behavior::advancement_hooks::{raise_filled_bucket, raise_placed_block};
 use crate::behavior::context::InteractionResult;
 use crate::behavior::item_utils::create_filled_result;
 use crate::behavior::{
@@ -127,7 +128,11 @@ fn use_empty_bucket(context: &mut UseItemContext) -> InteractionResult {
         }
 
         // Give filled bucket
+        let filled = result.filled_bucket.clone();
         create_filled_result(context, result.filled_bucket, true);
+        // Vanilla `BucketItem.use` raises `filled_bucket` with the new stack after
+        // `ItemUtils.createFilledResult` has put it in the player's hand.
+        raise_filled_bucket(context.player, context.world, &filled);
         context.world.game_event(
             &vanilla_game_events::FLUID_PICKUP,
             hit_pos,
@@ -155,7 +160,11 @@ fn use_empty_bucket(context: &mut UseItemContext) -> InteractionResult {
             context.player.play_sound(sound, 1.0, 1.0);
         }
 
+        let filled = result.filled_bucket.clone();
         create_filled_result(context, result.filled_bucket, true);
+        // Vanilla `BucketItem.use` raises `filled_bucket` with the new stack after
+        // `ItemUtils.createFilledResult` has put it in the player's hand.
+        raise_filled_bucket(context.player, context.world, &filled);
         context.world.game_event(
             &vanilla_game_events::FLUID_PICKUP,
             hit_pos,
@@ -348,6 +357,7 @@ pub(crate) fn use_filled_bucket(
 
     // Attempt Primary (with sneak check)
     if try_place_fluid(primary_pos, true) {
+        raise_bucket_placed_block(context, primary_pos);
         let result_stack = empty_success_stack(context);
         create_filled_result(context, result_stack, true);
         return (InteractionResult::Success, Some(primary_pos));
@@ -358,12 +368,21 @@ pub(crate) fn use_filled_bucket(
     // when the primary attempt fails, regardless of bucket type.
     let secondary_pos = direction.relative(clicked_pos);
     if try_place_fluid(secondary_pos, false) {
+        raise_bucket_placed_block(context, secondary_pos);
         let result_stack = empty_success_stack(context);
         create_filled_result(context, result_stack, true);
         return (InteractionResult::Success, Some(secondary_pos));
     }
 
     (InteractionResult::Fail, None)
+}
+
+/// Vanilla `BucketItem.use`'s `PLACED_BLOCK` raise: a filled bucket that emptied
+/// its fluid at `pos`. The held stack is snapshotted before the raise so the
+/// player's inventory is not locked underneath it.
+fn raise_bucket_placed_block(context: &UseItemContext, pos: BlockPos) {
+    let item = context.inv.with_item(|item| item.clone());
+    raise_placed_block(context.player, context.world, pos, &item);
 }
 
 fn play_empty_sound_and_event(

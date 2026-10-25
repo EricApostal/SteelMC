@@ -344,10 +344,16 @@ impl PickedUpItemTriggerInstance {
     /// Vanilla `PickedUpItemTrigger.TriggerInstance.matches(stack, pickedBy)`.
     #[must_use]
     pub fn matches(&self, event: &TriggerEvent<'_>) -> bool {
-        let (
-            TriggerEvent::ThrownItemPickedUpByEntity { ref base, item, picker }
-            | TriggerEvent::ThrownItemPickedUpByPlayer { ref base, item, picker },
-        ) = *event
+        let (TriggerEvent::ThrownItemPickedUpByEntity {
+            ref base,
+            item,
+            picker,
+        }
+        | TriggerEvent::ThrownItemPickedUpByPlayer {
+            ref base,
+            item,
+            picker,
+        }) = *event
         else {
             return false;
         };
@@ -423,10 +429,16 @@ impl PlayerInteractedWithEntityTriggerInstance {
     /// Vanilla `PlayerInteractTrigger.TriggerInstance.matches(stack, entity)`.
     #[must_use]
     pub fn matches(&self, event: &TriggerEvent<'_>) -> bool {
-        let (
-            TriggerEvent::PlayerInteractedWithEntity { ref base, item, entity }
-            | TriggerEvent::PlayerShearedEquipment { ref base, item, entity },
-        ) = *event
+        let (TriggerEvent::PlayerInteractedWithEntity {
+            ref base,
+            item,
+            entity,
+        }
+        | TriggerEvent::PlayerShearedEquipment {
+            ref base,
+            item,
+            entity,
+        }) = *event
         else {
             return false;
         };
@@ -499,13 +511,11 @@ impl ItemTriggerInstance {
     /// Vanilla `matches(stack)` for the item-only triggers.
     #[must_use]
     pub fn matches(&self, event: &TriggerEvent<'_>) -> bool {
-        let (
-            TriggerEvent::ConsumeItem { ref base, item }
-            | TriggerEvent::FilledBucket { ref base, item }
-            | TriggerEvent::UsedTotem { ref base, item }
-            | TriggerEvent::UsingItem { ref base, item }
-            | TriggerEvent::ShotCrossbow { ref base, item },
-        ) = *event
+        let (TriggerEvent::ConsumeItem { ref base, item }
+        | TriggerEvent::FilledBucket { ref base, item }
+        | TriggerEvent::UsedTotem { ref base, item }
+        | TriggerEvent::UsingItem { ref base, item }
+        | TriggerEvent::ShotCrossbow { ref base, item }) = *event
         else {
             return false;
         };

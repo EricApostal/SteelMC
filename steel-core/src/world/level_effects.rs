@@ -8,6 +8,7 @@ use super::{
     WorldEntityManager, entity_loot_ref, fluid_state_to_block, level_events, vanilla_blocks,
     vanilla_game_events,
 };
+use crate::entity::loot::loot_level_view;
 use crate::entity::loot_equipment;
 use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
 use steel_registry::sound_event::SoundEventHolder;
@@ -51,7 +52,7 @@ fn sound_packet_for_player(
     clippy::too_many_arguments,
     reason = "one builder for Vanilla's sendParticles parameter list"
 )]
-fn particle_packet(
+const fn particle_packet(
     particle: ParticleData,
     override_limiter: bool,
     always_show: bool,
@@ -520,7 +521,7 @@ impl World {
         }
         // Vanilla loot params always carry the level, which
         // `minecraft:location_check` resolves its predicate against.
-        let level = crate::entity::loot::loot_level_view(
+        let level = loot_level_view(
             context.world(),
             (
                 f64::from(context.pos().x()),
@@ -713,6 +714,7 @@ mod tests {
     use glam::DVec3;
     use steel_protocol::packets::game::CLevelParticles;
     use steel_registry::init_vanilla_registry;
+    use steel_registry::particle_type::ParticleData;
     use steel_registry::vanilla_particle_types;
 
     use super::{particle_packet, sound_packet_for_player};
@@ -737,7 +739,7 @@ mod tests {
     fn particle_packet_preserves_per_axis_speeds_and_flags() {
         init_vanilla_registry();
         let packet: CLevelParticles = particle_packet(
-            steel_registry::particle_type::ParticleData::simple(&vanilla_particle_types::SMOKE),
+            ParticleData::simple(&vanilla_particle_types::SMOKE),
             true,
             true,
             DVec3::new(1.0, 2.0, 3.0),

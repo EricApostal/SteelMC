@@ -141,6 +141,10 @@ impl WriteTo for TrimPatternHolder {
 /// Variant order matches the vanilla registry ids produced by
 /// `SlotDisplays.bootstrap`.
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "variants mirror vanilla SlotDisplays payloads in registry-id order; boxing them would distort the wire mirror"
+)]
 pub enum SlotDisplay {
     /// `minecraft:empty` (id 0): renders nothing, no payload.
     Empty,
@@ -251,6 +255,10 @@ impl WriteTo for SlotDisplay {
 /// Variant order matches the vanilla registry ids produced by
 /// `RecipeDisplays.bootstrap`.
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "variants mirror vanilla RecipeDisplays payloads in registry-id order; boxing them would distort the wire mirror"
+)]
 pub enum RecipeDisplay {
     /// `minecraft:crafting_shapeless` (id 0).
     ShapelessCrafting {

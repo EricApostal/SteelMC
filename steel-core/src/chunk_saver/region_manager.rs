@@ -123,7 +123,7 @@ impl RegionManager {
         }
 
         let version = u16::from_le_bytes([header_bytes[4], header_bytes[5]]);
-        if u64::from(version) != u64::from(FORMAT_VERSION) {
+        if version != FORMAT_VERSION {
             // An unreadable container is never regenerated in place: that would replace the
             // world's chunks with an empty file. Report and keep the original untouched.
             return Err(io::Error::new(
@@ -967,6 +967,75 @@ mod tests {
             .await
             .expect("status byte should remain readable");
         assert_eq!(status[0], u8::MAX);
+
+        fs::remove_dir_all(directory)
+            .await
+            .expect("test directory should be removable");
+    }
+
+    /// A region file from another Steel format version must be refused, not replaced: the
+    /// previous behaviour renamed it aside and wrote a fresh empty region, which silently
+    /// dropped every chunk it held.
+    #[tokio::test]
+    async fn mismatched_region_version_is_refused_without_touching_the_file() {
+        let directory = test_directory("version");
+        let pos = ChunkPos::new(0, 0);
+        let payload = b"some encoded chunk";
+        write_test_region(&directory, pos, payload, payload.len() as u32)
+            .await
+            .expect("test region should be written");
+
+        let region_pos = RegionPos::from_chunk(pos.0.x, pos.0.y);
+        let path = directory.join(region_pos.filename());
+        let stale_version = FORMAT_VERSION - 1;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .await
+            .expect("test region should be writable");
+        file.seek(io::SeekFrom::Start(4))
+            .await
+            .expect("version field should be seekable");
+        file.write_all(&stale_version.to_le_bytes())
+            .await
+            .expect("version field should be writable");
+        file.flush().await.expect("version field should flush");
+        drop(file);
+        let original = fs::read(&path)
+            .await
+            .expect("test region should be readable");
+
+        let manager = RegionManager::new(&directory);
+        let Err(error) = manager.acquire_chunk(pos).await else {
+            panic!("a mismatched region version must reject the region");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let message = error.to_string();
+        assert!(message.contains(&stale_version.to_string()), "{message}");
+        assert!(message.contains(&FORMAT_VERSION.to_string()), "{message}");
+        assert!(message.contains(&region_pos.filename()), "{message}");
+
+        assert_eq!(
+            fs::read(&path).await.expect("region should be untouched"),
+            original,
+            "a refused region must keep every byte it had"
+        );
+        let mut entries = fs::read_dir(&directory)
+            .await
+            .expect("test directory should be readable");
+        let mut remaining = 0;
+        while entries
+            .next_entry()
+            .await
+            .expect("test directory entry should be readable")
+            .is_some()
+        {
+            remaining += 1;
+        }
+        assert_eq!(
+            remaining, 1,
+            "a refused region must not be backed up or recreated"
+        );
 
         fs::remove_dir_all(directory)
             .await

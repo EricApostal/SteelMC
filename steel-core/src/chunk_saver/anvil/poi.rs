@@ -19,6 +19,7 @@ use std::str::FromStr;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompound;
 use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_utils::Identifier;
+use steel_utils::version::DATA_VERSION;
 
 use super::nbt::compound_list;
 
@@ -64,7 +65,7 @@ pub(crate) fn poi_to_nbt(entries: &[VanillaPoi]) -> NbtCompound {
         sections_compound.insert(section_y.to_string(), NbtTag::Compound(section));
     }
     root.insert("Sections", NbtTag::Compound(sections_compound));
-    root.insert("DataVersion", steel_utils::version::DATA_VERSION);
+    root.insert("DataVersion", DATA_VERSION);
     root
 }
 

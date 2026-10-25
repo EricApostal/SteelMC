@@ -61,6 +61,10 @@ impl ObjectiveMethod {
 /// Vanilla dispatches on the `minecraft:number_format_type` registry, so the wire
 /// format is the registry id followed by that type's own payload.
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "variants mirror vanilla NumberFormatTypes payloads; the large variants carry the protocol data"
+)]
 pub enum NumberFormat {
     /// `minecraft:blank`: the score is rendered without a number.
     Blank,

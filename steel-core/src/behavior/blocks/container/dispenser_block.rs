@@ -8,19 +8,25 @@
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
+use std::ptr;
 use steel_macros::block_behavior;
 use steel_math::convert_to_rotation_segment;
+
 use steel_registry::RegistryReference;
+use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{
     BlockStateProperties, BoolProperty, Direction, EnumProperty,
 };
 use steel_registry::data_components::components::PotionContents;
-use steel_registry::data_components::vanilla_components::{ENTITY_DATA, POTION_CONTENTS};
+use steel_registry::data_components::vanilla_components::{
+    ENTITY_DATA, EQUIPPABLE, POTION_CONTENTS,
+};
 use steel_registry::fluid::FluidStateExt as _;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::ItemRef;
+use steel_registry::particle_type::ParticleData;
 use steel_registry::stat::custom::CustomStatRef;
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::{
@@ -29,6 +35,7 @@ use steel_registry::{
     vanilla_particle_types, vanilla_potions,
 };
 use steel_utils::Downcast as _;
+use steel_utils::axis::Axis;
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId, WorldAabb, translations};
 use text_components::TextComponent;
@@ -42,7 +49,7 @@ use crate::behavior::items::BlockItem;
 use crate::behavior::waxables::get_waxed_from_normal_variant;
 use crate::behavior::{BLOCK_BEHAVIORS, ITEM_BEHAVIORS, InventoryAccess};
 use crate::block_entity::BLOCK_ENTITIES;
-use crate::block_entity::entities::insert_item_into;
+use crate::block_entity::entities::{hopper_add_item, hopper_container_at, insert_item_into};
 use crate::entity::entities::ArmadilloEntity;
 use crate::entity::entities::ItemEntity;
 use crate::entity::projectile::triangle_random;
@@ -54,6 +61,7 @@ use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
 use crate::inventory::menu::kinds::dispenser;
 use crate::player::Player;
 use crate::world::game_event::GameEventContext;
+use crate::world::village::can_spawn_golem;
 use crate::world::{LevelReader, SignalGetter as _, World};
 
 const FACING: &EnumProperty<Direction> = &BlockStateProperties::FACING;
@@ -254,7 +262,7 @@ enum DispenseMethod {
 /// Matches an item against a set of vanilla item statics.
 macro_rules! is_any_of {
     ($item:expr, $($candidate:expr),+ $(,)?) => {
-        $(std::ptr::eq($item, &*$candidate))||+
+        $(ptr::eq($item, &*$candidate))||+
     };
 }
 
@@ -292,45 +300,45 @@ fn dispense_method(stack: &ItemStack) -> DispenseMethod {
         return DispenseMethod::Projectile;
     }
 
-    if std::ptr::eq(item, &*vanilla_items::ARMOR_STAND) {
+    if ptr::eq(item, &raw const *vanilla_items::ARMOR_STAND) {
         return DispenseMethod::ArmorStand;
     }
-    if std::ptr::eq(item, &*vanilla_items::FLINT_AND_STEEL) {
+    if ptr::eq(item, &raw const *vanilla_items::FLINT_AND_STEEL) {
         return DispenseMethod::FlintAndSteel;
     }
-    if std::ptr::eq(item, &*vanilla_items::BONE_MEAL) {
+    if ptr::eq(item, &raw const *vanilla_items::BONE_MEAL) {
         return DispenseMethod::BoneMeal;
     }
-    if std::ptr::eq(item, &*vanilla_items::TNT) {
+    if ptr::eq(item, &raw const *vanilla_items::TNT) {
         return DispenseMethod::Tnt;
     }
-    if std::ptr::eq(item, &*vanilla_items::CARVED_PUMPKIN) {
+    if ptr::eq(item, &raw const *vanilla_items::CARVED_PUMPKIN) {
         return DispenseMethod::CarvedPumpkin;
     }
-    if std::ptr::eq(item, &*vanilla_items::WITHER_SKELETON_SKULL) {
+    if ptr::eq(item, &raw const *vanilla_items::WITHER_SKELETON_SKULL) {
         return DispenseMethod::WitherSkull;
     }
     if is_shulker_box(item) {
         return DispenseMethod::ShulkerBox;
     }
-    if std::ptr::eq(item, &*vanilla_items::BUCKET) {
+    if ptr::eq(item, &raw const *vanilla_items::BUCKET) {
         return DispenseMethod::EmptyBucket;
     }
-    if std::ptr::eq(item, &*vanilla_items::GLASS_BOTTLE) {
+    if ptr::eq(item, &raw const *vanilla_items::GLASS_BOTTLE) {
         return DispenseMethod::GlassBottle;
     }
-    if std::ptr::eq(item, &*vanilla_items::BRUSH) {
+    if ptr::eq(item, &raw const *vanilla_items::BRUSH) {
         return DispenseMethod::Brush;
     }
-    if std::ptr::eq(item, &*vanilla_items::HONEYCOMB) {
+    if ptr::eq(item, &raw const *vanilla_items::HONEYCOMB) {
         return DispenseMethod::Honeycomb;
     }
-    if std::ptr::eq(item, &*vanilla_items::POTION) {
+    if ptr::eq(item, &raw const *vanilla_items::POTION) {
         return DispenseMethod::WaterPotion;
     }
 
     // Vanilla `DispenserBlock.getDefaultDispenseMethod`.
-    if stack.has(steel_registry::data_components::vanilla_components::EQUIPPABLE) {
+    if stack.has(EQUIPPABLE) {
         return DispenseMethod::Equipment;
     }
     if item.block.is_none()
@@ -425,7 +433,7 @@ fn spawn_item(
 ) {
     let (step_x, _step_y, step_z) = direction.offset();
     let mut spawn_y = position.y;
-    if direction.get_axis() == steel_utils::axis::Axis::Y {
+    if direction.get_axis() == Axis::Y {
         spawn_y -= 0.125;
     } else {
         spawn_y -= 0.15625;
@@ -448,7 +456,7 @@ fn spawn_item(
         Arc::downgrade(world),
     );
     if world.try_add_entity(Arc::new(entity)).is_err() {
-        log::warn!("Failed to eject item from dispenser at {:?}", position);
+        log::warn!("Failed to eject item from dispenser at {position:?}");
     }
 }
 
@@ -511,7 +519,7 @@ fn dispense_projectile(
     };
 
     let (step_x, step_y, step_z) = direction.offset();
-    crate::entity::projectile::shoot_projectile_entity(
+    let _unused = crate::entity::projectile::shoot_projectile_entity(
         source.world,
         &entity,
         &mut stack,
@@ -692,7 +700,7 @@ fn dispense_carved_pumpkin(
 ) -> (ItemStack, DispenseFeedback) {
     let target = source.target();
     if source.world.get_block_state(target).is_air()
-        && crate::world::village::can_spawn_golem(source.world.as_ref(), target)
+        && can_spawn_golem(source.world.as_ref(), target)
     {
         source.world.set_block(
             target,
@@ -894,7 +902,7 @@ fn dispense_water_potion(
 
     for _ in 0..5 {
         source.world.send_particles(
-            steel_registry::particle_type::ParticleData::simple(&vanilla_particle_types::SPLASH),
+            ParticleData::simple(&vanilla_particle_types::SPLASH),
             DVec3::new(
                 f64::from(source.pos.x()) + rand::random::<f64>(),
                 f64::from(source.pos.y()) + 1.0,
@@ -1066,7 +1074,7 @@ fn analog_output(world: &dyn LevelReader, pos: BlockPos) -> i32 {
 fn dispense_container(
     world: &Arc<World>,
     pos: BlockPos,
-    expected: steel_registry::block_entity_type::BlockEntityTypeRef,
+    expected: BlockEntityTypeRef,
 ) -> Option<ContainerRef> {
     let Some(block_entity) = world.get_block_entity(pos) else {
         log::warn!("Ignoring dispensing attempt without a block entity at {pos:?}");
@@ -1132,7 +1140,7 @@ impl BlockBehavior for DispenserBlock {
     }
 
     fn tick(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
-        self.dispense_from(world, state, pos);
+        Self::dispense_from(world, state, pos);
     }
 
     fn has_analog_output_signal(&self, _state: BlockStateId) -> bool {
@@ -1152,7 +1160,7 @@ impl BlockBehavior for DispenserBlock {
 
 impl DispenserBlock {
     /// Vanilla `DispenserBlock.dispenseFrom`.
-    fn dispense_from(&self, world: &Arc<World>, state: BlockStateId, pos: BlockPos) {
+    fn dispense_from(world: &Arc<World>, state: BlockStateId, pos: BlockPos) {
         let Some(container) =
             dispense_container(world, pos, &vanilla_block_entity_types::DISPENSER)
         else {
@@ -1233,7 +1241,7 @@ impl BlockBehavior for DropperBlock {
     }
 
     fn tick(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
-        self.dispense_from(world, state, pos);
+        Self::dispense_from(world, state, pos);
     }
 
     fn has_analog_output_signal(&self, _state: BlockStateId) -> bool {
@@ -1253,7 +1261,7 @@ impl BlockBehavior for DropperBlock {
 
 impl DropperBlock {
     /// Vanilla `DropperBlock.dispenseFrom`.
-    fn dispense_from(&self, world: &Arc<World>, state: BlockStateId, pos: BlockPos) {
+    fn dispense_from(world: &Arc<World>, state: BlockStateId, pos: BlockPos) {
         let Some(container) = dispense_container(world, pos, &vanilla_block_entity_types::DROPPER)
         else {
             return;
@@ -1271,10 +1279,7 @@ impl DropperBlock {
         };
 
         let direction = source.facing();
-        let remaining = match crate::block_entity::entities::hopper_container_at(
-            world,
-            direction.relative(pos),
-        ) {
+        let remaining = match hopper_container_at(world, direction.relative(pos)) {
             Some(into) => push_into_container(&container, &into, stack, direction),
             None => dispense(&source, stack),
         };
@@ -1297,7 +1302,7 @@ fn push_into_container(
         return stack;
     };
 
-    let leftover = crate::block_entity::entities::hopper_add_item(
+    let leftover = hopper_add_item(
         Some(from_container),
         into_container,
         stack.copy_with_count(1),

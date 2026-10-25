@@ -7,9 +7,8 @@ use steel_protocol::packet_reader::TCPNetworkDecoder;
 use steel_protocol::packet_traits::{ClientPacket, CompressionInfo, EncodedPacket, ServerPacket};
 use steel_protocol::packet_writer::TCPNetworkEncoder;
 use steel_protocol::packets::common::{
-    CDisconnect, CKeepAlive, CPongResponse, ResourcePackAction, SClientInformation,
-    SCookieResponse, SCustomClickAction, SCustomPayload, SKeepAlive, SPingRequest, SPong,
-    SResourcePack,
+    CDisconnect, CKeepAlive, CPongResponse, SClientInformation, SCookieResponse,
+    SCustomClickAction, SCustomPayload, SKeepAlive, SPingRequest, SPong, SResourcePack,
 };
 use steel_protocol::packets::game::{
     CBundleDelimiter, CCommandSuggestions, ClientCommandAction, PlayerAction, PlayerCommandAction,
@@ -1298,7 +1297,9 @@ mod tests {
         test_support::{TestPlayerBuilder, fresh_test_world},
     };
     use rustc_hash::FxHashMap;
-    use steel_protocol::packets::common::{ChatVisibility, HumanoidArm, ParticleStatus};
+    use steel_protocol::packets::common::{
+        ChatVisibility, HumanoidArm, ParticleStatus, ResourcePackAction,
+    };
     use steel_protocol::packets::game::{ClickType, ClientCommandAction, HashedStack};
     use steel_registry::{blocks::properties::Direction, item_stack::ItemStack};
     use steel_utils::{BlockPos, codec::VarInt, types::SignTextSlot};

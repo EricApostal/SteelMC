@@ -4,9 +4,10 @@
 //!
 //! Deviation: vanilla `SignBlockEntity.executeClickCommandsIfPresent` (text click
 //! events that run commands) is not run when a sign is used; Steel sign text has no
-//! click-command component (owner: block_entity/sign.rs).
+//! click-command component (owner: `block_entity/sign.rs`).
 
 use std::cmp::Ordering;
+use std::ptr;
 use std::sync::{Arc, Weak};
 
 use steel_macros::block_behavior;
@@ -296,7 +297,10 @@ fn try_open_sign_editor(
     if sign.is_waxed() {
         // Vanilla `SignBlockEntity.getSignInteractionFailedSoundEvent`: hanging
         // signs use their own event.
-        let is_hanging = std::ptr::eq(sign.get_type(), &vanilla_block_entity_types::HANGING_SIGN);
+        let is_hanging = ptr::eq(
+            sign.get_type(),
+            &raw const vanilla_block_entity_types::HANGING_SIGN,
+        );
         let sound = if is_hanging {
             &sound_events::BLOCK_HANGING_SIGN_WAXED_INTERACT_FAIL
         } else {

@@ -15,6 +15,7 @@
 //! currently only persists the link; the block-level `playerWillDestroy`/`onExplosionHit` hooks
 //! therefore award experience without tearing the protector down.
 
+use std::ops::RangeInclusive;
 use std::sync::{Arc, Weak};
 
 use steel_macros::block_behavior;
@@ -33,7 +34,7 @@ use steel_utils::{BlockPos, BlockStateId, Downcast as _, axis::Axis};
 use crate::behavior::{BlockBehavior, BlockEntityCreation, BlockPlaceContext};
 use crate::block_entity::{BLOCK_ENTITIES, BlockEntityTicker};
 use crate::player::Player;
-use crate::world::explosion::ExplosionInfo;
+use crate::world::explosion::{ExplosionInfo, default_on_explosion_hit};
 use crate::world::{LevelReader, ScheduledTickAccess, World};
 
 const AXIS: &EnumProperty<Axis> = &BlockStateProperties::AXIS;
@@ -41,7 +42,7 @@ const STATE: &EnumProperty<CreakingHeartState> = &BlockStateProperties::CREAKING
 const NATURAL: &BoolProperty = &BlockStateProperties::NATURAL;
 
 /// Vanilla `CreakingHeartBlock` experience range when a natural heart is broken.
-const NATURAL_EXPERIENCE_RANGE: std::ops::RangeInclusive<i32> = 20..=24;
+const NATURAL_EXPERIENCE_RANGE: RangeInclusive<i32> = 20..=24;
 
 /// `CreakingHeartBlock` behavior.
 #[block_behavior]
@@ -201,7 +202,7 @@ impl BlockBehavior for CreakingHeartBlock {
         {
             Self::try_award_experience(player, state, world, pos);
         }
-        crate::world::explosion::default_on_explosion_hit(state, world, pos, explosion, on_drop);
+        default_on_explosion_hit(state, world, pos, explosion, on_drop);
     }
 
     fn affect_neighbors_after_removal(

@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 use steel_utils::translations;
+use text_components::interactivity::HoverEvent;
 use text_components::{Modifier, TextComponent, format::Color};
 
 use crate::scoreboard::display::DisplaySlot;
@@ -15,36 +16,52 @@ use crate::scoreboard::display::DisplaySlot;
 /// Vanilla `TeamColor`: the sixteen fixed team colors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum TeamColor {
+    /// Vanilla `black`.
     #[serde(rename = "black")]
     Black,
+    /// Vanilla `dark_blue`.
     #[serde(rename = "dark_blue")]
     DarkBlue,
+    /// Vanilla `dark_green`.
     #[serde(rename = "dark_green")]
     DarkGreen,
+    /// Vanilla `dark_aqua`.
     #[serde(rename = "dark_aqua")]
     DarkAqua,
+    /// Vanilla `dark_red`.
     #[serde(rename = "dark_red")]
     DarkRed,
+    /// Vanilla `dark_purple`.
     #[serde(rename = "dark_purple")]
     DarkPurple,
+    /// Vanilla `gold`.
     #[serde(rename = "gold")]
     Gold,
+    /// Vanilla `gray`.
     #[serde(rename = "gray")]
     Gray,
+    /// Vanilla `dark_gray`.
     #[serde(rename = "dark_gray")]
     DarkGray,
+    /// Vanilla `blue`.
     #[serde(rename = "blue")]
     Blue,
+    /// Vanilla `green`.
     #[serde(rename = "green")]
     Green,
+    /// Vanilla `aqua`.
     #[serde(rename = "aqua")]
     Aqua,
+    /// Vanilla `red`.
     #[serde(rename = "red")]
     Red,
+    /// Vanilla `light_purple`.
     #[serde(rename = "light_purple")]
     LightPurple,
+    /// Vanilla `yellow`.
     #[serde(rename = "yellow")]
     Yellow,
+    /// Vanilla `white`.
     #[serde(rename = "white")]
     White,
 }
@@ -118,6 +135,10 @@ impl TeamColor {
 
     /// Vanilla `TeamColor.byName`.
     #[must_use]
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "mirrors vanilla `TeamColor.byName`, which returns an optional colour; the name-based lookup is called by the save-data and command parsers"
+    )]
     pub fn from_str(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|color| color.as_str() == name)
     }
@@ -268,6 +289,10 @@ impl TeamVisibility {
 
     /// Parses a vanilla visibility name.
     #[must_use]
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "mirrors vanilla's name-based enum lookup, which returns an optional value rather than a parse error"
+    )]
     pub fn from_str(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|value| value.as_str() == name)
     }
@@ -326,6 +351,10 @@ impl CollisionRule {
 
     /// Parses a vanilla collision-rule name.
     #[must_use]
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "mirrors vanilla's name-based enum lookup, which returns an optional value rather than a parse error"
+    )]
     pub fn from_str(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|value| value.as_str() == name)
     }
@@ -428,7 +457,7 @@ impl PlayerTeam {
     }
 
     /// Replaces the optional team color.
-    pub fn set_color(&mut self, color: Option<TeamColor>) {
+    pub const fn set_color(&mut self, color: Option<TeamColor>) {
         self.color = color;
     }
 
@@ -439,7 +468,7 @@ impl PlayerTeam {
     }
 
     /// Vanilla `PlayerTeam.setAllowFriendlyFire`.
-    pub fn set_allow_friendly_fire(&mut self, allow: bool) {
+    pub const fn set_allow_friendly_fire(&mut self, allow: bool) {
         self.allow_friendly_fire = allow;
     }
 
@@ -450,7 +479,7 @@ impl PlayerTeam {
     }
 
     /// Vanilla `PlayerTeam.setSeeFriendlyInvisibles`.
-    pub fn set_see_friendly_invisibles(&mut self, see: bool) {
+    pub const fn set_see_friendly_invisibles(&mut self, see: bool) {
         self.see_friendly_invisibles = see;
     }
 
@@ -461,7 +490,7 @@ impl PlayerTeam {
     }
 
     /// Vanilla `PlayerTeam.setNameTagVisibility`.
-    pub fn set_name_tag_visibility(&mut self, visibility: TeamVisibility) {
+    pub const fn set_name_tag_visibility(&mut self, visibility: TeamVisibility) {
         self.name_tag_visibility = visibility;
     }
 
@@ -472,7 +501,7 @@ impl PlayerTeam {
     }
 
     /// Vanilla `PlayerTeam.setDeathMessageVisibility`.
-    pub fn set_death_message_visibility(&mut self, visibility: TeamVisibility) {
+    pub const fn set_death_message_visibility(&mut self, visibility: TeamVisibility) {
         self.death_message_visibility = visibility;
     }
 
@@ -483,7 +512,7 @@ impl PlayerTeam {
     }
 
     /// Vanilla `PlayerTeam.setCollisionRule`.
-    pub fn set_collision_rule(&mut self, rule: CollisionRule) {
+    pub const fn set_collision_rule(&mut self, rule: CollisionRule) {
         self.collision_rule = rule;
     }
 
@@ -529,9 +558,7 @@ impl PlayerTeam {
             .display_name
             .clone()
             .insertion(self.name.clone())
-            .hover_event(text_components::interactivity::HoverEvent::show_text(
-                self.name.clone(),
-            ));
+            .hover_event(HoverEvent::show_text(self.name.clone()));
         self.apply_color(wrap_in_square_brackets(styled))
     }
 }

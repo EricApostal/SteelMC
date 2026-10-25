@@ -165,7 +165,13 @@ pub enum TriggerEvent<'a> {
         bees_inside: i32,
     },
     /// `placed_block`.
-    PlacedBlock(EventBase<'a>),
+    PlacedBlock {
+        /// Shared event fields.
+        base: EventBase<'a>,
+        /// The placed block's item. Vanilla passes it as the location context's
+        /// `tool`, exactly like `item_used_on_block`.
+        tool: &'a ItemStack,
+    },
     /// `item_used_on_block`.
     ItemUsedOnBlock {
         /// Shared event fields.
@@ -505,11 +511,9 @@ impl<'a> TriggerEvent<'a> {
     #[must_use]
     pub const fn base(&self) -> EventBase<'a> {
         match self {
-            Self::Player(base)
-            | Self::StartRiding(base)
-            | Self::PlacedBlock(base)
-            | Self::BlockUse(base) => *base,
-            Self::InventoryChanged { base, .. }
+            Self::Player(base) | Self::StartRiding(base) | Self::BlockUse(base) => *base,
+            Self::PlacedBlock { base, .. }
+            | Self::InventoryChanged { base, .. }
             | Self::EnterBlock { base, .. }
             | Self::SlideDownBlock { base, .. }
             | Self::BeeNestDestroyed { base, .. }

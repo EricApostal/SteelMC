@@ -281,10 +281,10 @@ mod tests {
     use super::*;
     use crate::entity::ai::brain::memory::module_type as mem;
     use crate::entity::entities::mobs::npc::villager::VillagerEntity;
+    use crate::entity::init_entities;
     use crate::test_support::{
         advance_test_game_time_to, fresh_test_world, insert_ready_full_chunk,
     };
-    use steel_registry::blocks::block_state_ext::BlockStateExt as _;
     use steel_registry::{init_vanilla_registry, vanilla_blocks};
     use steel_utils::ChunkPos;
     use steel_utils::types::UpdateFlags;
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn gossip_consensus_spawns_one_golem_and_marks_the_neighborhood() {
         init_vanilla_registry();
-        crate::entity::init_entities();
+        init_entities();
 
         let fixture = fresh_test_world("village_golem_consensus");
         let world = &fixture.world;
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn golem_consensus_requires_recent_sleepers() {
         init_vanilla_registry();
-        crate::entity::init_entities();
+        init_entities();
 
         let fixture = fresh_test_world("village_golem_consensus_threshold");
         let world = &fixture.world;
@@ -425,7 +425,7 @@ mod tests {
     #[test]
     fn golem_summon_requires_the_last_slept_memory() {
         init_vanilla_registry();
-        crate::entity::init_entities();
+        init_entities();
 
         let fixture = fresh_test_world("village_golem_no_sleep");
         let world = &fixture.world;

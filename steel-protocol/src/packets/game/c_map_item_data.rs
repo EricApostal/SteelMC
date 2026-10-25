@@ -14,7 +14,7 @@ use text_components::TextComponent;
 
 /// A single marker drawn on a filled map (vanilla `MapDecoration`).
 ///
-/// Wire order: VarInt `minecraft:map_decoration_type` registry id, three bytes
+/// Wire order: `VarInt` `minecraft:map_decoration_type` registry id, three bytes
 /// (`x`, `y`, `rot`), then a presence byte with the optional hover name.
 #[derive(Clone, Debug)]
 pub struct MapDecoration {
@@ -33,7 +33,7 @@ pub struct MapDecoration {
 impl MapDecoration {
     /// Creates a decoration, truncating `rot` to its low 4 bits like vanilla's constructor.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         decoration_type: MapDecorationTypeRef,
         x: i8,
         y: i8,
@@ -95,13 +95,13 @@ impl WriteTo for MapPatch {
 
 /// Updates the decorations and/or the color patch of a filled map.
 ///
-/// Wire order: VarInt map id, `i8` scale, bool locked, optional decoration list
-/// (presence byte + VarInt count + entries), then the color patch
+/// Wire order: `VarInt` map id, `i8` scale, bool locked, optional decoration list
+/// (presence byte + `VarInt` count + entries), then the color patch
 /// (`width` byte of 0 means absent, otherwise the [`MapPatch`] payload).
 #[derive(ClientPacket, Clone, Debug)]
 #[packet_id(Play = C_MAP_ITEM_DATA)]
 pub struct CMapItemData {
-    /// Numeric map id; vanilla wraps this in `MapId` and writes only the VarInt.
+    /// Numeric map id; vanilla wraps this in `MapId` and writes only the `VarInt`.
     pub map_id: i32,
     /// Zoom scale of the map.
     pub scale: i8,

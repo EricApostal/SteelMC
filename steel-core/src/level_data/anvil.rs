@@ -9,9 +9,11 @@
 //! beyond the version stamp, `Player` (singleplayer) blocks, and the `dimensions` registry inside
 //! `WorldGenSettings` (Steel derives dimensions from its own generated datapack).
 
+use std::fs;
 use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_utils::Identifier;
@@ -22,6 +24,8 @@ use crate::chunk_saver::anvil::saved_data::{
     game_rules_from_nbt, game_rules_to_nbt, read_saved_data_file, read_world_gen_seed,
     weather_from_nbt, weather_to_nbt, write_saved_data_file,
 };
+use crate::chunk_saver::anvil::{read_compressed_nbt, write_gzip_nbt};
+use crate::datafixer::{DataFixType, ensure_current, version_of};
 use crate::level_data::{LevelData, SpawnPoint, WorldBorderData};
 
 /// Vanilla `level.dat` file name.
@@ -38,11 +42,11 @@ static WARNED_UNMAPPED: AtomicBool = AtomicBool::new(false);
 /// # Errors
 /// Returns `InvalidData` when the file is not gzip NBT or has no `Data` compound.
 pub fn read_level_dat(world_dir: &Path) -> io::Result<Option<NbtCompound>> {
-    let bytes = match std::fs::read(world_dir.join(LEVEL_DAT_FILE)) {
+    let bytes = match fs::read(world_dir.join(LEVEL_DAT_FILE)) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             // Vanilla falls back to `level.dat_old` when the primary file is unreadable.
-            match std::fs::read(world_dir.join(LEVEL_DAT_OLD_FILE)) {
+            match fs::read(world_dir.join(LEVEL_DAT_OLD_FILE)) {
                 Ok(bytes) => bytes,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
                 Err(error) => return Err(error),
@@ -50,7 +54,7 @@ pub fn read_level_dat(world_dir: &Path) -> io::Result<Option<NbtCompound>> {
         }
         Err(error) => return Err(error),
     };
-    let root = crate::chunk_saver::anvil::read_compressed_nbt(&bytes)?;
+    let root = read_compressed_nbt(&bytes)?;
     match root.get("Data") {
         Some(NbtTag::Compound(data)) => Ok(Some(data.clone())),
         _ => Err(io::Error::new(
@@ -86,16 +90,21 @@ pub fn read_seed(world_dir: &Path) -> io::Result<Option<i64>> {
 /// Unmapped vanilla fields are ignored (the caller logs them once per world).
 ///
 /// # Errors
-/// Propagates saved-data read errors for the dimension `data/` directory.
+/// Propagates saved-data read errors for the dimension `data/` directory. Returns
+/// `Unsupported` when the file's `DataVersion` is not this build's (`crate::datafixer`), so a
+/// world that needs fixing is refused before any of its state is adopted.
 pub(crate) fn apply_level_dat(
     data: &NbtCompound,
     dimension_dir: &Path,
     level: &mut LevelData,
 ) -> io::Result<()> {
-    crate::datafixer::ensure_current(
-        crate::datafixer::version_of(data),
-        crate::datafixer::DataFixType::Level,
-        "level.dat",
+    ensure_current(
+        version_of(data),
+        DataFixType::Level,
+        &format!(
+            "level data file {}",
+            dimension_dir.join("level.dat").display()
+        ),
     )?;
     if let Some(time) = data.long("Time") {
         level.game_time = Some(time);
@@ -197,16 +206,16 @@ pub(crate) fn write_level_dat(
         "Data",
         NbtTag::Compound(level_data_to_level_dat(level, level_name, bound_dimension)),
     );
-    let bytes = crate::chunk_saver::anvil::write_gzip_nbt(&root)?;
-    std::fs::create_dir_all(world_dir)?;
+    let bytes = write_gzip_nbt(&root)?;
+    fs::create_dir_all(world_dir)?;
     let path = world_dir.join(LEVEL_DAT_FILE);
     let temporary = world_dir.join("level.dat.tmp");
-    std::fs::write(&temporary, bytes)?;
-    if std::fs::exists(&path)? {
+    fs::write(&temporary, bytes)?;
+    if fs::exists(&path)? {
         // Mirrors `Util.safeReplaceFile(current, temp, old)`.
-        std::fs::rename(&path, world_dir.join(LEVEL_DAT_OLD_FILE))?;
+        fs::rename(&path, world_dir.join(LEVEL_DAT_OLD_FILE))?;
     }
-    std::fs::rename(&temporary, &path)
+    fs::rename(&temporary, &path)
 }
 
 /// Mirrors Steel's weather and game rules into the dimension's `data/` directory.
@@ -280,7 +289,7 @@ fn read_difficulty(settings: &NbtCompound) -> Difficulty {
     Difficulty::Normal
 }
 
-fn difficulty_name(difficulty: Difficulty) -> &'static str {
+const fn difficulty_name(difficulty: Difficulty) -> &'static str {
     match difficulty {
         Difficulty::Peaceful => "peaceful",
         Difficulty::Easy => "easy",
@@ -325,30 +334,34 @@ fn write_world_border(border: &WorldBorderData, data: &mut NbtCompound) {
 }
 
 fn unix_millis() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_millis() as i64)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+    use std::fs;
     use std::path::PathBuf;
     use std::process;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    use simdnbt::owned::{NbtCompound, NbtTag};
     use steel_registry::init_vanilla_registry;
     use steel_utils::Identifier;
 
     use super::{
         apply_level_dat, read_level_dat, read_seed, write_dimension_saved_data, write_level_dat,
     };
+    use crate::chunk_saver::anvil::write_gzip_nbt;
     use crate::level_data::{LevelData, SpawnPoint};
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
     fn test_directory(name: &str) -> PathBuf {
         let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
+        env::temp_dir().join(format!(
             "steel-level-dat-{name}-{}-{sequence}",
             process::id()
         ))
@@ -358,7 +371,7 @@ mod tests {
     fn level_dat_round_trips_steel_level_data() {
         init_vanilla_registry();
         let directory = test_directory("round-trip");
-        std::fs::create_dir_all(&directory).expect("directory should be creatable");
+        fs::create_dir_all(&directory).expect("directory should be creatable");
 
         let mut level = LevelData::new_with_seed(0x5EED);
         level.spawn = SpawnPoint {
@@ -397,14 +410,14 @@ mod tests {
         assert_eq!(imported.game_time, Some(555));
         assert!(imported.difficulty_locked);
 
-        std::fs::remove_dir_all(&directory).ok();
+        fs::remove_dir_all(&directory).ok();
     }
 
     #[test]
     fn level_dat_write_keeps_a_backup_of_the_previous_file() {
         init_vanilla_registry();
         let directory = test_directory("backup");
-        std::fs::create_dir_all(&directory).expect("directory should be creatable");
+        fs::create_dir_all(&directory).expect("directory should be creatable");
         let level = LevelData::new_with_seed(1);
         let dimension = Identifier::vanilla_static("overworld");
 
@@ -415,27 +428,27 @@ mod tests {
             "the previous level.dat is retained as level.dat_old"
         );
 
-        std::fs::remove_dir_all(&directory).ok();
+        fs::remove_dir_all(&directory).ok();
     }
 
     #[test]
     fn seed_is_read_from_the_world_gen_settings_payload() {
         init_vanilla_registry();
         let directory = test_directory("seed");
-        std::fs::create_dir_all(directory.join("data")).expect("directory should be creatable");
+        fs::create_dir_all(directory.join("data")).expect("directory should be creatable");
 
-        let mut settings = simdnbt::owned::NbtCompound::new();
+        let mut settings = NbtCompound::new();
         settings.insert("seed", 987_654_321i64);
-        let mut root = simdnbt::owned::NbtCompound::new();
-        root.insert("data", simdnbt::owned::NbtTag::Compound(settings));
-        let bytes = crate::chunk_saver::anvil::write_gzip_nbt(&root).expect("gzip");
-        std::fs::write(directory.join("data").join("world_gen_settings.dat"), bytes)
+        let mut root = NbtCompound::new();
+        root.insert("data", NbtTag::Compound(settings));
+        let bytes = write_gzip_nbt(&root).expect("gzip");
+        fs::write(directory.join("data").join("world_gen_settings.dat"), bytes)
             .expect("settings should write");
 
         assert_eq!(
             read_seed(&directory).expect("seed should read"),
             Some(987_654_321)
         );
-        std::fs::remove_dir_all(&directory).ok();
+        fs::remove_dir_all(&directory).ok();
     }
 }

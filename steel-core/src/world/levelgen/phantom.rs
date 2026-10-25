@@ -12,6 +12,7 @@ use steel_utils::types::Difficulty;
 
 use crate::entity::Entity as _;
 use crate::entity::{EntitySpawnReason, create_entity_instance};
+use crate::player::Player;
 use crate::world::World;
 use crate::world::custom_spawner::CustomSpawner;
 use crate::world::spawn::natural::runtime_random;
@@ -138,7 +139,7 @@ impl CustomSpawner for PhantomSpawner {
 }
 
 /// Vanilla `Player.getStats().getValue(Stats.TIME_SINCE_REST)`.
-fn time_since_rest(player: &crate::player::Player) -> i32 {
+fn time_since_rest(player: &Player) -> i32 {
     let stat = vanilla_stat_types::CUSTOM.get(&vanilla_custom_stats::TIME_SINCE_REST);
     player
         .stats()

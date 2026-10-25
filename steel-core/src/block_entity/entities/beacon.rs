@@ -28,6 +28,7 @@ use steel_utils::{
 };
 
 use crate::behavior::BLOCK_BEHAVIORS;
+use crate::behavior::advancement_hooks::raise_construct_beacon;
 use crate::block_entity::{BlockEntity, BlockEntityBase};
 use crate::chunk::heightmap::HeightmapType;
 use crate::chunk::light::MAX_LIGHT_LEVEL;
@@ -404,7 +405,7 @@ impl BlockEntity for BeaconBlockEntity {
             // Vanilla `BeaconBlockEntity.tick` fires `CONSTRUCT_BEACON` for the players
             // around a beacon that just activated, with the beacon's new level.
             if previous_levels <= 0 && levels > 0 {
-                crate::behavior::advancement_hooks::raise_construct_beacon(world, pos, levels);
+                raise_construct_beacon(world, pos, levels);
             }
         }
     }
@@ -432,7 +433,9 @@ mod tests {
 
     use super::{BEACON_TICK_INTERVAL, BeaconBlockEntity};
     use crate::behavior::advancement_hooks::test_support::criterion_granted;
+    use crate::behavior::init_behaviors;
     use crate::block_entity::BlockEntity;
+    use crate::block_entity::init_block_entities;
     use crate::entity::Entity as _;
     use crate::player::ResetReason;
     use crate::test_support::{
@@ -445,8 +448,8 @@ mod tests {
     #[test]
     fn activating_pyramid_grants_the_create_beacon_criterion() {
         init_vanilla_registry();
-        crate::behavior::init_behaviors();
-        crate::block_entity::init_block_entities();
+        init_behaviors();
+        init_block_entities();
         let world_fixture = fresh_test_world("beacon_construct_beacon");
         let world = &world_fixture.world;
         let pos = BlockPos::new(8, 64, 8);

@@ -244,7 +244,7 @@ impl ContainerViewers for BarrelBlockEntity {
 impl ContainerOpenersHost for BarrelBlockEntity {
     /// Vanilla `BarrelBlockEntity.openersCounter.onOpen`.
     fn on_open(&self, world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
-        self.play_sound(world, pos, state, &sound_events::BLOCK_BARREL_OPEN);
+        Self::play_sound(world, pos, state, &sound_events::BLOCK_BARREL_OPEN);
         world.set_block_state(
             pos,
             state.set_value(&BlockStateProperties::OPEN, true),
@@ -254,7 +254,7 @@ impl ContainerOpenersHost for BarrelBlockEntity {
 
     /// Vanilla `BarrelBlockEntity.openersCounter.onClose`.
     fn on_close(&self, world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
-        self.play_sound(world, pos, state, &sound_events::BLOCK_BARREL_CLOSE);
+        Self::play_sound(world, pos, state, &sound_events::BLOCK_BARREL_CLOSE);
         world.set_block_state(
             pos,
             state.set_value(&BlockStateProperties::OPEN, false),
@@ -280,13 +280,7 @@ impl ContainerOpenersHost for BarrelBlockEntity {
 
 impl BarrelBlockEntity {
     /// Vanilla `BarrelBlockEntity.playSound`: emits from the faced side.
-    fn play_sound(
-        &self,
-        world: &Arc<World>,
-        pos: BlockPos,
-        state: BlockStateId,
-        sound: SoundEventRef,
-    ) {
+    fn play_sound(world: &Arc<World>, pos: BlockPos, state: BlockStateId, sound: SoundEventRef) {
         let direction = state.get_value(&BlockStateProperties::FACING);
         let (dx, dy, dz) = direction.offset();
         let position = DVec3::new(
@@ -337,6 +331,9 @@ impl Container for BarrelContainer {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
+    use simdnbt::borrow::read_compound;
     use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_items};
 
     use super::*;
@@ -376,9 +373,8 @@ mod tests {
 
         let mut encoded = Vec::new();
         nbt.write(&mut encoded);
-        let borrowed =
-            simdnbt::borrow::read_compound(&mut std::io::Cursor::new(encoded.as_slice()))
-                .expect("saved barrel NBT should reparse");
+        let borrowed = read_compound(&mut Cursor::new(encoded.as_slice()))
+            .expect("saved barrel NBT should reparse");
         barrel.load_additional(&borrowed);
 
         let container = barrel.container.lock();

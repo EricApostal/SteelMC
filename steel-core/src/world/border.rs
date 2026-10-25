@@ -1,6 +1,6 @@
 //! World border state and collision helpers.
 
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, sync::Arc};
 
 use glam::DVec3;
 use steel_utils::{BlockPos, WorldAabb};
@@ -389,11 +389,11 @@ pub(crate) struct WorldBorder {
     warning_blocks: i32,
     absolute_max_size: i32,
     extent: BorderExtent,
-    listeners: Vec<std::sync::Arc<dyn BorderChangeListener>>,
+    listeners: Vec<Arc<dyn BorderChangeListener>>,
 }
 
-impl std::fmt::Debug for WorldBorder {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for WorldBorder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WorldBorder")
             .field("center_x", &self.center_x)
             .field("center_z", &self.center_z)
@@ -451,19 +451,19 @@ impl WorldBorder {
     }
 
     /// Vanilla `WorldBorder.addListener`.
-    pub(crate) fn add_listener(&mut self, listener: std::sync::Arc<dyn BorderChangeListener>) {
+    pub(crate) fn add_listener(&mut self, listener: Arc<dyn BorderChangeListener>) {
         self.listeners.push(listener);
     }
 
     /// Vanilla `WorldBorder.removeListener`.
-    pub(crate) fn remove_listener(&mut self, listener: &std::sync::Arc<dyn BorderChangeListener>) {
+    pub(crate) fn remove_listener(&mut self, listener: &Arc<dyn BorderChangeListener>) {
         self.listeners
-            .retain(|registered| !std::sync::Arc::ptr_eq(registered, listener));
+            .retain(|registered| !Arc::ptr_eq(registered, listener));
     }
 
     /// Returns the registered listeners, matching vanilla's copy-on-read
     /// `getListeners` so listeners can be added or removed while notifying.
-    pub(crate) fn listeners(&self) -> Vec<std::sync::Arc<dyn BorderChangeListener>> {
+    pub(crate) fn listeners(&self) -> Vec<Arc<dyn BorderChangeListener>> {
         self.listeners.clone()
     }
 
@@ -606,15 +606,12 @@ use super::{
 
 impl World {
     /// Vanilla `WorldBorder.addListener`: registers an observer of border mutations.
-    pub fn add_world_border_listener(&self, listener: std::sync::Arc<dyn BorderChangeListener>) {
+    pub fn add_world_border_listener(&self, listener: Arc<dyn BorderChangeListener>) {
         self.world_border.lock().add_listener(listener);
     }
 
     /// Vanilla `WorldBorder.removeListener`.
-    pub fn remove_world_border_listener(
-        &self,
-        listener: &std::sync::Arc<dyn BorderChangeListener>,
-    ) {
+    pub fn remove_world_border_listener(&self, listener: &Arc<dyn BorderChangeListener>) {
         self.world_border.lock().remove_listener(listener);
     }
 
@@ -638,7 +635,7 @@ impl World {
                     listener.on_set_damage_per_block(snapshot, damage_per_block);
                 }
                 BorderChange::SafeZone { safe_zone } => {
-                    listener.on_set_safe_zone(snapshot, safe_zone)
+                    listener.on_set_safe_zone(snapshot, safe_zone);
                 }
             }
         }

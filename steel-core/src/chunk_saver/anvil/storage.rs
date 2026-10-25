@@ -16,15 +16,18 @@
 //! (vanilla's `LEVELCHUNK` behaviour); protochunks keep them inline. Fields Steel cannot model
 //! are dropped with an explicit warning — see `chunk.rs` for the list.
 
+use std::collections::hash_map::Entry;
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Weak;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use rustc_hash::FxHashMap;
-use simdnbt::borrow::read_compound as read_borrowed_compound;
+use simdnbt::borrow::{BaseNbtCompound, read_compound as read_borrowed_compound};
 use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_registry::{REGISTRY, RegistryExt as _};
+use steel_utils::version::DATA_VERSION;
 use steel_utils::{ChunkPos, locks::AsyncRwLock};
 use tokio::sync::oneshot;
 
@@ -33,13 +36,14 @@ use crate::chunk_saver::format::RegionPos;
 use crate::chunk_saver::{
     ChunkStorage, LoadedChunk, PersistentChunk, PreparedChunkSave, format::PersistentPoi,
 };
+use crate::datafixer::{DataFixType, ensure_current, is_refusal, version_of_borrowed};
 use crate::world::World;
 
 use super::chunk::{chunk_to_nbt, nbt_to_chunk, poi_type_at};
 use super::entities::{entity_from_nbt, entity_to_nbt};
 use super::nbt::{compound_list, write_raw_nbt};
 use super::poi::{VanillaPoi, poi_from_nbt, poi_to_nbt};
-use super::region::{AnvilRegionFile, chunk_slot};
+use super::region::{AnvilRegionFile, chunk_slot, region_file_name};
 
 /// Fallback minimum Y when `level.toml` is not available yet (overworld default).
 const DEFAULT_MIN_Y: i32 = -64;
@@ -88,7 +92,7 @@ impl AnvilStorage {
         &self.region_dir
     }
 
-    fn region_pos(pos: ChunkPos) -> RegionPos {
+    const fn region_pos(pos: ChunkPos) -> RegionPos {
         RegionPos::from_chunk(pos.0.x, pos.0.y)
     }
 
@@ -119,15 +123,18 @@ impl AnvilStorage {
     ///
     /// # Errors
     /// Propagates filesystem errors.
+    ///
+    /// # Panics
+    /// Panics if the region handle is missing right after it was inserted.
     pub async fn acquire_chunk(&self, pos: ChunkPos) -> io::Result<bool> {
         let region = Self::region_pos(pos);
         let slot = chunk_slot(pos.0.x, pos.0.y);
         let mut regions = self.regions.write().await;
-        if !regions.contains_key(&region) {
+        if let Entry::Vacant(entry) = regions.entry(region) {
             let Some(handle) = self.open_region(region, true).await? else {
                 return Ok(false);
             };
-            regions.insert(region, handle);
+            entry.insert(handle);
         }
         let handle = regions.get_mut(&region).expect("region was just inserted");
         let exists = handle.region.contains(slot);
@@ -246,6 +253,13 @@ impl AnvilStorage {
             return Ok(None);
         };
 
+        let source = format!(
+            "{} at chunk {pos:?}",
+            self.region_dir
+                .join(region_file_name(region.x, region.z))
+                .display()
+        );
+
         let (sender, receiver) = oneshot::channel();
         thread_pool.spawn(move || {
             let result = decode_loaded_chunk(
@@ -256,6 +270,7 @@ impl AnvilStorage {
                 min_y,
                 height,
                 level,
+                &source,
             );
             if sender.send(result).is_err() {
                 tracing::trace!(
@@ -272,6 +287,12 @@ impl AnvilStorage {
         match decoded {
             Ok(loaded) => Ok(Some(loaded)),
             Err(error) => {
+                // A version refusal is not corruption: the record is intact and is simply
+                // unreadable here. Clearing the slot would delete a chunk we must not touch,
+                // so the refusal propagates and the load is aborted instead.
+                if is_refusal(&error) {
+                    return Err(error);
+                }
                 tracing::error!(
                     ?pos,
                     "Discarding corrupt Anvil chunk and regenerating it: {error}"
@@ -290,6 +311,9 @@ impl AnvilStorage {
     ///
     /// # Errors
     /// Propagates encoding and filesystem errors.
+    ///
+    /// # Panics
+    /// Panics if the region handle is missing right after it was inserted.
     pub async fn save_chunk_data(
         &self,
         prepared: PreparedChunkSave,
@@ -317,11 +341,11 @@ impl AnvilStorage {
         })??;
 
         let mut regions = self.regions.write().await;
-        if !regions.contains_key(&region) {
+        if let Entry::Vacant(entry) = regions.entry(region) {
             let Some(handle) = self.open_region(region, true).await? else {
                 return Err(io::Error::other("could not create Anvil region files"));
             };
-            regions.insert(region, handle);
+            entry.insert(handle);
         }
         let handle = regions.get_mut(&region).expect("region was just inserted");
 
@@ -406,6 +430,10 @@ impl AnvilStorage {
 /// `(chunk NBT, full-chunk entity NBT, POI NBT)` for one chunk.
 pub(crate) type EncodedChunk = (Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>);
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "keeps the fallible signature of the native backend's `encode_chunk` so both save paths compose with `?`"
+)]
 pub(crate) fn encode_chunk(
     persistent: &PersistentChunk<'_>,
     pos: ChunkPos,
@@ -425,7 +453,7 @@ pub(crate) fn encode_chunk(
 
 fn entities_to_nbt(persistent: &PersistentChunk<'_>, pos: ChunkPos) -> Vec<u8> {
     let mut nbt = NbtCompound::new();
-    nbt.insert("DataVersion", steel_utils::version::DATA_VERSION);
+    nbt.insert("DataVersion", DATA_VERSION);
     nbt.insert("Position", NbtTag::IntArray(vec![pos.0.x, pos.0.y]));
     nbt.insert(
         "Entities",
@@ -481,6 +509,14 @@ fn poi_to_bytes(persistent: &PersistentChunk<'_>, pos: ChunkPos, min_y: i32) -> 
     Some(write_raw_nbt(&poi_to_nbt(&entries)))
 }
 
+/// Decodes the chunk/entity/POI record triple at `pos` into a live chunk.
+///
+/// `source` labels the records for the version gate.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the record triple plus the geometry and world the decode needs; \
+              bundling them into a struct would only move the same fields elsewhere"
+)]
 fn decode_loaded_chunk(
     chunk_bytes: &[u8],
     entity_bytes: Option<&[u8]>,
@@ -489,9 +525,17 @@ fn decode_loaded_chunk(
     min_y: i32,
     height: i32,
     level: Weak<World>,
+    source: &str,
 ) -> io::Result<LoadedChunk> {
-    let (persistent, status) =
-        decode_persistent_chunk(chunk_bytes, entity_bytes, poi_bytes, pos, min_y, height)?;
+    let (persistent, status) = decode_persistent_chunk(
+        chunk_bytes,
+        entity_bytes,
+        poi_bytes,
+        pos,
+        min_y,
+        height,
+        source,
+    )?;
     ChunkStorage::try_persistent_to_chunk(&persistent, pos, status, min_y, height, level)
 }
 
@@ -504,20 +548,21 @@ pub(crate) fn decode_persistent_chunk(
     pos: ChunkPos,
     min_y: i32,
     height: i32,
+    source: &str,
 ) -> io::Result<(PersistentChunk<'static>, ChunkStatus)> {
     let (mut persistent, status) = {
         let borrowed = parse_root(chunk_bytes, "chunk")?;
         let view = simdnbt::borrow::NbtCompound::from(&borrowed);
-        nbt_to_chunk(&view, pos, min_y, height)?
+        nbt_to_chunk(&view, pos, min_y, height, source)?
     };
 
     if let Some(entities) = entity_bytes {
         let borrowed = parse_root(entities, "entity")?;
         let view = simdnbt::borrow::NbtCompound::from(&borrowed);
-        crate::datafixer::ensure_current(
-            crate::datafixer::version_of_borrowed(&view),
-            crate::datafixer::DataFixType::Entity,
-            &format!("entity record for chunk {pos:?}"),
+        ensure_current(
+            version_of_borrowed(&view),
+            DataFixType::Entity,
+            &format!("entity record of {source}"),
         )?;
         for entity in view.list("Entities").map_or_else(Vec::new, compound_list) {
             match entity_from_nbt(&entity) {
@@ -532,10 +577,10 @@ pub(crate) fn decode_persistent_chunk(
     if let Some(poi) = poi_bytes {
         let borrowed = parse_root(poi, "POI")?;
         let view = simdnbt::borrow::NbtCompound::from(&borrowed);
-        crate::datafixer::ensure_current(
-            crate::datafixer::version_of_borrowed(&view),
-            crate::datafixer::DataFixType::Poi,
-            &format!("POI record for chunk {pos:?}"),
+        ensure_current(
+            version_of_borrowed(&view),
+            DataFixType::Poi,
+            &format!("POI record of {source}"),
         )?;
         for record in poi_from_nbt(&view)? {
             let x = record.pos[0] - pos.0.x * 16;
@@ -592,7 +637,7 @@ pub(crate) fn decode_persistent_chunk(
     Ok((persistent, status))
 }
 
-fn parse_root<'a>(bytes: &'a [u8], what: &str) -> io::Result<simdnbt::borrow::BaseNbtCompound<'a>> {
+fn parse_root<'a>(bytes: &'a [u8], what: &str) -> io::Result<BaseNbtCompound<'a>> {
     read_borrowed_compound(&mut io::Cursor::new(bytes)).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -603,7 +648,7 @@ fn parse_root<'a>(bytes: &'a [u8], what: &str) -> io::Result<simdnbt::borrow::Ba
 
 /// Reads `generation.min_y`/`generation.height` from a world's `level.toml`.
 fn read_level_height(world_dir: &Path) -> Option<(i32, i32)> {
-    let contents = std::fs::read_to_string(world_dir.join("level.toml")).ok()?;
+    let contents = fs::read_to_string(world_dir.join("level.toml")).ok()?;
     let parsed: toml::Value = toml::from_str(&contents).ok()?;
     let generation = parsed.get("generation")?;
     let min_y = i32::try_from(generation.get("min_y")?.as_integer()?).ok()?;

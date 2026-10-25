@@ -12,14 +12,18 @@ use steel_macros::block_behavior;
 use steel_registry::REGISTRY;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
-use steel_registry::blocks::properties::{BlockStateProperties, ChestType};
+use steel_registry::blocks::properties::{
+    BlockStateProperties, BoolProperty, ChestType, EnumProperty,
+};
 use steel_registry::vanilla_block_entity_types;
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_custom_stats;
 use steel_utils::{BlockPos, BlockStateId, Direction};
 
 use crate::behavior::InventoryAccess;
-use crate::behavior::block::{BlockBehavior, BlockEntityCreation};
+use crate::behavior::block::{
+    BlockBehavior, BlockEntityCreation, schedule_water_tick_if_waterlogged,
+};
 use crate::behavior::blocks::building::{WeatherState, WeatheringCopper};
 use crate::behavior::blocks::container::chest_block::{
     analog_signal, connected_direction, open_menu,
@@ -33,12 +37,9 @@ use crate::entity::ai::path::PathComputationType;
 use crate::player::Player;
 use crate::world::{LevelReader, ScheduledTickAccess, World};
 
-const FACING: &steel_registry::blocks::properties::EnumProperty<Direction> =
-    &BlockStateProperties::FACING;
-const CHEST_TYPE: &steel_registry::blocks::properties::EnumProperty<ChestType> =
-    &BlockStateProperties::CHEST_TYPE;
-const WATERLOGGED: &steel_registry::blocks::properties::BoolProperty =
-    &BlockStateProperties::WATERLOGGED;
+const FACING: &EnumProperty<Direction> = &BlockStateProperties::FACING;
+const CHEST_TYPE: &EnumProperty<ChestType> = &BlockStateProperties::CHEST_TYPE;
+const WATERLOGGED: &BoolProperty = &BlockStateProperties::WATERLOGGED;
 
 /// Copper chest behaviour.
 ///
@@ -112,25 +113,25 @@ fn chest_type_for(world: &Arc<World>, pos: BlockPos, facing: Direction) -> Chest
 }
 
 /// Vanilla `CopperChestBlock.getStateForPlacement`.
-fn state_for_placement(block: BlockRef, context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
+fn state_for_placement(block: BlockRef, context: &BlockPlaceContext<'_>) -> BlockStateId {
     let mut facing = context.horizontal_direction().opposite();
     let mut chest_type = ChestType::Single;
 
-    if context.is_secondary_use_active() && context.clicked_face().is_horizontal() {
-        if let Some(neighbor_facing) = candidate_partner_facing(
+    if context.is_secondary_use_active()
+        && context.clicked_face().is_horizontal()
+        && let Some(neighbor_facing) = candidate_partner_facing(
             context.world,
             context.place_pos(),
             context.clicked_face().opposite(),
-        ) && neighbor_facing.axis() != context.clicked_face().axis()
-        {
-            facing = neighbor_facing;
-            chest_type = if facing.rotate_y_counter_clockwise() == context.clicked_face().opposite()
-            {
-                ChestType::Right
-            } else {
-                ChestType::Left
-            };
-        }
+        )
+        && neighbor_facing.axis() != context.clicked_face().axis()
+    {
+        facing = neighbor_facing;
+        chest_type = if facing.rotate_y_counter_clockwise() == context.clicked_face().opposite() {
+            ChestType::Right
+        } else {
+            ChestType::Left
+        };
     }
 
     if chest_type == ChestType::Single && !context.is_secondary_use_active() {
@@ -143,11 +144,7 @@ fn state_for_placement(block: BlockRef, context: &BlockPlaceContext<'_>) -> Opti
         .set_value(CHEST_TYPE, chest_type)
         .set_value(WATERLOGGED, context.is_water_source());
 
-    Some(least_oxidized_connected_chest(
-        state,
-        context.world,
-        context.place_pos(),
-    ))
+    least_oxidized_connected_chest(state, context.world, context.place_pos())
 }
 
 /// Vanilla `CopperChestBlock.getLeastOxidizedChestOfConnectedBlocks`.
@@ -249,7 +246,7 @@ fn place_new_block_entity(
 
 impl BlockBehavior for CopperChestBlock {
     fn get_state_for_placement(&self, context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
-        state_for_placement(self.block, context)
+        Some(state_for_placement(self.block, context))
     }
 
     fn update_shape(
@@ -261,7 +258,7 @@ impl BlockBehavior for CopperChestBlock {
         _neighbor_pos: BlockPos,
         neighbor_state: BlockStateId,
     ) -> BlockStateId {
-        crate::behavior::block::schedule_water_tick_if_waterlogged(state, world, pos);
+        schedule_water_tick_if_waterlogged(state, world, pos);
         update_shape(state, direction, neighbor_state)
     }
 
@@ -334,7 +331,7 @@ impl BlockBehavior for CopperChestBlock {
 
 impl BlockBehavior for WeatheringCopperChestBlock {
     fn get_state_for_placement(&self, context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
-        state_for_placement(self.block, context)
+        Some(state_for_placement(self.block, context))
     }
 
     fn update_shape(
@@ -346,7 +343,7 @@ impl BlockBehavior for WeatheringCopperChestBlock {
         _neighbor_pos: BlockPos,
         neighbor_state: BlockStateId,
     ) -> BlockStateId {
-        crate::behavior::block::schedule_water_tick_if_waterlogged(state, world, pos);
+        schedule_water_tick_if_waterlogged(state, world, pos);
         update_shape(state, direction, neighbor_state)
     }
 

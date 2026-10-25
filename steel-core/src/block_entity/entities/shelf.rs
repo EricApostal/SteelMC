@@ -4,14 +4,17 @@
 //! `getUpdateTag`/`getUpdatePacket` carry the `Items` list so the client can render the displayed
 //! stacks, exactly like vanilla.
 
-use std::sync::{Arc, Weak};
+use std::{
+    mem,
+    sync::{Arc, Weak},
+};
 
 use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
-use simdnbt::owned::{NbtCompound, NbtList};
+use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_registry::data_components::vanilla_components::CONTAINER;
 use steel_registry::game_events::GameEventRef;
 use steel_registry::item_stack::ItemStack;
-use steel_registry::{ItemStackTemplate, vanilla_block_entity_types};
+use steel_registry::{ItemStackTemplate, vanilla_block_entity_types, vanilla_game_events};
 use steel_utils::locks::SyncMutex;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
@@ -94,7 +97,7 @@ impl ShelfBlockEntity {
         let after_changed = Arc::new(move || {
             if let Some(world) = callback_level.upgrade() {
                 world.game_event(
-                    &steel_registry::vanilla_game_events::BLOCK_ACTIVATE,
+                    &vanilla_game_events::BLOCK_ACTIVATE,
                     pos,
                     &GameEventContext::new(None, Some(world.get_block_state(pos))),
                 );
@@ -132,7 +135,7 @@ impl ShelfBlockEntity {
         let Some(entry) = container.items.get_mut(slot) else {
             return ItemStack::empty();
         };
-        std::mem::replace(entry, stack)
+        mem::replace(entry, stack)
     }
 
     /// Vanilla `ShelfBlockEntity.removeItem`: removes and returns the item in `slot`.
@@ -142,8 +145,7 @@ impl ShelfBlockEntity {
         container
             .items
             .get_mut(slot)
-            .map(std::mem::take)
-            .unwrap_or_else(ItemStack::empty)
+            .map_or_else(ItemStack::empty, mem::take)
     }
 
     /// Returns whether the shelf currently holds no items.
@@ -177,10 +179,7 @@ impl BlockEntity for ShelfBlockEntity {
         let Some(world) = self.get_level() else {
             return;
         };
-        self.mark_changed(
-            &world,
-            Some(&steel_registry::vanilla_game_events::BLOCK_ACTIVATE),
-        );
+        self.mark_changed(&world, Some(&vanilla_game_events::BLOCK_ACTIVATE));
     }
 
     fn container_ref(&self) -> Option<ContainerRef> {
@@ -192,7 +191,7 @@ impl BlockEntity for ShelfBlockEntity {
     fn pre_remove_side_effects(&self, pos: BlockPos, _state: BlockStateId) {
         let items = {
             let mut container = self.container.lock();
-            std::mem::replace(&mut container.items, vec![ItemStack::empty(); SHELF_SLOTS])
+            mem::replace(&mut container.items, vec![ItemStack::empty(); SHELF_SLOTS])
         };
         let Some(world) = self.get_level() else {
             return;
@@ -233,7 +232,7 @@ impl BlockEntity for ShelfBlockEntity {
             if item.is_empty() {
                 continue;
             }
-            if let simdnbt::owned::NbtTag::Compound(mut compound) = item.to_nbt_tag_ref() {
+            if let NbtTag::Compound(mut compound) = item.to_nbt_tag_ref() {
                 compound.insert("Slot", slot as i8);
                 items.push(compound);
             }
@@ -256,8 +255,8 @@ impl BlockEntity for ShelfBlockEntity {
     fn apply_components_from_item(&self, item: &ItemStack) {
         let contents = item.get(CONTAINER);
         let mut container = self.container.lock();
-        for slot in 0..SHELF_SLOTS {
-            container.items[slot] = contents
+        for (slot, item) in container.items.iter_mut().enumerate() {
+            *item = contents
                 .and_then(|contents| contents.items().get(slot))
                 .and_then(Option::as_ref)
                 .map_or_else(ItemStack::empty, ItemStackTemplate::create);

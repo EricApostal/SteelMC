@@ -21,6 +21,7 @@ use steel_utils::types::Difficulty;
 use steel_utils::{BlockPos, GlobalPos, Identifier};
 use tokio::fs;
 
+use crate::datafixer::ensure_steel_current;
 use crate::world::{MAX_SIZE, clock::WorldClockManager};
 
 mod game_time;
@@ -459,12 +460,12 @@ impl LevelDataManager {
                 let toml_version = table
                     .remove("level_toml_version")
                     .and_then(|version| {
-                        version.as_integer().map(|version| {
-                            u64::try_from(version).unwrap_or(u64::MAX)
-                        })
+                        version
+                            .as_integer()
+                            .map(|version| u64::try_from(version).unwrap_or(u64::MAX))
                     })
                     .unwrap_or(LEVEL_TOML_VERSION);
-                crate::datafixer::ensure_steel_current(
+                ensure_steel_current(
                     toml_version,
                     LEVEL_TOML_VERSION,
                     &format!("level file {}", path.display()),
@@ -985,6 +986,87 @@ mod tests {
                 .get(&RANDOM_TICK_SPEED, &REGISTRY.game_rules),
             9
         );
+    }
+
+    /// The `level_toml_version` stamp: an unstamped (legacy) file and a current one load, a
+    /// future one is refused by name, and a save writes the stamp for the next build to read.
+    #[tokio::test]
+    async fn level_toml_version_stamp_gates_newer_files_and_is_written_on_save() {
+        init_vanilla_registry();
+
+        // A real pre-stamp payload: exactly what this build serializes for `LevelData`, with no
+        // `level_toml_version` key.
+        let mut legacy_data = LevelData::new_with_seed(5);
+        legacy_data.game_time = Some(0);
+        let legacy_text =
+            toml::to_string_pretty(&legacy_data).expect("level data should serialize");
+
+        let legacy = temp_level_data_dir("toml-legacy");
+        std_fs::write(legacy.join("level.toml"), &legacy_text)
+            .expect("legacy level.toml should be written");
+        let manager = LevelDataManager::new(
+            Some(legacy.as_path()),
+            1,
+            Difficulty::default(),
+            settings("minecraft:overworld", OverworldNoiseSettings::HEIGHT),
+            GameTimeSource::Primary,
+        )
+        .await
+        .expect("an unstamped level.toml predates the stamp and must still load");
+        assert_eq!(manager.data().seed, 5);
+        let _ = std_fs::remove_dir_all(&legacy);
+
+        let version = LEVEL_TOML_VERSION + 1;
+        let future = temp_level_data_dir("toml-future");
+        // The stamp is a top-level key, so it has to go *before* the serialized payload: the
+        // payload ends with nested `[section]` tables, and a key appended after one would land
+        // inside that section.
+        std_fs::write(
+            future.join("level.toml"),
+            format!("level_toml_version = {version}\n{legacy_text}"),
+        )
+        .expect("future level.toml should be written");
+        let Err(error) = LevelDataManager::new(
+            Some(future.as_path()),
+            1,
+            Difficulty::default(),
+            settings("minecraft:overworld", OverworldNoiseSettings::HEIGHT),
+            GameTimeSource::Primary,
+        )
+        .await
+        else {
+            panic!("a level.toml from a newer build must be refused");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        let message = error.to_string();
+        assert!(message.contains(&version.to_string()), "{message}");
+        assert!(message.contains("level.toml"), "{message}");
+        let _ = std_fs::remove_dir_all(&future);
+
+        let current = temp_level_data_dir("toml-current");
+        std_fs::write(
+            current.join("level.toml"),
+            format!("level_toml_version = {LEVEL_TOML_VERSION}\n{legacy_text}"),
+        )
+        .expect("current level.toml should be written");
+        let mut manager = LevelDataManager::new(
+            Some(current.as_path()),
+            1,
+            Difficulty::default(),
+            settings("minecraft:overworld", OverworldNoiseSettings::HEIGHT),
+            GameTimeSource::Primary,
+        )
+        .await
+        .expect("a level.toml stamped by this build must load");
+        manager.mark_dirty();
+        manager.save().await.expect("level.toml should save");
+        let written = std_fs::read_to_string(current.join("level.toml"))
+            .expect("saved level.toml should be readable");
+        assert!(
+            written.contains(&format!("level_toml_version = {LEVEL_TOML_VERSION}")),
+            "save must stamp the version: {written}"
+        );
+        let _ = std_fs::remove_dir_all(&current);
     }
 }
 

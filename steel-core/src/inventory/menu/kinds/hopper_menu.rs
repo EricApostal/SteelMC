@@ -16,8 +16,6 @@ pub fn hopper(
     container_id: u8,
     container: ContainerRef,
 ) -> Menu {
-    let container = container.into();
-
     let mut builder = MenuBuilder::new(&vanilla_menu_types::HOPPER, container_id);
     let hopper = builder.section(&container, HOPPER_SLOTS);
     let player = builder.player_inventory(&inventory);

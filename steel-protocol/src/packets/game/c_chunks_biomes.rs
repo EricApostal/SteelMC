@@ -18,7 +18,7 @@ pub const TWO_MEGABYTES: usize = 2_097_152;
 pub struct ChunkBiomeData {
     /// Position of the chunk whose biomes are replaced, in vanilla's packed `long` layout.
     pub pos: PackedChunkPos,
-    /// Raw biome data: a VarInt byte length followed by the bytes themselves.
+    /// Raw biome data: a `VarInt` byte length followed by the bytes themselves.
     pub buffer: Vec<u8>,
 }
 

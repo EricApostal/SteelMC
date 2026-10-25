@@ -6,6 +6,7 @@
 //! flag in the block entity's `ContainerData`; the menu reads both, so Steel
 //! shares them through [`CrafterSlotStates`].
 
+use std::mem;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, Ordering};
 use std::sync::{Arc, Weak};
 
@@ -44,7 +45,7 @@ pub struct CrafterSlotStates {
 }
 
 impl CrafterSlotStates {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             disabled: AtomicU16::new(0),
             triggered: AtomicBool::new(false),
@@ -339,7 +340,7 @@ impl BlockEntity for CrafterBlockEntity {
     fn pre_remove_side_effects(&self, pos: BlockPos, _state: BlockStateId) {
         let items = {
             let mut container = self.container.lock();
-            std::mem::replace(
+            mem::replace(
                 &mut container.items,
                 vec![ItemStack::empty(); CRAFTER_SLOTS],
             )
@@ -378,7 +379,7 @@ impl BlockEntity for CrafterBlockEntity {
 
         let mut mask = 0u16;
         if let Some(disabled) = nbt_view.int_array("disabled_slots") {
-            for &slot in disabled.iter() {
+            for &slot in &disabled {
                 if let Ok(slot) = usize::try_from(slot)
                     && slot < CRAFTER_SLOTS
                     && container.items[slot].is_empty()
@@ -447,7 +448,6 @@ impl BlockEntity for CrafterBlockEntity {
 
 #[cfg(test)]
 mod tests {
-    use steel_registry::blocks::block_state_ext::BlockStateExt as _;
     use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_items};
 
     use super::*;

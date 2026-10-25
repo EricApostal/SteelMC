@@ -977,7 +977,10 @@ fn clear_area_removes_inside_ticks_and_repairs_heads() {
 
     assert_eq!(block_live_positions(&scheduler, first_pos), [outside_y]);
     assert_eq!(block_live_positions(&scheduler, second_pos), [other_chunk]);
-    assert!(fluid_live_positions(&scheduler, first_pos).is_empty());
+    assert_eq!(
+        fluid_live_positions(&scheduler, first_pos),
+        [] as [BlockPos; 0]
+    );
     assert_eq!(
         fluid_live_positions(&scheduler, second_pos),
         [fluid_outside]
@@ -1055,7 +1058,10 @@ fn clear_area_purges_pending_ticks_and_keeps_collection_order() {
 
     // Both the live and the not-yet-unpacked tick inside the box are gone.
     assert_eq!(block_live_positions(&scheduler, pos), [remaining_pos]);
-    assert!(block_pending_positions(&scheduler, pos).is_empty());
+    assert_eq!(
+        block_pending_positions(&scheduler, pos),
+        [] as [BlockPos; 0]
+    );
     assert_eq!(block_head(&scheduler, pos), Some(2));
 
     // `unpack` must not resurrect cleared pending ticks, and collection still drains in order.
@@ -1063,7 +1069,10 @@ fn clear_area_purges_pending_ticks_and_keeps_collection_order() {
         if let Err(error) = scheduler.unpack_chunk(chunk_pos, 0) {
             panic!("test scheduler invariant failed: {error:?}");
         }
-        assert!(block_pending_positions(&scheduler, chunk_pos).is_empty());
+        assert_eq!(
+            block_pending_positions(&scheduler, chunk_pos),
+            [] as [BlockPos; 0]
+        );
     }
     let selected = begin_block_tick_at(&scheduler, 3, &[pos, untouched_pos], 10);
     assert_eq!(
@@ -1100,7 +1109,7 @@ fn clear_area_visits_edge_chunks_by_block_corners() {
 
     scheduler.clear_area(BoundingBox::new(IVec3::new(16, 0, 0), IVec3::new(16, 0, 0)));
 
-    assert!(block_live_positions(&scheduler, pos).is_empty());
+    assert_eq!(block_live_positions(&scheduler, pos), [] as [BlockPos; 0]);
     assert_eq!(block_head(&scheduler, pos), None);
 }
 

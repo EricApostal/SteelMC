@@ -968,6 +968,9 @@ mod tests {
 
     #[test]
     fn flat_decoration_options_resolve_and_unknown_structure_sets_are_rejected() {
+        // `validate_flat_config` resolves structure sets through the global registry.
+        init_vanilla_registry();
+
         for key in ["features", "lakes"] {
             let config = toml::Value::Table(Map::from_iter([(
                 key.to_owned(),

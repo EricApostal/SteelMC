@@ -23,6 +23,7 @@ use crate::entity::{
     AgeableMob, AgeableMobBase, EntitySpawnReason, Mob, MobBase, SharedEntity, next_entity_id,
 };
 use crate::player::Player;
+use crate::player::advancement::triggers::raise_bred_animals;
 use crate::world::{LevelReader, World};
 
 const PARENT_AGE_AFTER_BREEDING: i32 = 6000;
@@ -308,7 +309,7 @@ pub trait Animal: AgeableMob {
             player.award_custom_stat(&vanilla_custom_stats::ANIMALS_BRED);
             // Vanilla `Animal.finalizeSpawnChildFromBreeding` raises `BRED_ANIMALS`
             // for the love cause with both parents and the offspring.
-            crate::player::advancement::triggers::raise_bred_animals(
+            raise_bred_animals(
                 &player,
                 self.as_entity_event_source(),
                 partner.as_entity_event_source(),

@@ -896,6 +896,10 @@ pub(crate) fn macro_signature(function: &Function) -> Option<TextComponent> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "these tests unwrap their own fixture data so failures point at the offending assertion"
+)]
 mod tests {
     use super::{Function, FunctionArguments, StringTemplate, run_function};
     use simdnbt::owned::NbtCompound;

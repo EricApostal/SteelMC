@@ -10,17 +10,22 @@
 //! the same fields through its domain-scoped TOML saved-data boundary.
 
 use std::{
+    cmp::Ordering as CmpOrdering,
     collections::{BTreeMap, BTreeSet, btree_map::Entry},
+    hash::{Hash, Hasher},
     io,
+    mem::take,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use serde::{Deserialize, Serialize};
 use steel_utils::locks::{AsyncMutex, SyncMutex, SyncRwLock};
 use steel_utils::saved_data::names as saved_data_names;
+use text_components::interactivity::HoverEvent;
 use text_components::{Modifier as _, TextComponent};
 use thiserror::Error;
 
+use crate::player::Player;
 use crate::server::Server;
 use crate::server::worlds::WorldMap;
 use crate::world::World;
@@ -94,9 +99,9 @@ impl ScoreHolder {
     #[must_use]
     pub fn feedback_display_name(&self) -> TextComponent {
         match &self.display_name {
-            Some(display_name) => display_name.clone().hover_event(
-                text_components::interactivity::HoverEvent::show_text(self.name.clone()),
-            ),
+            Some(display_name) => display_name
+                .clone()
+                .hover_event(HoverEvent::show_text(self.name.clone())),
             None => TextComponent::plain(self.name.clone()),
         }
     }
@@ -117,19 +122,19 @@ impl PartialEq for ScoreHolder {
 impl Eq for ScoreHolder {}
 
 impl PartialOrd for ScoreHolder {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for ScoreHolder {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
         self.name.cmp(&other.name)
     }
 }
 
-impl std::hash::Hash for ScoreHolder {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl Hash for ScoreHolder {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.name.hash(state);
     }
 }
@@ -192,9 +197,10 @@ impl ScoreboardObjective {
     /// brackets with the objective name as hover text.
     #[must_use]
     pub fn formatted_display_name(&self) -> TextComponent {
-        let styled = self.display_name.clone().hover_event(
-            text_components::interactivity::HoverEvent::show_text(self.name.clone()),
-        );
+        let styled = self
+            .display_name
+            .clone()
+            .hover_event(HoverEvent::show_text(self.name.clone()));
         team::wrap_in_square_brackets(styled)
     }
 
@@ -427,7 +433,7 @@ impl Scoreboard {
             return Err(ScoreboardError::DuplicateObjective(name));
         }
         let objective = objective_snapshot(&name, &state);
-        persistent.objectives.insert(name.clone(), state);
+        persistent.objectives.insert(name.to_owned(), state);
         drop(persistent);
         self.mark_dirty();
         // Vanilla `ServerScoreboard.onObjectiveAdded` only marks the scoreboard dirty: the
@@ -530,7 +536,7 @@ impl Scoreboard {
         display_auto_update: bool,
     ) -> Result<(), ScoreboardError> {
         self.mutate_objective(name, |state| {
-            state.display_auto_update = display_auto_update
+            state.display_auto_update = display_auto_update;
         })
     }
 
@@ -1114,7 +1120,7 @@ impl Scoreboard {
         number_format: Option<NumberFormat>,
     ) -> Result<(), ScoreboardError> {
         self.mutate_score(holder, objective, |state| {
-            state.number_format = number_format
+            state.number_format = number_format;
         })?;
         self.queue_score_change(holder.name(), objective.name());
         Ok(())
@@ -1353,7 +1359,7 @@ impl Scoreboard {
     /// Takes the client packets queued since the last flush, in mutation order.
     #[must_use]
     pub fn pending_packets(&self) -> Vec<ScoreboardPacket> {
-        std::mem::take(&mut *self.pending.lock())
+        take(&mut *self.pending.lock())
     }
 
     /// Builds the vanilla `ServerScoreboard.getStartTrackingPackets` for one objective.
@@ -1607,7 +1613,7 @@ impl DomainScoreboards {
 
     /// Sends the scoreboard state to one joining player, mirroring vanilla
     /// `PlayerList.updateEntireScoreboard`.
-    pub fn send_initial_state(&self, domain: &str, player: &crate::player::Player) -> usize {
+    pub fn send_initial_state(&self, domain: &str, player: &Player) -> usize {
         let Some(scoreboard) = self.scoreboards.get(domain) else {
             return 0;
         };
@@ -1658,13 +1664,14 @@ mod tests {
     };
     use tokio::fs;
 
+    use steel_protocol::packets::game::ScoreboardDisplaySlot;
     use steel_utils::saved_data::{SavedDataManager, names as saved_data_names};
     use text_components::TextComponent;
 
     use super::{
         AsyncMutex, CriteriaKind, DisplaySlot, DomainScoreboards, NumberFormat, ObjectiveCriteria,
         PersistentScoreboard, RenderType, ScoreHolder, Scoreboard, ScoreboardError,
-        ScoreboardPacket, SyncMutex, TeamColor, TeamVisibility,
+        ScoreboardPacket, TeamColor, TeamVisibility,
     };
 
     /// Vanilla `NumberFormat.Fixed` over a plain contents component.
@@ -1742,7 +1749,7 @@ mod tests {
             scoreboard.holder_team_name(&holder).as_deref(),
             Some("blue")
         );
-        assert!(scoreboard.team_holders("red").is_empty());
+        assert_eq!(scoreboard.team_holders("red"), [] as [String; 0]);
         assert_eq!(scoreboard.team_holders("blue"), vec!["Steve".to_owned()]);
     }
 
@@ -2080,10 +2087,7 @@ mod tests {
                     "score"
                 }
                 ScoreboardPacket::DisplayObjective(packet) => {
-                    assert!(matches!(
-                        packet.slot,
-                        steel_protocol::packets::game::ScoreboardDisplaySlot::Sidebar
-                    ));
+                    assert!(matches!(packet.slot, ScoreboardDisplaySlot::Sidebar));
                     assert_eq!(packet.objective_name.as_deref(), Some("kills"));
                     "display-slot"
                 }
@@ -2208,7 +2212,9 @@ mod tests {
                     format!("score:{}:{}", packet.objective_name, packet.owner)
                 }
                 ScoreboardPacket::DisplayObjective(_) => "display-slot".to_owned(),
-                other => panic!("unexpected packet: {other:?}"),
+                ScoreboardPacket::ResetScore(packet) => {
+                    panic!("unexpected packet: {packet:?}")
+                }
             })
             .collect();
         // Teams first, then the displayed objective's create + both of its display slots +

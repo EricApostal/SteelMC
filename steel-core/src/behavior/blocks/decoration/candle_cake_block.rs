@@ -27,7 +27,11 @@ use crate::{
     entity::Entity,
     entity::projectile::Projectile,
     player::Player,
-    world::{ClipHitResult, LevelReader, ScheduledTickAccess, World, game_event::GameEventContext},
+    world::{
+        ClipHitResult, LevelReader, ScheduledTickAccess, World, explosion::BlockInteraction,
+        explosion::ExplosionInfo, explosion::default_on_explosion_hit,
+        game_event::GameEventContext,
+    },
 };
 
 /// Behavior for candle cakes (vanilla `CandleCakeBlock`).
@@ -209,14 +213,12 @@ impl BlockBehavior for CandleCakeBlock {
         state: BlockStateId,
         world: &Arc<World>,
         pos: BlockPos,
-        explosion: &crate::world::explosion::ExplosionInfo<'_>,
+        explosion: &ExplosionInfo<'_>,
         on_drop: &mut dyn FnMut(ItemStack, BlockPos),
     ) {
-        if explosion.block_interaction == crate::world::explosion::BlockInteraction::TriggerBlock
-            && state.get_value(LIT)
-        {
+        if explosion.block_interaction == BlockInteraction::TriggerBlock && state.get_value(LIT) {
             Self::extinguish(world, state, pos, None);
         }
-        crate::world::explosion::default_on_explosion_hit(state, world, pos, explosion, on_drop);
+        default_on_explosion_hit(state, world, pos, explosion, on_drop);
     }
 }

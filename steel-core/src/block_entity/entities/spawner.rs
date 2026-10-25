@@ -4,6 +4,7 @@
 //! list, the delay between attempts, the spawn count/range and the player proximity
 //! requirements. The server tick advances the delay and runs the vanilla spawn attempt.
 
+use std::ptr;
 use std::str::FromStr;
 use std::sync::{Arc, Weak};
 
@@ -17,6 +18,7 @@ use steel_registry::vanilla_game_rules;
 use steel_registry::{REGISTRY, RegistryExt as _, vanilla_block_entity_types, vanilla_game_events};
 use steel_utils::entity_events::EntityStatus;
 use steel_utils::nbt::NbtNumeric as _;
+use steel_utils::random::{RandomSource, legacy_random::LegacyRandom};
 use steel_utils::types::Difficulty;
 use steel_utils::{
     BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier, WorldAabb, locks::SyncMutex,
@@ -367,6 +369,10 @@ impl SpawnerBlockEntity {
     }
 
     /// Vanilla `BaseSpawner.serverTick`'s spawn branch.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "mirrors vanilla BaseSpawner.serverTick"
+    )]
     fn spawn_attempt(&self, world: &Arc<World>) {
         let pos = self.get_block_pos();
         let mut rng = rand::rng();
@@ -414,11 +420,7 @@ impl SpawnerBlockEntity {
                     continue;
                 }
             } else {
-                let mut random = steel_utils::random::RandomSource::Legacy(
-                    steel_utils::random::legacy_random::LegacyRandom::from_seed(
-                        rng.random::<u64>(),
-                    ),
-                );
+                let mut random = RandomSource::Legacy(LegacyRandom::from_seed(rng.random::<u64>()));
                 if !SpawnPlacements::check_spawn_rules(
                     entity_type,
                     world,
@@ -459,9 +461,7 @@ impl SpawnerBlockEntity {
             let nearby = world
                 .get_entities_in_aabb(&nearby_aabb)
                 .into_iter()
-                .filter(|other| {
-                    std::ptr::eq(other.entity_type(), entity_type) && !other.is_spectator()
-                })
+                .filter(|other| ptr::eq(other.entity_type(), entity_type) && !other.is_spectator())
                 .count();
             if i32::try_from(nearby).unwrap_or(i32::MAX) >= max_nearby {
                 self.delay(world);

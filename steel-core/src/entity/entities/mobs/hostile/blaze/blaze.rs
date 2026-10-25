@@ -1,7 +1,10 @@
 //! Vanilla `Blaze` (`net.minecraft.world.entity.monster.Blaze`).
 
 use std::iter::empty;
+use std::sync::mpsc;
 use std::sync::{Arc, Weak};
+use std::thread;
+use std::time::Duration;
 
 use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
@@ -508,7 +511,9 @@ impl PathfinderMob for BlazeEntity {}
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Weak};
+    use std::sync::{Arc, Weak, mpsc};
+    use std::thread;
+    use std::time::Duration;
 
     use glam::DVec3;
     use steel_registry::{init_vanilla_registry, vanilla_entities};
@@ -545,16 +550,16 @@ mod tests {
             DVec3::ZERO,
             Weak::new(),
         ));
-        let shared: SharedEntity = blaze.clone();
+        let shared: SharedEntity = Arc::<BlazeEntity>::clone(&blaze);
 
         // A regression overflows the stack instead of hanging, so run it off-thread and
         // bound it: either outcome fails the test rather than the whole binary silently.
-        let (done, finished) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
+        let (done, finished) = mpsc::channel();
+        let worker = thread::spawn(move || {
             LivingEntity::server_ai_step(blaze.as_ref(), &shared);
             let _ = done.send(());
         });
-        let outcome = finished.recv_timeout(std::time::Duration::from_secs(10));
+        let outcome = finished.recv_timeout(Duration::from_secs(10));
         assert!(
             outcome.is_ok(),
             "blaze server_ai_step did not terminate: customServerAiStep re-enters itself"

@@ -8,7 +8,7 @@ use steel_utils::Identifier;
 ///
 /// Mirrors vanilla's `ClientboundUpdateEnabledFeaturesPacket`, whose features
 /// are encoded by `Identifier.STREAM_CODEC.apply(ByteBufCodecs.collection(
-/// HashSet::new))`: a VarInt element count followed by each identifier as a
+/// HashSet::new))`: a `VarInt` element count followed by each identifier as a
 /// VarInt-prefixed UTF-8 string. Vanilla models the field as a set, so entries
 /// are unique and their wire order is not significant.
 #[derive(ClientPacket, WriteTo, Clone, Debug)]

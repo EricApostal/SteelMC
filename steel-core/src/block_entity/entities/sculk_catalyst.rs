@@ -17,6 +17,7 @@ use steel_registry::game_events::GameEventRef;
 use steel_registry::{vanilla_block_entity_types, vanilla_game_events};
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, locks::SyncMutex};
 
+use crate::behavior::blocks::SculkCatalystBlock;
 use crate::block_entity::{BlockEntity, BlockEntityBase};
 use crate::world::World;
 use crate::world::game_event::vibration::CATALYST_LISTENER_RADIUS;
@@ -105,12 +106,7 @@ impl CatalystListener {
             // Vanilla `mob.skipDropExperience()`: the death must not also drop XP orbs.
             living.skip_drop_experience();
             let state = world.get_block_state(self.pos);
-            crate::behavior::blocks::SculkCatalystBlock::bloom(
-                state.get_block(),
-                world,
-                self.pos,
-                state,
-            );
+            SculkCatalystBlock::bloom(state.get_block(), world, self.pos, state);
         }
         // TODO(Worldgen): Vanilla also runs `updateCursors(level, pos, random, true)` every tick,
         // which is what consumes the cursors above. Wire the cursor list to a level-bound
@@ -208,7 +204,7 @@ impl SculkCatalystBlockEntity {
 
     /// The registered game-event listener.
     #[must_use]
-    pub fn catalyst_listener(&self) -> &Arc<CatalystListener> {
+    pub const fn catalyst_listener(&self) -> &Arc<CatalystListener> {
         &self.listener
     }
 }

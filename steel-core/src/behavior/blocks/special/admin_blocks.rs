@@ -28,6 +28,7 @@ use crate::behavior::{
     BlockBehavior, BlockEntityCreation, BlockHitResult, BlockPlaceContext, InteractionResult,
     InventoryAccess,
 };
+use crate::block_entity::entities::StructureBlockEntity;
 use crate::block_entity::{BLOCK_ENTITIES, BlockEntityTicker};
 use crate::player::Player;
 use crate::world::{LevelReader, SignalGetter as _, SignalQueryContext, World};
@@ -230,16 +231,14 @@ impl BlockBehavior for StructureBlock {
         let Some(entity) = world.get_block_entity(pos) else {
             return;
         };
-        let Some(structure_be) =
-            entity.downcast_ref::<crate::block_entity::entities::StructureBlockEntity>()
-        else {
+        let Some(structure_be) = entity.downcast_ref::<StructureBlockEntity>() else {
             return;
         };
         // Vanilla `StructureBlock.neighborChanged`: rising edge triggers, falling edge clears.
         let powered = world.has_neighbor_signal(pos);
         if powered && !structure_be.is_powered() {
             structure_be.set_powered(true);
-            structure_be.trigger(world, pos);
+            StructureBlockEntity::trigger(world, pos);
         } else if !powered {
             structure_be.set_powered(false);
         }

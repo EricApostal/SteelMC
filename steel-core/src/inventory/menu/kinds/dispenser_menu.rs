@@ -59,7 +59,6 @@ impl MenuKind for DispenserKind {
 mod tests {
     use std::sync::Weak;
 
-    use steel_registry::blocks::block_state_ext::BlockStateExt as _;
     use steel_registry::{init_vanilla_registry, vanilla_blocks};
     use steel_utils::BlockPos;
     use steel_utils::locks::IntoShared as _;

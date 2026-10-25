@@ -56,7 +56,7 @@ impl EnderChestBlockEntity {
 
     /// Vanilla `EnderChestBlockEntity.openersCounter` sound: `ENDER_CHEST_OPEN`
     /// and `ENDER_CHEST_CLOSE` at the block center.
-    fn play_sound(&self, world: &Arc<World>, pos: BlockPos, sound: SoundEventRef) {
+    fn play_sound(world: &Arc<World>, pos: BlockPos, sound: SoundEventRef) {
         world.play_sound_at(
             sound,
             SoundSource::Blocks,
@@ -96,12 +96,12 @@ impl BlockEntity for EnderChestBlockEntity {
 impl ContainerOpenersHost for EnderChestBlockEntity {
     /// Vanilla `EnderChestBlockEntity.openersCounter.onOpen`.
     fn on_open(&self, world: &Arc<World>, pos: BlockPos, _state: BlockStateId) {
-        self.play_sound(world, pos, &sound_events::BLOCK_ENDER_CHEST_OPEN);
+        Self::play_sound(world, pos, &sound_events::BLOCK_ENDER_CHEST_OPEN);
     }
 
     /// Vanilla `EnderChestBlockEntity.openersCounter.onClose`.
     fn on_close(&self, world: &Arc<World>, pos: BlockPos, _state: BlockStateId) {
-        self.play_sound(world, pos, &sound_events::BLOCK_ENDER_CHEST_CLOSE);
+        Self::play_sound(world, pos, &sound_events::BLOCK_ENDER_CHEST_CLOSE);
     }
 
     /// Vanilla `EnderChestBlockEntity.openersCounter.openerCountChanged`, which

@@ -13,9 +13,11 @@
 use std::sync::Arc;
 
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+use steel_registry::vanilla_game_events;
+use steel_utils::types::GameType;
 use steel_utils::{BlockPos, BlockStateId, WorldAabb};
 
-use crate::entity::Entity as _;
+use crate::entity::Entity;
 use crate::player::Player;
 use crate::world::World;
 use crate::world::game_event::GameEventContext;
@@ -121,7 +123,7 @@ pub fn count_viewers<H: ContainerOpenersHost + ?Sized>(
     )
     .inflate(max_interaction_range + 4.0);
     world.players.iter_players(|_, player| {
-        if player.game_mode() == steel_utils::types::GameType::Spectator
+        if player.game_mode() == GameType::Spectator
             || !search_box.intersects(player.bounding_box())
             || !host.is_own_container(player)
         {
@@ -168,7 +170,7 @@ impl ContainerOpenersCounter {
     ///
     /// `interaction_range` is vanilla's `containerUser.getContainerInteractionRange()`,
     /// which for a player is their block interaction range.
-    pub fn increment(&mut self, interaction_range: f64) -> OpenerTransition {
+    pub const fn increment(&mut self, interaction_range: f64) -> OpenerTransition {
         let previous = self.open_count;
         self.open_count += 1;
         self.max_interaction_range = self.max_interaction_range.max(interaction_range);
@@ -182,7 +184,7 @@ impl ContainerOpenersCounter {
     }
 
     /// Vanilla `decrementOpeners` bookkeeping.
-    pub fn decrement(&mut self) -> OpenerTransition {
+    pub const fn decrement(&mut self) -> OpenerTransition {
         let previous = self.open_count;
         self.open_count -= 1;
         if self.open_count == 0 {
@@ -201,7 +203,11 @@ impl ContainerOpenersCounter {
     ///
     /// `max_interaction_range` is stored unconditionally, exactly like vanilla,
     /// because it is recomputed from the players that still count as viewers.
-    pub fn recheck(&mut self, open_count: i32, max_interaction_range: f64) -> OpenerTransition {
+    pub const fn recheck(
+        &mut self,
+        open_count: i32,
+        max_interaction_range: f64,
+    ) -> OpenerTransition {
         let previous = self.open_count;
         let was_open = previous != 0;
         let is_open = open_count != 0;
@@ -229,21 +235,13 @@ impl ContainerOpenersCounter {
         pos: BlockPos,
         state: BlockStateId,
     ) {
-        let context = GameEventContext::new(player.map(|p| p as &dyn crate::entity::Entity), None);
+        let context = GameEventContext::new(player.map(|p| p as &dyn Entity), None);
         if transition.opened {
             host.on_open(world, pos, state);
-            world.game_event(
-                &steel_registry::vanilla_game_events::CONTAINER_OPEN,
-                pos,
-                &context,
-            );
+            world.game_event(&vanilla_game_events::CONTAINER_OPEN, pos, &context);
         } else if transition.closed {
             host.on_close(world, pos, state);
-            world.game_event(
-                &steel_registry::vanilla_game_events::CONTAINER_CLOSE,
-                pos,
-                &context,
-            );
+            world.game_event(&vanilla_game_events::CONTAINER_CLOSE, pos, &context);
         }
 
         host.opener_count_changed(world, pos, state, transition.previous, transition.current);

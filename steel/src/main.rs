@@ -263,6 +263,28 @@ async fn main_async(
     let panic_token = cancel_token.clone();
     panic::set_hook(Box::new(move |panic_info| {
         let message = panic_info.payload_as_str().unwrap_or("Unknown");
+        // Also write the report synchronously to stderr before the logger's channel is
+        // used: `error!` queues onto the async `CommandLogger`, so a thread that aborts
+        // instead of unwinding (rayon's abort-on-panic guard kills the process) loses
+        // every queued line and the crash has no recorded cause at all.
+        let thread = thread::current();
+        let thread_name = thread.name().unwrap_or("unnamed");
+        let location = panic_info.location().map_or_else(
+            || "an unknown location".to_owned(),
+            |location| {
+                format!(
+                    "{}:{}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                )
+            },
+        );
+        eprintln!("[FATAL ERROR] Thread '{thread_name}' has panicked at {location}: {message}");
+        let backtrace = Backtrace::capture();
+        if backtrace.status() == BacktraceStatus::Captured {
+            eprintln!("Stack Backtrace:\n{backtrace}");
+        }
         error!(
             "{}Steel {} ({GIT_HASH_SHORT}) {} on {}/{}{}",
             SetForegroundColor(Color::Red),
@@ -306,13 +328,10 @@ async fn main_async(
             ResetColor
         );
 
-        let backtrace = Backtrace::capture();
         match backtrace.status() {
             BacktraceStatus::Captured => {
                 error!("Stack Backtrace:");
-                let string = backtrace.to_string();
-                let traces = string.split('\n');
-                for trace in traces {
+                for trace in backtrace.to_string().split('\n') {
                     error!("{}", trace.trim_start());
                 }
             }

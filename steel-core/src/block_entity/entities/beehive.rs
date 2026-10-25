@@ -20,6 +20,8 @@
 //! intersection helper (owner: `steel-registry/src/blocks/shapes.rs`), so the
 //! static collision shape is tested.
 
+use std::mem;
+use std::ptr;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -31,6 +33,8 @@ use steel_registry::blocks::properties::{
 };
 use steel_registry::blocks::shapes::{BooleanOp, VoxelShape, join_is_not_empty};
 use steel_registry::data_components::components::{BeehiveOccupant, Bees, CustomData, EntityData};
+use steel_registry::data_components::vanilla_components::BEES;
+use steel_registry::entity_type::EntityType;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entity_type_tags::EntityTypeTag;
@@ -38,7 +42,7 @@ use steel_registry::{
     REGISTRY, RegistryExt as _, TaggedRegistryExt as _, sound_events, vanilla_block_entity_types,
     vanilla_blocks, vanilla_entities, vanilla_game_events,
 };
-use steel_utils::nbt::NbtNumeric as _;
+use steel_utils::nbt::NbtNumeric;
 use steel_utils::types::UpdateFlags;
 use steel_utils::{
     BlockLocalAabb, BlockPos, BlockStateId, Downcast, DowncastType, DowncastTypeKey, Identifier,
@@ -61,9 +65,6 @@ pub const BEEHIVE_MAX_OCCUPANTS: usize = 3;
 pub const BEEHIVE_MIN_OCCUPATION_TICKS_NECTARLESS: i32 = 600;
 /// Minimum occupation time for bees that still carry nectar (`MIN_OCCUPATION_TICKS_NECTAR`).
 pub const BEEHIVE_MIN_OCCUPATION_TICKS_NECTAR: i32 = 2400;
-/// Ticks a released bee must stay out of any hive (`MIN_TICKS_BEFORE_REENTERING_HIVE`).
-pub const BEEHIVE_MIN_TICKS_BEFORE_REENTERING_HIVE: i32 = 400;
-
 const LEVEL_HONEY: &IntProperty = &BlockStateProperties::LEVEL_HONEY;
 const HORIZONTAL_FACING: &EnumProperty<Direction> = &BlockStateProperties::HORIZONTAL_FACING;
 const LIT: &BoolProperty = &BlockStateProperties::LIT;
@@ -148,24 +149,6 @@ impl BeehiveBeeOccupant {
         }
     }
 
-    /// Vanilla `Occupant.entityData`.
-    #[must_use]
-    pub const fn entity_data(&self) -> &NbtCompound {
-        &self.entity_data
-    }
-
-    /// Vanilla `Occupant.ticksInHive`.
-    #[must_use]
-    pub const fn ticks_in_hive(&self) -> i32 {
-        self.ticks_in_hive
-    }
-
-    /// Vanilla `Occupant.minTicksInHive`.
-    #[must_use]
-    pub const fn min_ticks_in_hive(&self) -> i32 {
-        self.min_ticks_in_hive
-    }
-
     /// Vanilla `BeeData.hasNectar`: the stored `HasNectar` flag.
     #[must_use]
     pub fn has_nectar(&self) -> bool {
@@ -240,14 +223,12 @@ fn default_bee_entity_data() -> NbtCompound {
 fn has_nectar_tag(entity_data: &NbtCompound) -> bool {
     entity_data
         .get("HasNectar")
-        .and_then(|tag| tag.codec_i32())
+        .and_then(NbtNumeric::codec_i32)
         .is_some_and(|value| value != 0)
 }
 
 /// Resolves the stored `id` tag to a registered entity type.
-fn entity_type_of(
-    entity_data: &NbtCompound,
-) -> Option<&'static steel_registry::entity_type::EntityType> {
+fn entity_type_of(entity_data: &NbtCompound) -> Option<&'static EntityType> {
     let id = entity_data
         .get("id")
         .and_then(|tag| tag.string())
@@ -372,8 +353,8 @@ impl BeehiveBlockEntity {
             for dy in -1..=1 {
                 for dz in -1..=1 {
                     let block = level.get_block_state(pos.offset(dx, dy, dz)).get_block();
-                    if std::ptr::eq(block, &vanilla_blocks::FIRE)
-                        || std::ptr::eq(block, &vanilla_blocks::SOUL_FIRE)
+                    if ptr::eq(block, &raw const vanilla_blocks::FIRE)
+                        || ptr::eq(block, &raw const vanilla_blocks::SOUL_FIRE)
                     {
                         return true;
                     }
@@ -471,7 +452,7 @@ impl BeehiveBlockEntity {
         let (occupants, saved_flower_pos) = {
             let mut stored = self.state.lock();
             let saved_flower_pos = stored.saved_flower_pos;
-            (std::mem::take(&mut stored.stored), saved_flower_pos)
+            (mem::take(&mut stored.stored), saved_flower_pos)
         };
 
         let mut spawned = Vec::new();
@@ -546,7 +527,7 @@ impl BeehiveBlockEntity {
         let mut still_stored = Vec::new();
         let occupants = {
             let mut stored = self.state.lock();
-            std::mem::take(&mut stored.stored)
+            mem::take(&mut stored.stored)
         };
         for mut occupant in occupants {
             let release = occupant.ticks_in_hive > occupant.min_ticks_in_hive;
@@ -589,7 +570,7 @@ impl BeehiveBlockEntity {
         block_pos: BlockPos,
         state: BlockStateId,
         occupant: &BeehiveBeeOccupant,
-        mut spawned: Option<&mut Vec<SharedEntity>>,
+        spawned: Option<&mut Vec<SharedEntity>>,
         status: BeeReleaseStatus,
         saved_flower_pos: Option<BlockPos>,
     ) -> bool {
@@ -658,7 +639,7 @@ impl BeehiveBlockEntity {
             animal.set_in_love_time((animal.in_love_time() - occupant.ticks_in_hive).max(0));
         }
 
-        if let Some(spawned) = spawned.as_deref_mut() {
+        if let Some(spawned) = spawned {
             spawned.push(SharedEntity::clone(&entity));
         }
 
@@ -789,10 +770,7 @@ impl BlockEntity for BeehiveBlockEntity {
     }
 
     fn apply_components_from_item(&self, item: &ItemStack) {
-        let bees = item.get_or_default(
-            steel_registry::data_components::vanilla_components::BEES,
-            Bees::empty(),
-        );
+        let bees = item.get_or_default(BEES, Bees::empty());
         if bees.bees().is_empty() {
             return;
         }

@@ -12,13 +12,16 @@
 //! `VegetationPatch` kind of `moss_patch_bonemeal`/`pale_moss_patch_bonemeal` cannot be placed
 //! outside chunk generation (owner: worldgen lane, `worldgen/feature/configured.rs`).
 
+use std::ptr;
 use std::sync::Arc;
 
 use rand::Rng;
 use steel_macros::block_behavior;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+use steel_registry::feature::ConfiguredFeature;
 use steel_registry::vanilla_blocks;
+use steel_registry::vanilla_configured_features;
 use steel_utils::{BlockPos, BlockStateId};
 
 use crate::behavior::blocks::vegetation::bonemealable::{BonemealAction, Bonemealable};
@@ -43,11 +46,11 @@ impl BonemealableFeaturePlacerBlock {
     }
 
     /// Returns the configured feature this block grows (vanilla `feature` field).
-    fn configured_feature(&self) -> &'static steel_registry::feature::ConfiguredFeature {
-        if std::ptr::eq(self.block, &vanilla_blocks::PALE_MOSS_BLOCK) {
-            &steel_registry::vanilla_configured_features::PALE_MOSS_PATCH_BONEMEAL
+    fn configured_feature(&self) -> &'static ConfiguredFeature {
+        if ptr::eq(self.block, &raw const vanilla_blocks::PALE_MOSS_BLOCK) {
+            &vanilla_configured_features::PALE_MOSS_PATCH_BONEMEAL
         } else {
-            &steel_registry::vanilla_configured_features::MOSS_PATCH_BONEMEAL
+            &vanilla_configured_features::MOSS_PATCH_BONEMEAL
         }
     }
 }

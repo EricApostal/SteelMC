@@ -206,6 +206,10 @@ impl ReloadableResourceManager {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "these tests unwrap their own fixture data so failures point at the offending assertion"
+)]
 mod tests {
     use std::sync::{
         Mutex,

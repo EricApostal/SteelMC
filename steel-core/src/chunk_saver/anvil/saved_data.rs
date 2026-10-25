@@ -1,6 +1,6 @@
-//! Vanilla SavedData files (`data/<id>.dat`) ⇄ Steel saved-data shapes.
+//! Vanilla `SavedData` files (`data/<id>.dat`) ⇄ Steel saved-data shapes.
 //!
-//! Vanilla writes every SavedData as gzip NBT `{ data: <codec payload>, DataVersion: <int> }`
+//! Vanilla writes every `SavedData` as gzip NBT `{ data: <codec payload>, DataVersion: <int> }`
 //! (`LevelStorageSource.writeSavedData`). This module implements the wrapper plus the payload
 //! conversions for the files whose field names already match Steel's:
 //!
@@ -11,6 +11,7 @@
 //! * `world_gen_settings` — only the `seed` field is read; the rest is vanilla world-gen data
 //!   Steel does not model.
 
+use std::fs;
 use std::io;
 use std::path::Path;
 
@@ -21,6 +22,7 @@ use steel_utils::uuid_ext::UuidExt as _;
 use steel_utils::version::DATA_VERSION;
 use uuid::Uuid;
 
+use crate::datafixer::{DataFixType, ensure_current, version_of};
 use crate::entity::raid::{RaidRecord, RaidsData};
 use crate::level_data::WeatherState;
 
@@ -33,7 +35,7 @@ use super::nbt::{read_compressed_nbt, write_gzip_nbt};
 /// # Errors
 /// Returns `InvalidData` when the file is not gzip NBT or has no `data` compound.
 pub(crate) fn read_saved_data_file(path: &Path) -> io::Result<Option<NbtCompound>> {
-    let bytes = match std::fs::read(path) {
+    let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
@@ -47,9 +49,9 @@ pub(crate) fn read_saved_data_file(path: &Path) -> io::Result<Option<NbtCompound
     };
     // The `DataVersion` tag lives next to `data` on the wrapper root, so the gate reads the
     // root, not the inner payload.
-    crate::datafixer::ensure_current(
-        crate::datafixer::version_of(&root),
-        crate::datafixer::DataFixType::SavedData,
+    ensure_current(
+        version_of(&root),
+        DataFixType::SavedData,
         &format!("saved data `{}`", path.display()),
     )?;
     Ok(Some(data.clone()))
@@ -65,11 +67,11 @@ pub(crate) fn write_saved_data_file(path: &Path, data: &NbtCompound) -> io::Resu
     root.insert("DataVersion", DATA_VERSION);
     let bytes = write_gzip_nbt(&root)?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent)?;
     }
     let temporary = path.with_extension("dat.tmp");
-    std::fs::write(&temporary, bytes)?;
-    std::fs::rename(&temporary, path)
+    fs::write(&temporary, bytes)?;
+    fs::rename(&temporary, path)
 }
 
 /// Serializes Steel's raid saved data with vanilla's `Raids.CODEC` field names.
@@ -91,8 +93,7 @@ pub(crate) fn raids_from_nbt(nbt: &NbtCompound) -> RaidsData {
     let raids = nbt
         .list("raids")
         .and_then(NbtList::compounds)
-        .map(|raids| raids.iter().map(raid_from_nbt).collect())
-        .unwrap_or_default();
+        .map_or_default(|raids| raids.iter().map(raid_from_nbt).collect());
     RaidsData {
         raids,
         next_id: nbt.int("next_id").unwrap_or(0),
@@ -245,7 +246,7 @@ pub(crate) fn game_rules_from_nbt(nbt: &NbtCompound) -> FxHashMap<String, JsonVa
 /// # Errors
 /// Returns `InvalidData` when the payload is not a valid NBT compound.
 pub(crate) fn read_world_gen_seed(path: &Path) -> io::Result<Option<i64>> {
-    let bytes = match std::fs::read(path) {
+    let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),

@@ -87,12 +87,11 @@ pub(crate) fn entity_to_nbt(entity: &PersistentEntity) -> NbtCompound {
     if entity.has_visual_fire {
         nbt.insert("HasVisualFire", nbt_bool(true));
     }
-    if !entity.custom_name_nbt.is_empty() {
-        if let Ok(root) = read_raw_nbt(&entity.custom_name_nbt)
-            && let Some(name) = root.get("CustomName")
-        {
-            nbt.insert("CustomName", name.clone());
-        }
+    if !entity.custom_name_nbt.is_empty()
+        && let Ok(root) = read_raw_nbt(&entity.custom_name_nbt)
+        && let Some(name) = root.get("CustomName")
+    {
+        nbt.insert("CustomName", name.clone());
     }
     if entity.custom_name_visible {
         nbt.insert("CustomNameVisible", nbt_bool(true));
@@ -163,12 +162,11 @@ pub(crate) fn entity_from_nbt(tag: &BorrowedNbtCompound<'_, '_>) -> io::Result<P
     let tags = tag
         .list("Tags")
         .and_then(|list| list.strings())
-        .map(|tags| {
+        .map_or_default(|tags| {
             tags.iter()
                 .map(|tag| tag.to_str().into_owned())
                 .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+        });
 
     let mut nbt_data = NbtCompound::new();
     for (key, value) in tag.iter() {

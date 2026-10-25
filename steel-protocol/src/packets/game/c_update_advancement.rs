@@ -97,7 +97,7 @@ mod tests {
         };
         let packet = CUpdateAdvancements::new(
             true,
-            vec![node.clone()],
+            vec![node],
             vec![removed.clone()],
             vec![progress.clone()],
             false,
@@ -106,9 +106,9 @@ mod tests {
 
         let mut expected = Vec::new();
         expected.extend(write(&true));
-        expected.extend(write(&vec![node.clone()]));
-        expected.extend(write(&vec![removed.clone()]));
-        expected.extend(write(&vec![progress.clone()]));
+        expected.extend(write(&vec![node]));
+        expected.extend(write(&vec![removed]));
+        expected.extend(write(&vec![progress]));
         expected.extend(write(&false));
 
         assert_eq!(encoded, expected);

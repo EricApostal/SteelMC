@@ -117,7 +117,7 @@ impl FilePlayerDataStorage {
             return Ok(None);
         }
         let bytes = fs::read(&path).await?;
-        let file = decode_player_file(&bytes)?;
+        let file = decode_player_file(&bytes, &format!("player data file {}", path.display()))?;
         let data = file.into_persistent()?;
         log::debug!("Loaded player data for {uuid} in domain {domain}");
 
@@ -156,7 +156,7 @@ impl FilePlayerDataStorage {
             return Ok(None);
         }
         let bytes = fs::read(&path).await?;
-        let file = decode_global_file(&bytes)?;
+        let file = decode_global_file(&bytes, &format!("player data file {}", path.display()))?;
         Ok(Some(GlobalPlayerData {
             last_active_domain: file.last_active_domain,
         }))
@@ -188,7 +188,8 @@ impl FilePlayerDataStorage {
             return Ok(KnownPlayers::new());
         }
         let bytes = fs::read(path).await?;
-        decode_known_players_file(&bytes)?.into_known_players()
+        decode_known_players_file(&bytes, &format!("player cache file {}", path.display()))?
+            .into_known_players()
     }
 
     pub(crate) async fn save_known_players_if_current(

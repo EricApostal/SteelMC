@@ -4,6 +4,8 @@
 //! is vanilla's declaration order verbatim, including the per-index names
 //! (`container.0` … `container.53`) and the `*` aggregate of every prefix.
 
+use std::sync::LazyLock;
+
 /// Vanilla `world.inventory.SlotRange`: a named range of vanilla slot ids.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SlotRange {
@@ -34,8 +36,7 @@ impl SlotRange {
 /// Vanilla `SlotRanges.SLOTS`: every named range, in vanilla declaration order.
 #[must_use]
 pub(crate) fn slot_ranges() -> &'static [SlotRange] {
-    static SLOT_RANGES: std::sync::LazyLock<Vec<SlotRange>> =
-        std::sync::LazyLock::new(build_slot_ranges);
+    static SLOT_RANGES: LazyLock<Vec<SlotRange>> = LazyLock::new(build_slot_ranges);
     &SLOT_RANGES
 }
 

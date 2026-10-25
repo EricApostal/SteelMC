@@ -65,7 +65,7 @@ impl DebugChunkGenerator {
             let grid_z = world_z / BLOCK_MARGIN;
             if grid_x <= self.grid_width && grid_z <= self.grid_height {
                 let index = (i64::from(grid_x) * i64::from(self.grid_width) + i64::from(grid_z))
-                    .abs() as usize;
+                    .unsigned_abs() as usize;
                 if index < self.all_blocks_len {
                     return BlockStateId(index as u16);
                 }

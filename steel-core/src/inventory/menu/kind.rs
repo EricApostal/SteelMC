@@ -2,12 +2,14 @@
 
 use steel_registry::item_stack::ItemStack;
 use steel_registry::mob_effect::MobEffectRef;
+use steel_registry::recipe::UntypedRecipeRef;
 use steel_utils::ErasedType;
 
 use crate::inventory::menu::behavior::MenuBehavior;
 use crate::{inventory::lock::ContainerLockGuard, player::Player};
 
 use crate::inventory::click::{Click, ClickOutcome, QuickCraft};
+use crate::inventory::recipe_book_placement::PostPlaceAction;
 
 /// Per-menu behavior that isn't shared: recompute-on-change, validity, close
 /// cleanup, and the optional shift-click override.
@@ -109,11 +111,11 @@ pub trait MenuKind: ErasedType + Send + Sync {
     fn handle_placement(
         &mut self,
         _guard: &mut ContainerLockGuard,
-        _recipe: steel_registry::recipe::UntypedRecipeRef,
+        _recipe: UntypedRecipeRef,
         _use_max_items: bool,
         _allow_dropping_items_to_clear: bool,
         _player: &Player,
-    ) -> Option<crate::inventory::recipe_book_placement::PostPlaceAction> {
+    ) -> Option<PostPlaceAction> {
         None
     }
 

@@ -8,11 +8,12 @@
 //! The dimension height (`min_y`/`height`) cannot be derived from region files alone, so the
 //! caller supplies it: overworld `-64 / 384`, nether and end `0 / 256`.
 
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use steel_utils::{ChunkPos, Identifier};
-use tokio::fs;
+use tokio::fs as tokio_fs;
 
 use crate::chunk::status::ChunkStatus;
 use crate::chunk_saver::format::{
@@ -20,8 +21,11 @@ use crate::chunk_saver::format::{
     RegionHeader, SECTOR_SIZE,
 };
 use crate::chunk_saver::{PreparedChunkSave, RegionManager};
+use crate::entity::raid::RaidsData;
+use crate::level_data::LevelData;
+use crate::level_data::anvil;
 
-use super::region::{AnvilRegionFile, chunk_slot, slot_chunk_pos};
+use super::region::{AnvilRegionFile, chunk_slot, region_file_name, slot_chunk_pos};
 use super::saved_data::{
     raids_from_nbt, raids_to_nbt, read_saved_data_file, wandering_trader_from_nbt,
     wandering_trader_to_nbt, weather_to_nbt, write_saved_data_file,
@@ -77,7 +81,7 @@ pub struct VanillaRegion {
 /// Propagates directory read errors.
 pub async fn list_vanilla_regions(directory: &Path) -> io::Result<Vec<VanillaRegion>> {
     let mut regions = Vec::new();
-    let mut entries = match fs::read_dir(directory).await {
+    let mut entries = match tokio_fs::read_dir(directory).await {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(regions),
         Err(error) => return Err(error),
@@ -116,7 +120,7 @@ pub fn for_each_steel_region_chunk(
     path: &Path,
     mut visit: impl FnMut(ChunkPos, ChunkStatus, &PersistentChunk<'_>) -> io::Result<()>,
 ) -> io::Result<()> {
-    let bytes = std::fs::read(path)?;
+    let bytes = fs::read(path)?;
     if bytes.len() < FILE_HEADER_SIZE + CHUNK_TABLE_SIZE {
         return Err(invalid(format!(
             "{} is too short to be a region file",
@@ -225,6 +229,13 @@ pub async fn import_world(
                 None => None,
             };
             let pos = slot_chunk_pos(region.x, region.z, slot);
+            let source = format!(
+                "{} at chunk {pos:?}",
+                vanilla_dir
+                    .join("region")
+                    .join(region_file_name(region.x, region.z))
+                    .display()
+            );
             let (persistent, status) = decode_persistent_chunk(
                 &chunk_bytes,
                 entity_bytes.as_deref(),
@@ -232,6 +243,7 @@ pub async fn import_world(
                 pos,
                 min_y,
                 height,
+                &source,
             )?;
             report.entities += persistent.entities.len() as u64;
             report.block_entities += persistent.block_entities.len() as u64;
@@ -251,7 +263,7 @@ pub async fn import_world(
         }
     }
 
-    import_level_data(vanilla_dir, steel_dir).await?;
+    import_level_data(vanilla_dir, steel_dir)?;
     manager.close_all().await?;
     Ok(report)
 }
@@ -269,7 +281,7 @@ pub async fn export_world(
     let mut report = AnvilConversionReport::new();
     let region_dir = steel_dir.join("region");
     let mut steel_regions = Vec::new();
-    let mut entries = fs::read_dir(&region_dir).await.map_err(|error| {
+    let mut entries = tokio_fs::read_dir(&region_dir).await.map_err(|error| {
         if error.kind() == io::ErrorKind::NotFound {
             io::Error::new(
                 io::ErrorKind::NotFound,
@@ -330,16 +342,16 @@ pub async fn export_world(
         }
     }
 
-    export_level_data(steel_dir, vanilla_dir).await?;
+    export_level_data(steel_dir, vanilla_dir)?;
     Ok(report)
 }
 
-async fn import_level_data(vanilla_dir: &Path, steel_dir: &Path) -> io::Result<()> {
-    let seed = crate::level_data::anvil::read_seed(vanilla_dir)?.unwrap_or(0);
-    let mut level = crate::level_data::LevelData::new_with_seed(seed);
-    if let Some(data) = crate::level_data::anvil::read_level_dat(vanilla_dir)? {
-        crate::level_data::anvil::apply_level_dat(&data, vanilla_dir, &mut level)?;
-        crate::level_data::anvil::warn_unmapped_level_dat();
+fn import_level_data(vanilla_dir: &Path, steel_dir: &Path) -> io::Result<()> {
+    let seed = anvil::read_seed(vanilla_dir)?.unwrap_or(0);
+    let mut level = LevelData::new_with_seed(seed);
+    if let Some(data) = anvil::read_level_dat(vanilla_dir)? {
+        anvil::apply_level_dat(&data, vanilla_dir, &mut level)?;
+        anvil::warn_unmapped_level_dat();
     }
 
     let data_dir = vanilla_dir.join("data");
@@ -367,7 +379,7 @@ async fn import_level_data(vanilla_dir: &Path, steel_dir: &Path) -> io::Result<(
     write_steel_level_toml(steel_dir, &level)
 }
 
-async fn export_level_data(steel_dir: &Path, vanilla_dir: &Path) -> io::Result<()> {
+fn export_level_data(steel_dir: &Path, vanilla_dir: &Path) -> io::Result<()> {
     let Some(level) = read_steel_level_toml(steel_dir)? else {
         return Ok(());
     };
@@ -376,15 +388,15 @@ async fn export_level_data(steel_dir: &Path, vanilla_dir: &Path) -> io::Result<(
         .and_then(|name| name.to_str())
         .unwrap_or("world");
     let dimension = Identifier::vanilla_static("overworld");
-    crate::level_data::anvil::write_level_dat(vanilla_dir, &level, level_name, &dimension)?;
-    crate::level_data::anvil::write_dimension_saved_data(vanilla_dir, &level)?;
+    anvil::write_level_dat(vanilla_dir, &level, level_name, &dimension)?;
+    anvil::write_dimension_saved_data(vanilla_dir, &level)?;
     write_saved_data_file(
         &vanilla_dir.join("data").join("weather.dat"),
         &weather_to_nbt(&level.weather),
     )?;
 
     if let Some(text) = read_text(&steel_dir.join("data").join("raids.toml"))? {
-        let raids: crate::entity::raid::RaidsData = toml::from_str(&text)
+        let raids: RaidsData = toml::from_str(&text)
             .map_err(|error| invalid(format!("data/raids.toml is malformed: {error}")))?;
         write_saved_data_file(
             &vanilla_dir.join("data").join("raids.dat"),
@@ -408,17 +420,14 @@ struct WanderingTraderToml {
     spawn_chance: i32,
 }
 
-fn write_steel_level_toml(
-    steel_dir: &Path,
-    level: &crate::level_data::LevelData,
-) -> io::Result<()> {
+fn write_steel_level_toml(steel_dir: &Path, level: &LevelData) -> io::Result<()> {
     let text = toml::to_string_pretty(level)
         .map_err(|error| invalid(format!("could not encode level.toml: {error}")))?;
-    std::fs::create_dir_all(steel_dir)?;
-    std::fs::write(steel_dir.join("level.toml"), text)
+    fs::create_dir_all(steel_dir)?;
+    fs::write(steel_dir.join("level.toml"), text)
 }
 
-fn read_steel_level_toml(steel_dir: &Path) -> io::Result<Option<crate::level_data::LevelData>> {
+fn read_steel_level_toml(steel_dir: &Path) -> io::Result<Option<LevelData>> {
     let Some(text) = read_text(&steel_dir.join("level.toml"))? else {
         return Ok(None);
     };
@@ -430,13 +439,13 @@ fn read_steel_level_toml(steel_dir: &Path) -> io::Result<Option<crate::level_dat
 fn write_toml(path: &Path, value: &impl serde::Serialize) -> io::Result<()> {
     let text = toml::to_string_pretty(value).map_err(|error| invalid(format!("{error}")))?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, text)
+    fs::write(path, text)
 }
 
 fn read_text(path: &Path) -> io::Result<Option<String>> {
-    match std::fs::read_to_string(path) {
+    match fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),

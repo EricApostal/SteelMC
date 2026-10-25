@@ -25,7 +25,7 @@ impl SlotSelector for AnySelector {
 }
 
 /// Vanilla `SlotSelector.EMPTY_SLOTS` (`ItemStack::isEmpty`).
-#[allow(dead_code, reason = "vanilla SlotSelector API surface")]
+#[expect(dead_code, reason = "vanilla SlotSelector API surface")]
 #[derive(Debug, Default)]
 pub(crate) struct EmptySelector;
 
@@ -46,14 +46,14 @@ impl SlotSelector for NonEmptySelector {
 }
 
 /// Vanilla `SlotSelector.selecting(predicate)` / `FilteringSelector`.
-#[allow(dead_code, reason = "vanilla SlotSelector API surface")]
+#[expect(dead_code, reason = "vanilla SlotSelector API surface")]
 pub(crate) struct SelectingSelector<F> {
     filter: F,
 }
 
 impl<F> SelectingSelector<F> {
     /// Mirrors `SlotSelector.selecting`.
-    #[allow(dead_code, reason = "vanilla SlotSelector API surface")]
+    #[expect(dead_code, reason = "vanilla SlotSelector API surface")]
     pub(crate) const fn new(filter: F) -> Self {
         Self { filter }
     }
@@ -90,7 +90,7 @@ impl TrackingSelector {
     }
 
     /// Mirrors `SlotSelector.limit(int)` on the tracking selector.
-    #[allow(dead_code, reason = "vanilla SlotSelector API surface")]
+    #[expect(dead_code, reason = "vanilla SlotSelector API surface")]
     pub(crate) fn limit(self, limit: usize) -> Self {
         if limit >= self.limit {
             return self;
@@ -103,7 +103,7 @@ impl TrackingSelector {
     }
 
     /// Returns how many slots this tracker has selected.
-    #[allow(dead_code, reason = "vanilla SlotSelector API surface")]
+    #[expect(dead_code, reason = "vanilla SlotSelector API surface")]
     pub(crate) fn selected_count(&self) -> usize {
         self.selected.get()
     }

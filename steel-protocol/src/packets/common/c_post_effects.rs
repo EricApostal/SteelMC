@@ -8,7 +8,7 @@ use steel_utils::Identifier;
 /// Replaces the client's post-effect chain.
 ///
 /// Mirrors vanilla's `ClientboundPostEffectsPacket`: `Identifier.STREAM_CODEC
-/// .apply(ByteBufCodecs.list())`, i.e. a VarInt element count followed by each
+/// .apply(ByteBufCodecs.list())`, i.e. a `VarInt` element count followed by each
 /// identifier as a VarInt-prefixed UTF-8 string.
 #[derive(ClientPacket, WriteTo, Clone, Debug)]
 #[packet_id(Config = C_POST_EFFECTS, Play = PLAY_C_POST_EFFECTS)]

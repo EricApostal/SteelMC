@@ -29,6 +29,7 @@ use steel_utils::{
 };
 
 use crate::{
+    behavior::items::MapItem,
     inventory::{
         container::{ResultContainer, SimpleContainer},
         lock::ContainerId,
@@ -162,10 +163,10 @@ impl ResultHandler for CartographyResultHandler {
         stack.remove(MAP_POST_PROCESSING);
         match post_processing {
             MapPostProcessing::Lock => {
-                crate::behavior::items::MapItem::lock_map(stack, &self.world);
+                MapItem::lock_map(stack, &self.world);
             }
             MapPostProcessing::Scale => {
-                crate::behavior::items::MapItem::scale_map(stack, &self.world);
+                MapItem::scale_map(stack, &self.world);
             }
         }
     }
@@ -355,13 +356,15 @@ mod tests {
     use super::{CartographyKind, CartographyResultHandler, cartography};
     use crate::inventory::container::Container as _;
     use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
+    use crate::inventory::menu::Menu;
     use crate::inventory::slots::ResultHandler;
     use crate::map::MapItemSavedData;
     use crate::test_support::{TestPlayerBuilder, fresh_test_world};
+    use crate::world::World;
 
     struct Fixture {
-        world: Arc<crate::world::World>,
-        menu: crate::inventory::menu::Menu,
+        world: Arc<World>,
+        menu: Menu,
         pos: BlockPos,
     }
 
@@ -375,7 +378,7 @@ mod tests {
         Fixture { world, menu, pos }
     }
 
-    fn map_stack(world: &crate::world::World, locked: bool, scale: u8) -> ItemStack {
+    fn map_stack(world: &World, locked: bool, scale: u8) -> ItemStack {
         let map_id = world.get_free_map_id();
         world.set_map_data(
             map_id,
@@ -452,7 +455,7 @@ mod tests {
             last_sound_time: Arc::new(AtomicI64::new(-1)),
         };
 
-        let mut taken = map.clone();
+        let mut taken = map;
         taken.set(MAP_POST_PROCESSING, super::MapPostProcessing::Lock);
         handler.on_result_crafted(&mut taken);
 

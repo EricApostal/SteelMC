@@ -20,6 +20,7 @@
 
 use std::io::{self, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
@@ -46,7 +47,7 @@ const MAX_RECORD_BYTES: usize = 16 * 1024 * 1024;
 
 /// Returns the in-region slot index for a world chunk position.
 #[must_use]
-pub fn chunk_slot(chunk_x: i32, chunk_z: i32) -> usize {
+pub const fn chunk_slot(chunk_x: i32, chunk_z: i32) -> usize {
     let local_x = chunk_x.rem_euclid(REGION_SIZE as i32) as usize;
     let local_z = chunk_z.rem_euclid(REGION_SIZE as i32) as usize;
     local_z * REGION_SIZE + local_x
@@ -463,7 +464,7 @@ impl AnvilRegionFile {
 
 /// Returns the chunk position owning a region slot.
 #[must_use]
-pub fn slot_chunk_pos(region_x: i32, region_z: i32, slot: usize) -> ChunkPos {
+pub const fn slot_chunk_pos(region_x: i32, region_z: i32, slot: usize) -> ChunkPos {
     let local_x = (slot % REGION_SIZE) as i32;
     let local_z = (slot / REGION_SIZE) as i32;
     ChunkPos::new(
@@ -479,7 +480,7 @@ async fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
 }
 
 fn unix_seconds() -> u32 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs() as u32)
 }

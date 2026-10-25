@@ -49,12 +49,7 @@ pub fn is_village_poi(poi_type: PoiTypeRef) -> bool {
 
 /// Adapts a type predicate to the storage's POI type id predicate.
 fn type_id_predicate(predicate: PoiTypePredicate<'_>) -> impl Fn(usize) -> bool + '_ {
-    move |type_id| {
-        REGISTRY
-            .poi_types
-            .by_id(type_id)
-            .is_some_and(|poi_type| predicate(poi_type))
-    }
+    move |type_id| REGISTRY.poi_types.by_id(type_id).is_some_and(predicate)
 }
 
 /// The `village` POI tag as a type-id predicate.
@@ -375,6 +370,7 @@ pub const fn section_center(section: SectionPos) -> BlockPos {
 }
 
 /// Iterates every section within `radius` of `center` (vanilla `SectionPos.cube`).
+#[must_use]
 pub fn sections_in_cube(center: SectionPos, radius: i32) -> Vec<SectionPos> {
     let mut sections = Vec::new();
     for dx in -radius..=radius {

@@ -578,7 +578,7 @@ fn try_take_in_item_from_slot(
         return false;
     }
 
-    let original = item_stack.clone();
+    let original = item_stack;
     let moving = source.remove_item(slot, 1);
     let remaining = add_item(Some(&mut *source), &mut *dest, moving, None);
     if remaining.is_empty() {
@@ -619,8 +619,7 @@ fn suck_aabb(pos: BlockPos) -> WorldAabb {
 mod tests {
     use super::*;
     use crate::inventory::container::SimpleContainer;
-    use steel_registry::blocks::block_state_ext::BlockStateExt as _;
-    use steel_registry::{init_vanilla_registry, vanilla_items};
+    use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_items};
     use steel_utils::locks::IntoShared as _;
 
     fn hopper() -> HopperBlockEntity {
@@ -628,13 +627,13 @@ mod tests {
         HopperBlockEntity::new(
             Weak::new(),
             BlockPos::new(0, 64, 0),
-            steel_registry::vanilla_blocks::HOPPER.default_state(),
+            vanilla_blocks::HOPPER.default_state(),
         )
     }
 
     #[test]
     fn add_item_merges_into_existing_stack() {
-        let mut container = SimpleContainer::new(1).into_shared();
+        let container = SimpleContainer::new(1).into_shared();
         let mut dest = container.lock();
         dest.set_item(0, ItemStack::with_count(&vanilla_items::STONE, 10));
         let leftover = add_item(
@@ -679,7 +678,7 @@ mod tests {
             .set_item(0, ItemStack::new(&vanilla_items::STONE));
         hopper.pre_remove_side_effects(
             BlockPos::new(0, 64, 0),
-            steel_registry::vanilla_blocks::HOPPER.default_state(),
+            vanilla_blocks::HOPPER.default_state(),
         );
         let container = hopper.container.lock();
         assert_eq!(container.items.len(), HOPPER_SLOTS);
@@ -725,7 +724,7 @@ mod tests {
         let hopper = HopperBlockEntity::new(
             Arc::downgrade(world),
             pos,
-            steel_registry::vanilla_blocks::HOPPER.default_state(),
+            vanilla_blocks::HOPPER.default_state(),
         );
 
         let cart = Arc::new(ChestMinecartEntity::new(

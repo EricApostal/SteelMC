@@ -5,6 +5,7 @@
 //! containment signal a comparator reads.
 
 use std::sync::Weak;
+use std::{array, mem, sync::Arc};
 
 use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
 use simdnbt::owned::NbtCompound;
@@ -16,13 +17,20 @@ use steel_registry::data_components::vanilla_components::{
 };
 use steel_registry::item_stack::ItemStack;
 use steel_registry::particle_type::ParticleData;
+use steel_registry::sound_events;
+use steel_registry::vanilla_game_events;
+use steel_registry::vanilla_particle_types;
 use steel_registry::{ItemStackTemplate, vanilla_block_entity_types};
 use steel_utils::{
     BlockPos, BlockStateId, Direction, DowncastType, DowncastTypeKey, locks::SyncMutex,
 };
 
+use crate::behavior::InventoryAccess;
 use crate::block_entity::{BlockEntity, BlockEntityBase};
+use crate::entity::Entity;
+use crate::player::Player;
 use crate::world::World;
+use crate::world::game_event::GameEventContext;
 
 /// Number of sherd slots in a decorated pot.
 pub const DECORATED_POT_SHERDS: usize = 4;
@@ -81,7 +89,7 @@ impl DecoratedPotBlockEntity {
                 state,
             ),
             state: SyncMutex::new(DecoratedPotState {
-                sherds: std::array::from_fn(|_| ItemStack::empty()),
+                sherds: array::from_fn(|_| ItemStack::empty()),
                 item: ItemStack::empty(),
                 wobble: None,
                 wobble_started_at_tick: 0,
@@ -188,10 +196,10 @@ impl DecoratedPotBlockEntity {
     /// Returns `true` when the item was inserted.
     pub fn try_insert(
         &self,
-        world: &std::sync::Arc<World>,
+        world: &Arc<World>,
         pos: BlockPos,
-        player: &crate::player::Player,
-        inv: &mut crate::behavior::InventoryAccess,
+        player: &Player,
+        inv: &mut InventoryAccess,
     ) -> bool {
         let pot_item = self.item();
         let hand_item = inv.with_item(|stack| stack.copy_with_count(stack.count()));
@@ -201,8 +209,8 @@ impl DecoratedPotBlockEntity {
 
         let pot_is_empty = pot_item.is_empty();
         if !pot_is_empty
-            && !(ItemStack::is_same_item_same_components(&pot_item, &hand_item)
-                && pot_item.count() < pot_item.max_stack_size())
+            && (!ItemStack::is_same_item_same_components(&pot_item, &hand_item)
+                || pot_item.count() >= pot_item.max_stack_size())
         {
             return false;
         }
@@ -228,7 +236,7 @@ impl DecoratedPotBlockEntity {
         };
 
         world.play_sound(
-            &steel_registry::sound_events::BLOCK_DECORATED_POT_INSERT,
+            &sound_events::BLOCK_DECORATED_POT_INSERT,
             SoundSource::Blocks,
             pos,
             1.0,
@@ -236,7 +244,7 @@ impl DecoratedPotBlockEntity {
             None,
         );
         world.send_particles(
-            ParticleData::simple(&steel_registry::vanilla_particle_types::DUST_PLUME),
+            ParticleData::simple(&vanilla_particle_types::DUST_PLUME),
             glam::DVec3::new(
                 f64::from(pos.x()) + 0.5,
                 f64::from(pos.y()) + 1.2,
@@ -249,12 +257,9 @@ impl DecoratedPotBlockEntity {
 
         self.wobble_positive();
         world.game_event(
-            &steel_registry::vanilla_game_events::BLOCK_CHANGE,
+            &vanilla_game_events::BLOCK_CHANGE,
             pos,
-            &crate::world::game_event::GameEventContext::new(
-                Some(player as &dyn crate::entity::Entity),
-                None,
-            ),
+            &GameEventContext::new(Some(player as &dyn Entity), None),
         );
         true
     }
@@ -268,7 +273,7 @@ impl BlockEntity for DecoratedPotBlockEntity {
     /// Vanilla `BlockEntity.preRemoveSideEffects` (the `Container` branch): breaking a pot drops
     /// the item stored inside it, in addition to the block's own drops.
     fn pre_remove_side_effects(&self, pos: BlockPos, _state: BlockStateId) {
-        let item = std::mem::take(&mut self.state.lock().item);
+        let item = mem::take(&mut self.state.lock().item);
         let Some(world) = self.get_level() else {
             return;
         };

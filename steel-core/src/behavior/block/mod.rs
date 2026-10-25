@@ -43,6 +43,7 @@ use crate::entity::{
 use crate::fluid::is_water_fluid;
 use crate::physics::collide;
 use crate::player::Player;
+use crate::world::explosion::{ExplosionInfo, default_on_explosion_hit};
 use crate::world::game_event::SharedGameEventListener;
 use crate::world::{
     ClipHitResult, ConditionalBlockSetResult, LevelAccessor, LevelReader, ScheduledTickAccess,
@@ -409,10 +410,10 @@ pub trait BlockBehavior: Send + Sync {
         state: BlockStateId,
         world: &Arc<World>,
         pos: BlockPos,
-        explosion: &crate::world::explosion::ExplosionInfo<'_>,
+        explosion: &ExplosionInfo<'_>,
         on_drop: &mut dyn FnMut(ItemStack, BlockPos),
     ) {
-        crate::world::explosion::default_on_explosion_hit(state, world, pos, explosion, on_drop);
+        default_on_explosion_hit(state, world, pos, explosion, on_drop);
     }
 
     /// Vanilla `Block.wasExploded`.
@@ -420,13 +421,7 @@ pub trait BlockBehavior: Send + Sync {
         unused_variables,
         reason = "default trait implementation ignores all params"
     )]
-    fn was_exploded(
-        &self,
-        world: &Arc<World>,
-        pos: BlockPos,
-        explosion: &crate::world::explosion::ExplosionInfo<'_>,
-    ) {
-    }
+    fn was_exploded(&self, world: &Arc<World>, pos: BlockPos, explosion: &ExplosionInfo<'_>) {}
 
     /// Called after this block is removed from the world, to affect neighbors.
     ///

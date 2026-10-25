@@ -45,7 +45,6 @@ pub fn stonecutter(
     let input_container = SimpleContainer::new(1).into_shared();
     let result_container = ResultContainer::new().into_shared();
     let state = Arc::new(SyncMutex::new(StonecutterState::new()));
-    let last_sound_time = Arc::new(AtomicI64::new(-1));
 
     let mut builder = MenuBuilder::new(&vanilla_menu_types::STONECUTTER, container_id);
 
@@ -56,7 +55,7 @@ pub fn stonecutter(
         state: Arc::clone(&state),
         block_pos: pos,
         world: Arc::clone(world),
-        last_sound_time: Arc::clone(&last_sound_time),
+        last_sound_time: Arc::new(AtomicI64::new(-1)),
     });
     let player = builder.player_inventory(&inventory);
     let selected_recipe = builder.data_slot(-1);
@@ -80,7 +79,6 @@ pub fn stonecutter(
         player,
         selected_recipe,
         state,
-        last_sound_time,
     })
 }
 
@@ -102,7 +100,7 @@ impl StonecutterState {
         }
     }
 
-    fn is_valid_recipe_index(&self, index: i32) -> bool {
+    const fn is_valid_recipe_index(&self, index: i32) -> bool {
         index >= 0 && (index as usize) < self.recipes.len()
     }
 }
@@ -247,7 +245,6 @@ pub struct StonecutterKind {
     /// Client-facing selected recipe index.
     selected_recipe: DataSlot,
     state: Arc<SyncMutex<StonecutterState>>,
-    last_sound_time: Arc<AtomicI64>,
 }
 
 // SAFETY: This Steel-owned key uniquely identifies the concrete menu kind

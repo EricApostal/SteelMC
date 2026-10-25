@@ -9,9 +9,10 @@ use steel_registry::data_components::vanilla_components::ENTITY_DATA;
 use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::stat::vanilla_stat_types;
-use steel_registry::{vanilla_blocks, vanilla_game_events};
+use steel_registry::{vanilla_blocks, vanilla_game_events, vanilla_game_rules};
 use steel_utils::BlockPos;
 use steel_utils::Downcast as _;
+use steel_utils::translations;
 
 use crate::behavior::item_utils::get_player_pov_hit_result;
 use crate::behavior::{
@@ -147,13 +148,11 @@ impl SpawnEggItem {
         // Vanilla `ServerLevel.isSpawnerBlockEnabled` (`spawnerBlocksWork`).
         if !context
             .world
-            .get_game_rule(&steel_registry::vanilla_game_rules::SPAWNER_BLOCKS_WORK)
+            .get_game_rule(&vanilla_game_rules::SPAWNER_BLOCKS_WORK)
         {
-            context.player.send_message(
-                &steel_utils::translations::ADV_MODE_NOT_ENABLED_SPAWNER
-                    .msg()
-                    .component(),
-            );
+            context
+                .player
+                .send_message(&translations::ADV_MODE_NOT_ENABLED_SPAWNER.msg().component());
             return InteractionResult::Fail;
         }
 

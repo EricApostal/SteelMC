@@ -20,7 +20,7 @@ pub struct CDebugEntityValue<V: WriteTo> {
 impl<V: WriteTo> CDebugEntityValue<V> {
     /// Creates a new debug entity value packet.
     #[must_use]
-    pub fn new(entity_id: i32, update: DebugSubscriptionUpdate<V>) -> Self {
+    pub const fn new(entity_id: i32, update: DebugSubscriptionUpdate<V>) -> Self {
         Self { entity_id, update }
     }
 }

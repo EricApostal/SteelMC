@@ -20,7 +20,7 @@ const MAX_DETAIL_COUNT: usize = 32;
 ///
 /// Mirrors vanilla's `ClientboundCustomReportDetailsPacket`, whose details are
 /// encoded by `ByteBufCodecs.map(HashMap::new, stringUtf8(128),
-/// stringUtf8(4096), 32)`: a VarInt entry count, then each key and value as a
+/// stringUtf8(4096), 32)`: a `VarInt` entry count, then each key and value as a
 /// VarInt-prefixed UTF-8 string (map iteration order is unspecified).
 #[derive(ClientPacket, Clone, Debug)]
 #[packet_id(

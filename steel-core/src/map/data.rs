@@ -14,7 +14,9 @@ use steel_utils::{BlockPos, Identifier};
 use text_components::TextComponent;
 use uuid::Uuid;
 
+use crate::chunk::heightmap::HeightmapType;
 use crate::entity::Entity as _;
+use crate::player::Player;
 use crate::world::level_reader::LevelReader;
 
 use super::decoration::{MapBanner, MapDecoration, MapFrame, frame_id};
@@ -261,7 +263,7 @@ impl MapItemSavedData {
             self.dimension.clone(),
         );
         copy.banner_markers = self.banner_markers.clone();
-        copy.decorations = self.decorations.clone();
+        self.decorations.clone_into(&mut copy.decorations);
         copy.tracked_decoration_count = self.tracked_decoration_count;
         copy.colors = self.colors.clone();
         copy
@@ -396,11 +398,7 @@ impl MapItemSavedData {
 
     /// Vanilla `MapItemSavedData.checkBanners` call site: refreshes banner
     /// markers in the sampled column under the player.
-    pub(crate) fn check_banners_near_player(
-        &mut self,
-        level: &dyn LevelReader,
-        player: &crate::player::Player,
-    ) {
+    pub(crate) fn check_banners_near_player(&mut self, level: &dyn LevelReader, player: &Player) {
         let position = player.position();
         self.check_banners(level, position.x.floor() as i32, position.z.floor() as i32);
     }
@@ -427,6 +425,10 @@ impl MapItemSavedData {
     ///
     /// `has_ceiling` and `game_time` are vanilla `calculateRotation(level, yRot)`
     /// inputs; `x_pos`/`z_pos` are world coordinates.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors vanilla addDecoration's saved-data inputs, which are plumbed through verbatim"
+    )]
     pub fn add_decoration(
         &mut self,
         decoration_type: MapDecorationTypeRef,
@@ -468,10 +470,6 @@ impl MapItemSavedData {
     }
 
     /// Vanilla `MapItemSavedData.calculateDecorationLocationAndType`.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "mirrors the vanilla helper's inputs"
-    )]
     fn calculate_decoration_location_and_type(
         &self,
         decoration_type: MapDecorationTypeRef,
@@ -483,7 +481,7 @@ impl MapItemSavedData {
     ) -> Option<(MapDecorationTypeRef, i8, i8, i8)> {
         let rot = calculate_rotation(has_ceiling, y_rot, game_time);
         if decoration_type.key == vanilla_map_decoration_types::PLAYER.key {
-            if delta_x >= -63.0 && delta_x <= 63.0 && delta_z >= -63.0 && delta_z <= 63.0 {
+            if (-63.0..=63.0).contains(&delta_x) && (-63.0..=63.0).contains(&delta_z) {
                 return Some((
                     &vanilla_map_decoration_types::PLAYER,
                     clamp_map_coordinate(delta_x),
@@ -530,7 +528,7 @@ impl MapItemSavedData {
         if delta_x.abs() > 63.0 || delta_z.abs() > 63.0 {
             return;
         }
-        let mut y = level.height_at(crate::chunk::heightmap::HeightmapType::WorldSurface, x, z) + 1;
+        let mut y = level.height_at(HeightmapType::WorldSurface, x, z) + 1;
         let min_y = level.min_y();
         let mut remaining = 16;
         while y > min_y && remaining > 0 {
@@ -661,12 +659,13 @@ impl MapItemSavedData {
     #[must_use]
     pub(crate) fn to_persistent(&self) -> PersistentMapData {
         use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD;
         PersistentMapData {
             dimension: self.dimension.clone(),
             center_x: self.center_x,
             center_z: self.center_z,
             scale: self.scale,
-            colors: base64::engine::general_purpose::STANDARD.encode(self.colors.as_slice()),
+            colors: STANDARD.encode(self.colors.as_slice()),
             tracking_position: self.tracking_position,
             unlimited_tracking: self.unlimited_tracking,
             locked: self.locked,
@@ -680,6 +679,7 @@ impl MapItemSavedData {
     #[must_use]
     pub(crate) fn from_persistent(persistent: PersistentMapData) -> Self {
         use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD;
         let mut data = Self::with_center(
             persistent.center_x,
             persistent.center_z,
@@ -689,10 +689,10 @@ impl MapItemSavedData {
             persistent.locked,
             persistent.dimension,
         );
-        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(persistent.colors) {
-            if decoded.len() == MAP_COLOR_BYTES {
-                data.colors.copy_from_slice(&decoded);
-            }
+        if let Ok(decoded) = STANDARD.decode(persistent.colors)
+            && decoded.len() == MAP_COLOR_BYTES
+        {
+            data.colors.copy_from_slice(&decoded);
         }
         for banner in persistent.banners {
             let key = banner.id();

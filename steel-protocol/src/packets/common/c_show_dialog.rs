@@ -13,7 +13,7 @@ use steel_utils::serial::WriteTo;
 /// Tells the client to open a dialog.
 ///
 /// Vanilla's play-state codec is `Dialog.STREAM_CODEC`, i.e.
-/// `ByteBufCodecs.holder(Registries.DIALOG, directCodec)`: a VarInt holder id
+/// `ByteBufCodecs.holder(Registries.DIALOG, directCodec)`: a `VarInt` holder id
 /// (`registry id + 1` for a reference, `0` followed by the inline dialog for a
 /// direct holder). Steel's [`DialogRef`] is always a registered dialog, so this
 /// packet writes the reference branch.

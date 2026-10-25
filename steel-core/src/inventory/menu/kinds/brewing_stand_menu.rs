@@ -3,6 +3,8 @@
 //! Five container slots (bottles 0-2, ingredient 3, fuel 4) plus the player
 //! inventory; four data slots track brew time, fuel, and their totals.
 
+use std::array;
+
 use steel_registry::data_components::vanilla_components;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_menu_types;
@@ -57,7 +59,7 @@ pub fn brewing_stand(
         }),
     );
     let player = builder.player_inventory(&inventory);
-    let data = std::array::from_fn(|_| builder.data_slot(0));
+    let data = array::from_fn(|_| builder.data_slot(0));
 
     builder.build(BrewingStandKind {
         container,
@@ -190,6 +192,10 @@ impl MenuKind for BrewingStandKind {
         self.update_data(behavior, guard);
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "mirrors vanilla BrewingStandMenu.quickMoveStack slot-priority routing"
+    )]
     fn quick_move(
         &mut self,
         behavior: &mut MenuBehavior,

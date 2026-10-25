@@ -1,5 +1,6 @@
 //! Vanilla `CopperGolemStatueBlock` and `WeatheringCopperGolemStatueBlock`.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
 
 use steel_macros::block_behavior;
@@ -13,9 +14,10 @@ use steel_registry::data_components::vanilla_components::BLOCK_STATE;
 use steel_registry::fluid::FluidStateExt as _;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::item::BlockHitResult;
+use steel_registry::vanilla_block_entity_types;
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_item_tags::ItemTag;
-use steel_registry::{REGISTRY, sound_events, vanilla_game_events};
+use steel_registry::{REGISTRY, sound_events, vanilla_game_events, vanilla_items};
 use steel_utils::types::{InteractionHand, UpdateFlags};
 use steel_utils::{BlockPos, BlockStateId, Direction, Downcast as _};
 
@@ -116,7 +118,7 @@ fn place_statue_entity(
     state: BlockStateId,
 ) -> BlockEntityCreation {
     BlockEntityCreation::from_registered_factory(BLOCK_ENTITIES.create(
-        &steel_registry::vanilla_block_entity_types::COPPER_GOLEM_STATUE,
+        &vanilla_block_entity_types::COPPER_GOLEM_STATUE,
         level,
         pos,
         state,
@@ -142,7 +144,7 @@ fn clone_item(
         }
     }
 
-    let mut properties = std::collections::BTreeMap::new();
+    let mut properties = BTreeMap::new();
     properties.insert(
         POSE.name.to_string(),
         state.get_value(POSE).as_str().to_string(),
@@ -293,7 +295,7 @@ impl BlockBehavior for WeatheringCopperGolemStatueBlock {
         let (is_axe, is_honeycomb) = inv.with_item(|stack| {
             (
                 stack.item().has_tag(&ItemTag::AXES),
-                stack.is(&steel_registry::vanilla_items::HONEYCOMB),
+                stack.is(&vanilla_items::HONEYCOMB),
             )
         });
 
@@ -312,13 +314,13 @@ impl BlockBehavior for WeatheringCopperGolemStatueBlock {
         let Some(block_entity) = world.get_block_entity(pos) else {
             return InteractionResult::Pass;
         };
-        let Some(statue) = block_entity.downcast_ref::<CopperGolemStatueBlockEntity>() else {
+        let Some(statue_block) = block_entity.downcast_ref::<CopperGolemStatueBlockEntity>() else {
             return InteractionResult::Pass;
         };
 
         // Vanilla damages the axe before checking the converted golem, so a
         // failed conversion still costs durability.
-        let golem = statue.remove_statue();
+        let golem = statue_block.remove_statue();
         inv.with_item(|stack| {
             stack.hurt_and_break(1, player.has_infinite_materials());
         });

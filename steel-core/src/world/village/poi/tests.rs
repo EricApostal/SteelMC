@@ -163,7 +163,7 @@ fn world_village_queries_follow_the_distance_tracker() {
     let world = &fixture.world;
     let bed = BlockPos::new(8, 64, 8);
     world.poi_storage.lock().add(bed, home_type_id(), 1);
-    world.poi_storage.lock().reserve_ticket(bed);
+    assert!(world.poi_storage.lock().reserve_ticket(bed));
     let village_section = SectionPos::from_block_pos(bed);
 
     assert!(world.is_village(bed), "an occupied bed is a village");

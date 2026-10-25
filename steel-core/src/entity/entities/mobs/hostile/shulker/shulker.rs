@@ -61,8 +61,6 @@ const COVERED_ARMOR_MODIFIER: AttributeModifier = AttributeModifier {
     amount: 20.0,
     operation: AttributeModifierOperation::AddValue,
 };
-/// Vanilla `Shulker.MAX_SCALE`.
-const MAX_SCALE: f32 = 1.0;
 /// Vanilla `Shulker.PEEK_PER_TICK`.
 const PEEK_PER_TICK: f32 = 0.05;
 /// Vanilla `Shulker.DEFAULT_PEEK`.

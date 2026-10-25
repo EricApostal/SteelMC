@@ -30,15 +30,15 @@ use text_components::TextComponent;
 use crate::behavior::ItemBehavior;
 use crate::behavior::context::{InteractionResult, UseItemContext};
 use crate::behavior::items::{DispenseConfig, ProjectileItem};
-use crate::entity::Entity as _;
-use crate::entity::SharedEntity;
 use crate::entity::entities::objects::projectiles::{
     ThrownLingeringPotionEntity, ThrownSplashPotionEntity,
 };
 use crate::entity::next_entity_id;
 use crate::entity::projectile::ThrowableItemProjectile as _;
 use crate::entity::projectile::spawn_projectile_from_rotation;
+use crate::entity::{Entity, Projectile, SharedEntity};
 use crate::player::Player;
+use crate::world::World;
 
 use super::dynamic_name::potion_name;
 
@@ -107,7 +107,7 @@ impl ProjectileItem for SplashPotionItem {
     /// `SplashPotion.createPotion(Level, Position, ItemStack)`.
     fn as_projectile(
         &self,
-        world: &Arc<crate::world::World>,
+        world: &Arc<World>,
         position: DVec3,
         stack: &ItemStack,
         _direction: Direction,
@@ -166,7 +166,7 @@ impl ProjectileItem for LingeringPotionItem {
     /// `LingeringPotion.createPotion(Level, Position, ItemStack)`.
     fn as_projectile(
         &self,
-        world: &Arc<crate::world::World>,
+        world: &Arc<World>,
         position: DVec3,
         stack: &ItemStack,
         _direction: Direction,
@@ -190,10 +190,10 @@ impl ProjectileItem for LingeringPotionItem {
 /// Vanilla `ThrowablePotionItem.use`: spawn the potion, award the stat, consume.
 fn throw_potion<E>(
     context: &mut UseItemContext,
-    create: impl FnOnce(&Arc<crate::world::World>, &SharedEntity, ItemStack) -> E,
+    create: impl FnOnce(&Arc<World>, &SharedEntity, ItemStack) -> E,
 ) -> InteractionResult
 where
-    E: crate::entity::Projectile + crate::entity::Entity + 'static,
+    E: Projectile + Entity + 'static,
 {
     let player = context.player;
     let world = context.world;
@@ -237,7 +237,6 @@ mod tests {
 
     use crate::behavior::items::ProjectileItem as _;
     use crate::behavior::{ITEM_BEHAVIORS, init_behaviors};
-    use crate::entity::Entity as _;
     use crate::entity::entities::objects::projectiles::{
         ThrownLingeringPotionEntity, ThrownSplashPotionEntity,
     };
@@ -305,7 +304,7 @@ mod tests {
         let stack = stacked_splash_potion();
 
         let projectile = SplashPotionItem
-            .as_projectile(&world, position, &stack, Direction::North)
+            .as_projectile(world, position, &stack, Direction::North)
             .expect("splash potion dispenses an entity");
         assert_eq!(projectile.entity_type(), &vanilla_entities::SPLASH_POTION);
         assert_eq!(projectile.position(), position);
@@ -323,7 +322,7 @@ mod tests {
         let stack = ItemStack::new(&vanilla_items::LINGERING_POTION);
 
         let projectile = LingeringPotionItem
-            .as_projectile(&world, position, &stack, Direction::North)
+            .as_projectile(world, position, &stack, Direction::North)
             .expect("lingering potion dispenses an entity");
         assert_eq!(
             projectile.entity_type(),

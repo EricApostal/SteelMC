@@ -222,6 +222,10 @@ pub(super) fn format_ban_date(time: SystemTime) -> String {
 }
 
 /// Formats an optional timestamp, writing vanilla's `forever` for permanent bans.
+#[expect(
+    clippy::ref_option,
+    reason = "serde serialize_with passes `&Option<T>` by contract"
+)]
 pub(super) fn serialize_ban_date<S: serde::Serializer>(
     value: &Option<SystemTime>,
     serializer: S,

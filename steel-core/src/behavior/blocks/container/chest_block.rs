@@ -11,7 +11,9 @@ use steel_macros::block_behavior;
 use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
-use steel_registry::blocks::properties::{BlockStateProperties, ChestType, Direction};
+use steel_registry::blocks::properties::{
+    BlockStateProperties, BoolProperty, ChestType, Direction, EnumProperty,
+};
 use steel_registry::stat::custom::CustomStatRef;
 use steel_registry::{vanilla_block_entity_types, vanilla_custom_stats};
 use steel_utils::{BlockPos, BlockStateId, translations};
@@ -33,12 +35,9 @@ use crate::world::{
     LevelReader, ScheduledTickAccess, SignalQueryContext, World, is_redstone_conductor,
 };
 
-const FACING: &steel_registry::blocks::properties::EnumProperty<Direction> =
-    &BlockStateProperties::FACING;
-const CHEST_TYPE: &steel_registry::blocks::properties::EnumProperty<ChestType> =
-    &BlockStateProperties::CHEST_TYPE;
-const WATERLOGGED: &steel_registry::blocks::properties::BoolProperty =
-    &BlockStateProperties::WATERLOGGED;
+const FACING: &EnumProperty<Direction> = &BlockStateProperties::FACING;
+const CHEST_TYPE: &EnumProperty<ChestType> = &BlockStateProperties::CHEST_TYPE;
+const WATERLOGGED: &BoolProperty = &BlockStateProperties::WATERLOGGED;
 
 /// Behavior for chest blocks.
 ///

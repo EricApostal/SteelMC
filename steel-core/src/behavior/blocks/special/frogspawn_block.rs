@@ -14,10 +14,13 @@ use steel_registry::sound_events;
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_blocks;
 use steel_registry::vanilla_entities;
+use steel_registry::vanilla_fluid_tags::FluidTag;
 use steel_utils::{BlockPos, BlockStateId, Direction};
 
 use crate::behavior::{BlockBehavior, BlockPlaceContext};
-use crate::entity::{Entity, add_spawned_entity, create_entity_instance};
+use crate::entity::{
+    Entity, InsideBlockEffectCollector, add_spawned_entity, create_entity_instance,
+};
 use crate::world::{LevelReader, ScheduledTickAccess, World};
 
 /// Vanilla `FrogspawnBlock.MIN_TADPOLES_SPAWN`.
@@ -54,9 +57,7 @@ impl FrogspawnBlock {
         let below = world.get_block_state(pos);
         let fluid_state = below.get_fluid_state();
         let supports = below.get_block().has_tag(&BlockTag::SUPPORTS_FROGSPAWN)
-            || fluid_state
-                .fluid_id
-                .has_tag(&steel_registry::vanilla_fluid_tags::FluidTag::SUPPORTS_FROGSPAWN);
+            || fluid_state.fluid_id.has_tag(&FluidTag::SUPPORTS_FROGSPAWN);
         supports
             && world
                 .get_block_state(pos.above())
@@ -150,7 +151,7 @@ impl BlockBehavior for FrogspawnBlock {
         world: &Arc<World>,
         pos: BlockPos,
         entity: &dyn Entity,
-        _effect_collector: &mut crate::entity::InsideBlockEffectCollector,
+        _effect_collector: &mut InsideBlockEffectCollector,
         _is_precise: bool,
     ) {
         if entity.entity_type() == &vanilla_entities::FALLING_BLOCK {
