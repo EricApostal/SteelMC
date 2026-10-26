@@ -12,7 +12,7 @@ use steel_protocol::packets::game::{
 };
 use steel_registry::{REGISTRY, recipe::UntypedRecipeRef};
 use steel_utils::{DowncastType, DowncastTypeKey, Identifier, translations};
-use text_components::TextComponent;
+use text_components::{TextComponent, translation::Translation};
 
 use super::super::{
     brigadier::{
@@ -114,7 +114,7 @@ impl<'a> PlayerTracker<'a> {
         }
     }
 
-    fn track(&mut self, player: &'a Player, value: i32) {
+    const fn track(&mut self, player: &'a Player, value: i32) {
         self.total_value += value;
         if value != 0 {
             self.non_zero_element_count += 1;
@@ -134,7 +134,7 @@ fn finish(
     action: RecipeAction,
 ) -> Result<i32, CommandSyntaxError> {
     if tracker.non_zero_element_count == 0 {
-        let failed: &text_components::translation::Translation<0> = match action {
+        let failed: &Translation<0> = match action {
             RecipeAction::Give => &translations::COMMANDS_RECIPE_GIVE_FAILED,
             RecipeAction::Take => &translations::COMMANDS_RECIPE_TAKE_FAILED,
         };

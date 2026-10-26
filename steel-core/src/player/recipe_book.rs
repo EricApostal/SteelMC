@@ -6,6 +6,7 @@
 //! `ServerRecipeBook.DisplayResolver`), sends the clientbound recipe-book packets
 //! and fires the `recipe_unlocked` criterion.
 
+use std::mem;
 use std::sync::OnceLock;
 
 use rustc_hash::FxHashMap;
@@ -13,13 +14,15 @@ use steel_protocol::packets::game::{
     CRecipeBookAdd, CRecipeBookRemove, CRecipeBookSettings, CUpdateRecipes, ComponentTypeRef,
     ItemHolder, ItemHolderSet, RecipeBookAddEntry, RecipeBookSettings, RecipeBookType,
     RecipeBookTypeSettings, RecipeDisplay, RecipeDisplayEntry, RecipeDisplayId,
-    RecipePropertySetEntry, SelectableStonecutterRecipe, SlotDisplay,
+    RecipePropertySetEntry, SRecipeBookChangeSettings, SRecipeBookSeenRecipe,
+    SelectableStonecutterRecipe, SlotDisplay, TrimPatternHolder,
 };
 use steel_registry::advancement::triggers::TriggerEvent;
 use steel_registry::data_components::vanilla_components;
 use steel_registry::data_components::{DataComponentPatch, DataComponentType};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::item_stack_template::ItemStackTemplate;
+use steel_registry::items::{Item, ItemRef};
 use steel_registry::recipe::vanilla_recipe_book_categories as categories;
 use steel_registry::recipe::{
     BrewingRecipe, CookingBookCategory, CookingRecipe, CraftingBookCategory, CraftingRecipe,
@@ -27,6 +30,7 @@ use steel_registry::recipe::{
     ShapedRecipe, ShapelessRecipe, SmithingRecipe, StonecuttingRecipe, TransmuteRecipe,
     UntypedRecipeRef, vanilla_recipe_types,
 };
+use steel_registry::registry::holder::RegistryHolder;
 use steel_registry::{REGISTRY, RegistryExt as _, vanilla_items};
 use steel_utils::Identifier;
 
@@ -196,7 +200,12 @@ impl ServerRecipeBook {
     }
 
     /// Vanilla `RecipeBook.setBookSetting`.
-    pub fn set_book_setting(&mut self, book_type: RecipeBookType, open: bool, filtering: bool) {
+    pub const fn set_book_setting(
+        &mut self,
+        book_type: RecipeBookType,
+        open: bool,
+        filtering: bool,
+    ) {
         let target = match book_type {
             RecipeBookType::Crafting => &mut self.settings.crafting,
             RecipeBookType::Furnace => &mut self.settings.furnace,
@@ -274,7 +283,7 @@ impl ServerRecipeBook {
 
     /// Vanilla `ServerRecipeBook.toNetwork`: the packet that replaces the book.
     #[must_use]
-    pub fn to_network(&self, entries: Vec<RecipeBookAddEntry>) -> CRecipeBookAdd {
+    pub const fn to_network(entries: Vec<RecipeBookAddEntry>) -> CRecipeBookAdd {
         CRecipeBookAdd {
             entries,
             replace: true,
@@ -323,7 +332,7 @@ impl ServerRecipeBook {
 
     /// Takes the queued recipe unlocks.
     pub fn take_pending(&mut self) -> Vec<Identifier> {
-        std::mem::take(&mut self.pending)
+        mem::take(&mut self.pending)
     }
 
     /// Resolves every recipe id in `ids` to its registered recipe, dropping
@@ -437,10 +446,7 @@ impl Player {
     }
 
     /// Vanilla `ServerGamePacketListenerImpl.handleRecipeBookChangeSettingsPacket`.
-    pub fn handle_recipe_book_change_settings(
-        &self,
-        packet: &steel_protocol::packets::game::SRecipeBookChangeSettings,
-    ) {
+    pub fn handle_recipe_book_change_settings(&self, packet: &SRecipeBookChangeSettings) {
         self.recipe_book.lock().set_book_setting(
             packet.book_type,
             packet.is_open,
@@ -449,10 +455,7 @@ impl Player {
     }
 
     /// Vanilla `ServerGamePacketListenerImpl.handleRecipeBookSeenRecipePacket`.
-    pub fn handle_recipe_book_seen_recipe(
-        &self,
-        packet: &steel_protocol::packets::game::SRecipeBookSeenRecipe,
-    ) {
+    pub fn handle_recipe_book_seen_recipe(&self, packet: &SRecipeBookSeenRecipe) {
         let Some(recipe) = recipe_for_display(packet.recipe) else {
             return;
         };
@@ -586,7 +589,7 @@ fn property_set(
     key: &'static str,
     extract: impl Fn(UntypedRecipeRef) -> Option<Ingredient>,
 ) -> RecipePropertySetEntry {
-    let mut items: Vec<steel_registry::items::ItemRef> = Vec::new();
+    let mut items: Vec<ItemRef> = Vec::new();
     for recipe in REGISTRY.recipes.iter() {
         let Some(ingredient) = extract(recipe) else {
             continue;
@@ -852,7 +855,7 @@ fn recipe_displays(recipe: UntypedRecipeRef) -> Vec<RecipeDisplay> {
     if type_key == vanilla_recipe_types::SMITHING.key() {
         return recipe
             .downcast_data::<SmithingRecipe>()
-            .and_then(smithing_display)
+            .map(smithing_display)
             .into_iter()
             .collect();
     }
@@ -987,10 +990,7 @@ fn shapeless_display(recipe: &ShapelessRecipe) -> RecipeDisplay {
 }
 
 /// Vanilla `AbstractCookingRecipe.display()` with the type's furnace icon.
-fn cooking_display(
-    recipe: UntypedRecipeRef,
-    furnace_icon: &'static steel_registry::items::Item,
-) -> Option<RecipeDisplay> {
+fn cooking_display(recipe: UntypedRecipeRef, furnace_icon: &'static Item) -> Option<RecipeDisplay> {
     let cooking = recipe.downcast_data::<CookingRecipe>()?;
     Some(RecipeDisplay::Furnace {
         ingredient: ingredient_display(&cooking.ingredient),
@@ -1003,32 +1003,30 @@ fn cooking_display(
 }
 
 /// Vanilla `SmithingTransformRecipe.display()`/`SmithingTrimRecipe.display()`.
-fn smithing_display(recipe: &SmithingRecipe) -> Option<RecipeDisplay> {
+fn smithing_display(recipe: &SmithingRecipe) -> RecipeDisplay {
     match recipe {
-        SmithingRecipe::Transform(transform) => Some(RecipeDisplay::Smithing {
+        SmithingRecipe::Transform(transform) => RecipeDisplay::Smithing {
             template: optional_ingredient_display(transform.template.as_ref()),
             base: ingredient_display(&transform.base),
             addition: optional_ingredient_display(transform.addition.as_ref()),
             result: stack_display(&transform.result),
             crafting_station: station_display(&vanilla_items::SMITHING_TABLE),
-        }),
+        },
         SmithingRecipe::Trim(trim) => {
             let base = ingredient_display(&trim.base);
             let material = ingredient_display(&trim.addition);
             let result = SlotDisplay::SmithingTrim {
                 base: Box::new(base.clone()),
                 material: Box::new(material.clone()),
-                pattern: steel_protocol::packets::game::TrimPatternHolder(
-                    steel_registry::registry::holder::RegistryHolder::Reference(trim.pattern),
-                ),
+                pattern: TrimPatternHolder(RegistryHolder::Reference(trim.pattern)),
             };
-            Some(RecipeDisplay::Smithing {
+            RecipeDisplay::Smithing {
                 template: ingredient_display(&trim.template),
                 base,
                 addition: material,
                 result,
                 crafting_station: station_display(&vanilla_items::SMITHING_TABLE),
-            })
+            }
         }
     }
 }
@@ -1057,12 +1055,12 @@ fn ingredient_holder_set(ingredient: &Ingredient) -> Option<ItemHolderSet> {
 }
 
 /// Vanilla `SlotDisplay.ItemStackSlotDisplay`.
-fn stack_display(stack: &steel_registry::item_stack_template::ItemStackTemplate) -> SlotDisplay {
+fn stack_display(stack: &ItemStackTemplate) -> SlotDisplay {
     SlotDisplay::ItemStack(stack.clone())
 }
 
 /// Vanilla `SlotDisplay.ItemSlotDisplay` for a crafting station.
-fn station_display(item: &'static steel_registry::items::Item) -> SlotDisplay {
+const fn station_display(item: &'static Item) -> SlotDisplay {
     SlotDisplay::Item(ItemHolder(item))
 }
 
@@ -1272,7 +1270,10 @@ mod tests {
                 let SlotDisplay::ItemStack(template) = content else {
                     panic!("composite entries are item stack displays");
                 };
-                assert_eq!(template.count(), 1 + i32::try_from(material_count).unwrap());
+                assert_eq!(
+                    template.count(),
+                    1 + i32::try_from(material_count).expect("material count fits in i32")
+                );
                 assert!(
                     REGISTRY.items.is_in_tag(
                         template.item(),

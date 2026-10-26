@@ -255,17 +255,19 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{ScoreboardWire, default_criteria};
-    use crate::scoreboard::{PersistentScoreboard, ScoreState};
+    use crate::scoreboard::{
+        ObjectiveCriteria, ObjectiveState, PersistentScoreboard, RenderType, ScoreState,
+    };
 
     #[test]
     fn wire_uses_vanilla_save_data_keys() {
         let mut state = PersistentScoreboard::default();
         state.objectives.insert(
             "kills".to_owned(),
-            crate::scoreboard::ObjectiveState {
-                criteria: crate::scoreboard::ObjectiveCriteria::dummy(),
+            ObjectiveState {
+                criteria: ObjectiveCriteria::dummy(),
                 display_name: text_components::TextComponent::plain("Kills".to_owned()),
-                render_type: crate::scoreboard::RenderType::Integer,
+                render_type: RenderType::Integer,
                 display_auto_update: false,
                 number_format: None,
             },

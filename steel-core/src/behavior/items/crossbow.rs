@@ -27,7 +27,9 @@ use steel_macros::item_behavior;
 use steel_protocol::packets::game::SoundSource;
 use steel_registry::REGISTRY;
 use steel_registry::data_components::components::ChargedProjectiles;
-use steel_registry::data_components::vanilla_components::CHARGED_PROJECTILES;
+use steel_registry::data_components::vanilla_components::{
+    CHARGED_PROJECTILES, INTANGIBLE_PROJECTILE,
+};
 use steel_registry::enchantment::effect::{CrossbowChargingSounds, EnchantmentEffectComponent};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::item_stack_template::ItemStackTemplate;
@@ -38,11 +40,12 @@ use steel_registry::{
     vanilla_items,
 };
 use steel_utils::Downcast as _;
+use steel_utils::types::InteractionHand;
 
 use crate::behavior::advancement_hooks::raise_shot_crossbow;
 use crate::behavior::context::{InteractionResult, UseItemContext};
 use crate::behavior::items::arrow::create_arrow;
-use crate::behavior::items::bow::{draw, find_ammo_matching};
+use crate::behavior::items::bow::{draw, find_ammo_matching, is_supported_projectile};
 use crate::behavior::{ItemBehavior, ItemUseAnimation};
 use crate::entity::entities::objects::projectiles::{
     AbstractArrow as _, ArrowEntity, FireworkRocketEntity, SpectralArrowEntity,
@@ -65,6 +68,12 @@ const MAX_CHARGE_DURATION: f32 = 20.0;
 const ARROW_POWER: f32 = 3.15;
 /// Vanilla `CrossbowItem.FIREWORK_POWER` (`getShootingPower` with a firework).
 const FIREWORK_POWER: f32 = 1.6;
+/// Vanilla `CrossbowItem.MOB_ARROW_POWER`: the velocity a mob's crossbow bolt
+/// flies at. Both `Pillager.performRangedAttack` and `Piglin.performRangedAttack`
+/// pass this same literal `1.6F` to `CrossbowAttackMob.performCrossbowAttack`
+/// (the goal and the piglin brain only hand over the unrelated `1.0F` bound of
+/// vanilla's `RangedAttackMob`).
+pub const MOB_ARROW_POWER: f32 = 1.6;
 /// Vanilla `CrossbowItem.shootProjectile` inaccuracy (`shoot(..., power, 1.0F)`).
 const SHOOT_UNCERTAINTY: f32 = 1.0;
 /// Vanilla `CrossbowItem` firing a firework spawns it below the shooter's eyes.
@@ -149,12 +158,9 @@ impl ItemBehavior for CrossbowItem {
         ticks_remaining: i32,
     ) {
         // Vanilla `CrossbowItem.onUseTick` runs on the server only, and loads
-        // through `LivingEntity.getProjectile`. Steel's ammo draw consumes the
-        // shooter's inventory, which only players model (the mob AIs drive their
-        // own crossbow state), so mobs keep the crossbow unloaded and silent.
-        let Some(player) = user.living().as_player() else {
-            return;
-        };
+        // through `LivingEntity.getProjectile`: the shooter type decides the
+        // ammo source, so the shared load below hands a player to their
+        // inventory and a monster to its weapon's declared default.
         let entity = user.living();
 
         // Vanilla tracks `startSoundPlayed`/`midLoadSoundPlayed` per item
@@ -181,7 +187,7 @@ impl ItemBehavior for CrossbowItem {
         }
         if sounds.end
             && !is_charged(stack)
-            && try_load_projectiles(player, stack)
+            && load_projectiles(entity, stack)
             && let Some(sound) = charging_sounds.end
         {
             let pitch = 1.0 / (rand::random::<f32>() * 0.5 + 1.0) + 0.2;
@@ -257,12 +263,143 @@ pub fn is_crossbow_ammo(stack: &ItemStack) -> bool {
 pub fn try_load_projectiles(shooter: &Player, weapon: &mut ItemStack) -> bool {
     let ammo = find_ammo_matching(shooter, is_crossbow_ammo);
     let drawn = draw(weapon, &ammo, shooter);
-    if drawn.is_empty() {
+    set_charged_projectiles(weapon, &drawn)
+}
+
+/// Vanilla `CrossbowItem.onUseTick`'s load for a shooter whose ammo is
+/// resolved through `LivingEntity.getProjectile`: a player draws from their
+/// inventory, a monster from the projectile its weapon declares, and any other
+/// living entity has no projectile at all.
+fn load_projectiles(shooter: &dyn LivingEntity, weapon: &mut ItemStack) -> bool {
+    if let Some(player) = shooter.as_player() {
+        try_load_projectiles(player, weapon)
+    } else if shooter.as_monster().is_some() {
+        try_load_monster_projectiles(shooter, weapon)
+    } else {
+        false
+    }
+}
+
+/// Vanilla `Monster.getProjectile` for a projectile weapon: the stack the
+/// monster visibly holds when the weapon's `getSupportedHeldProjectiles`
+/// predicate accepts it (the off hand first, then the main hand), otherwise the
+/// plain arrow every projectile weapon declares as its default.
+///
+/// Returns the ammo together with the hand it was taken from, which is the hand
+/// vanilla's `useAmmo` splits the projectile out of.
+fn monster_projectile(
+    shooter: &dyn LivingEntity,
+    weapon: &ItemStack,
+) -> (ItemStack, Option<InteractionHand>) {
+    let Some(supported) = held_projectile_set(weapon) else {
+        return (ItemStack::empty(), None);
+    };
+    for hand in [InteractionHand::OffHand, InteractionHand::MainHand] {
+        let stack = shooter.get_item_in_hand(hand);
+        if supported(&stack) {
+            return (stack, Some(hand));
+        }
+    }
+    (ItemStack::new(&vanilla_items::ARROW), None)
+}
+
+/// The `ProjectileWeaponItem.getSupportedHeldProjectiles` predicate of the
+/// projectile weapons Steel models: `ARROW_ONLY` for the bow and
+/// `ARROW_OR_FIREWORK` for the crossbow. `None` means the stack is not a
+/// projectile weapon, which vanilla's `Monster.getProjectile` reports as
+/// `ItemStack.EMPTY`.
+fn held_projectile_set(weapon: &ItemStack) -> Option<fn(&ItemStack) -> bool> {
+    if weapon.is(&vanilla_items::CROSSBOW) {
+        Some(is_crossbow_ammo)
+    } else if weapon.is(&vanilla_items::BOW) {
+        Some(is_supported_projectile)
+    } else {
+        None
+    }
+}
+
+/// Vanilla `CrossbowItem.tryLoadProjectiles` for a monster shooter: the ammo is
+/// the `Monster.getProjectile` stack, drawn through `ProjectileWeaponItem.draw`
+/// with no inventory behind it. The first projectile is split out of the stack
+/// the monster visibly holds (so holding matching ammo spends it), while the
+/// extra projectiles `projectile_count` grants are intangible copies. Returns
+/// whether anything was loaded.
+pub fn try_load_monster_projectiles(shooter: &dyn LivingEntity, weapon: &mut ItemStack) -> bool {
+    let (mut ammo, held_hand) = monster_projectile(shooter, weapon);
+    if ammo.is_empty() {
         return false;
     }
 
-    // Vanilla `ChargedProjectiles.ofNonEmpty`: drop empty stacks, cap at
-    // `MAX_SIZE`.
+    // Vanilla `draw` keeps its own copy of the ammo stack taken before the
+    // loop, so every projectile after the first is an intangible copy of the
+    // untouched stack rather than of the already-split one.
+    let mut spare = ammo.copy_with_count(1);
+    let mut drawn = Vec::with_capacity(projectile_count(weapon));
+    for index in 0..projectile_count(weapon) {
+        let projectile = if index == 0 {
+            use_monster_ammo(weapon, &mut ammo, false)
+        } else {
+            use_monster_ammo(weapon, &mut spare, true)
+        };
+        if projectile.is_empty() {
+            break;
+        }
+        drawn.push(projectile);
+    }
+
+    // Vanilla `useAmmo` splits the drawn projectile out of the stack
+    // `getProjectile` returned, so a monster that visibly holds matching ammo
+    // spends it. The declared default is a throwaway stack, so the split copy
+    // of it is discarded with it.
+    if let Some(hand) = held_hand {
+        shooter.set_item_in_hand(hand, ammo);
+    }
+
+    set_charged_projectiles(weapon, &drawn)
+}
+
+/// Vanilla `ProjectileWeaponItem.draw`'s projectile count:
+/// `EnchantmentHelper.processProjectileCount(level, weapon, shooter, 1)`.
+fn projectile_count(weapon: &ItemStack) -> usize {
+    weapon
+        .apply_unconditional_enchantment_value_effects(
+            EnchantmentEffectComponent::ProjectileCount,
+            1.0,
+        )
+        .max(1.0) as usize
+}
+
+/// Vanilla `ProjectileWeaponItem.useAmmo` for a shooter with no inventory:
+/// `ammo` is split in place, and a projectile that costs no ammo becomes an
+/// intangible copy so it cannot be picked up. `force_infinite` is the vanilla
+/// flag for every projectile after the first, which never costs ammo.
+fn use_monster_ammo(weapon: &ItemStack, ammo: &mut ItemStack, force_infinite: bool) -> ItemStack {
+    let ammo_to_use = if force_infinite {
+        0
+    } else {
+        weapon
+            .apply_unconditional_enchantment_value_effects(EnchantmentEffectComponent::AmmoUse, 1.0)
+            .max(0.0) as i32
+    };
+
+    if ammo_to_use > ammo.count() {
+        return ItemStack::empty();
+    }
+    if ammo_to_use == 0 {
+        let mut copy = ammo.copy_with_count(1);
+        copy.set(INTANGIBLE_PROJECTILE, ());
+        return copy;
+    }
+    ammo.split(ammo_to_use)
+}
+
+/// Vanilla `ChargedProjectiles.ofNonEmpty`: drop empty stacks, cap at
+/// `MAX_SIZE`, and store the result in the weapon's `charged_projectiles`
+/// component. Returns whether anything was loaded.
+fn set_charged_projectiles(weapon: &mut ItemStack, drawn: &[ItemStack]) -> bool {
+    if drawn.is_empty() {
+        return false;
+    }
     let templates: Vec<ItemStackTemplate> = drawn
         .iter()
         .filter_map(|stack| ItemStackTemplate::from_stack(stack).ok())
@@ -403,6 +540,64 @@ pub fn perform_shooting(
     if let Some(player) = shooter.as_player() {
         raise_shot_crossbow(player, world, weapon);
         player.award_stat(&vanilla_stat_types::ITEM_USED, weapon.item());
+    }
+}
+
+/// Vanilla `CrossbowAttackMob.performCrossbowAttack`: the mob releases the
+/// crossbow in its weapon-holding hand at `velocity` with its own difficulty
+/// uncertainty, aimed at its attack target. The `hand` is vanilla's
+/// `ProjectileUtil.getWeaponHoldingHand`, and the cleared and damaged weapon is
+/// written back to it.
+///
+/// Returns whether a loaded crossbow was released: vanilla always performs
+/// `onCrossbowAttackPerformed` while only a crossbow stack shoots, so the
+/// caller clears its own crossbow state while the shot is this caller's signal
+/// that a bolt actually left.
+pub fn perform_mob_crossbow_attack(
+    world: &Arc<World>,
+    shooter: &SharedEntity,
+    target: &SharedEntity,
+    velocity: f32,
+    inaccuracy: f32,
+) -> bool {
+    let Some(living) = shooter.as_living_entity() else {
+        return false;
+    };
+    let Some(hand) = weapon_holding_hand(living) else {
+        return false;
+    };
+    let mut weapon = living.get_item_in_hand(hand);
+    if !weapon.is(&vanilla_items::CROSSBOW) {
+        return false;
+    }
+    let released = is_charged(&weapon);
+    perform_shooting(
+        world,
+        shooter,
+        &mut weapon,
+        velocity,
+        inaccuracy,
+        Some(target),
+    );
+    living.set_item_in_hand(hand, weapon);
+    released
+}
+
+/// Vanilla `ProjectileUtil.getWeaponHoldingHand`: the main hand when it holds
+/// the crossbow, otherwise the off hand.
+fn weapon_holding_hand(living: &dyn LivingEntity) -> Option<InteractionHand> {
+    if living
+        .get_item_in_hand(InteractionHand::MainHand)
+        .is(&vanilla_items::CROSSBOW)
+    {
+        Some(InteractionHand::MainHand)
+    } else if living
+        .get_item_in_hand(InteractionHand::OffHand)
+        .is(&vanilla_items::CROSSBOW)
+    {
+        Some(InteractionHand::OffHand)
+    } else {
+        None
     }
 }
 
@@ -613,6 +808,7 @@ mod tests {
     use crate::behavior::ITEM_BEHAVIORS;
     use crate::behavior::init_behaviors;
     use crate::entity::Entity as _;
+    use crate::entity::entities::mobs::illager::PillagerEntity;
     use crate::inventory::container::Container as _;
     use crate::player::game_mode::use_item;
     use crate::test_support::{
@@ -1176,5 +1372,247 @@ mod tests {
             &vanilla_items::ARROW
         )));
         assert!(!is_crossbow_ammo(&ItemStack::new(&vanilla_items::SHIELD)));
+    }
+
+    /// A monster shooter: the fixture world plus a pillager standing next to a
+    /// player. Vanilla `Monster.getProjectile` never consults an inventory, so
+    /// the co-located player is what proves the mob draw stays inside the mob.
+    fn mob_fixture(
+        name: &'static str,
+    ) -> (TestWorld, Arc<Player>, Arc<PillagerEntity>, SharedEntity) {
+        let (world_fixture, player) = fixture(name);
+        let world = &world_fixture.world;
+        let pillager = Arc::new(PillagerEntity::new(
+            &vanilla_entities::PILLAGER,
+            4343,
+            DVec3::new(2.5, 65.0, 0.5),
+            Arc::downgrade(world),
+        ));
+        let body: SharedEntity = Arc::<PillagerEntity>::clone(&pillager);
+        world
+            .try_add_entity(Arc::clone(&body))
+            .expect("the shooter joins the world");
+        (world_fixture, player, pillager, body)
+    }
+
+    fn equip_mob_crossbow(pillager: &PillagerEntity, crossbow: ItemStack) {
+        pillager.set_item_in_hand(InteractionHand::MainHand, crossbow);
+    }
+
+    fn held_mob_crossbow(pillager: &PillagerEntity) -> ItemStack {
+        pillager.get_item_in_hand(InteractionHand::MainHand)
+    }
+
+    /// Ticks the mob's active item use through vanilla `LivingEntity.updateUsingItem`,
+    /// the path `Mob.serverAiStep` drives on every mob tick.
+    fn tick_mob_charge(pillager: &PillagerEntity, body: &SharedEntity, ticks: i32) {
+        for _ in 0..ticks {
+            pillager.updating_using_item(body);
+        }
+    }
+
+    /// Charges exactly the way the crossbow goals do: one `updateUsingItem` per
+    /// mob tick and a `releaseUsingItem` once `getTicksUsingItem` reaches the
+    /// crossbow's charge duration. The release tick is what loads a mob's
+    /// crossbow, because `CrossbowItem.useOnRelease` re-ticks the use (with the
+    /// same remaining ticks) before it stops.
+    fn charge_and_release(pillager: &PillagerEntity, body: &SharedEntity, ticks: i32) {
+        pillager.start_using_item(InteractionHand::MainHand);
+        tick_mob_charge(pillager, body, ticks);
+        pillager.release_using_item(body);
+        assert!(!pillager.is_using_item(), "the release ends the charge");
+    }
+
+    #[test]
+    fn mob_charge_loads_the_declared_arrow_without_touching_a_player() {
+        let (_fixture, player, pillager, body) = mob_fixture("mob_crossbow_load");
+        // The player holds the same ammo a mob would silently steal in the buggy
+        // shared-helper shape.
+        player
+            .inventory
+            .lock()
+            .set_item(1, ItemStack::with_count(&vanilla_items::ARROW, 16));
+        equip_mob_crossbow(&pillager, ItemStack::new(&vanilla_items::CROSSBOW));
+
+        let duration = get_charge_duration(&held_mob_crossbow(&pillager));
+        assert_eq!(duration, 25);
+
+        // One tick short of the vanilla duration leaves the crossbow unloaded.
+        charge_and_release(&pillager, &body, duration - 1);
+        assert!(
+            !is_charged(&held_mob_crossbow(&pillager)),
+            "24 of the vanilla 25 ticks is not a full charge"
+        );
+
+        // The full vanilla duration loads exactly one declared arrow.
+        charge_and_release(&pillager, &body, duration);
+        let loaded = held_mob_crossbow(&pillager);
+        let projectiles = loaded
+            .get(CHARGED_PROJECTILES)
+            .expect("a full charge loads the component");
+        assert_eq!(
+            projectiles.items().len(),
+            1,
+            "a plain mob crossbow loads exactly one projectile"
+        );
+        assert_eq!(projectiles.items()[0].item().key, vanilla_items::ARROW.key);
+
+        assert_eq!(
+            ammo_count(&player, 1),
+            16,
+            "a mob never draws from a co-located player's inventory"
+        );
+        assert!(held(&player).is_empty(), "the player's hand is untouched");
+    }
+
+    #[test]
+    fn mob_charge_duration_follows_quick_charge() {
+        for (key, level, expected) in [
+            ("mob_crossbow_charge_plain", None, 25),
+            ("mob_crossbow_charge_quick_1", Some(1), 20),
+            ("mob_crossbow_charge_quick_2", Some(2), 15),
+            ("mob_crossbow_charge_quick_3", Some(3), 10),
+        ] {
+            let (_fixture, _player, pillager, body) = mob_fixture(key);
+            let mut crossbow = ItemStack::new(&vanilla_items::CROSSBOW);
+            if let Some(level) = level {
+                crossbow.set_enchantments(
+                    &[(Identifier::vanilla_static("quick_charge"), level)],
+                    false,
+                );
+            }
+            equip_mob_crossbow(&pillager, crossbow);
+            assert_eq!(
+                get_charge_duration(&held_mob_crossbow(&pillager)),
+                expected,
+                "quick charge {level:?}"
+            );
+
+            charge_and_release(&pillager, &body, expected - 1);
+            assert!(
+                !is_charged(&held_mob_crossbow(&pillager)),
+                "quick charge {level:?} is not full one tick early"
+            );
+
+            charge_and_release(&pillager, &body, expected);
+            assert!(
+                is_charged(&held_mob_crossbow(&pillager)),
+                "quick charge {level:?} loads on the vanilla duration"
+            );
+        }
+    }
+
+    #[test]
+    fn mob_loading_spends_matching_ammo_held_in_the_off_hand() {
+        let (_fixture, _player, pillager, body) = mob_fixture("mob_crossbow_offhand_ammo");
+        // Vanilla `Monster.getProjectile` checks `getHeldProjectile` before its
+        // plain-arrow default, so a rocket in the off hand is what loads.
+        pillager.set_item_in_hand(
+            InteractionHand::OffHand,
+            ItemStack::with_count(&vanilla_items::FIREWORK_ROCKET, 5),
+        );
+        equip_mob_crossbow(&pillager, ItemStack::new(&vanilla_items::CROSSBOW));
+
+        charge_and_release(&pillager, &body, 25);
+
+        let loaded = held_mob_crossbow(&pillager);
+        let projectiles = loaded
+            .get(CHARGED_PROJECTILES)
+            .expect("the held rocket loads");
+        assert_eq!(
+            projectiles.items()[0].item().key,
+            vanilla_items::FIREWORK_ROCKET.key
+        );
+        assert_eq!(
+            pillager.get_item_in_hand(InteractionHand::OffHand).count(),
+            4,
+            "vanilla `useAmmo` splits the loaded rocket out of the held stack"
+        );
+    }
+
+    #[test]
+    fn mob_multishot_loads_intangible_copies_of_the_declared_arrow() {
+        let (_fixture, _player, pillager, body) = mob_fixture("mob_crossbow_multishot");
+        let mut crossbow = ItemStack::new(&vanilla_items::CROSSBOW);
+        crossbow.set_enchantments(&[(Identifier::vanilla_static("multishot"), 1)], true);
+        equip_mob_crossbow(&pillager, crossbow);
+
+        charge_and_release(&pillager, &body, 25);
+
+        let loaded = held_mob_crossbow(&pillager);
+        let projectiles = loaded
+            .get(CHARGED_PROJECTILES)
+            .expect("multishot loads the component");
+        assert_eq!(projectiles.items().len(), 3, "multishot loads three bolts");
+        assert!(
+            projectiles
+                .items()
+                .iter()
+                .all(|template| template.item().key == vanilla_items::ARROW.key)
+        );
+        // Vanilla's `useAmmo` marks every projectile after the first as an
+        // intangible copy, so the declared default is not consumed three times.
+        assert!(
+            projectiles.items()[1].create().has(INTANGIBLE_PROJECTILE),
+            "the copies beyond the first are intangible"
+        );
+    }
+
+    #[test]
+    fn mob_crossbow_fires_at_mob_arrow_power_and_clears_the_load() {
+        let (fixture, player, pillager, body) = mob_fixture("mob_crossbow_fire");
+        let world = &fixture.world;
+        equip_mob_crossbow(&pillager, ItemStack::new(&vanilla_items::CROSSBOW));
+        charge_and_release(&pillager, &body, 25);
+        assert!(is_charged(&held_mob_crossbow(&pillager)));
+
+        let target: SharedEntity = Arc::<Player>::clone(&player);
+        assert!(perform_mob_crossbow_attack(
+            world,
+            &body,
+            &target,
+            MOB_ARROW_POWER,
+            SHOOT_UNCERTAINTY,
+        ));
+
+        let fired = held_mob_crossbow(&pillager);
+        assert!(
+            fired
+                .get(CHARGED_PROJECTILES)
+                .is_none_or(|projectiles| projectiles.items().is_empty()),
+            "the shot clears the loaded projectiles"
+        );
+        assert_eq!(
+            fired.get_damage_value(),
+            1,
+            "firing an arrow costs one durability"
+        );
+
+        let arrows = projectiles(world);
+        assert_eq!(arrows.len(), 1);
+        let velocity = arrows[0].velocity();
+        assert!(
+            (velocity.length() - f64::from(MOB_ARROW_POWER)).abs() < 0.2,
+            "a mob bolt flies at `MOB_ARROW_POWER` (1.6): {velocity:?}"
+        );
+    }
+
+    #[test]
+    fn uncharged_mob_crossbow_releases_nothing() {
+        let (fixture, player, pillager, body) = mob_fixture("mob_crossbow_uncharged");
+        let world = &fixture.world;
+        equip_mob_crossbow(&pillager, ItemStack::new(&vanilla_items::CROSSBOW));
+
+        let target: SharedEntity = Arc::<Player>::clone(&player);
+        assert!(
+            !perform_mob_crossbow_attack(world, &body, &target, MOB_ARROW_POWER, SHOOT_UNCERTAINTY,),
+            "an unloaded crossbow releases no bolt"
+        );
+        assert!(projectiles(world).is_empty());
+        assert_eq!(
+            held_mob_crossbow(&pillager).get_damage_value(),
+            0,
+            "an empty crossbow is not damaged"
+        );
     }
 }

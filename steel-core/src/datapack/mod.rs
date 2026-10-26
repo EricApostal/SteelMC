@@ -49,9 +49,9 @@ pub(crate) use repository::{
 pub(crate) use resource::{MultiPackResourceManager, ReloadableResourceManager};
 pub(crate) use schedule::{ScheduleMode, ScheduleRegistry, ScheduledCallback};
 
-use crate::command::{execution::CommandSource, sender::CommandSender};
-use crate::player::Player;
-use crate::server::Server;
+use crate::command::{command_tree_packet, execution::CommandSource, sender::CommandSender};
+use crate::player::{Player, recipe_book};
+use crate::server::{Server, registry_cache::RegistryCache};
 
 use pack::PackType;
 
@@ -129,6 +129,10 @@ impl DatapackManager {
 
     /// The world directory this manager reads packs from.
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "vanilla PackRepository world-directory API surface"
+    )]
     pub(crate) fn world_dir(&self) -> &Path {
         &self.world_dir
     }
@@ -157,19 +161,19 @@ impl DatapackManager {
 
     /// The pack repository, for `/datapack list`.
     #[must_use]
-    pub(crate) fn repository(&self) -> &SyncRwLock<PackRepository> {
+    pub(crate) const fn repository(&self) -> &SyncRwLock<PackRepository> {
         &self.repository
     }
 
     /// The currently loaded functions.
     #[must_use]
-    pub(crate) fn functions(&self) -> &Arc<SyncRwLock<FunctionRegistry>> {
+    pub(crate) const fn functions(&self) -> &Arc<SyncRwLock<FunctionRegistry>> {
         &self.functions
     }
 
     /// The scheduled-function queue, for `/schedule`.
     #[must_use]
-    pub(crate) fn schedules(&self) -> &Arc<SyncRwLock<ScheduleRegistry>> {
+    pub(crate) const fn schedules(&self) -> &Arc<SyncRwLock<ScheduleRegistry>> {
         &self.schedules
     }
 
@@ -232,12 +236,17 @@ impl DatapackManager {
 
     /// The layered view of the enabled packs.
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "vanilla MultiPackResourceManager overlay API surface"
+    )]
     pub(crate) fn resources(&self) -> Arc<MultiPackResourceManager> {
         Arc::clone(&self.resources.read())
     }
 
     /// Reads a JSON resource from the enabled packs, honoring load order.
     #[must_use]
+    #[expect(dead_code, reason = "vanilla ResourceManager JSON-access API surface")]
     pub(crate) fn json(&self, location: &steel_utils::Identifier) -> Option<serde_json::Value> {
         let resources = self.resources();
         let resource = resources.get_resource(PackType::Server, location)?;
@@ -308,15 +317,11 @@ pub(crate) fn try_datapacks() -> Option<&'static DatapackManager> {
 /// replaced, and re-projecting keeps the client's graph consistent with the live
 /// dispatcher.
 pub(crate) fn resend_clients(server: &Arc<Server>) {
-    let recipes = crate::player::recipe_book::update_recipes_packet().cloned();
+    let recipes = recipe_book::update_recipes_packet().cloned();
     for player in server.get_players() {
         // `CUpdateTags` is not `Clone`; rebuilding it per player is cheap enough for
         // the rare reload and keeps the packet crate untouched.
-        player.send_packet(
-            crate::server::registry_cache::RegistryCache::build_tags_packet(
-                &steel_registry::REGISTRY,
-            ),
-        );
+        player.send_packet(RegistryCache::build_tags_packet(&steel_registry::REGISTRY));
         if let Some(recipes) = &recipes {
             player.send_packet(recipes.clone());
         }
@@ -336,7 +341,7 @@ fn resend_command_tree(server: &Arc<Server>, player: &Arc<Player>) {
     );
     let packet = {
         let dispatcher = server.command_dispatcher();
-        crate::command::command_tree_packet(&dispatcher, &source)
+        command_tree_packet(&dispatcher, &source)
     };
     match packet {
         Ok(packet) => player.send_packet(packet),
@@ -453,7 +458,10 @@ fn execute(
     reason = "these tests unwrap their own fixture data so failures point at the offending assertion"
 )]
 mod tests {
+    use std::fs;
+    use std::panic::catch_unwind;
     use std::path::Path;
+    use std::sync::Arc;
 
     use super::{DatapackManager, PackError};
 
@@ -461,12 +469,12 @@ mod tests {
     fn manager_without_builtin_tree_reports_missing_pack() {
         // A path that cannot contain the vendored tree must surface the dedicated
         // error rather than panicking.
-        let result = std::panic::catch_unwind(|| {
-            let sources: Vec<std::sync::Arc<dyn super::RepositorySource>> = vec![
-                std::sync::Arc::new(super::BuiltinPackSource::new(
+        let result = catch_unwind(|| {
+            let sources: Vec<Arc<dyn super::RepositorySource>> = vec![
+                Arc::new(super::BuiltinPackSource::new(
                     Path::new("/nonexistent").into(),
                 )),
-                std::sync::Arc::new(super::WorldPackSource::new(
+                Arc::new(super::WorldPackSource::new(
                     Path::new("/nonexistent/datapacks").into(),
                 )),
             ];
@@ -489,15 +497,15 @@ mod tests {
 
     #[test]
     fn datapacks_are_not_initialized_in_unit_tests() {
-        assert!(std::panic::catch_unwind(super::datapacks).is_err());
+        assert!(catch_unwind(super::datapacks).is_err());
     }
 
     #[test]
     fn manager_new_with_explicit_sources_is_constructible() {
         let world = super::repository::temp_dir("manager");
-        let sources: Vec<std::sync::Arc<dyn super::RepositorySource>> = vec![
-            std::sync::Arc::new(super::BuiltinPackSource::new(world.clone())),
-            std::sync::Arc::new(super::WorldPackSource::new(world.join("datapacks"))),
+        let sources: Vec<Arc<dyn super::RepositorySource>> = vec![
+            Arc::new(super::BuiltinPackSource::new(world.clone())),
+            Arc::new(super::WorldPackSource::new(world.join("datapacks"))),
         ];
         let repository = super::PackRepository::new(sources, None).unwrap();
         assert!(repository.is_enabled("vanilla"));
@@ -513,9 +521,9 @@ mod tests {
         let pack = world.join("datapacks").join("reload_test");
         let function_dir = pack.join("data/reload_test/function");
         let tag_dir = pack.join("data/reload_test/tags/function");
-        std::fs::create_dir_all(&function_dir).unwrap();
-        std::fs::create_dir_all(&tag_dir).unwrap();
-        std::fs::write(
+        fs::create_dir_all(&function_dir).unwrap();
+        fs::create_dir_all(&tag_dir).unwrap();
+        fs::write(
             pack.join("pack.mcmeta"),
             format!(
                 "{{\"pack\":{{\"min_format\":{format},\"max_format\":{format}}}}}",
@@ -534,8 +542,8 @@ mod tests {
         assert!(manager.functions().read().get(&entry).is_none());
 
         // A function added while the server runs becomes active on `/reload`.
-        std::fs::write(function_dir.join("entry.mcfunction"), "say hi\n").unwrap();
-        std::fs::write(
+        fs::write(function_dir.join("entry.mcfunction"), "say hi\n").unwrap();
+        fs::write(
             tag_dir.join("tick.json"),
             "{\"values\":[\"reload_test:entry\"]}",
         )
@@ -552,11 +560,11 @@ mod tests {
         );
 
         // Removing it drops it from the next reload as well.
-        std::fs::remove_file(function_dir.join("entry.mcfunction")).unwrap();
+        fs::remove_file(function_dir.join("entry.mcfunction")).unwrap();
         manager.reload().unwrap();
         assert!(manager.functions().read().get(&entry).is_none());
 
-        std::fs::remove_dir_all(&world).ok();
+        fs::remove_dir_all(&world).ok();
     }
 
     #[test]
@@ -571,8 +579,8 @@ mod tests {
         let world = super::repository::temp_dir("toggle-functions");
         let pack = world.join("datapacks").join("toggle_test");
         let function_dir = pack.join("data/toggle_test/function");
-        std::fs::create_dir_all(&function_dir).unwrap();
-        std::fs::write(
+        fs::create_dir_all(&function_dir).unwrap();
+        fs::write(
             pack.join("pack.mcmeta"),
             format!(
                 "{{\"pack\":{{\"min_format\":{format},\"max_format\":{format}}}}}",
@@ -580,7 +588,7 @@ mod tests {
             ),
         )
         .unwrap();
-        std::fs::write(function_dir.join("entry.mcfunction"), "say hi\n").unwrap();
+        fs::write(function_dir.join("entry.mcfunction"), "say hi\n").unwrap();
 
         let manager = DatapackManager::new(&world).unwrap();
         manager.reload().unwrap();
@@ -609,6 +617,6 @@ mod tests {
         manager.reload().unwrap();
         assert!(manager.functions().read().get(&entry).is_some());
 
-        std::fs::remove_dir_all(&world).ok();
+        fs::remove_dir_all(&world).ok();
     }
 }

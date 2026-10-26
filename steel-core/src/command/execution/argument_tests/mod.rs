@@ -6,8 +6,8 @@ use crate::command::{
     execution::{
         BiomeOrTag, BlockPredicate, CommandArgumentSource, CommandPermissionSource,
         CommandResultCallback, Coordinates, ExecutionCommandSource, GameProfileArgument,
-        ScoreHolderArgument, SteelArgumentType, SteelCommandRuntime, StructureOrTagKey,
-        WorldArgument, argument,
+        PoiTypeOrTag, ScoreHolderArgument, SteelArgumentType, SteelCommandRuntime,
+        StructureOrTagKey, WorldArgument, argument,
         coordinates::{LocalCoordinates, WorldCoordinate, WorldCoordinates},
         literal,
     },
@@ -176,6 +176,7 @@ mod core_permissions;
 mod general;
 mod item_predicate;
 mod item_stack;
+mod nbt;
 mod registry_arguments;
 mod resources_world;
 mod selector_time;

@@ -173,7 +173,7 @@ const fn bookshelf_offsets() -> [BlockPos; BOOKSHELF_OFFSET_COUNT] {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use rustc_hash::FxHashSet;
 
     use super::*;
 
@@ -183,7 +183,7 @@ mod tests {
         // `|x| == 2 || |z| == 2` yields both layers of the 5x5 perimeter.
         assert_eq!(BOOKSHELF_OFFSETS.len(), 32);
 
-        let unique: HashSet<_> = BOOKSHELF_OFFSETS
+        let unique: FxHashSet<_> = BOOKSHELF_OFFSETS
             .iter()
             .map(|pos| (pos.x(), pos.y(), pos.z()))
             .collect();

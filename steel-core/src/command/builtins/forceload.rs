@@ -134,6 +134,10 @@ fn list_force_load(
     })
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "Command executors use a shared fallible callback signature."
+)]
 fn remove_all(context: &SteelCommandContext<CommandSource>) -> Result<i32, CommandSyntaxError> {
     let world = context.source().world();
     for chunk in world.chunk_map.force_loaded_chunks() {
@@ -260,6 +264,6 @@ fn send_force_load_feedback(
     })
 }
 
-fn to_chunk_pos(pos: ColumnPos) -> ChunkPos {
+const fn to_chunk_pos(pos: ColumnPos) -> ChunkPos {
     ChunkPos::new(pos.x >> 4, pos.z >> 4)
 }

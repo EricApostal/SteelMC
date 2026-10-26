@@ -157,11 +157,11 @@ impl Container for PlayerInventory {
                 if stack.is_empty() {
                     break;
                 }
-                for slot in 0..Self::INVENTORY_SIZE {
+                for (slot, item) in self.items.iter_mut().enumerate().take(Self::INVENTORY_SIZE) {
                     if slot == selected {
                         continue;
                     }
-                    merge_if_compatible(&mut self.items[slot], stack, max_size, &mut changed);
+                    merge_if_compatible(item, stack, max_size, &mut changed);
                     if stack.is_empty() {
                         break;
                     }
@@ -176,13 +176,13 @@ impl Container for PlayerInventory {
 
             // Second pass: try empty slots in main inventory only
             let mut placed = false;
-            for slot in 0..Self::INVENTORY_SIZE {
+            for item in self.items.iter_mut().take(Self::INVENTORY_SIZE) {
                 if stack.is_empty() {
                     break;
                 }
-                if self.items[slot].is_empty() {
+                if item.is_empty() {
                     let to_place = stack.count().min(max_size);
-                    self.items[slot] = stack.split(to_place);
+                    *item = stack.split(to_place);
                     changed = true;
                     placed = true;
                 }

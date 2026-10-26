@@ -14,12 +14,14 @@ use steel_registry::blocks::properties::{BlockStateProperties, IntProperty};
 use steel_registry::sound_events;
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entities;
+use steel_registry::vanilla_game_events;
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId};
 
 use crate::behavior::{BlockBehavior, BlockPlaceContext};
 use crate::entity::ai::path::PathComputationType;
 use crate::entity::{add_spawned_entity, create_entity_instance};
+use crate::world::game_event::GameEventContext;
 use crate::world::{LevelReader, World};
 
 /// Vanilla `SnifferEggBlock.MAX_HATCH_LEVEL`.
@@ -117,9 +119,9 @@ impl BlockBehavior for SnifferEggBlock {
             REGULAR_HATCH_TIME_TICKS
         };
         world.game_event(
-            &steel_registry::vanilla_game_events::BLOCK_PLACE,
+            &vanilla_game_events::BLOCK_PLACE,
             pos,
-            &crate::world::game_event::GameEventContext::new(None, Some(state)),
+            &GameEventContext::new(None, Some(state)),
         );
         let progression_delay = hatch_time / 3 + rand::random_range(0..RANDOM_HATCH_OFFSET_TICKS);
         world.schedule_block_tick_default(pos, self.block, progression_delay);

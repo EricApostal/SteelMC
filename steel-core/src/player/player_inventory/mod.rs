@@ -106,7 +106,6 @@ impl PlayerInventorySyncState {
 }
 
 struct OpenMenuDispatch {
-    container_id: u8,
     overrides_player_slots: bool,
     actions: Vec<DeferredMenuAction>,
 }

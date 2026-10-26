@@ -295,8 +295,8 @@ impl AxolotlEntity {
 
     /// Vanilla `Axolotl.loadFromBucketTag` / `Bucketable.loadDefaultDataFromBucketTag`.
     ///
-    /// `MobBucketItem` currently only applies generic item components, so the
-    /// bucket's entity data is not fed back here yet (see the wave report).
+    /// `MobBucketItem` calls this on the spawned mob when a bucket releases it and
+    /// then flips `setFromBucket(true)`, matching vanilla `MobBucketItem.spawn`.
     pub fn load_from_bucket_data(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
         if let Some(no_ai) = nbt.byte("NoAI") {
             self.set_no_ai(no_ai != 0);
@@ -502,6 +502,17 @@ impl Entity for AxolotlEntity {
 
         self.set_variant(AxolotlVariant::by_id(nbt.int("Variant").unwrap_or(0)));
         self.set_from_bucket(nbt.byte("FromBucket").is_some_and(|value| value != 0));
+    }
+
+    /// Vanilla `Axolotl.loadFromBucketTag`, restored by `MobBucketItem.spawn` on
+    /// release.
+    fn load_from_bucket_tag(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
+        self.load_from_bucket_data(nbt);
+    }
+
+    /// Vanilla `Bucketable.setFromBucket`, flipped for every released mob.
+    fn set_from_bucket(&self, from_bucket: bool) {
+        AxolotlEntity::set_from_bucket(self, from_bucket);
     }
 
     /// Vanilla `Axolotl.hurtServer`: a hit in water can start the play-dead

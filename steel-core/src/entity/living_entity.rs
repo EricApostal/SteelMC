@@ -1,6 +1,6 @@
 use steel_math::DEGREE_90;
 use steel_registry::data_components::vanilla_components::{
-    CONSUMABLE, DEATH_PROTECTION, USE_EFFECTS,
+    CONSUMABLE, DEATH_PROTECTION, KINETIC_WEAPON, USE_EFFECTS,
 };
 use steel_registry::stat::vanilla_stat_types;
 use steel_registry::{DyeColor, vanilla_custom_stats};
@@ -13,6 +13,9 @@ use crate::behavior::{
 use crate::entity::consume_effect::apply_consume_effect;
 use crate::entity::damage::RecentDamageSource;
 use crate::entity::loot::experience_reward_with_enchantments;
+use crate::player::advancement::triggers::{
+    raise_entity_hurt_player, raise_player_hurt_entity, raise_used_totem,
+};
 
 const BED_SLEEP_POSITION_OFFSET: f64 = 0.125;
 /// Vanilla `DATA_LIVING_ENTITY_FLAGS` bit 0: the entity is using an item.
@@ -760,19 +763,13 @@ pub trait LivingEntity: Entity {
             // player, `PLAYER_HURT_ENTITY` when the damage entity is a player.
             // Steel has no item blocking yet, so `blocked` is always false.
             if let Some(player) = self.as_player() {
-                crate::player::advancement::triggers::raise_entity_hurt_player(
-                    player,
-                    source,
-                    original,
-                    effective_amount,
-                    false,
-                );
+                raise_entity_hurt_player(player, source, original, effective_amount, false);
             }
             if let Some(player) = source
                 .causing_entity()
                 .and_then(|entity| entity.as_player())
             {
-                crate::player::advancement::triggers::raise_player_hurt_entity(
+                raise_player_hurt_entity(
                     player,
                     self.as_entity_event_source(),
                     source,
@@ -1076,7 +1073,7 @@ pub trait LivingEntity: Entity {
             player.award_stat(&vanilla_stat_types::ITEM_USED, protection_item.item());
             // Vanilla `LivingEntity.checkTotemDeathProtection` raises `USED_TOTEM`
             // with a copy of the consumed totem after the `used` stat.
-            crate::player::advancement::triggers::raise_used_totem(player, &protection_item);
+            raise_used_totem(player, &protection_item);
             if protection_item
                 .get(USE_EFFECTS)
                 .is_some_and(|effects| effects.interact_vibrations)
@@ -1765,6 +1762,30 @@ pub trait LivingEntity: Entity {
             .map_or(0, |active| active.duration() - active.remaining_ticks())
     }
 
+    /// Vanilla `LivingEntity.wasRecentlyStabbed`.
+    fn was_recently_stabbed(&self, target_id: i32, ticks: i32) -> bool {
+        self.level().is_some_and(|world| {
+            self.living_base()
+                .was_recently_stabbed(target_id, ticks, world.game_time())
+        })
+    }
+
+    /// Vanilla `LivingEntity.rememberStabbedEntity`.
+    fn remember_stabbed_entity(&self, target_entity: &dyn Entity) {
+        if let Some(world) = self.level() {
+            self.living_base().remember_stabbed_entity(
+                target_entity.id(),
+                world.game_time(),
+                target_entity.as_living_entity().is_some(),
+            );
+        }
+    }
+
+    /// Vanilla `LivingEntity.stabbedEntities(e -> e instanceof LivingEntity)`.
+    fn stabbed_living_entities(&self) -> i32 {
+        self.living_base().stabbed_living_entities()
+    }
+
     /// Vanilla `LivingEntity.startUsingItem`: begins using the item in `hand`.
     ///
     /// Vanilla also sends the new equipment to tracking players here; Steel's
@@ -1784,6 +1805,11 @@ pub trait LivingEntity: Entity {
         if self.living_base().start_using_item(hand, &stack, duration) {
             self.set_living_entity_using_item_flag(hand, true);
             self.cause_use_vibration(&stack, &vanilla_game_events::ITEM_INTERACT_START);
+            // Vanilla resets `recentKineticEnemies` to a fresh map when the use
+            // that just started carries a kinetic weapon.
+            if stack.has(KINETIC_WEAPON) {
+                self.living_base().start_kinetic_enemy_tracking();
+            }
         }
     }
 
@@ -1792,6 +1818,7 @@ pub trait LivingEntity: Entity {
         let was_using_item = self.living_base().is_using_item();
         let used_stack = self.get_use_item();
         self.living_base().stop_using_item();
+        self.living_base().stop_kinetic_enemy_tracking();
         self.set_living_entity_using_item_flag(InteractionHand::MainHand, false);
         if was_using_item {
             self.cause_use_vibration(&used_stack, &vanilla_game_events::ITEM_INTERACT_FINISH);

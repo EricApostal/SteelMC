@@ -5,6 +5,8 @@
 //! resolved against the `minecraft:brewing` recipe set, and `HAS_BOTTLE_*`
 //! block-state updates mirroring bottle occupancy.
 
+use std::array;
+use std::mem;
 use std::sync::{Arc, Weak};
 
 use simdnbt::ToNbtTag;
@@ -159,7 +161,7 @@ enum BrewingTick {
 impl BrewingStandContainer {
     fn new() -> Self {
         Self {
-            items: std::array::from_fn(|_| ItemStack::empty()),
+            items: array::from_fn(|_| ItemStack::empty()),
             brew_time: 0,
             total_brew_time: DEFAULT_BREW_TIME,
             fuel: 0,
@@ -332,13 +334,13 @@ impl BrewingStandContainer {
     /// Applies the brewing recipe to every bottle and consumes one ingredient.
     fn brew(&mut self) {
         let ingredient = self.items[SLOT_INGREDIENT].clone();
-        for slot in SLOT_BOTTLE_START..SLOT_BOTTLE_START + 3 {
-            let input = BrewingInput::new(self.items[slot].clone(), ingredient.clone());
+        for bottle in &mut self.items[SLOT_BOTTLE_START..SLOT_BOTTLE_START + 3] {
+            let input = BrewingInput::new(bottle.clone(), ingredient.clone());
             if let Some(recipe) = REGISTRY
                 .recipes
                 .find_match(&vanilla_recipe_types::BREWING, &input)
             {
-                self.items[slot] = recipe.data().assemble();
+                *bottle = recipe.data().assemble();
             }
         }
         let ingredient_item = self.items[SLOT_INGREDIENT].item();
@@ -446,7 +448,7 @@ impl BrewingStandBlockEntity {
             let tick = state.tick();
             let dirty = state.dirty;
             state.dirty = false;
-            (tick, std::mem::take(&mut state.pending_drops), dirty)
+            (tick, mem::take(&mut state.pending_drops), dirty)
         };
         if dirty {
             self.base.set_changed();
@@ -493,7 +495,7 @@ impl BrewingStandBlockEntity {
     fn load_state(&self, nbt: &BorrowedNbtCompound<'_>) {
         let nbt: NbtCompoundView<'_, '_> = nbt.into();
         let mut state = self.container.lock();
-        state.items = std::array::from_fn(|_| ItemStack::empty());
+        state.items = array::from_fn(|_| ItemStack::empty());
         if let Some(items) = nbt.list("Items").and_then(|list| list.compounds()) {
             for compound in items {
                 let Some(slot) = compound.byte("Slot").map(|slot| slot as usize) else {
@@ -550,10 +552,7 @@ impl BlockEntity for BrewingStandBlockEntity {
     fn pre_remove_side_effects(&self, pos: BlockPos, _state: BlockStateId) {
         let items = {
             let mut state = self.container.lock();
-            std::mem::replace(
-                &mut state.items,
-                std::array::from_fn(|_| ItemStack::empty()),
-            )
+            mem::replace(&mut state.items, array::from_fn(|_| ItemStack::empty()))
         };
         let Some(world) = self.get_level() else {
             return;

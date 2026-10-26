@@ -9,7 +9,10 @@
 //! `level.dat`; Steel keeps it in memory, so pending schedules end with the server
 //! process.
 
-use std::{cmp::Reverse, collections::BinaryHeap};
+use std::{
+    cmp::{Ordering, Reverse},
+    collections::BinaryHeap,
+};
 
 use steel_utils::Identifier;
 
@@ -155,7 +158,7 @@ struct ScheduledEntry {
 }
 
 impl Ord for ScheduledEntry {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> Ordering {
         self.tick
             .cmp(&other.tick)
             .then_with(|| self.sequential_id.cmp(&other.sequential_id))
@@ -163,7 +166,7 @@ impl Ord for ScheduledEntry {
 }
 
 impl PartialOrd for ScheduledEntry {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
@@ -172,6 +175,10 @@ impl PartialOrd for ScheduledEntry {
 ///
 /// # Errors
 /// Returns the vanilla-shaped failure reason when the argument is unusable.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "vanilla ScheduleCommand.parseDelay API surface")
+)]
 pub(crate) fn parse_delay(argument: &str) -> Result<i64, String> {
     let (value, unit) = match argument.chars().last() {
         Some('t' | 's' | 'd') => argument.split_at(argument.len().saturating_sub(1)),
@@ -225,7 +232,7 @@ mod tests {
     fn entries_not_yet_due_stay_queued() {
         let mut registry = ScheduleRegistry::default();
         registry.schedule(function("a"), 100, ScheduleMode::Replace);
-        assert!(registry.take_due(99).is_empty());
+        assert_eq!(registry.take_due(99), [] as [ScheduledCallback; 0]);
         assert_eq!(registry.pending().len(), 1);
         assert_eq!(registry.take_due(100).len(), 1);
     }
@@ -235,7 +242,7 @@ mod tests {
         let mut registry = ScheduleRegistry::default();
         registry.schedule(function("a"), 10, ScheduleMode::Replace);
         registry.schedule(function("a"), 20, ScheduleMode::Replace);
-        assert!(registry.take_due(10).is_empty());
+        assert_eq!(registry.take_due(10), [] as [ScheduledCallback; 0]);
         assert_eq!(registry.take_due(20).len(), 1);
     }
 

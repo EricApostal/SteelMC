@@ -10,6 +10,7 @@ use super::{
     vanilla_damage_types, vanilla_entities,
 };
 
+use crate::behavior::advancement_hooks::raise_player_interacted_with_entity;
 use crate::player::food_data::food_constants;
 use std::ops::Add;
 use steel_registry::particle_type::ParticleData;
@@ -722,18 +723,10 @@ impl Player {
             InteractionResult::Success
             | InteractionResult::SuccessServer
             | InteractionResult::Consume => {
-                crate::behavior::advancement_hooks::raise_player_interacted_with_entity(
-                    self,
-                    target.as_ref(),
-                    &item_before,
-                );
+                raise_player_interacted_with_entity(self, target.as_ref(), &item_before);
             }
             InteractionResult::SuccessWithoutItem => {
-                crate::behavior::advancement_hooks::raise_player_interacted_with_entity(
-                    self,
-                    target.as_ref(),
-                    &ItemStack::empty(),
-                );
+                raise_player_interacted_with_entity(self, target.as_ref(), &ItemStack::empty());
             }
             InteractionResult::Fail
             | InteractionResult::Pass

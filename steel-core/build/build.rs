@@ -3,6 +3,10 @@
     clippy::disallowed_types,
     reason = "build script lacks project type aliases"
 )]
+#![expect(
+    clippy::too_many_lines,
+    reason = "registration builders mirror one vanilla registry entry per statement"
+)]
 
 use heck::ToShoutySnakeCase;
 use proc_macro2::Span;

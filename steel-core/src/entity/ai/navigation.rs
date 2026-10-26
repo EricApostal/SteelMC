@@ -1397,6 +1397,7 @@ mod tests {
     /// "the block below the waypoint is not air".
     #[test]
     fn bee_flying_navigation_stable_destination_uses_the_block_below() {
+        init_vanilla_registry();
         let stone = REGISTRY.blocks.get_default_state_id(&vanilla_blocks::STONE);
         let level = empty_level().with(BlockPos::new(0, 64, 0), stone);
         let mut navigation = PathNavigation::new();

@@ -8,7 +8,7 @@ use heck::ToShoutySnakeCase;
 use proc_macro2::{Ident, Span};
 use quote::quote;
 use serde::Deserialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[derive(Debug, Deserialize)]
 pub struct ItemClass {
@@ -18,6 +18,24 @@ pub struct ItemClass {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
+/// Indexes behaviors that key on item names instead of a vanilla class, so an
+/// item with no class of its own (the spears are plain `Item` built by
+/// `Item.Properties.spear`) can still register a behavior.
+fn index_behaviors_by_item_name(
+    discovered: &HashMap<String, common::DiscoveredObject>,
+) -> HashMap<String, &common::DiscoveredObject> {
+    let mut by_item_name = HashMap::new();
+    for info in discovered.values() {
+        for name in &info.item_names {
+            assert!(
+                by_item_name.insert(name.clone(), info).is_none(),
+                "Two item behaviors are registered for '{name}'"
+            );
+        }
+    }
+    by_item_name
+}
+
 pub fn build(items: &[ItemClass]) -> String {
     let discovered = scan_object_behaviors("items", "item_behavior");
 
@@ -25,13 +43,21 @@ pub fn build(items: &[ItemClass]) -> String {
     let mut registry_modules_used: BTreeSet<String> = BTreeSet::new();
     let mut registrations = Vec::new();
     let mut matched_classes = BTreeSet::new();
+    let mut matched_item_names = BTreeSet::new();
+
+    // Item-name keying for behaviors with no vanilla class of their own.
+    let by_item_name = index_behaviors_by_item_name(&discovered);
 
     for item in items {
-        let Some(info) = discovered.get(&item.class) else {
+        let info = if let Some(info) = discovered.get(&item.class) {
+            matched_classes.insert(&item.class);
+            info
+        } else if let Some(info) = by_item_name.get(&item.name) {
+            matched_item_names.insert(&item.name);
+            info
+        } else {
             continue;
         };
-
-        matched_classes.insert(&item.class);
 
         let struct_ident = Ident::new(&info.struct_name, Span::call_site());
         let item_field = Ident::new(&item.name.to_shouty_snake_case(), Span::call_site());
@@ -80,12 +106,22 @@ pub fn build(items: &[ItemClass]) -> String {
     }
 
     for (class_name, info) in &discovered {
-        assert!(
-            matched_classes.contains(class_name),
-            "Item behavior struct `{}` maps to class '{}' which doesn't exist in classes.json",
-            info.struct_name,
-            class_name
-        );
+        if info.item_names.is_empty() {
+            assert!(
+                matched_classes.contains(class_name),
+                "Item behavior struct `{}` maps to class '{}' which doesn't exist in classes.json",
+                info.struct_name,
+                class_name
+            );
+        } else {
+            for name in &info.item_names {
+                assert!(
+                    matched_item_names.contains(name),
+                    "Item behavior struct `{}` names item '{name}' which doesn't exist in classes.json",
+                    info.struct_name,
+                );
+            }
+        }
     }
 
     let enum_import_tokens: Vec<_> = enum_imports

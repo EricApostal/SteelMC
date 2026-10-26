@@ -13,6 +13,7 @@ use super::{
     player_inventory::PlayerInventory,
 };
 use crate::player::advancement::PersistentAdvancement;
+use crate::player::recipe_book::{PackedRecipeBook, ServerRecipeBook};
 use crate::player::stats_counter::StatState;
 use crate::{
     chunk_saver::{ChunkStorage, PersistentEntity},
@@ -136,7 +137,7 @@ pub struct PersistentPlayerData {
     pub advancements: Vec<PersistentAdvancement>,
 
     /// Vanilla `ServerRecipeBook.pack()`: unlocked recipes, highlights and book settings.
-    pub recipe_book: crate::player::recipe_book::PackedRecipeBook,
+    pub recipe_book: PackedRecipeBook,
 }
 
 /// A vanilla `RootVehicle` tree persisted with player data.
@@ -361,7 +362,7 @@ impl Player {
         *self.ender_chest_inventory.lock() = PlayerEnderChestContainer::new();
         *self.food_data.lock() = FoodData::new();
         self.stats.lock().reset();
-        *self.recipe_book.lock() = crate::player::recipe_book::ServerRecipeBook::new();
+        *self.recipe_book.lock() = ServerRecipeBook::new();
 
         let mut experience = Experience::default();
         experience.dirty = true;

@@ -1,6 +1,7 @@
 use std::ptr;
 
 use crate::player::connection::NetworkConnection;
+use crate::player::recipe_book::update_recipes_packet;
 
 use super::{
     Arc, CLogin, CSetDefaultSpawnPosition, CommonPlayerSpawnInfo, DVec3, DomainPlayerData,
@@ -422,7 +423,7 @@ impl Server {
         // Vanilla `PlayerList.placeNewPlayer`: the synchronized recipe property sets and
         // stonecutter options are sent with the first play packets, before the player's
         // own recipe-book contents arrive.
-        if let Some(recipes) = crate::player::recipe_book::update_recipes_packet() {
+        if let Some(recipes) = update_recipes_packet() {
             player.send_packet(recipes.clone());
         }
     }

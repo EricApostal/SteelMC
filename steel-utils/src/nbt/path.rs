@@ -315,6 +315,72 @@ impl NbtPath {
         self.insert_at(0, target, index, to_insert)
     }
 
+    /// Selects the tags named by this path, creating missing parents the way
+    /// vanilla `NbtPathArgument.NbtPath#getOrCreate` does.
+    ///
+    /// Missing intermediate parents use the next node's preferred parent tag
+    /// and the missing final selection uses `default`, matching vanilla's
+    /// caller-supplied `CompoundTag::new` for `/data modify ... merge`.
+    /// `visitor` receives every selected tag and reports whether it changed
+    /// anything; the return value is the count it reported.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NbtPathMutationError::NothingFound`] when an intermediate path
+    /// node cannot resolve, like vanilla's `ERROR_NOTHING_FOUND`.
+    pub fn get_or_create(
+        &self,
+        tag: &mut NbtTag,
+        default: NbtTag,
+        mut visitor: impl FnMut(&mut NbtTag) -> Result<bool, NbtPathMutationError>,
+    ) -> Result<usize, NbtPathMutationError> {
+        if self.nodes.is_empty() {
+            return Ok(0);
+        }
+        self.get_or_create_at(tag, 0, &default, &mut visitor)
+    }
+
+    fn get_or_create_at(
+        &self,
+        tag: &mut NbtTag,
+        node_index: usize,
+        default: &NbtTag,
+        visitor: &mut impl FnMut(&mut NbtTag) -> Result<bool, NbtPathMutationError>,
+    ) -> Result<usize, NbtPathMutationError> {
+        let entry = &self.nodes[node_index];
+        if node_index + 1 == self.nodes.len() {
+            let mut modified = 0;
+            entry.node.get_or_create_tag(tag, default, |selected| {
+                modified += usize::from(visitor(selected)?);
+                Ok(true)
+            })?;
+            return Ok(modified);
+        }
+
+        // Vanilla `getOrCreateParents` walks the same way `set` walks: parents
+        // use each next node's preferred parent tag, and an empty selection
+        // fails with `ERROR_NOTHING_FOUND` for the path written so far.
+        let preferred_child = self.nodes[node_index + 1]
+            .node
+            .create_preferred_parent_tag();
+        let mut modified = 0;
+        let mut deeper_found = false;
+        let found = entry
+            .node
+            .get_or_create_tag(tag, &preferred_child, |child| {
+                modified += self.get_or_create_at(child, node_index + 1, default, visitor)?;
+                deeper_found = true;
+                Ok(true)
+            })?;
+        if !found || !deeper_found {
+            return Err(NbtPathMutationError::NothingFound(
+                self.original[..entry.original_end].to_owned(),
+            ));
+        }
+
+        Ok(modified)
+    }
+
     fn insert_at(
         &self,
         node_index: usize,

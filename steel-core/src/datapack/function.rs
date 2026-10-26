@@ -10,10 +10,10 @@
 //! observable behaviour — including syntax errors surfacing at run time rather
 //! than load time — is otherwise the same, and the prepare phase stays off-thread.
 
-use std::{any::Any, collections::HashMap, sync::Arc};
+use std::{any::Any, sync::Arc};
 
 use rustc_hash::FxHashMap;
-use simdnbt::owned::NbtCompound;
+use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_utils::{Identifier, locks::SyncRwLock, translations};
 use text_components::TextComponent;
 
@@ -226,6 +226,10 @@ impl Function {
     /// # Errors
     /// Returns the vanilla instantiation reason when a macro argument is missing or
     /// a line cannot be parsed.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the fallible callback signature mirrors vanilla FunctionInstantiationException"
+    )]
     pub(crate) fn instantiate(
         &self,
         arguments: Option<&FunctionArguments>,
@@ -256,6 +260,10 @@ impl Function {
     ///
     /// # Errors
     /// Returns the vanilla instantiation reason when a macro argument is missing.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the fallible callback signature mirrors vanilla FunctionInstantiationException"
+    )]
     pub(crate) fn expand_lines(
         &self,
         arguments: Option<&FunctionArguments>,
@@ -375,12 +383,20 @@ impl FunctionArguments {
 
     /// Vanilla `MacroFunction.instantiate` argument check: every macro name must be present.
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "vanilla MacroFunction argument API surface")
+    )]
     pub(crate) fn has_all_of(&self, names: &[String]) -> bool {
         names.iter().all(|name| self.values.contains_key(name))
     }
 
     /// The supplied argument names.
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "vanilla MacroFunction argument API surface")
+    )]
     pub(crate) fn names(&self) -> Vec<&str> {
         self.values.keys().map(String::as_str).collect()
     }
@@ -390,9 +406,7 @@ impl FunctionArguments {
 ///
 /// Vanilla stringifies every argument tag with `Tag.toString`: a bare string is
 /// inserted as-is, while every other tag renders in SNBT form.
-fn tag_to_substitution(tag: &simdnbt::owned::NbtTag) -> String {
-    use simdnbt::owned::NbtTag;
-
+fn tag_to_substitution(tag: &NbtTag) -> String {
     if let NbtTag::String(value) = tag {
         return value.to_str().into_owned();
     }
@@ -402,9 +416,7 @@ fn tag_to_substitution(tag: &simdnbt::owned::NbtTag) -> String {
 }
 
 /// Appends `tag` in SNBT form, mirroring vanilla's `StringTagVisitor`.
-fn write_snbt(tag: &simdnbt::owned::NbtTag, out: &mut String) {
-    use simdnbt::owned::NbtTag;
-
+fn write_snbt(tag: &NbtTag, out: &mut String) {
     match tag {
         NbtTag::Byte(value) => out.push_str(&value.to_string()),
         NbtTag::Short(value) => out.push_str(&value.to_string()),
@@ -458,7 +470,7 @@ fn write_snbt(tag: &simdnbt::owned::NbtTag, out: &mut String) {
 }
 
 /// Appends one NBT compound in SNBT form.
-fn write_snbt_compound(compound: &simdnbt::owned::NbtCompound, out: &mut String) {
+fn write_snbt_compound(compound: &NbtCompound, out: &mut String) {
     out.push('{');
     for (index, (name, value)) in compound.iter().enumerate() {
         if index > 0 {
@@ -472,9 +484,11 @@ fn write_snbt_compound(compound: &simdnbt::owned::NbtCompound, out: &mut String)
 }
 
 /// Appends one NBT list in SNBT form.
-fn write_snbt_list(list: &simdnbt::owned::NbtList, out: &mut String) {
-    use simdnbt::owned::NbtList;
-
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per NbtList variant; splitting would scatter the SNBT grammar"
+)]
+fn write_snbt_list(list: &NbtList, out: &mut String) {
     out.push('[');
     let mut first = true;
     let separator = |out: &mut String, first: &mut bool| {
@@ -602,8 +616,8 @@ fn write_quoted(value: &str, out: &mut String) {
 /// Vanilla server-side function library: id -> function, plus `#tag` lookups.
 #[derive(Debug, Default)]
 pub(crate) struct FunctionRegistry {
-    functions: HashMap<Identifier, Arc<Function>>,
-    tags: HashMap<Identifier, Vec<Identifier>>,
+    functions: FxHashMap<Identifier, Arc<Function>>,
+    tags: FxHashMap<Identifier, Vec<Identifier>>,
 }
 
 impl FunctionRegistry {
@@ -623,29 +637,30 @@ impl FunctionRegistry {
     /// Vanilla `/function #tag`: every function the tag names, in tag order.
     #[must_use]
     pub(crate) fn tagged_shared(&self, tag: &Identifier) -> Vec<Arc<Function>> {
-        self.tags
-            .get(tag)
-            .map(|members| {
-                members
-                    .iter()
-                    .filter_map(|id| self.functions.get(id).cloned())
-                    .collect()
-            })
-            .unwrap_or_default()
+        self.tags.get(tag).map_or_default(|members| {
+            members
+                .iter()
+                .filter_map(|id| self.functions.get(id).cloned())
+                .collect()
+        })
     }
 
     /// Vanilla `/function #tag`: every function the tag names, in tag order.
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "vanilla ServerFunctionManager tagged-function API surface"
+        )
+    )]
     pub(crate) fn tagged(&self, tag: &Identifier) -> Vec<&Function> {
-        self.tags
-            .get(tag)
-            .map(|members| {
-                members
-                    .iter()
-                    .filter_map(|id| self.functions.get(id).map(Arc::as_ref))
-                    .collect()
-            })
-            .unwrap_or_default()
+        self.tags.get(tag).map_or_default(|members| {
+            members
+                .iter()
+                .filter_map(|id| self.functions.get(id).map(Arc::as_ref))
+                .collect()
+        })
     }
 
     /// Every loaded function id, sorted for stable command suggestions.
@@ -664,6 +679,10 @@ impl FunctionRegistry {
 
     /// Whether no functions are loaded.
     #[must_use]
+    #[expect(
+        dead_code,
+        reason = "vanilla ServerFunctionManager function-map API surface"
+    )]
     pub(crate) fn is_empty(&self) -> bool {
         self.functions.is_empty()
     }
@@ -695,6 +714,7 @@ impl FunctionLoader {
 
     /// Vanilla `FunctionLibrary.getTag`: the tag definitions from the last prepare.
     #[must_use]
+    #[expect(dead_code, reason = "vanilla FunctionLibrary load-report API surface")]
     pub(crate) fn problems(&self) -> Vec<String> {
         self.report.read().clone()
     }
@@ -709,14 +729,16 @@ impl PreparableReloadListener for FunctionLoader {
         &self,
         manager: &MultiPackResourceManager,
     ) -> Result<Box<dyn Any + Send>, PackError> {
-        let mut functions: HashMap<Identifier, Arc<Function>> = HashMap::new();
+        let mut functions: FxHashMap<Identifier, Arc<Function>> = FxHashMap::default();
         let mut problems = Vec::new();
 
         for (key, stack) in manager.list_resources(PackType::Server, "function") {
-            let location: Identifier = key.parse().map_err(|error| PackError::Decode {
-                path: key.clone(),
-                message: format!("{error}"),
-            })?;
+            let location: Identifier =
+                key.parse()
+                    .map_err(|error: &'static str| PackError::Decode {
+                        path: key.clone(),
+                        message: error.to_string(),
+                    })?;
             let Some(resource) = stack.first() else {
                 continue;
             };
@@ -745,8 +767,8 @@ impl PreparableReloadListener for FunctionLoader {
 
     fn apply(&self, prepared: Box<dyn Any + Send>) {
         let Ok(prepared) = prepared.downcast::<(
-            HashMap<Identifier, Arc<Function>>,
-            HashMap<Identifier, Vec<Identifier>>,
+            FxHashMap<Identifier, Arc<Function>>,
+            FxHashMap<Identifier, Vec<Identifier>>,
             Vec<String>,
         )>() else {
             return;
@@ -764,8 +786,8 @@ impl PreparableReloadListener for FunctionLoader {
 fn read_function_tags(
     manager: &MultiPackResourceManager,
     problems: &mut Vec<String>,
-) -> Result<HashMap<Identifier, Vec<Identifier>>, PackError> {
-    let mut raw: HashMap<Identifier, Vec<String>> = HashMap::new();
+) -> Result<FxHashMap<Identifier, Vec<Identifier>>, PackError> {
+    let mut raw: FxHashMap<Identifier, Vec<String>> = FxHashMap::default();
     for (key, stack) in manager.list_resources(PackType::Server, "tags/function") {
         let Some(resource) = stack.first() else {
             continue;
@@ -779,10 +801,12 @@ fn read_function_tags(
             problems.push(format!("{key}: function tag has no `values` array"));
             continue;
         };
-        let tag: Identifier = key.parse().map_err(|error| PackError::Decode {
-            path: key.clone(),
-            message: format!("{error}"),
-        })?;
+        let tag: Identifier = key
+            .parse()
+            .map_err(|error: &'static str| PackError::Decode {
+                path: key.clone(),
+                message: error.to_string(),
+            })?;
         raw.insert(
             tag,
             values
@@ -795,7 +819,7 @@ fn read_function_tags(
 
     // Vanilla `TagLoader` resolves `#tag` references recursively; function tags
     // may nest other function tags.
-    let mut resolved: HashMap<Identifier, Vec<Identifier>> = HashMap::new();
+    let mut resolved: FxHashMap<Identifier, Vec<Identifier>> = FxHashMap::default();
     let keys: Vec<Identifier> = raw.keys().cloned().collect();
     for tag in keys {
         let mut members = Vec::new();
@@ -809,7 +833,7 @@ fn read_function_tags(
 /// Depth-first `#tag` resolution for function tags, de-duplicating members.
 fn resolve_function_tag(
     tag: &Identifier,
-    raw: &HashMap<Identifier, Vec<String>>,
+    raw: &FxHashMap<Identifier, Vec<String>>,
     members: &mut Vec<Identifier>,
     visiting: &mut Vec<Identifier>,
     problems: &mut Vec<String>,
@@ -853,6 +877,10 @@ fn resolve_function_tag(
 ///
 /// # Errors
 /// Returns the instantiation reason when a line cannot be built.
+#[expect(
+    clippy::result_large_err,
+    reason = "the fallible callback signature mirrors vanilla FunctionInstantiationException"
+)]
 pub(crate) fn run_function(
     source: &Arc<CommandSource>,
     function: &Function,
@@ -880,6 +908,7 @@ pub(crate) fn run_function(
 
 /// Renders a function's macro signature for command errors and suggestions.
 #[must_use]
+#[expect(dead_code, reason = "vanilla MacroFunction signature API surface")]
 pub(crate) fn macro_signature(function: &Function) -> Option<TextComponent> {
     if function.macro_names.is_empty() {
         return None;
@@ -900,7 +929,15 @@ pub(crate) fn macro_signature(function: &Function) -> Option<TextComponent> {
     clippy::unwrap_used,
     reason = "these tests unwrap their own fixture data so failures point at the offending assertion"
 )]
+#[expect(
+    clippy::assert_is_empty,
+    reason = "`assert!(xs.is_empty())` reads better than equality against an empty slice"
+)]
 mod tests {
+    use std::sync::Arc;
+
+    use crate::command::execution::CommandSource;
+
     use super::{Function, FunctionArguments, StringTemplate, run_function};
     use simdnbt::owned::NbtCompound;
     use steel_utils::Identifier;
@@ -951,7 +988,9 @@ mod tests {
         let function = Function::from_lines(Identifier::vanilla_static("test"), &lines).unwrap();
         match &function.entries[0] {
             super::FunctionEntry::Plain(line) => assert_eq!(line, "say hi there"),
-            other => panic!("expected a plain entry, got {other:?}"),
+            other @ super::FunctionEntry::Macro(_) => {
+                panic!("expected a plain entry, got {other:?}")
+            }
         }
     }
 
@@ -995,11 +1034,6 @@ mod tests {
     #[test]
     fn run_function_is_reachable() {
         // Type-level check that the public entry point keeps its signature.
-        let _ = run_function
-            as fn(
-                &std::sync::Arc<crate::command::execution::CommandSource>,
-                &Function,
-                Option<&FunctionArguments>,
-            ) -> _;
+        let _ = run_function as fn(&Arc<CommandSource>, &Function, Option<&FunctionArguments>) -> _;
     }
 }

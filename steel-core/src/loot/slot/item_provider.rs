@@ -119,7 +119,7 @@ impl CycledItemProvider {
         }
     }
 
-    fn len(&self) -> usize {
+    const fn len(&self) -> usize {
         self.inner.items.len()
     }
 }

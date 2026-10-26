@@ -29,7 +29,7 @@ impl ItemBehavior for EmptyMapItem {
         context.inv.with_item(|item| {
             context
                 .player
-                .award_stat(&vanilla_stat_types::ITEM_USED, item.item())
+                .award_stat(&vanilla_stat_types::ITEM_USED, item.item());
         });
         context.world.play_sound_at(
             &sound_events::UI_CARTOGRAPHY_TABLE_TAKE_RESULT,

@@ -32,14 +32,14 @@ fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
 
 fn say(context: &SteelCommandContext<CommandSource>) -> Result<i32, CommandSyntaxError> {
     let source = context.source();
-    let content = context.message("message")?;
+    let text = context.message("message")?;
     // Vanilla `PlayerList.broadcastChatMessage` logs the decorated message.
     let logged = translations::CHAT_TYPE_ANNOUNCEMENT
-        .message([source_display_name(source), content.clone()])
+        .message([source_display_name(source), text.clone()])
         .component();
     broadcast_command_chat(
         source,
-        &content,
+        &text,
         vanilla_chat_types::SAY_COMMAND.id() as i32,
         &logged,
     );
@@ -71,7 +71,7 @@ pub(super) fn entity_display_name(source: &CommandSource, entity: &dyn Entity) -
 }
 
 /// Builds vanilla's `ChatType.Bound` for a registry chat type.
-pub(super) fn bound_chat_type(
+pub(super) const fn bound_chat_type(
     chat_type_id: i32,
     sender_name: TextComponent,
     target_name: Option<TextComponent>,

@@ -546,14 +546,15 @@ fn villager_takes_a_job_site_placed_in_the_live_world() {
     use steel_utils::types::UpdateFlags;
     use steel_utils::{BlockPos, ChunkPos};
 
-    use crate::entity::{EntitySpawnReason, SharedEntity, add_spawned_entity};
+    use crate::behavior::init_behaviors;
+    use crate::entity::{EntitySpawnReason, SharedEntity, add_spawned_entity, init_entities};
     use crate::player::ResetReason;
     use crate::test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk};
     use steel_registry::vanilla_game_rules::{SPAWN_MOBS, SPAWN_MONSTERS};
 
     init_vanilla_registry();
-    crate::entity::init_entities();
-    crate::behavior::init_behaviors();
+    init_entities();
+    init_behaviors();
 
     let fixture = fresh_test_world("villager_live_job_site");
     let world = &fixture.world;

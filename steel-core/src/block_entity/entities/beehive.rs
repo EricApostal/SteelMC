@@ -11,10 +11,9 @@
 //! compound with `EntityType.loadEntityRecursive`; Steel spawns the entity through
 //! `spawn_entity` and then applies the stored compound with
 //! `Entity::load_with_owned_components` (owner: entity lane).
-//! Deviation: vanilla `Bee.setStayOutOfHiveCountdown(400)` on sedation,
-//! `Bee.dropOffNectar`'s crop-counter reset, and `addOccupant`'s `dropLeash` have
-//! no Steel bee API (owner: `entity/entities/mobs/neutral/bee/bee.rs` plus the
-//! missing `Leashable` re-export); sedation only clears the new target instead.
+//! Deviation: vanilla `addOccupant` also calls `dropLeash`; Steel's `Leashable` has no
+//! matching re-export in this module's reach, so only `stop_riding`/`eject_passengers`
+//! equivalents run.
 //! Deviation: vanilla `CampfireBlock.isSmokeyPos` tests the neighbour collision
 //! shape including its `getOffset`; Steel's `VoxelShape` has no offset-aware
 //! intersection helper (owner: `steel-registry/src/blocks/shapes.rs`), so the
@@ -52,7 +51,7 @@ use steel_utils::{
 use crate::block_entity::{BlockEntity, BlockEntityBase};
 use crate::entity::entities::BeeEntity;
 use crate::entity::{
-    Entity, EntitySpawnPlacement, EntitySpawnReason, EntitySpawnRequest, RemovalReason,
+    Entity, EntitySpawnPlacement, EntitySpawnReason, EntitySpawnRequest, Mob, RemovalReason,
     SharedEntity, spawn_entity,
 };
 use crate::player::Player;
@@ -65,6 +64,8 @@ pub const BEEHIVE_MAX_OCCUPANTS: usize = 3;
 pub const BEEHIVE_MIN_OCCUPATION_TICKS_NECTARLESS: i32 = 600;
 /// Minimum occupation time for bees that still carry nectar (`MIN_OCCUPATION_TICKS_NECTAR`).
 pub const BEEHIVE_MIN_OCCUPATION_TICKS_NECTAR: i32 = 2400;
+/// Vanilla `BeehiveBlockEntity.MIN_TICKS_BEFORE_REENTERING_HIVE`, applied to sedated bees.
+pub const MIN_TICKS_BEFORE_REENTERING_HIVE: i32 = 400;
 const LEVEL_HONEY: &IntProperty = &BlockStateProperties::LEVEL_HONEY;
 const HORIZONTAL_FACING: &EnumProperty<Direction> = &BlockStateProperties::HORIZONTAL_FACING;
 const LIT: &BoolProperty = &BlockStateProperties::LIT;
@@ -499,20 +500,18 @@ impl BeehiveBlockEntity {
         };
         let sedated = self.is_sedated();
         for entity in released {
-            if entity.as_ref().downcast_ref::<BeeEntity>().is_none() {
+            let Some(bee) = entity.as_ref().downcast_ref::<BeeEntity>() else {
                 continue;
-            }
+            };
             if player.position().distance_squared(entity.position()) > 16.0 {
                 continue;
             }
-            let Some(mob) = entity.as_mob() else {
-                continue;
-            };
             if sedated {
-                // Vanilla sets a 400-tick stay-out countdown; see the module docs.
-                let _ = mob.set_target(None);
+                // Vanilla `BeehiveBlockEntity.emptyAllLivingFromHive`:
+                // `bee.setStayOutOfHiveCountdown(MIN_TICKS_BEFORE_REENTERING_HIVE)`.
+                bee.set_stay_out_of_hive_countdown(MIN_TICKS_BEFORE_REENTERING_HIVE);
             } else {
-                let _ = mob.set_target(Some(&player_entity));
+                let _ = Mob::set_target(bee, Some(&player_entity));
             }
         }
     }
@@ -530,8 +529,9 @@ impl BeehiveBlockEntity {
             mem::take(&mut stored.stored)
         };
         for mut occupant in occupants {
-            let release = occupant.ticks_in_hive > occupant.min_ticks_in_hive;
+            // Vanilla `BeeData.tick`: `++ticksInHive > minTicksInHive`.
             occupant.ticks_in_hive += 1;
+            let release = occupant.ticks_in_hive > occupant.min_ticks_in_hive;
             if release {
                 let status = if occupant.has_nectar() {
                     BeeReleaseStatus::HoneyDelivered
@@ -629,7 +629,9 @@ impl BeehiveBlockEntity {
             }
 
             if status == BeeReleaseStatus::HoneyDelivered {
-                bee.set_has_nectar(false);
+                // Vanilla `BeehiveBlockEntity.releaseOccupant` → `Bee.dropOffNectar`, which clears
+                // the nectar flag and resets the crop counter.
+                bee.drop_off_nectar();
                 Self::grow_honey_level(world, block_pos, state);
             }
         }
@@ -786,5 +788,168 @@ impl BlockEntity for BeehiveBlockEntity {
                 min_ticks_in_hive: bee.min_ticks_in_hive(),
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::behavior::init_behaviors;
+    use crate::block_entity::{SharedBlockEntity, init_block_entities};
+    use crate::entity::entities::BeeEntity;
+    use crate::entity::init_entities;
+    use crate::test_support::{TestWorld, fresh_test_world, insert_ready_full_chunk};
+    use glam::DVec3;
+    use steel_registry::blocks::properties::Direction;
+    use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_entities};
+    use steel_utils::ChunkPos;
+
+    const HIVE_POS: BlockPos = BlockPos::new(4, 64, 4);
+
+    fn beehive_state() -> BlockStateId {
+        vanilla_blocks::BEEHIVE
+            .default_state()
+            .set_value(HORIZONTAL_FACING, Direction::North)
+    }
+
+    fn honey_level(world: &World) -> u8 {
+        world.get_block_state(HIVE_POS).get_value(LEVEL_HONEY)
+    }
+
+    /// Builds a loaded test world with a placed beehive, its block entity, and (optionally) a
+    /// nectar-carrying bee that has just entered the hive.
+    fn hive_with_bee(
+        name: &'static str,
+        nectar: bool,
+    ) -> (TestWorld, Arc<World>, SharedBlockEntity, SharedEntity) {
+        init_vanilla_registry();
+        init_behaviors();
+        init_entities();
+        init_block_entities();
+        let fixture = fresh_test_world(name);
+        let world = Arc::clone(&fixture.world);
+        insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
+        world.set_block(HIVE_POS, beehive_state(), UpdateFlags::UPDATE_ALL);
+
+        let hive: SharedBlockEntity = Arc::new(BeehiveBlockEntity::new(
+            Arc::downgrade(&world),
+            HIVE_POS,
+            beehive_state(),
+        ));
+
+        let bee = Arc::new(BeeEntity::new(
+            &vanilla_entities::BEE,
+            1,
+            DVec3::new(4.5, 64.0, 4.5),
+            Arc::downgrade(&world),
+        ));
+        bee.set_has_nectar(nectar);
+        bee.set_flower_pos(Some(BlockPos::new(6, 64, 6)));
+        let shared: SharedEntity = Arc::clone(&bee) as SharedEntity;
+
+        hive.downcast_ref::<BeehiveBlockEntity>()
+            .expect("test hive should be a beehive")
+            .add_occupant(&shared);
+
+        (fixture, world, hive, shared)
+    }
+
+    #[test]
+    fn occupant_strips_exactly_the_ignored_bee_tags() {
+        init_vanilla_registry();
+        let bee = BeeEntity::new(&vanilla_entities::BEE, 1, DVec3::ZERO, Weak::new());
+        bee.set_hive_pos(Some(HIVE_POS));
+        bee.set_flower_pos(Some(BlockPos::new(6, 64, 6)));
+        bee.set_has_nectar(true);
+        bee.set_stay_out_of_hive_countdown(7);
+        bee.increment_crops_grown_since_pollination();
+
+        let occupant = BeehiveBeeOccupant::of(&bee);
+        let data = &occupant.entity_data;
+
+        // `hive_pos` and the three counters are stripped, so a bee cannot leak its hive back
+        // into the world through the stored occupant.
+        assert!(data.get("hive_pos").is_none(), "hive_pos must be stripped");
+        assert!(data.get("TicksSincePollination").is_none());
+        assert!(data.get("CropsGrownSincePollination").is_none());
+        assert!(data.get("CannotEnterHiveTicks").is_none());
+        assert!(data.get("Air").is_none());
+        assert!(data.get("Pos").is_none());
+        assert!(data.get("UUID").is_none());
+
+        // `flower_pos` and `HasNectar` survive, which is what the release path reads.
+        assert!(data.get("flower_pos").is_some());
+        assert!(data.get("HasNectar").is_some());
+        assert!(occupant.has_nectar());
+        assert_eq!(
+            occupant.min_ticks_in_hive,
+            BEEHIVE_MIN_OCCUPATION_TICKS_NECTAR
+        );
+    }
+
+    #[test]
+    fn hive_records_an_occupant_and_grows_honey_at_the_vanilla_dwell() {
+        let (_fixture, world, hive, bee) = hive_with_bee("beehive_dwell", true);
+        let hive = hive
+            .downcast_ref::<BeehiveBlockEntity>()
+            .expect("test hive should be a beehive");
+
+        assert_eq!(hive.occupant_count(), 1, "the bee should be an occupant");
+        // Vanilla discards the occupant, so no AI tick can run for it.
+        assert_eq!(bee.removal_reason(), Some(RemovalReason::Discarded));
+
+        // `BeeData.tick` releases on the first tick past `minTicksInHive`.
+        for _ in 0..BEEHIVE_MIN_OCCUPATION_TICKS_NECTAR {
+            hive.server_tick(&world);
+        }
+        assert_eq!(hive.occupant_count(), 1, "dwell must not release early");
+        assert_eq!(honey_level(&world), 0);
+
+        hive.server_tick(&world);
+        assert_eq!(hive.occupant_count(), 0, "dwell must release the bee");
+        // Vanilla grows the honey level by one, or by two on the 1/100 roll.
+        assert!(
+            (1..=2).contains(&honey_level(&world)),
+            "honey level should grow once, got {}",
+            honey_level(&world)
+        );
+
+        let released = world
+            .get_entities_in_aabb_matching(
+                &steel_utils::WorldAabb::of_size(DVec3::new(4.5, 64.5, 3.5), 3.0, 3.0, 3.0),
+                |entity| entity.entity_type() == &vanilla_entities::BEE,
+            )
+            .into_iter()
+            .filter_map(|entity| {
+                entity
+                    .as_ref()
+                    .downcast_ref::<BeeEntity>()
+                    .map(BeeEntity::has_nectar)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(released.len(), 1, "the occupant should have been released");
+        assert!(!released[0], "delivery must clear the nectar");
+    }
+
+    #[test]
+    fn nectarless_occupants_dwell_for_the_short_occupation_time() {
+        let (_fixture, world, hive, _bee) = hive_with_bee("beehive_nectarless_dwell", false);
+        let hive = hive
+            .downcast_ref::<BeehiveBlockEntity>()
+            .expect("test hive should be a beehive");
+
+        for _ in 0..BEEHIVE_MIN_OCCUPATION_TICKS_NECTARLESS {
+            hive.server_tick(&world);
+        }
+        assert_eq!(hive.occupant_count(), 1);
+        assert_eq!(honey_level(&world), 0);
+
+        hive.server_tick(&world);
+        assert_eq!(hive.occupant_count(), 0);
+        assert_eq!(
+            honey_level(&world),
+            0,
+            "a nectar-less release must not grow the honey level"
+        );
     }
 }

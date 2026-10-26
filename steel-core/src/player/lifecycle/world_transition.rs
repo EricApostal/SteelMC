@@ -1,3 +1,5 @@
+use crate::player::advancement::triggers::raise_dimension_change_triggers;
+
 use super::*;
 
 impl Player {
@@ -69,13 +71,15 @@ impl Player {
             }
             self.reset_flying_ticks();
         } else {
-            // Vanilla `ServerPlayer.teleport` calls `triggerDimensionChangeTriggers`
-            // with the prior level when the player moves to a different level.
-            crate::player::advancement::triggers::raise_changed_dimension(
-                self,
-                &current_world.key,
-                &new_world.key,
-            );
+            // Vanilla `ServerPlayer.teleport` records the Overworld position the
+            // player leaves from when the transition enters the Nether, before the
+            // level swap; `triggerDimensionChangeTriggers` consumes it on the way
+            // back.
+            if current_world.dimension_type == &vanilla_dimension_types::OVERWORLD
+                && new_world.dimension_type == &vanilla_dimension_types::THE_NETHER
+            {
+                self.set_entered_nether_position(Some(current_position));
+            }
             self.reset(new_world, ResetReason::WorldChange);
             if !self.spawn_with_velocity_packet(
                 position,
@@ -89,6 +93,9 @@ impl Player {
             ) {
                 return false;
             }
+            // Vanilla `ServerPlayer.teleport` calls `triggerDimensionChangeTriggers`
+            // with the prior level once the player has joined the new level.
+            raise_dimension_change_triggers(self, &current_world);
             // Vanilla: PlayerList.sendAllPlayerInfo -> inventoryMenu.sendAllDataToRemote
             self.send_inventory_to_remote();
         }

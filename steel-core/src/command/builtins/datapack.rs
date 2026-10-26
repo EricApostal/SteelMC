@@ -13,19 +13,21 @@
 //! pack that requires any `features.enabled` entry reports vanilla's
 //! `commands.datapack.enable.failed.no_flags`.
 
+use std::fs;
+
 use steel_utils::{
     Identifier,
     translations::{
-        COMMANDS_DATAPACK_CREATE_ALREADY_EXISTS, COMMANDS_DATAPACK_CREATE_INVALID_FULL_NAME,
-        COMMANDS_DATAPACK_CREATE_INVALID_NAME, COMMANDS_DATAPACK_CREATE_IO_FAILURE,
-        COMMANDS_DATAPACK_CREATE_METADATA_ENCODE_FAILURE, COMMANDS_DATAPACK_CREATE_SUCCESS,
-        COMMANDS_DATAPACK_DISABLE_FAILED, COMMANDS_DATAPACK_DISABLE_FAILED_FEATURE,
-        COMMANDS_DATAPACK_ENABLE_FAILED, COMMANDS_DATAPACK_ENABLE_FAILED_NO_FLAGS,
-        COMMANDS_DATAPACK_LIST_AVAILABLE_NONE, COMMANDS_DATAPACK_LIST_AVAILABLE_SUCCESS,
-        COMMANDS_DATAPACK_LIST_ENABLED_NONE, COMMANDS_DATAPACK_LIST_ENABLED_SUCCESS,
-        COMMANDS_DATAPACK_MODIFY_DISABLE, COMMANDS_DATAPACK_MODIFY_ENABLE,
-        COMMANDS_DATAPACK_UNKNOWN, PACK_NAME_AND_SOURCE, PACK_SOURCE_BUILTIN, PACK_SOURCE_FEATURE,
-        PACK_SOURCE_WORLD,
+        CHAT_SQUARE_BRACKETS, COMMANDS_DATAPACK_CREATE_ALREADY_EXISTS,
+        COMMANDS_DATAPACK_CREATE_INVALID_FULL_NAME, COMMANDS_DATAPACK_CREATE_INVALID_NAME,
+        COMMANDS_DATAPACK_CREATE_IO_FAILURE, COMMANDS_DATAPACK_CREATE_METADATA_ENCODE_FAILURE,
+        COMMANDS_DATAPACK_CREATE_SUCCESS, COMMANDS_DATAPACK_DISABLE_FAILED,
+        COMMANDS_DATAPACK_DISABLE_FAILED_FEATURE, COMMANDS_DATAPACK_ENABLE_FAILED,
+        COMMANDS_DATAPACK_ENABLE_FAILED_NO_FLAGS, COMMANDS_DATAPACK_LIST_AVAILABLE_NONE,
+        COMMANDS_DATAPACK_LIST_AVAILABLE_SUCCESS, COMMANDS_DATAPACK_LIST_ENABLED_NONE,
+        COMMANDS_DATAPACK_LIST_ENABLED_SUCCESS, COMMANDS_DATAPACK_MODIFY_DISABLE,
+        COMMANDS_DATAPACK_MODIFY_ENABLE, COMMANDS_DATAPACK_UNKNOWN, COMMANDS_RELOAD_FAILURE,
+        PACK_NAME_AND_SOURCE, PACK_SOURCE_BUILTIN, PACK_SOURCE_FEATURE, PACK_SOURCE_WORLD,
     },
 };
 use text_components::{
@@ -60,7 +62,7 @@ fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
     literal("datapack")
         .then(
             literal("list")
-                .executes(|context| list_all(context))
+                .executes(list_all)
                 .then(literal("available").executes(|context| {
                     rediscover_for_list(datapack::datapacks());
                     list_available(context)
@@ -220,7 +222,7 @@ fn enable(
         &COMMANDS_DATAPACK_MODIFY_ENABLE.message([link]).component(),
         true,
     );
-    reload_after_selection(context)?;
+    reload_after_selection(context);
     enabled_count()
 }
 
@@ -249,7 +251,7 @@ fn disable(context: &SteelCommandContext<CommandSource>) -> Result<i32, CommandS
         &COMMANDS_DATAPACK_MODIFY_DISABLE.message([link]).component(),
         true,
     );
-    reload_after_selection(context)?;
+    reload_after_selection(context);
     enabled_count()
 }
 
@@ -278,9 +280,7 @@ fn apply_selection(
 }
 
 /// Vanilla's `ReloadCommand.reloadPacks` after a selection change.
-fn reload_after_selection(
-    context: &SteelCommandContext<CommandSource>,
-) -> Result<(), CommandSyntaxError> {
+fn reload_after_selection(context: &SteelCommandContext<CommandSource>) {
     match datapack::datapacks().reload() {
         Ok(summary) => {
             tracing::info!(
@@ -292,14 +292,12 @@ fn reload_after_selection(
                 "Reloaded data packs after selection change"
             );
             datapack::resend_clients(context.source().server());
-            Ok(())
         }
         Err(error) => {
             log::warn!("Failed to execute reload: {error}");
-            context.source().send_failure(TextComponent::from(
-                &steel_utils::translations::COMMANDS_RELOAD_FAILURE,
-            ));
-            Ok(())
+            context
+                .source()
+                .send_failure(TextComponent::from(&COMMANDS_RELOAD_FAILURE));
         }
     }
 }
@@ -374,15 +372,14 @@ fn pack_link(id: &str, enabled: bool) -> TextComponent {
         let description = pack
             .metadata
             .as_ref()
-            .map(|metadata| metadata.description.clone())
-            .unwrap_or_default();
+            .map_or_default(|metadata| metadata.description.clone());
         (source, description)
     };
 
     let name = PACK_NAME_AND_SOURCE
         .message([TextComponent::plain(id.to_owned()), source])
         .component();
-    let link = steel_utils::translations::CHAT_SQUARE_BRACKETS
+    let link = CHAT_SQUARE_BRACKETS
         .message([name])
         .component()
         .color(if enabled { Color::Green } else { Color::Red })
@@ -473,8 +470,8 @@ fn create_pack(context: &SteelCommandContext<CommandSource>) -> Result<i32, Comm
         )
     })?;
 
-    let write = std::fs::create_dir_all(pack_dir.join("data"))
-        .and_then(|()| std::fs::write(pack_dir.join("pack.mcmeta"), bytes));
+    let write = fs::create_dir_all(pack_dir.join("data"))
+        .and_then(|()| fs::write(pack_dir.join("pack.mcmeta"), bytes));
     if let Err(error) = write {
         log::warn!("Failed to create pack at {}: {error}", pack_dir.display());
         return Err(dynamic(&COMMANDS_DATAPACK_CREATE_IO_FAILURE, &id));
@@ -533,7 +530,7 @@ fn suggest_enabled(
 ) {
     let manager = datapack::datapacks();
     let ids = manager.repository().read().enabled_ids();
-    drop(manager);
+    // The temporary lock guard is released at the end of this statement.
     suggest_list(builder, ids);
 }
 

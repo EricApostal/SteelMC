@@ -5,6 +5,7 @@
 //! implementation keeps the same attach-face/peek/teleport state and re-derives the attachment
 //! each tick (documented deviation: it does not share the `BlockAttachedEntity` base yet).
 
+use std::f32::consts::PI;
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -268,7 +269,7 @@ impl ShulkerEntity {
     /// Vanilla `Shulker.getPhysicalPeek`: the physical lid offset for an
     /// interpolated peek amount.
     fn physical_peek(peek: f32) -> f32 {
-        0.5 - 0.5 * ((0.5 + peek) * std::f32::consts::PI).sin()
+        0.5 - 0.5 * ((0.5 + peek) * PI).sin()
     }
 
     /// Vanilla `Shulker.updatePeekAmount`, returning whether it changed.
@@ -276,7 +277,14 @@ impl ShulkerEntity {
         let target = f32::from(self.peek_amount()) * 0.01;
         let mut peek = self.peek_amount.lock();
         peek.old = peek.current;
-        if peek.current == target {
+        // Vanilla `Shulker.updatePeekAmount` compares against the target exactly: the clamped
+        // step lands on `target` bit-for-bit, so only an exact hit ends the animation.
+        #[expect(
+            clippy::float_cmp,
+            reason = "vanilla stops the peek animation only on an exact target hit"
+        )]
+        let at_target = peek.current == target;
+        if at_target {
             return false;
         }
         peek.current = if peek.current > target {
@@ -481,19 +489,16 @@ impl ShulkerEntity {
     /// Vanilla `Shulker.findAttachableSurface`: the first face the shulker can
     /// stay attached through.
     fn find_attachable_surface(&self, pos: &BlockPos) -> Option<Direction> {
-        for face in [
+        [
             Direction::Down,
             Direction::Up,
             Direction::North,
             Direction::South,
             Direction::West,
             Direction::East,
-        ] {
-            if self.can_stay_at(*pos, face) {
-                return Some(face);
-            }
-        }
-        None
+        ]
+        .into_iter()
+        .find(|&face| self.can_stay_at(*pos, face))
     }
 
     /// Vanilla `Shulker.canStayAt`.

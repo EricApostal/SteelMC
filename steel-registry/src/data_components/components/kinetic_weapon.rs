@@ -72,6 +72,26 @@ impl KineticWeaponCondition {
         self.min_relative_speed
     }
 
+    /// Vanilla `KineticWeapon.Condition.test`.
+    ///
+    /// Verified against the 26.3 jar (`KineticWeapon$Condition.test`): the
+    /// thrust must be this fresh (`ticks_used <= max_duration_ticks`), the user
+    /// this fast along their look direction, and the approach this fast
+    /// relative to the target, each speed requirement scaled by `speed_scale`
+    /// (1.0 for players, 0.2 for mobs in `KineticWeapon.damageEntities`).
+    #[must_use]
+    pub fn test(
+        &self,
+        ticks_used: i32,
+        attacker_speed: f64,
+        relative_speed: f64,
+        speed_scale: f64,
+    ) -> bool {
+        ticks_used <= self.max_duration_ticks
+            && attacker_speed >= f64::from(self.min_speed) * speed_scale
+            && relative_speed >= f64::from(self.min_relative_speed) * speed_scale
+    }
+
     fn to_nbt_tag_ref(&self) -> NbtTag {
         let mut compound = NbtCompound::new();
         compound.insert("max_duration_ticks", self.max_duration_ticks);
@@ -511,6 +531,40 @@ mod tests {
                 .expect("weapon should decode"),
             value
         );
+    }
+
+    #[test]
+    fn condition_test_matches_vanilla_tick_speed_and_relative_speed() {
+        let condition = KineticWeaponCondition::new(10, 5.0, 2.0).expect("valid condition");
+        // Exact boundaries pass: `test` uses `<=` on the tick count and `>=`
+        // on both scaled speeds.
+        assert!(condition.test(10, 5.0, 2.0, 1.0));
+        assert!(condition.test(0, 6.0, 9.0, 1.0));
+        assert!(
+            !condition.test(11, 6.0, 9.0, 1.0),
+            "ticks past the max fail"
+        );
+        assert!(
+            !condition.test(0, 4.9, 9.0, 1.0),
+            "attacker slower than min speed fails"
+        );
+        assert!(
+            !condition.test(0, 6.0, 1.9, 1.0),
+            "approach slower than min relative speed fails"
+        );
+        // Mobs use a 0.2 speed scale (`KineticWeapon.damageEntities`), which
+        // scales the *thresholds* down: a mob only needs a fifth of the
+        // attacker speed and relative speed a player needs.
+        assert!(condition.test(0, 5.0, 2.0, 0.2));
+        assert!(condition.test(0, 1.0, 0.4, 0.2), "scaled boundaries pass");
+        assert!(!condition.test(0, 0.9, 0.4, 0.2));
+        assert!(!condition.test(0, 1.0, 0.3, 0.2));
+        // A zeroed condition passes at rest from the first tick, which is how
+        // the netherite spear's damage window opens once `delay_ticks` elapse.
+        let open = KineticWeaponCondition::new(175, 0.0, 4.6).expect("valid condition");
+        assert!(open.test(8, 0.0, 4.6, 1.0));
+        assert!(!open.test(8, 0.0, 4.5, 1.0));
+        assert!(!open.test(176, 0.0, 4.6, 1.0));
     }
 
     #[test]

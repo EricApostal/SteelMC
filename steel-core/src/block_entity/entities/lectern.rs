@@ -11,13 +11,16 @@
 //! after every container lock has been released.
 
 use std::{
-    mem,
+    io::Cursor,
+    mem, slice,
     sync::{Arc, Weak},
 };
 
 use glam::DVec3;
 use simdnbt::ToNbtTag;
-use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
+use simdnbt::borrow::{
+    BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView, read_compound,
+};
 use simdnbt::owned::{NbtCompound, NbtTag};
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{
@@ -111,7 +114,7 @@ impl LecternContainer {
 
     /// Returns the stored book.
     #[must_use]
-    pub fn book(&self) -> &ItemStack {
+    pub const fn book(&self) -> &ItemStack {
         &self.book
     }
 
@@ -282,6 +285,7 @@ impl LecternBlockEntity {
     /// Sets the current page, clamped to the book's page count.
     ///
     /// Returns `true` when the page changed.
+    #[must_use]
     pub fn set_page(&self, page: i32) -> bool {
         let mut changed = false;
         self.mutate(|state| changed = state.set_page(page));
@@ -295,9 +299,7 @@ impl LecternBlockEntity {
     pub fn apply_item_block_entity_data(&self, payload: &NbtCompound) {
         let mut bytes = Vec::new();
         payload.write(&mut bytes);
-        let Ok(borrowed) =
-            simdnbt::borrow::read_compound(&mut std::io::Cursor::new(bytes.as_slice()))
-        else {
+        let Ok(borrowed) = read_compound(&mut Cursor::new(bytes.as_slice())) else {
             log::warn!(
                 "failed to reborrow lectern block-entity data at {:?}",
                 self.get_block_pos()
@@ -440,11 +442,11 @@ impl BlockEntity for LecternBlockEntity {
 
 impl Container for LecternContainer {
     fn items(&self) -> &[ItemStack] {
-        std::slice::from_ref(&self.book)
+        slice::from_ref(&self.book)
     }
 
     fn items_mut(&mut self) -> &mut [ItemStack] {
-        std::slice::from_mut(&mut self.book)
+        slice::from_mut(&mut self.book)
     }
 
     fn get_container_size(&self) -> usize {

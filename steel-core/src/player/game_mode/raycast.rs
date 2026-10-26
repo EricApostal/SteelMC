@@ -1,6 +1,6 @@
 use super::{ClipBlockShape, ClipFluid, DVec3, World, WorldAabb, swap};
 
-pub(super) fn piercing_ray_hit_t(
+pub(crate) fn piercing_ray_hit_t(
     world: &World,
     bounding_box: WorldAabb,
     from: DVec3,

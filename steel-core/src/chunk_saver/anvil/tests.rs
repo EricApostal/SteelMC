@@ -296,7 +296,7 @@ fn chunk_nbt_round_trips_blocks_biomes_light_ticks_heightmaps_and_entities() {
     };
     assert_eq!(data.as_slice(), &[0xFFu8; DATA_LAYER_SIZE][..]);
     assert_eq!(decoded.postprocessing, chunk.postprocessing);
-    assert!(decoded.structure_starts.is_empty());
+    assert_eq!(decoded.structure_starts.as_slice(), []);
 }
 
 #[test]
@@ -324,7 +324,7 @@ fn entity_nbt_round_trips_base_fields_and_type_data() {
         nbt.string("id").map(|id| id.to_str().into_owned()),
         Some("minecraft:item".to_owned())
     );
-    let passengers = vec![entity_to_nbt(&entity)];
+    let passengers = [entity_to_nbt(&entity)];
 
     let bytes = write_raw_nbt(&nbt);
     let borrowed = reborrow(&bytes);

@@ -22,8 +22,10 @@ use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::{DowncastType, DowncastTypeKey, Identifier};
 
 use super::abstract_illager::{IllagerArmPose, RaiderKeys};
+use crate::behavior::items::{MOB_ARROW_POWER, perform_mob_crossbow_attack};
 use crate::entity::ai::goal::{
     FloatGoal, HurtByTargetGoal, LookAtPlayerGoal, NearestAttackableTargetGoal, RandomStrollGoal,
+    RangedAttackMob,
 };
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::mobs::spawn_equipment;
@@ -370,6 +372,37 @@ impl Monster for PillagerEntity {}
 
 impl PathfinderMob for PillagerEntity {}
 
+/// Vanilla `Pillager` is a `CrossbowAttackMob`: the raid goal releases its bolt
+/// through `CrossbowAttackMob.performCrossbowAttack`, which is what
+/// `Pillager.performRangedAttack` wraps.
+impl RangedAttackMob for PillagerEntity {
+    /// Vanilla `Pillager.performRangedAttack`: `performCrossbowAttack(this, 1.6F)`
+    /// aimed at `target`.
+    ///
+    /// Vanilla's `1.0F` argument only satisfies the `RangedAttackMob` signature;
+    /// the pillager discards it and hands over `CrossbowItem.MOB_ARROW_POWER`.
+    /// `onCrossbowAttackPerformed` then clears the no-action time, whether or not
+    /// the pillager actually held a crossbow.
+    fn perform_ranged_attack(&self, target: &SharedEntity, _power: f32) -> bool {
+        let Some(world) = self.level() else {
+            return false;
+        };
+        let Some(shooter) = world.get_entity_by_id(self.id()) else {
+            return false;
+        };
+
+        let released = perform_mob_crossbow_attack(
+            &world,
+            &shooter,
+            target,
+            MOB_ARROW_POWER,
+            self.ranged_attack_uncertainty(&world),
+        );
+        self.set_no_action_time(0);
+        released
+    }
+}
+
 impl Raider for PillagerEntity {
     fn raider_base(&self) -> &RaiderBase {
         &self.raider_base
@@ -427,3 +460,155 @@ impl Raider for PillagerEntity {
 const _: () = {
     assert!(XP_REWARD == 5);
 };
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use glam::DVec3;
+    use steel_registry::data_components::components::ChargedProjectiles;
+    use steel_registry::data_components::vanilla_components::CHARGED_PROJECTILES;
+    use steel_registry::item_stack::ItemStack;
+    use steel_registry::item_stack_template::ItemStackTemplate;
+    use steel_registry::{init_vanilla_registry, vanilla_entities, vanilla_items};
+    use steel_utils::types::InteractionHand;
+    use steel_utils::{ChunkPos, WorldAabb};
+
+    use super::PillagerEntity;
+    use crate::behavior::init_behaviors;
+    use crate::behavior::items::{MOB_ARROW_POWER, is_charged};
+    use crate::entity::ai::goal::RangedAttackMob;
+    use crate::entity::{Entity as _, LivingEntity, SharedEntity};
+    use crate::player::Player;
+    use crate::test_support::{
+        TestPlayerBuilder, TestWorld, fresh_test_world, insert_ready_full_chunk,
+    };
+
+    const PILLAGER_ID: i32 = 5_151;
+    const TARGET_ID: i32 = 5_150;
+
+    /// A loaded pillager standing next to a player it shoots at.
+    fn fixture(
+        name: &'static str,
+        crossbow: ItemStack,
+    ) -> (TestWorld, Arc<PillagerEntity>, SharedEntity, SharedEntity) {
+        init_vanilla_registry();
+        init_behaviors();
+        let world_fixture = fresh_test_world(name);
+        let world = &world_fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+
+        let target = TestPlayerBuilder::new(Arc::clone(world), "PillagerTarget", TARGET_ID).build();
+        target
+            .try_set_position(DVec3::new(4.5, 65.0, 0.5))
+            .expect("the target starts inside the loaded chunk");
+        let target_body: SharedEntity = Arc::<Player>::clone(&target);
+        world
+            .try_add_entity(Arc::clone(&target_body))
+            .expect("the target joins the world");
+
+        let pillager = Arc::new(PillagerEntity::new(
+            &vanilla_entities::PILLAGER,
+            PILLAGER_ID,
+            DVec3::new(0.5, 65.0, 0.5),
+            Arc::downgrade(world),
+        ));
+        pillager.set_item_in_hand(InteractionHand::MainHand, crossbow);
+        let body: SharedEntity = Arc::<PillagerEntity>::clone(&pillager);
+        world
+            .try_add_entity(Arc::clone(&body))
+            .expect("the pillager joins the world");
+        (world_fixture, pillager, body, target_body)
+    }
+
+    /// The state a completed charge leaves in the pillager's hand.
+    fn charged_crossbow() -> ItemStack {
+        let mut crossbow = ItemStack::new(&vanilla_items::CROSSBOW);
+        let arrow = ItemStackTemplate::from_stack(&ItemStack::new(&vanilla_items::ARROW))
+            .expect("an arrow is a valid projectile template");
+        crossbow.set(
+            CHARGED_PROJECTILES,
+            ChargedProjectiles::new(vec![arrow]).expect("one projectile fits"),
+        );
+        crossbow
+    }
+
+    fn arrows(world_fixture: &TestWorld) -> Vec<SharedEntity> {
+        world_fixture.world.get_entities_in_aabb_matching(
+            &WorldAabb::new(-16.0, 55.0, -16.0, 16.0, 75.0, 16.0),
+            |entity| entity.entity_type() == &vanilla_entities::ARROW,
+        )
+    }
+
+    #[test]
+    fn pillager_is_a_ranged_attack_mob() {
+        init_vanilla_registry();
+        let (_fixture, _pillager, body, _target) =
+            fixture("pillager_ranged_attack_capability", charged_crossbow());
+        assert!(
+            body.as_ranged_attack_mob().is_some(),
+            "the raid goal's `ReadyToAttack` has nothing to release without this capability"
+        );
+    }
+
+    /// Vanilla `Pillager.performRangedAttack` is `performCrossbowAttack(this,
+    /// 1.6F)`: the pillager discards the `1.0F` the goal passes and its bolt
+    /// flies at `CrossbowItem.MOB_ARROW_POWER`.
+    #[test]
+    fn pillager_fires_its_charged_crossbow_at_mob_arrow_power() {
+        init_vanilla_registry();
+        let (world_fixture, pillager, _body, target) =
+            fixture("pillager_ranged_attack_fire", charged_crossbow());
+        pillager.set_no_action_time(42);
+
+        assert!(RangedAttackMob::perform_ranged_attack(
+            pillager.as_ref(),
+            &target,
+            1.0
+        ));
+
+        let fired = pillager.get_item_in_hand(InteractionHand::MainHand);
+        assert!(
+            !is_charged(&fired),
+            "the shot clears the loaded projectiles"
+        );
+        assert_eq!(
+            fired.get_damage_value(),
+            1,
+            "firing an arrow costs one durability"
+        );
+        assert_eq!(
+            pillager.no_action_time(),
+            0,
+            "`onCrossbowAttackPerformed` clears the no-action time"
+        );
+
+        let arrows = arrows(&world_fixture);
+        assert_eq!(arrows.len(), 1);
+        let velocity = arrows[0].velocity();
+        assert!(
+            (velocity.length() - f64::from(MOB_ARROW_POWER)).abs() < 0.2,
+            "the bolt flies at `MOB_ARROW_POWER` (1.6): {velocity:?}"
+        );
+    }
+
+    #[test]
+    fn uncharged_pillager_releases_nothing() {
+        init_vanilla_registry();
+        let (world_fixture, pillager, _body, target) = fixture(
+            "pillager_ranged_attack_uncharged",
+            ItemStack::new(&vanilla_items::CROSSBOW),
+        );
+
+        assert!(
+            !RangedAttackMob::perform_ranged_attack(pillager.as_ref(), &target, 1.0),
+            "an unloaded crossbow releases no bolt"
+        );
+        assert!(arrows(&world_fixture).is_empty());
+        assert_eq!(
+            pillager.no_action_time(),
+            0,
+            "vanilla still performs `onCrossbowAttackPerformed`"
+        );
+    }
+}

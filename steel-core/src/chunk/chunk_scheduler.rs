@@ -124,6 +124,7 @@ impl TicketOperationIngress {
         self.allocate_receipt()
     }
 
+    #[cfg(test)]
     fn push_player_batch(
         &mut self,
         operations: impl IntoIterator<Item = PlayerTicketOperation>,
@@ -314,6 +315,7 @@ impl ChunkSchedulingCoordinator {
         self.ticket_ingress.lock().push_player(operation)
     }
 
+    #[cfg(test)]
     pub(crate) fn queue_player_ticket_operations(
         &self,
         operations: impl IntoIterator<Item = PlayerTicketOperation>,

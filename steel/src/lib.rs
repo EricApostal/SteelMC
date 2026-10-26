@@ -172,6 +172,14 @@ impl SteelServer {
             server.run(token).await;
         });
 
+        // A `while let Some(listener) = self.tcp_listener.as_ref()` would hold the
+        // listener borrow across the whole body, which mutates `self.client_id` and
+        // re-assigns `self.tcp_listener` after the loop; re-binding per iteration is
+        // what keeps those borrows disjoint.
+        #[expect(
+            clippy::while_let_loop,
+            reason = "re-binding the listener per iteration is required for the disjoint borrow of self"
+        )]
         loop {
             // Bind the accept future to the listener for this iteration only, so
             // the fields mutated below are not borrowed across it.

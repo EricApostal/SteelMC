@@ -10,6 +10,7 @@
 use steel_registry::sound_event::SoundEventRef;
 
 use crate::entity::SharedEntity;
+use crate::world::World;
 
 /// Vanilla `TamableAnimal`: owner binding plus the sitting pose goals steer.
 pub trait Tameable: Send + Sync + 'static {
@@ -60,6 +61,15 @@ pub trait RangedAttackMob: Send + Sync + 'static {
     /// until the arrow entity lands), so the ranged goals need to know when to keep their
     /// vanilla charge window instead of pretending a shot happened.
     fn perform_ranged_attack(&self, target: &SharedEntity, power: f32) -> bool;
+
+    /// Vanilla `RangedAttackMob.rangedAttackUncertainty`:
+    /// `14 - level.getDifficulty().getId() * 4`. The `power` argument of
+    /// `performRangedAttack` is the mob's loosened charge draw, while this is
+    /// the difficulty-scaled spread of the released shot.
+    #[must_use]
+    fn ranged_attack_uncertainty(&self, world: &World) -> f32 {
+        14.0 - f32::from(world.difficulty() as u8) * 4.0
+    }
 }
 
 /// Vanilla `AbstractSchoolingFish`: the flock membership state `FollowFlockLeaderGoal` drives.

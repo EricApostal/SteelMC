@@ -24,6 +24,7 @@ use steel_utils::random::{
     xoroshiro::Xoroshiro,
 };
 use steel_utils::{BlockPos, ChunkPos, Identifier};
+use steel_worldgen::biomes;
 
 use self::context::{ChunkGeneratorType, EndGenerator, NetherGenerator, OverworldGenerator};
 use crate::chunk::Chunk;
@@ -31,6 +32,68 @@ use crate::worldgen::region::WorldGenRegion;
 use crate::worldgen::structure::{StructureGenerator, StructureStart};
 use steel_worldgen::noise::Beardifier;
 use steel_worldgen::structure::StructurePiece;
+
+/// Inputs for [`ChunkGenerator::find_closest_biome_3d`], grouped so the trait
+/// method keeps a small arity while every value stays named.
+///
+/// Vanilla passes these positionally to `BiomeSource.findClosestBiome3d`; the
+/// fields carry the same meaning (`horizontal_resolution` is the column spacing
+/// in blocks, `vertical_resolution` the step between sampled cells in a column).
+#[derive(Clone, Copy)]
+pub struct ClosestBiomeSearch<'a> {
+    /// Search origin.
+    pub origin: BlockPos,
+    /// Maximum horizontal search distance, in blocks.
+    pub search_radius: i32,
+    /// Spacing between sampled columns, in blocks.
+    pub horizontal_resolution: i32,
+    /// Spacing between sampled cells within a column, in blocks.
+    pub vertical_resolution: i32,
+    /// Inclusive bottom of the sampled Y range.
+    pub min_y: i32,
+    /// Inclusive top of the sampled Y range.
+    pub max_y: i32,
+    /// Biome filter; `None` accepts every biome.
+    pub allowed: Option<&'a dyn Fn(BiomeRef) -> bool>,
+}
+
+impl<'a> ClosestBiomeSearch<'a> {
+    /// Builds a search that accepts every biome.
+    #[must_use]
+    pub const fn new(
+        origin: BlockPos,
+        search_radius: i32,
+        horizontal_resolution: i32,
+        vertical_resolution: i32,
+        min_y: i32,
+        max_y: i32,
+    ) -> Self {
+        Self {
+            origin,
+            search_radius,
+            horizontal_resolution,
+            vertical_resolution,
+            min_y,
+            max_y,
+            allowed: None,
+        }
+    }
+
+    /// Restricts the search to biomes the predicate accepts.
+    #[must_use]
+    pub const fn allowing(self, allowed: &'a dyn Fn(BiomeRef) -> bool) -> Self {
+        Self {
+            allowed: Some(allowed),
+            ..self
+        }
+    }
+
+    /// Whether a biome passes the filter.
+    #[must_use]
+    pub fn permits(&self, biome: BiomeRef) -> bool {
+        self.allowed.is_none_or(|allowed| allowed(biome))
+    }
+}
 
 /// A trait for generating chunks.
 #[enum_dispatch]
@@ -43,6 +106,31 @@ pub trait ChunkGenerator: Send + Sync {
 
     /// Returns the generator biome at one quart position without requiring a loaded chunk.
     fn noise_biome(&self, quart_x: i32, quart_y: i32, quart_z: i32) -> BiomeRef;
+
+    /// Returns the first biome matching `allowed` while visiting spiral rings around
+    /// `origin`, sampling one quart per `horizontal_resolution`-spaced column and the
+    /// `Mth.outFromOrigin` y order of `vertical_resolution` steps over
+    /// `[min_y + 1, max_y + 1]` (vanilla `BiomeSource.findClosestBiome3d`, used by
+    /// `locate biome`).
+    ///
+    /// The default implementation samples [`Self::noise_biome`] per quart; generators
+    /// with a persistent biome source override this to reuse one sampler, exactly like
+    /// vanilla's caching resolver.
+    fn find_closest_biome_3d(
+        &self,
+        search: ClosestBiomeSearch<'_>,
+    ) -> Option<(BlockPos, BiomeRef)> {
+        biomes::find_closest_biome_3d(
+            search.origin,
+            search.search_radius,
+            search.horizontal_resolution,
+            search.vertical_resolution,
+            search.min_y,
+            search.max_y,
+            |quart_x, quart_y, quart_z| self.noise_biome(quart_x, quart_y, quart_z),
+            &|biome| search.permits(biome),
+        )
+    }
 
     /// Returns the climate-selected origin used by vanilla before searching for a safe spawn chunk.
     fn initial_spawn_search_origin(&self) -> BlockPos {

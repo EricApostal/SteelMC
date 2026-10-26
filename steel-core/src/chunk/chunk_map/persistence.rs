@@ -2,6 +2,7 @@ use super::{
     Arc, Chunk, ChunkHolder, ChunkMap, ChunkSaveDependency, ChunkStatus, ChunkStorage,
     ClearedBlockEntities, FinalizedBlockEntityUnload, FxHashSet, instrument, io, mem,
 };
+use crate::chunk::light::LightSectionRange;
 use crate::chunk_saver::PreparedChunkSave;
 use tokio::sync::oneshot;
 
@@ -197,10 +198,9 @@ impl ChunkMap {
             // column's light enable/retain flags, queued layers, and section
             // states once the chunk is finalized.
             let context = &self.world_gen_context;
-            if let Ok(range) = crate::chunk::light::LightSectionRange::from_world_height(
-                context.min_y(),
-                context.height(),
-            ) {
+            if let Ok(range) =
+                LightSectionRange::from_world_height(context.min_y(), context.height())
+            {
                 self.release_light_column(pos, range);
             }
             if has_chunk {

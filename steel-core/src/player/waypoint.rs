@@ -9,6 +9,7 @@
 //! Steel stores the connections on the receiving player, so the tracking state is
 //! dropped with the player and needs no separate manager owner.
 
+use std::mem::take;
 use std::sync::Arc;
 
 use glam::DVec3;
@@ -292,7 +293,7 @@ impl Player {
 
     /// Drops every waypoint connection this player holds.
     fn untrack_all_waypoints(&self) {
-        let tracks = std::mem::take(&mut *self.waypoint_tracks.lock());
+        let tracks = take(&mut *self.waypoint_tracks.lock());
         for uuid in tracks.keys() {
             self.send_packet(CWaypoint::remove(*uuid));
         }
@@ -382,7 +383,7 @@ pub(crate) fn level_transmitters(world: &World) -> Vec<Arc<Player>> {
 
 /// Vanilla `LivingEntity.locatorBarIcon` initial state: the default style
 /// asset with no tint.
-pub(crate) fn new_icon() -> WaypointIcon {
+pub(crate) const fn new_icon() -> WaypointIcon {
     WaypointIcon {
         style: Identifier::vanilla_static("default"),
         color: None,

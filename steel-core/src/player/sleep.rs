@@ -11,6 +11,7 @@ use text_components::{TextComponent, translation::TranslatedMessage};
 
 use super::sleep_state::SLEEP_DURATION;
 use super::{Player, PlayerRespawnConfig};
+use crate::player::advancement::triggers::raise_slept_in_bed;
 use crate::{
     entity::{Entity, LivingEntity as _},
     level_data::RespawnData,
@@ -235,7 +236,7 @@ impl Player {
         // rule allows setting the spawn point (`canSetSpawn`), right after the
         // slept-in stat.
         if can_set_spawn {
-            crate::player::advancement::triggers::raise_slept_in_bed(self);
+            raise_slept_in_bed(self);
         }
         if !world.can_sleep_through_nights() {
             self.send_overlay_message(

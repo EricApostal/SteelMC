@@ -12,7 +12,7 @@ use crate::player::Player;
 use crate::player::advancement::rewards::grant_reward;
 use progress::{AdvancementProgress, AdvancementProgressMap};
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 use steel_protocol::packets::game::CSelectAdvancementsTab;
 use steel_protocol::packets::game::CUpdateAdvancements;
 use steel_registry::REGISTRY;
@@ -269,7 +269,7 @@ impl PlayerAdvancement {
                     &criterion.criterion_id,
                     criterion
                         .achieved_at_millis
-                        .map(|millis| UNIX_EPOCH + std::time::Duration::from_millis(millis)),
+                        .map(|millis| UNIX_EPOCH + Duration::from_millis(millis)),
                 );
             }
             // Vanilla re-evaluates the whole root on load: any recorded progress

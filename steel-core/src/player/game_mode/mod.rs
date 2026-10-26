@@ -100,7 +100,7 @@ impl PlayerGameModeState {
     }
 }
 
-use raycast::piercing_ray_hit_t;
+pub(crate) use raycast::piercing_ray_hit_t;
 
 const CREATIVE_BLOCK_RANGE_MODIFIER_AMOUNT: f64 = 0.5;
 const CREATIVE_ENTITY_RANGE_MODIFIER_AMOUNT: f64 = 2.0;

@@ -11,14 +11,14 @@ use std::sync::Arc;
 use super::{
     BiomeOrTag, BlockInput, BlockPredicate, ChainModifiers, CommandResultSuspension, CommandSource,
     Coordinates, ExecutionCommandSource, ExecutionControl, GameProfileArgument, IntRange,
-    ItemPredicate, PermissionGroupName, ScoreHolderArgument, ScoreHolderWildcard,
+    ItemPredicate, PermissionGroupName, PoiTypeOrTag, ScoreHolderArgument, ScoreHolderWildcard,
     SteelArgumentType, StructureOrTagKey, WorldArgument,
     argument::{
         AngleValue, AttributeValue, ColumnPos, ColumnPosValue, ComponentValue, CoordinateAxes,
         DomainValue, EnchantmentValue, EntityTypeValue, FloatNumberProviderArg,
         FloatNumberProviderValue, FloatRange, GameModeValue, HexColorValue, IdentifierValue,
         IntNumberProviderArg, IntNumberProviderValue, ItemModifierRef, ItemModifierValue,
-        ItemStackValue, MessageValue, MobEffectValue, NbtPathValue, NbtTagValue,
+        ItemStackValue, MessageValue, MobEffectValue, NbtCompoundValue, NbtPathValue, NbtTagValue,
         ObjectiveCriteriaValue, ObjectiveValue, Operation, OperationValue, ParticleValue,
         ScoreboardSlotValue, SlotSourceArg, SlotSourceValue, SlotsValue, SteelArgumentValue,
         StyleValue, SwingAnimationValue, TeamColorValue, TeamValue, TemplateMirrorValue,
@@ -41,7 +41,7 @@ use crate::{
     player::Player,
     scoreboard::{DisplaySlot, ScoreHolder, TeamColor},
 };
-use simdnbt::owned::NbtTag;
+use simdnbt::owned::{NbtCompound, NbtTag};
 use steel_registry::advancement::registry::AdvancementRef;
 use steel_registry::attribute::AttributeRef;
 use steel_registry::damage_type::DamageTypeRef;
@@ -297,6 +297,10 @@ where
         self.typed_argument(name)
     }
 
+    pub(crate) fn poi_or_tag(&self, name: &str) -> Result<&PoiTypeOrTag, CommandSyntaxError> {
+        self.typed_argument(name)
+    }
+
     pub(crate) fn structure_or_tag_key(
         &self,
         name: &str,
@@ -502,6 +506,12 @@ where
             .map(|value| &value.0)
     }
 
+    /// Returns a parsed SNBT compound.
+    pub(crate) fn nbt_compound(&self, name: &str) -> Result<&NbtCompound, CommandSyntaxError> {
+        self.typed_argument::<NbtCompoundValue>(name)
+            .map(|value| &value.0)
+    }
+
     /// Returns a parsed swing animation.
     pub(crate) fn swing_animation(
         &self,
@@ -600,6 +610,10 @@ impl<S> SteelSuggestionContext<'_, S> {
 
 impl SteelCommandContext<CommandSource> {
     /// Returns the yaw selected by a vanilla angle argument, wrapped like vanilla.
+    #[cfg_attr(
+        test,
+        expect(dead_code, reason = "vanilla AngleArgument accessor API surface")
+    )]
     pub(crate) fn angle(&self, name: &str) -> Result<f32, CommandSyntaxError> {
         let angle = self.typed_argument::<AngleValue>(name)?.0;
         let (yaw, _pitch) = self.source().rotation();

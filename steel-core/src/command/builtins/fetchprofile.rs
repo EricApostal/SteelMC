@@ -24,8 +24,6 @@
 //!   and feedback are still vanilla's, but later commands from the same source
 //!   wait for the lookup, as with `/ban`.
 
-use std::sync::Arc;
-
 use simdnbt::ToNbtTag;
 use steel_registry::game_profile::ProfileProperty;
 use steel_registry::resolvable_profile::{
@@ -50,7 +48,6 @@ use text_components::{
     translation::Translation,
 };
 use tokio::{sync::oneshot, task::JoinHandle};
-use uuid::Uuid;
 
 use super::super::{
     brigadier::{ArgumentType, CommandNodeBuilder, CommandSyntaxError},
@@ -131,6 +128,10 @@ fn resolve_id(
 
 /// Vanilla `ProfileResolver.fetchByName`/`fetchById` followed by
 /// `reportResolvedProfile`.
+#[expect(
+    clippy::result_large_err,
+    reason = "vanilla mirrors TextComponent conventions for suspension payloads"
+)]
 async fn lookup_profile(
     source: &CommandSource,
     requested: &str,
@@ -185,7 +186,7 @@ fn avatar_profile(entity: &SharedEntity) -> Option<ResolvableProfile> {
     }
     entity
         .downcast_ref::<MannequinEntity>()
-        .map(|mannequin| mannequin.profile())
+        .map(MannequinEntity::profile)
 }
 
 /// Vanilla `FetchProfileCommand.reportResolvedProfile`: the resolved profile's

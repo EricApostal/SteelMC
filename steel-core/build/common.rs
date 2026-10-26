@@ -52,6 +52,10 @@ pub(crate) struct JsonArgField {
 pub(crate) struct DiscoveredObject {
     pub(crate) struct_name: String,
     pub(crate) class_name: String,
+    /// Item names this behavior is registered for directly, for behaviors that
+    /// have no vanilla class of their own (e.g. every spear is a plain `Item`
+    /// built by `Item$Properties.spear`).
+    pub(crate) item_names: Vec<String>,
     pub(crate) fields: Vec<JsonArgField>,
 }
 
@@ -64,9 +68,10 @@ pub(crate) fn parse_object_behavior(
         .iter()
         .find(|a| path_ends_with(a.path(), attribute_name))?;
     let class_name = extract_class_name(attr, attribute_name).unwrap_or(s.ident.to_string());
+    let item_names = extract_item_names(attr, attribute_name);
 
     let mut fields = Vec::new();
-    if let syn::Fields::Named(ref named) = s.fields {
+    if let syn::Fields::Named(named) = &s.fields {
         for field in &named.named {
             if let Some(json_arg) = parse_json_arg(field) {
                 fields.push(json_arg);
@@ -77,6 +82,7 @@ pub(crate) fn parse_object_behavior(
     Some(DiscoveredObject {
         struct_name: s.ident.to_string(),
         class_name,
+        item_names,
         fields,
     })
 }
@@ -357,11 +363,50 @@ pub(crate) fn extract_class_name(attr: &syn::Attribute, attribute_name: &str) ->
             let value = meta.value()?;
             let lit: syn::LitStr = value.parse()?;
             class_name = Some(lit.value());
+        } else if meta.input.peek(syn::Token![=]) {
+            // Tolerate keys owned by other parsers (`items = ...`): consume
+            // the value so the cursor advances past `= <literal>`.
+            let _: syn::Lit = meta.value()?.parse()?;
+        } else {
+            // Tolerate bare path keys (`foo`) by consuming the path token.
+            let _: syn::Path = meta.path;
         }
         Ok(())
     })
     .unwrap_or_else(|e| panic!("Failed to parse {attribute_name} attribute: {e}"));
     class_name
+}
+
+/// Parses `#[…(items = "a, b, c")]`, the direct item-name keying used by
+/// behaviors that have no vanilla class of their own.
+pub(crate) fn extract_item_names(attr: &syn::Attribute, attribute_name: &str) -> Vec<String> {
+    let syn::Meta::List(meta) = &attr.meta else {
+        return Vec::new();
+    };
+
+    let mut item_names = Vec::new();
+    meta.parse_nested_meta(|meta| {
+        if meta.path.is_ident("items") {
+            let value = meta.value()?;
+            let lit: syn::LitStr = value.parse()?;
+            item_names.extend(
+                lit.value()
+                    .split(',')
+                    .map(|name| name.trim().to_owned())
+                    .filter(|name| !name.is_empty()),
+            );
+        } else if meta.input.peek(syn::Token![=]) {
+            // Tolerate keys owned by other parsers (`class = ...`): consume
+            // the value so the cursor advances past `= <literal>`.
+            let _: syn::Lit = meta.value()?.parse()?;
+        } else {
+            // Tolerate bare path keys (`foo`) by consuming the path token.
+            let _: syn::Path = meta.path;
+        }
+        Ok(())
+    })
+    .unwrap_or_else(|e| panic!("Failed to parse {attribute_name} attribute: {e}"));
+    item_names
 }
 
 /// Scans behavior source files for annotated structs (e.g. `#[block_behavior]`, `#[item_behavior]`).

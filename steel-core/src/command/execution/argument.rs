@@ -1,8 +1,8 @@
-use std::{fmt, sync::Arc};
+use std::{borrow::Cow, fmt, sync::Arc};
 
 use super::{
     BiomeOrTag, BlockInput, BlockPredicate, CommandArgumentSource, CommandSource, Coordinates,
-    IntRange, ItemPredicate, ScoreHolderArgument, StructureOrTagKey, WorldArgument,
+    IntRange, ItemPredicate, PoiTypeOrTag, ScoreHolderArgument, StructureOrTagKey, WorldArgument,
     biome::{parse_biome_or_tag, suggest_biomes},
     block::{parse_block_input, parse_block_predicate, suggest_block_inputs, suggest_blocks},
     coordinates::{
@@ -13,6 +13,7 @@ use super::{
     item_predicate::{parse_item_predicate, suggest_item_predicate},
     nbt::parse_nbt_path,
     permission::{PermissionGroupParser, PermissionMetadataParser, PermissionRuleParser},
+    poi::{parse_poi_type_or_tag, suggest_poi_types},
     profile::{GameProfileParser, GameProfileSuggestionMode},
     score::{parse_int_range, parse_score_holder, suggest_score_holders},
     selector::{EntitySelector, parse_entity_selector, suggest_entity_selector},
@@ -29,11 +30,11 @@ use crate::command::brigadier::{
 };
 use crate::command::incorrectly_typed_argument;
 use crate::command::protocol::protocol_argument_type;
-use crate::entity::{ENTITIES, EntityAnchor};
-use crate::loot::slot::range::SlotRange;
+use crate::entity::{ENTITIES, EntityAnchor, SharedEntity};
+use crate::loot::slot::range::{SlotRange, name_to_range, slot_ranges};
 use crate::scoreboard::{DisplaySlot, ObjectiveCriteria, TeamColor};
 use glam::DVec3;
-use simdnbt::owned::NbtTag;
+use simdnbt::owned::{NbtCompound, NbtTag};
 use steel_math::wrap_degrees;
 use steel_protocol::packets::game::{
     ArgumentStringTypeBehavior, ArgumentType as ProtocolArgumentType,
@@ -41,11 +42,15 @@ use steel_protocol::packets::game::{
 };
 use steel_registry::advancement::registry::AdvancementRef;
 use steel_registry::attribute::AttributeRef;
+use steel_registry::context_float_provider::ContextFloatProviderEntry;
+use steel_registry::context_int_provider::ContextIntProviderEntry;
 use steel_registry::damage_type::DamageTypeRef;
 use steel_registry::data_components::vanilla_components::SwingAnimationType;
 use steel_registry::dialog::DialogRef;
+use steel_registry::item_modifier::ItemModifier;
 use steel_registry::mob_effect::MobEffectRef;
 use steel_registry::particle_type::ParticleTypeRef;
+use steel_registry::slot_source::SlotSourceEntry;
 use steel_registry::{
     CONTEXT_FLOAT_PROVIDER_REGISTRY, CONTEXT_INT_PROVIDER_REGISTRY, DAMAGE_TYPE_REGISTRY,
     DIALOG_REGISTRY, ENCHANTMENT_REGISTRY, ENTITY_TYPE_REGISTRY, MOB_EFFECT_REGISTRY, REGISTRY,
@@ -62,7 +67,8 @@ use steel_utils::{
 };
 use steel_worldgen::structure::StructureMirror;
 use text_components::TextComponent;
-use text_components::format::Format;
+use text_components::format::{Color, Format};
+use text_components::translation::Translation;
 use uuid::Uuid;
 
 /// Axes selected by vanilla's coordinate swizzle argument.
@@ -215,6 +221,7 @@ impl SteelArgumentType {
         Self::new(EntityAnchorParser)
     }
 
+    #[expect(dead_code, reason = "vanilla EntityTagArgument parser API surface")]
     pub(crate) fn entity_tag() -> Self {
         Self::new(EntityTagParser)
     }
@@ -309,6 +316,10 @@ impl SteelArgumentType {
         Self::new(BiomeOrTagParser)
     }
 
+    pub(crate) fn poi_or_tag() -> Self {
+        Self::new(PoiTypeOrTagParser)
+    }
+
     pub(crate) fn structure_or_tag_key() -> Self {
         Self::new(StructureOrTagKeyParser)
     }
@@ -392,6 +403,10 @@ impl SteelArgumentType {
     }
 
     /// Vanilla `AngleArgument`: one source-relative or absolute yaw.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "vanilla AngleArgument parser API surface")
+    )]
     pub(crate) fn angle() -> Self {
         Self::new(AngleParser)
     }
@@ -457,6 +472,10 @@ impl SteelArgumentType {
     }
 
     /// Vanilla `RangeArgument.Floats`: a double range.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "vanilla RangeArgument.Floats API surface")
+    )]
     pub(crate) fn double_range() -> Self {
         Self::new(FloatRangeParser)
     }
@@ -464,6 +483,11 @@ impl SteelArgumentType {
     /// Vanilla `NbtTagArgument`: one SNBT value of any type.
     pub(crate) fn nbt_tag() -> Self {
         Self::new(NbtTagParser)
+    }
+
+    /// Vanilla `CompoundTagArgument`: one SNBT compound.
+    pub(crate) fn nbt_compound() -> Self {
+        Self::new(NbtCompoundParser)
     }
 
     /// Vanilla `SwingAnimationArgument`.
@@ -497,6 +521,10 @@ impl SteelArgumentType {
     }
 
     /// Vanilla `SlotsArgument`: a named range of vanilla container slots.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "vanilla SlotsArgument parser API surface")
+    )]
     pub(crate) fn slots() -> Self {
         Self::new(SlotsParser)
     }
@@ -652,6 +680,7 @@ impl_downcast_type!(ScoreHolderArgument, "steel:command/value/score_holder");
 impl_downcast_type!(IntRange, "steel:command/value/int_range");
 impl_downcast_type!(FloatRange, "steel:command/value/float_range");
 impl_downcast_type!(BiomeOrTag, "steel:command/value/biome_or_tag");
+impl_downcast_type!(PoiTypeOrTag, "steel:command/value/poi_type_or_tag");
 impl_downcast_type!(
     StructureOrTagKey,
     "steel:command/value/structure_or_tag_key"
@@ -729,6 +758,10 @@ argument_value_wrapper!(
     "steel:command/value/column_pos"
 );
 argument_value_wrapper!(NbtTagValue(NbtTag), "steel:command/value/nbt_tag");
+argument_value_wrapper!(
+    NbtCompoundValue(NbtCompound),
+    "steel:command/value/nbt_compound"
+);
 argument_value_wrapper!(
     SwingAnimationValue(SwingAnimationType),
     "steel:command/value/swing_animation"
@@ -889,7 +922,7 @@ impl Operation {
             ))
         };
         match self {
-            Self::Assign => Ok(right),
+            Self::Assign | Self::Swap => Ok(right),
             Self::Add => Ok(left.wrapping_add(right)),
             Self::Subtract => Ok(left.wrapping_sub(right)),
             Self::Multiply => Ok(left.wrapping_mul(right)),
@@ -911,7 +944,6 @@ impl Operation {
             }
             Self::Min => Ok(left.min(right)),
             Self::Max => Ok(left.max(right)),
-            Self::Swap => Ok(right),
         }
     }
 }
@@ -939,18 +971,24 @@ impl FloatRange {
 
     /// Returns the inclusive minimum bound.
     #[must_use]
+    #[expect(dead_code, reason = "vanilla MinMaxBounds.Doubles API surface")]
     pub(crate) const fn minimum(self) -> Option<f64> {
         self.minimum
     }
 
     /// Returns the inclusive maximum bound.
     #[must_use]
+    #[expect(dead_code, reason = "vanilla MinMaxBounds.Doubles API surface")]
     pub(crate) const fn maximum(self) -> Option<f64> {
         self.maximum
     }
 
     /// Returns whether `value` lies inside the inclusive bounds.
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "vanilla MinMaxBounds.Doubles API surface")
+    )]
     pub(crate) fn matches(self, value: f64) -> bool {
         if let Some(minimum) = self.minimum
             && value < minimum
@@ -978,7 +1016,7 @@ pub(crate) enum SlotSourceArg {
     /// Vanilla `LiteralResult`: a named `SlotRanges` entry.
     Literal(&'static SlotRange),
     /// Vanilla `HolderResult`: a registered `slot_source` entry.
-    Named(&'static steel_registry::slot_source::SlotSourceEntry),
+    Named(&'static SlotSourceEntry),
 }
 
 impl SlotSourceArg {
@@ -1012,7 +1050,7 @@ impl fmt::Display for SlotSourceName {
 }
 
 /// A resolved vanilla `ResourceOrIdArgument.lootModifier` (`item_modifier`).
-pub(crate) type ItemModifierRef = &'static steel_registry::item_modifier::ItemModifier;
+pub(crate) type ItemModifierRef = &'static ItemModifier;
 
 /// A parsed vanilla `ResourceOrIdArgument` int number provider.
 ///
@@ -1025,7 +1063,7 @@ pub(crate) enum IntNumberProviderArg {
     /// Inline constant provider.
     Constant(i32),
     /// `minecraft:<id>` resolved against `ContextIntProviderTypes`.
-    Named(&'static steel_registry::context_int_provider::ContextIntProviderEntry),
+    Named(&'static ContextIntProviderEntry),
 }
 
 impl IntNumberProviderArg {
@@ -1043,7 +1081,7 @@ impl IntNumberProviderArg {
 
     /// The registry id when this provider came from `minecraft:<id>`, else `None`.
     #[must_use]
-    pub(crate) fn identifier(&self) -> Option<&Identifier> {
+    pub(crate) const fn identifier(&self) -> Option<&Identifier> {
         match self {
             Self::Constant(_) => None,
             Self::Named(entry) => Some(&entry.key),
@@ -1058,7 +1096,7 @@ pub(crate) enum FloatNumberProviderArg {
     /// Inline constant provider.
     Constant(f32),
     /// `minecraft:<id>` resolved against `ContextFloatProviderTypes`.
-    Named(&'static steel_registry::context_float_provider::ContextFloatProviderEntry),
+    Named(&'static ContextFloatProviderEntry),
 }
 
 impl FloatNumberProviderArg {
@@ -1073,7 +1111,7 @@ impl FloatNumberProviderArg {
 
     /// The registry id when this provider came from `minecraft:<id>`, else `None`.
     #[must_use]
-    pub(crate) fn identifier(&self) -> Option<&Identifier> {
+    pub(crate) const fn identifier(&self) -> Option<&Identifier> {
         match self {
             Self::Constant(_) => None,
             Self::Named(entry) => Some(&entry.key),
@@ -1091,12 +1129,20 @@ pub(crate) struct Message {
 impl Message {
     /// The raw message text as typed by the sender.
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "vanilla MessageArgument API surface")
+    )]
     pub(crate) fn text(&self) -> &str {
         &self.text
     }
 
     /// The entity-selector parts resolved when the message is read.
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "vanilla MessageArgument API surface")
+    )]
     pub(crate) fn parts(&self) -> &[MessagePart] {
         &self.parts
     }
@@ -1113,18 +1159,27 @@ pub(crate) struct MessagePart {
 impl MessagePart {
     /// Offset of the first character of the selector.
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "vanilla MessageArgument API surface")
+    )]
     pub(crate) const fn start(&self) -> usize {
         self.start
     }
 
     /// Offset one past the last character of the selector.
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "vanilla MessageArgument API surface")
+    )]
     pub(crate) const fn end(&self) -> usize {
         self.end
     }
 
     /// The parsed selector.
     #[must_use]
+    #[expect(dead_code, reason = "vanilla MessageArgument API surface")]
     pub(crate) fn selector(&self) -> &EntitySelector {
         &self.selector
     }
@@ -1523,6 +1578,23 @@ unit_argument_parser!(
     )
 );
 unit_argument_parser!(
+    PoiTypeOrTagParser,
+    "steel:command/parser/poi_type_or_tag",
+    PoiTypeOrTag,
+    parse | reader,
+    _source | { parse_poi_type_or_tag(reader) },
+    suggest | _context,
+    builder | {
+        suggest_poi_types(builder);
+    },
+    protocol(
+        ProtocolArgumentType::ResourceOrTag {
+            identifier: "minecraft:point_of_interest_type",
+        },
+        Some(ProtocolSuggestionType::AskServer),
+    )
+);
+unit_argument_parser!(
     StructureOrTagKeyParser,
     "steel:command/parser/structure_or_tag_key",
     StructureOrTagKey,
@@ -1789,6 +1861,16 @@ unit_argument_parser!(
     protocol(ProtocolArgumentType::NbtTag, None)
 );
 unit_argument_parser!(
+    NbtCompoundParser,
+    "steel:command/parser/nbt_compound",
+    NbtCompoundValue,
+    parse | reader,
+    _source | { parse_nbt_compound(reader).map(NbtCompoundValue) },
+    suggest | _context,
+    _builder | {},
+    protocol(ProtocolArgumentType::Nbt, None)
+);
+unit_argument_parser!(
     NbtPathParser,
     "steel:command/parser/nbt_path",
     NbtPathValue,
@@ -1932,7 +2014,7 @@ unit_argument_parser!(
     "steel:command/parser/team",
     TeamValue,
     parse | reader,
-    _source | { parse_team_name(reader).map(TeamValue) },
+    _source | { Ok(TeamValue(parse_team_name(reader))) },
     suggest | context,
     builder | {
         suggest_team_names(builder, context.source());
@@ -2580,7 +2662,7 @@ pub(super) fn unknown_resource(
 fn parse_slot_source(reader: &mut StringReader<'_>) -> Result<SlotSourceArg, CommandSyntaxError> {
     let checkpoint = reader.checkpoint();
     let raw = reader.read_unquoted_token().to_owned();
-    if let Some(range) = crate::loot::slot::range::name_to_range(&raw) {
+    if let Some(range) = name_to_range(&raw) {
         return Ok(SlotSourceArg::Literal(range));
     }
     reader.restore(checkpoint);
@@ -2712,14 +2794,14 @@ fn dynamic_error(reader: &StringReader<'_>, component: TextComponent) -> Command
 
 fn translated_error(
     reader: &StringReader<'_>,
-    translation: &'static text_components::translation::Translation<0>,
+    translation: &'static Translation<0>,
 ) -> CommandSyntaxError {
     dynamic_error(reader, TextComponent::from(translation))
 }
 
 fn translated_argument_error(
     reader: &StringReader<'_>,
-    translation: &'static text_components::translation::Translation<1>,
+    translation: &'static Translation<1>,
     value: impl Into<String>,
 ) -> CommandSyntaxError {
     dynamic_error(reader, translation.message([value.into()]).component())
@@ -2846,7 +2928,7 @@ pub(crate) fn resolve_message(
         message.text[..message.parts[0].start].to_string(),
     ));
     let mut read_to = message.parts[0].start;
-    for part in message.parts.iter() {
+    for part in &message.parts {
         let entities = part.selector.find_entities(source)?;
         if read_to < part.start {
             result.children.push(TextComponent::plain(
@@ -2864,7 +2946,7 @@ pub(crate) fn resolve_message(
     Ok(result)
 }
 
-fn join_names(entities: &[crate::entity::SharedEntity]) -> TextComponent {
+fn join_names(entities: &[SharedEntity]) -> TextComponent {
     match entities {
         [] => TextComponent::new(),
         [only] => only.display_name(),
@@ -2970,8 +3052,8 @@ fn suggest_display_slots(builder: &mut SuggestionsBuilder<'_>) {
     }
 }
 
-fn parse_team_name(reader: &mut StringReader<'_>) -> Result<Box<str>, CommandSyntaxError> {
-    Ok(reader.read_unquoted_string().into())
+fn parse_team_name(reader: &mut StringReader<'_>) -> Box<str> {
+    reader.read_unquoted_string().into()
 }
 
 fn suggest_team_names(builder: &mut SuggestionsBuilder<'_>, source: &dyn CommandArgumentSource) {
@@ -3278,7 +3360,7 @@ fn is_range_number_character(character: char, next: Option<char>) -> bool {
 fn range_error(
     reader: &mut StringReader<'_>,
     start: ReaderCursor,
-    translation: &'static text_components::translation::Translation<0>,
+    translation: &'static Translation<0>,
 ) -> CommandSyntaxError {
     reader.restore(start);
     translated_error(reader, translation)
@@ -3296,6 +3378,19 @@ fn parse_nbt_tag(reader: &mut StringReader<'_>) -> Result<NbtTag, CommandSyntaxE
         ));
     }
     Ok(tag)
+}
+
+fn parse_nbt_compound(reader: &mut StringReader<'_>) -> Result<NbtCompound, CommandSyntaxError> {
+    let tag = parse_nbt_tag(reader)?;
+    let NbtTag::Compound(compound) = tag else {
+        // Vanilla `TagParser.castToCompoundOrThrow`: the value parses first,
+        // then a non-compound fails with `argument.nbt.expected.compound`.
+        return Err(dynamic_error(
+            reader,
+            TextComponent::from(&translations::ARGUMENT_NBT_EXPECTED_COMPOUND),
+        ));
+    };
+    Ok(compound)
 }
 
 fn parse_style(reader: &mut StringReader<'_>) -> Result<Format, CommandSyntaxError> {
@@ -3326,7 +3421,7 @@ fn parse_style(reader: &mut StringReader<'_>) -> Result<Format, CommandSyntaxErr
                         "font must be a string",
                     ));
                 };
-                style.font = Some(std::borrow::Cow::Owned(font.to_str().into_owned()));
+                style.font = Some(Cow::Owned(font.to_str().into_owned()));
             }
             "bold" => style.bold = Some(parse_style_bool(reader, value)?),
             "italic" => style.italic = Some(parse_style_bool(reader, value)?),
@@ -3350,7 +3445,7 @@ fn parse_style(reader: &mut StringReader<'_>) -> Result<Format, CommandSyntaxErr
 fn parse_style_color(
     reader: &StringReader<'_>,
     value: &NbtTag,
-) -> Result<text_components::format::Color, CommandSyntaxError> {
+) -> Result<Color, CommandSyntaxError> {
     let NbtTag::String(color) = value else {
         return Err(translated_argument_error(
             reader,
@@ -3359,7 +3454,7 @@ fn parse_style_color(
         ));
     };
     let color = color.to_str();
-    if let Some(color) = text_components::format::Color::from_hex(&color) {
+    if let Some(color) = Color::from_hex(&color) {
         return Ok(color);
     }
     named_style_color(&color).ok_or_else(|| {
@@ -3371,8 +3466,7 @@ fn parse_style_color(
     })
 }
 
-fn named_style_color(name: &str) -> Option<text_components::format::Color> {
-    use text_components::format::Color;
+fn named_style_color(name: &str) -> Option<Color> {
     Some(match name {
         "black" => Color::Black,
         "dark_blue" => Color::DarkBlue,
@@ -3428,7 +3522,7 @@ fn parse_style_int(reader: &StringReader<'_>, value: &NbtTag) -> Result<i32, Com
 
 fn parse_slot_range(reader: &mut StringReader<'_>) -> Result<SlotRange, CommandSyntaxError> {
     let raw = reader.read_unquoted_string();
-    if let Some(range) = crate::loot::slot::range::name_to_range(raw).cloned() {
+    if let Some(range) = name_to_range(raw).cloned() {
         return Ok(range);
     }
     Err(translated_argument_error(
@@ -3440,7 +3534,7 @@ fn parse_slot_range(reader: &mut StringReader<'_>) -> Result<SlotRange, CommandS
 
 fn suggest_slot_ranges(builder: &mut SuggestionsBuilder<'_>, single_only: bool) {
     let prefix = builder.remaining();
-    for range in crate::loot::slot::range::slot_ranges() {
+    for range in slot_ranges() {
         if single_only && !range.is_single() {
             continue;
         }

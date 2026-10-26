@@ -21,12 +21,13 @@ use steel_protocol::packets::game::SSeenAdvancement::Opened;
 use steel_protocol::packets::game::{
     CContainerClose, CMerchantOffers, CMountScreenOpen, COpenScreen, CSetPlayerInventory,
     ClickType, MerchantItemCost, MerchantOffer as WireMerchantOffer, SContainerButtonClick,
-    SContainerClick, SContainerClose, SContainerSlotStateChanged, SRenameItem, SSeenAdvancement,
-    SSelectTrade, SSetBeacon, SSetCarriedItem, SSetCreativeModeSlot, SoundSource,
+    SContainerClick, SContainerClose, SContainerSlotStateChanged, SPlaceRecipe, SRenameItem,
+    SSeenAdvancement, SSelectTrade, SSetBeacon, SSetCarriedItem, SSetCreativeModeSlot, SoundSource,
 };
 use steel_registry::data_components::vanilla_components::{BUNDLE_CONTENTS, SwingAnimation};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::mob_effect::MobEffectRef;
+use steel_registry::recipe::PlacementInfo;
 use steel_registry::sound_events;
 use steel_registry::stat::vanilla_stat_types;
 use steel_registry::vanilla_custom_stats;
@@ -63,13 +64,11 @@ impl Player {
             return Err(OpenMenuUnavailable::Unavailable);
         }
 
-        let container_id = menu.container_id();
         let overrides_player_slots = menu.overrides_player_slots();
         let Some(menu) = open_menu.menu.take() else {
             return Err(OpenMenuUnavailable::Unavailable);
         };
         open_menu.dispatch = Some(OpenMenuDispatch {
-            container_id,
             overrides_player_slots,
             actions: Vec::new(),
         });
@@ -414,7 +413,7 @@ impl Player {
     /// Handles a recipe-book placement packet.
     ///
     /// Vanilla `ServerGamePacketListenerImpl.handlePlaceRecipe`.
-    pub fn handle_place_recipe(&self, packet: steel_protocol::packets::game::SPlaceRecipe) {
+    pub fn handle_place_recipe(&self, packet: SPlaceRecipe) {
         self.reset_last_action_time();
         if self.game_mode() == GameType::Spectator {
             return;
@@ -439,11 +438,7 @@ impl Player {
     }
 
     /// The shared body of [`Self::handle_place_recipe`].
-    fn apply_recipe_placement(
-        &self,
-        menu: &mut Menu,
-        packet: &steel_protocol::packets::game::SPlaceRecipe,
-    ) {
+    fn apply_recipe_placement(&self, menu: &mut Menu, packet: &SPlaceRecipe) {
         use steel_protocol::packets::game::CPlaceGhostRecipe;
 
         use crate::inventory::recipe_book_placement::PostPlaceAction;
@@ -469,7 +464,7 @@ impl Player {
             .data()
             .properties()
             .and_then(|properties| properties.placement.as_ref())
-            .is_some_and(|placement| placement.is_impossible_to_place())
+            .is_some_and(PlacementInfo::is_impossible_to_place)
         {
             log::debug!(
                 "Player {} tried to place impossible recipe {}",
@@ -961,7 +956,6 @@ impl Player {
                 continue;
             }
             open_menu.dispatch = Some(OpenMenuDispatch {
-                container_id: menu.container_id(),
                 overrides_player_slots: menu.overrides_player_slots(),
                 actions: Vec::new(),
             });
@@ -1148,7 +1142,6 @@ impl Player {
                 return;
             };
             open_menu.dispatch = Some(OpenMenuDispatch {
-                container_id: menu.container_id(),
                 overrides_player_slots: menu.overrides_player_slots(),
                 actions: Vec::new(),
             });

@@ -11,6 +11,7 @@ mod op_list;
 mod stored_user_list;
 mod user_ban_list;
 
+use std::io;
 use std::path::{Path, PathBuf};
 
 pub use allowlist::{AllowList, AllowListEntry};
@@ -58,7 +59,7 @@ impl PlayerLists {
     /// # Errors
     ///
     /// Returns an I/O error when a list file exists but cannot be read or parsed.
-    pub(crate) async fn load(save_root: &Path, white_list: bool) -> std::io::Result<Self> {
+    pub(crate) async fn load(save_root: &Path, white_list: bool) -> io::Result<Self> {
         Ok(Self {
             ops: OpList::load(Some(list_path(save_root, OPS_FILE))).await?,
             bans: UserBanList::load(Some(list_path(save_root, USER_BAN_LIST_FILE))).await?,

@@ -8,6 +8,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Deserializer, de::Error as DeError};
 use std::{
     collections::BTreeMap,
+    fs,
     path::{Component, Path, PathBuf},
 };
 pub use steel_protocol::packet_traits::CompressionInfo;
@@ -151,7 +152,7 @@ impl RuntimeConfig {
     #[must_use]
     pub fn server_data_packet(&self) -> CServerData {
         let icon_bytes = if self.use_favicon {
-            std::fs::read(&self.favicon).ok()
+            fs::read(&self.favicon).ok()
         } else {
             None
         };

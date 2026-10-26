@@ -1,10 +1,10 @@
 //! Vanilla `RangedCrossbowAttackGoal` (vanilla `RangedCrossbowAttackGoal` /
 //! `CrossbowAttackMob.performCrossbowAttack`).
 //!
-//! The charge/aim/ready state machine is the complete vanilla one. The shot itself goes
-//! through [`RangedAttackMob::perform_ranged_attack`], the Steel capability behind vanilla's
-//! `RangedAttackMob` bound; a crossbow mob that does not implement that capability (e.g. a
-//! pillager without `CrossbowAttackMob`) simply has nothing to release.
+//! The charge/aim/ready state machine is the complete vanilla one. The shot itself is
+//! released through `RangedAttackMob::perform_ranged_attack`: any crossbow mob Steel
+//! models (`PillagerEntity`, `PiglinEntity`) implements the capability and fires its
+//! crossbow at the attack target.
 
 use std::ptr;
 
@@ -13,6 +13,8 @@ use steel_utils::Downcast as _;
 use steel_utils::types::InteractionHand;
 
 use super::selector::{Goal, GoalControls};
+use crate::behavior::items::get_charge_duration;
+use crate::entity::entities::mobs::hostile::piglin::PiglinEntity;
 use crate::entity::entities::mobs::illager::PillagerEntity;
 use crate::entity::{PathfinderMob, SharedEntity};
 
@@ -20,8 +22,6 @@ use crate::entity::{PathfinderMob, SharedEntity};
 const PERFECT_LOOK_SPEED: f32 = 30.0;
 /// Vanilla `RangedCrossbowAttackGoal` pitch clamp while charging.
 const PERFECT_LOOK_ANGLE: f32 = 30.0;
-/// Vanilla `CrossbowItem.getChargeDuration` for a crossbow without quick-charge.
-const CROSSBOW_CHARGE_DURATION: i32 = 25;
 /// Vanilla `RangedCrossbowAttackGoal.PATHFINDING_DELAY_RANGE` (`TimeUtil.rangeOfSeconds(1, 2)`).
 const PATHFINDING_DELAY_MIN: i32 = 20;
 const PATHFINDING_DELAY_MAX: i32 = 40;
@@ -72,12 +72,24 @@ impl RangedCrossbowAttackGoal {
         mob.target().is_some_and(|target| target.is_alive())
     }
 
-    /// Vanilla `CrossbowAttackMob.setChargingCrossbow` for the pillar of this goal: only
-    /// pillagers are `CrossbowAttackMob`s, so the concrete capability is reached by key.
+    /// Vanilla `CrossbowAttackMob.setChargingCrossbow` for the mobs Steel models
+    /// as `CrossbowAttackMob`s: the pillager and the piglin both read the flag
+    /// for their crossbow arm pose (`IllagerArmPose.CROSSBOW_CHARGE`,
+    /// `PiglinArmPose.CROSSBOW_CHARGE`).
     fn set_charging_crossbow(mob: &dyn PathfinderMob, charging: bool) {
         if let Some(pillager) = mob.downcast_ref::<PillagerEntity>() {
             pillager.set_charging_crossbow(charging);
+        } else if let Some(piglin) = mob.downcast_ref::<PiglinEntity>() {
+            piglin.set_charging_crossbow(charging);
         }
+    }
+
+    /// Vanilla `CrossbowItem.getChargeDuration(mob.getUseItem(), mob)`: the use
+    /// hand is the weapon-holding hand the charge started in, so Quick Charge
+    /// shortens the release threshold exactly as it shortens the charge itself
+    /// (25 ticks without it).
+    fn charge_duration(mob: &dyn PathfinderMob) -> i32 {
+        get_charge_duration(&mob.get_item_in_hand(Self::weapon_holding_hand(mob)))
     }
 
     /// Vanilla `ProjectileUtil.getWeaponHoldingHand`: the main hand when it holds the
@@ -122,9 +134,10 @@ impl Goal for RangedCrossbowAttackGoal {
         if mob.is_using_item() {
             mob.stop_using_item();
             Self::set_charging_crossbow(mob, false);
-            // Vanilla also clears `DataComponents.CHARGED_PROJECTILES` on the use stack.
-            // Steel has no `CrossbowItem` behavior that loads projectiles, so the stack can
-            // never carry charged projectiles here; there is nothing to clear.
+            // Vanilla also clears `DataComponents.CHARGED_PROJECTILES` on the use stack
+            // here, but it reads that stack through `getUseItem()` after
+            // `stopUsingItem()` has already reset `useItem` to `ItemStack.EMPTY`, so the
+            // clear never reaches the crossbow in hand and there is nothing to clear.
         }
     }
 
@@ -189,7 +202,7 @@ impl Goal for RangedCrossbowAttackGoal {
                     self.crossbow_state = CrossbowState::Uncharged;
                 }
 
-                if mob.get_tick_count_using_item() >= CROSSBOW_CHARGE_DURATION {
+                if mob.get_tick_count_using_item() >= Self::charge_duration(mob) {
                     mob.release_using_item(entity);
                     self.crossbow_state = CrossbowState::Charged;
                     self.attack_delay =
@@ -206,9 +219,9 @@ impl Goal for RangedCrossbowAttackGoal {
             CrossbowState::ReadyToAttack => {
                 if sees_target {
                     // Vanilla `CrossbowAttackMob.performCrossbowAttack` through
-                    // `Mob.performRangedAttack(target, 1.0F)`. The `RangedAttackMob` bound of
-                    // the vanilla goal is the capability Steel dispatches through; a mob
-                    // without it has no projectile to release.
+                    // `Mob.performRangedAttack(target, 1.0F)`: the `1.0F` only satisfies the
+                    // `RangedAttackMob` signature, and the mob's own override decides the real
+                    // bolt speed.
                     if let Some(ranged_attack_mob) = mob.as_ranged_attack_mob() {
                         ranged_attack_mob.perform_ranged_attack(&target, 1.0);
                     }
@@ -216,5 +229,85 @@ impl Goal for RangedCrossbowAttackGoal {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Weak};
+
+    use glam::DVec3;
+    use steel_registry::item_stack::ItemStack;
+    use steel_registry::{init_vanilla_registry, vanilla_entities, vanilla_items};
+    use steel_utils::Identifier;
+    use steel_utils::types::InteractionHand;
+
+    use super::RangedCrossbowAttackGoal;
+    use crate::entity::LivingEntity as _;
+    use crate::entity::SharedEntity;
+    use crate::entity::entities::mobs::hostile::piglin::PiglinEntity;
+    use crate::entity::entities::mobs::illager::PillagerEntity;
+
+    /// Vanilla `CrossbowAttackMob.setChargingCrossbow` has to reach every
+    /// crossbow mob, not just the pillager: the piglin reads the same flag for
+    /// its `PiglinArmPose.CROSSBOW_CHARGE`.
+    #[test]
+    fn charging_flag_reaches_both_crossbow_mobs() {
+        init_vanilla_registry();
+        let pillager =
+            PillagerEntity::new(&vanilla_entities::PILLAGER, 1, DVec3::ZERO, Weak::new());
+        let piglin = PiglinEntity::new(&vanilla_entities::PIGLIN, 2, DVec3::ZERO, Weak::new());
+
+        assert!(!pillager.is_charging_crossbow());
+        assert!(!piglin.is_charging_crossbow());
+
+        RangedCrossbowAttackGoal::set_charging_crossbow(&pillager, true);
+        RangedCrossbowAttackGoal::set_charging_crossbow(&piglin, true);
+        assert!(pillager.is_charging_crossbow(), "the pillager charges");
+        assert!(piglin.is_charging_crossbow(), "the piglin charges too");
+
+        RangedCrossbowAttackGoal::set_charging_crossbow(&pillager, false);
+        RangedCrossbowAttackGoal::set_charging_crossbow(&piglin, false);
+        assert!(!pillager.is_charging_crossbow());
+        assert!(!piglin.is_charging_crossbow());
+    }
+
+    /// Vanilla releases on `getTicksUsingItem() >= CrossbowItem.getChargeDuration
+    /// (mob.getUseItem(), mob)`, so Quick Charge shortens the goal's release
+    /// threshold instead of leaving it pinned at the plain 25 ticks.
+    #[test]
+    fn release_threshold_uses_the_held_crossbows_charge_duration() {
+        init_vanilla_registry();
+        let pillager =
+            PillagerEntity::new(&vanilla_entities::PILLAGER, 1, DVec3::ZERO, Weak::new());
+
+        pillager.set_item_in_hand(
+            InteractionHand::MainHand,
+            ItemStack::new(&vanilla_items::CROSSBOW),
+        );
+        assert_eq!(RangedCrossbowAttackGoal::charge_duration(&pillager), 25);
+
+        let mut quick = ItemStack::new(&vanilla_items::CROSSBOW);
+        quick.set_enchantments(&[(Identifier::vanilla_static("quick_charge"), 3)], false);
+        pillager.set_item_in_hand(InteractionHand::MainHand, quick);
+        assert_eq!(
+            RangedCrossbowAttackGoal::charge_duration(&pillager),
+            10,
+            "the goal releases at the crossbow's own charge duration"
+        );
+    }
+
+    /// The goal's `ReadyToAttack` arm releases through the mob itself: without
+    /// this capability the raid's ready pillager released nothing at all.
+    #[test]
+    fn pillager_exposes_the_ranged_attack_capability() {
+        init_vanilla_registry();
+        let pillager =
+            PillagerEntity::new(&vanilla_entities::PILLAGER, 1, DVec3::ZERO, Weak::new());
+        let body: SharedEntity = Arc::new(pillager);
+        assert!(
+            body.as_ranged_attack_mob().is_some(),
+            "the goal's ready state has nothing to release without this capability"
+        );
     }
 }

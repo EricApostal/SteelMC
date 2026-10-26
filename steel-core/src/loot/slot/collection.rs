@@ -38,6 +38,7 @@ pub(crate) trait SlotCollection {
     /// Vanilla `SlotCollection.modifySlots(modifier, selector)`.
     fn modify_slots(&self, modifier: &mut SlotModifier<'_>, selector: &mut dyn SlotSelector);
     /// Vanilla `SlotCollection.replaceSlotItems(provider)` (any selector).
+    #[cfg(test)]
     fn replace_all_slot_items(&self, provider: &mut dyn ItemProvider) -> usize {
         self.replace_slot_items(provider, &mut AnySelector)
     }

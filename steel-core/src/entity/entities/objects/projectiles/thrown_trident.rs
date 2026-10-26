@@ -10,17 +10,6 @@
 //! trident. Vanilla's `shouldRender` (always true) is client-local and has no
 //! server counterpart.
 //!
-//! GAP(`thrown_trident`): channeling does not summon its lightning bolt or play
-//! `ITEM_TRIDENT_THUNDER`. The enchantment data is present
-//! (`CHANNELING.effects.post_attack` = `SummonEntity { LIGHTNING_BOLT }` +
-//! `PlaySound { ITEM_TRIDENT_THUNDER, 5.0, 1.0 }`) and the bolt path exists
-//! (`World::spawn_lightning_bolt_with_cause`), but `enchantment_helper` cannot
-//! run this effect: `entity_effect_is_supported` rejects both
-//! `EnchantmentEntityEffect::SummonEntity` and
-//! `EnchantmentEntityEffect::PlaySound`, and the effect's `minecraft:weather_check`
-//! requirement parses as `EnchantmentEffectRequirements::Unsupported`, so the
-//! post-attack fold silently skips it. Wiring the effect belongs in
-//! `enchantment_helper`, not here.
 //! GAP(`thrown_trident`): `hitBlockEnchantmentEffects` (block-hit enchantment
 //! effects with an `onBreak` callback) is not run — `enchantment_helper`
 //! exposes no `on_hit_block` fold (also TODO in [`AbstractArrow`]).

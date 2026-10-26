@@ -237,7 +237,7 @@ impl HopperMinecartEntity {
                     continue;
                 }
 
-                let original = stack.clone();
+                let original = stack;
                 let moving = source_container.remove_item(slot, 1);
                 let remaining = {
                     let mut inventory = self.inventory.lock();
@@ -546,6 +546,6 @@ mod tests {
         let (_source, source_ref) = container_above();
 
         assert!(!cart.pull_from_container(&source_ref, Direction::Down));
-        assert!(cart.with_inventory(|inventory| inventory.is_empty()));
+        assert!(cart.with_inventory(Container::is_empty));
     }
 }

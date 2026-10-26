@@ -75,9 +75,10 @@ mod tests {
     use super::SessionLock;
     use std::env;
     use std::fs;
+    use std::path::PathBuf;
     use std::time::SystemTime;
 
-    fn temp_dir(name: &str) -> std::path::PathBuf {
+    fn temp_dir(name: &str) -> PathBuf {
         let suffix = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .expect("system clock should be after the epoch")

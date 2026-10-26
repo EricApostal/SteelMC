@@ -388,7 +388,7 @@ fn place(
         };
         let mut remaining = adjusted;
         while remaining > 0 {
-            match move_item_to_grid(guard, inventory, grid, grid_index, *item, remaining) {
+            match move_item_to_grid(guard, inventory, grid, grid_index, item, remaining) {
                 Some(left) => remaining = left,
                 None => return,
             }

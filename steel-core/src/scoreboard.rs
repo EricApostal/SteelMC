@@ -433,7 +433,7 @@ impl Scoreboard {
             return Err(ScoreboardError::DuplicateObjective(name));
         }
         let objective = objective_snapshot(&name, &state);
-        persistent.objectives.insert(name.to_owned(), state);
+        persistent.objectives.insert(name, state);
         drop(persistent);
         self.mark_dirty();
         // Vanilla `ServerScoreboard.onObjectiveAdded` only marks the scoreboard dirty: the

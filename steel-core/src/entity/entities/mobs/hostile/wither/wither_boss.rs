@@ -1128,6 +1128,7 @@ fn wither_of(mob: &dyn PathfinderMob) -> Option<&WitherBossEntity> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
     use std::sync::{Arc, Weak};
 
     use glam::DVec3;
@@ -1143,6 +1144,7 @@ mod tests {
     use text_components::TextComponent;
 
     use super::{DEFAULT_TARGET_ID, INVULNERABLE_TICKS, WitherBossEntity};
+    use crate::behavior::init_behaviors;
     use crate::entity::ai::goal::{
         RangedAttackGoal, RangedAttackMob, WaterAvoidingRandomFlyingGoal, is_goal,
     };
@@ -1245,7 +1247,7 @@ mod tests {
     #[test]
     fn wither_spawn_ramp_end_explodes_and_keeps_the_wither_intact() {
         init_vanilla_registry();
-        crate::behavior::init_behaviors();
+        init_behaviors();
         let world_fixture = fresh_test_world("wither_spawn_ramp_burst");
         let world = &world_fixture.world;
         let wither = spawn_wither(world);
@@ -1286,7 +1288,7 @@ mod tests {
     #[test]
     fn wither_powered_armour_deflects_arrows_and_wind_charges_at_half_health() {
         init_vanilla_registry();
-        crate::behavior::init_behaviors();
+        init_behaviors();
         let world_fixture = fresh_test_world("wither_powered_armour");
         let world = &world_fixture.world;
         assert_eq!(world.difficulty(), Difficulty::Normal);
@@ -1345,7 +1347,7 @@ mod tests {
         let mut bytes = Vec::new();
         nbt.write(&mut bytes);
         let loaded = WitherBossEntity::new(&vanilla_entities::WITHER, 2, DVec3::ZERO, Weak::new());
-        let borrowed = read_compound(&mut std::io::Cursor::new(&bytes))
+        let borrowed = read_compound(&mut Cursor::new(&bytes))
             .unwrap_or_else(|error| panic!("reborrow failed: {error}"));
         loaded.load_additional((&borrowed).into());
 
@@ -1517,7 +1519,7 @@ mod tests {
     #[test]
     fn wither_death_drops_an_extended_lifetime_nether_star() {
         init_vanilla_registry();
-        crate::behavior::init_behaviors();
+        init_behaviors();
         let world_fixture = fresh_test_world("wither_nether_star_loot");
         let world = &world_fixture.world;
         let wither = spawn_wither(world);
@@ -1591,7 +1593,7 @@ mod tests {
     #[test]
     fn wither_paths_through_the_air_with_flying_navigation() {
         init_vanilla_registry();
-        crate::behavior::init_behaviors();
+        init_behaviors();
         let world_fixture = fresh_test_world("wither_flying_navigation");
         let world = &world_fixture.world;
         let wither = spawn_wither(world);
@@ -1655,7 +1657,7 @@ mod tests {
     #[test]
     fn wither_flying_navigation_keeps_the_waypoint_height() {
         init_vanilla_registry();
-        crate::behavior::init_behaviors();
+        init_behaviors();
         let world_fixture = fresh_test_world("wither_flying_navigation_height");
         let world = &world_fixture.world;
         let wither = spawn_wither(world);

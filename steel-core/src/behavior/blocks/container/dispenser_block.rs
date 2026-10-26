@@ -52,7 +52,7 @@ use crate::block_entity::BLOCK_ENTITIES;
 use crate::block_entity::entities::{hopper_add_item, hopper_container_at, insert_item_into};
 use crate::entity::entities::ArmadilloEntity;
 use crate::entity::entities::ItemEntity;
-use crate::entity::projectile::triangle_random;
+use crate::entity::projectile::{shoot_projectile_entity, triangle_random};
 use crate::entity::{
     EntitySpawnPlacement, EntitySpawnReason, EntitySpawnRequest, next_entity_id, spawn_entity,
 };
@@ -519,7 +519,7 @@ fn dispense_projectile(
     };
 
     let (step_x, step_y, step_z) = direction.offset();
-    let _unused = crate::entity::projectile::shoot_projectile_entity(
+    let _unused = shoot_projectile_entity(
         source.world,
         &entity,
         &mut stack,

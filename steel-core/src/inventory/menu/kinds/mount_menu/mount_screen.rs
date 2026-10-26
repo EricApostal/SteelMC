@@ -111,6 +111,10 @@ fn mount_screen_packets(packets: &SyncMutex<Vec<EncodedPacket>>) -> Vec<(i32, i3
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "mirrors the vanilla mount screen layout builder; splitting it would obscure the linear vanilla sequence"
+)]
 fn mount_screen_open_uses_the_mount_menu_and_vanilla_columns() {
     init_vanilla_registry();
     let world_fixture = fresh_test_world("mount_menu_mount_screen");

@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use glam::DVec3;
+use simdnbt::owned::NbtCompound;
 use steel_registry::entity_type::EntityTypeRef;
 use steel_utils::{BlockPos, Identifier, translations, types::Difficulty};
 use text_components::{TextComponent, translation::Translation};
@@ -27,34 +28,39 @@ pub(super) fn registration() -> CommandRegistration<CommandSource> {
 fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
     literal("summon").then(
         argument("entity", SteelArgumentType::summonable_entity())
-            .executes(|context| summon_entity(context, context.source().position()))
+            .executes(|context| summon_entity(context, context.source().position(), None))
             .then(
-                argument("pos", SteelArgumentType::vec3(true)).executes(|context| {
-                    let position = context.coordinates("pos")?;
-                    summon_entity(context, position.position(context.source()))
-                }),
+                argument("pos", SteelArgumentType::vec3(true))
+                    .executes(|context| {
+                        let position = context.coordinates("pos")?;
+                        summon_entity(context, position.position(context.source()), None)
+                    })
+                    .then(
+                        // Vanilla nests `nbt` under `pos` and uses
+                        // `CompoundTagArgument`, like `/data merge`.
+                        argument("nbt", SteelArgumentType::nbt_compound()).executes(|context| {
+                            let position = context.coordinates("pos")?;
+                            let nbt = context.nbt_compound("nbt")?;
+                            summon_entity(context, position.position(context.source()), Some(nbt))
+                        }),
+                    ),
             ),
     )
-    // TODO: Add the vanilla `summon <entity> [<pos>] [<nbt>]` branch once Steel has an
-    // SNBT compound argument and recursive command entity loading.
-    // `nbt` needs `SteelArgumentType::nbt_tag()` (`execution/argument.rs` +
-    // `SteelCommandContext::nbt_tag()`, owner: `CommandArguments`); the tag is parsed
-    // from SNBT, which `steel_utils::nbt::parse_snbt_argument` already supports.
-    // Loading needs vanilla's `EntityType.loadEntityRecursive(tag, level, reason, consumer)`
-    // equivalent: merge the compound into the created entity and re-read every
-    // command-visible field (`Pos`, `Motion`, `Rotation`, `NoGravity`, `CustomName`,
-    // `Tags`, `data`, …) plus `Passengers`/`Vehicle` and the entity-specific
-    // `loadAdditional`. Steel only has creation-time `load_additional`/
-    // `apply_spawn_data` on an existing entity and no owned-compound recursive
-    // loader (owner: entity lane, `entity/entity/mod.rs` + `entity/mod.rs`).
+    // Vanilla `SummonCommand.createEntity` additionally loads the NBT's
+    // `Passengers` (and riding chain) recursively through
+    // `EntityType.loadEntityRecursive`, which Steel's owned-compound entity
+    // loader does not support yet (owner: entity lane,
+    // `entity/entity/mod.rs` + `entity/mod.rs`): a compound with `Passengers`
+    // spawns the root entity but not its passengers.
 }
 
 fn summon_entity(
     context: &SteelCommandContext<CommandSource>,
     position: DVec3,
+    nbt: Option<&NbtCompound>,
 ) -> Result<i32, CommandSyntaxError> {
     let entity_type = context.entity_type("entity")?;
-    let entity = create_entity(context, entity_type, position)?;
+    let entity = create_inner(context, entity_type, position, nbt)?;
     let message = translations::COMMANDS_SUMMON_SUCCESS
         .message([entity.display_name()])
         .component();
@@ -62,10 +68,21 @@ fn summon_entity(
     Ok(1)
 }
 
+/// Vanilla `SummonCommand`'s no-NBT branch (empty compound, `finalizeSpawn`
+/// set), shared with `/execute ... summon`.
 pub(super) fn create_entity(
     context: &SteelCommandContext<CommandSource>,
     entity_type: EntityTypeRef,
     position: DVec3,
+) -> Result<SharedEntity, CommandSyntaxError> {
+    create_inner(context, entity_type, position, None)
+}
+
+fn create_inner(
+    context: &SteelCommandContext<CommandSource>,
+    entity_type: EntityTypeRef,
+    position: DVec3,
+    nbt: Option<&NbtCompound>,
 ) -> Result<SharedEntity, CommandSyntaxError> {
     if !World::is_in_spawnable_bounds(BlockPos::from(position)) {
         return Err(command_failed(
@@ -89,7 +106,15 @@ pub(super) fn create_entity(
         return Err(command_failed(&translations::COMMANDS_SUMMON_FAILED));
     };
 
-    if let Some(mob) = entity.as_mob() {
+    if let Some(nbt) = nbt {
+        // Vanilla `SummonCommand.createEntity` copies the compound, stamps the
+        // argument's type id over any `id` inside, loads it into the entity and
+        // snaps to the command position while keeping the loaded rotation.
+        // Loading first and snapping after matches that exactly; `Entity.load`
+        // covers the same save fields as `/data modify entity`'s `setData`.
+        apply_command_nbt(&entity, position, nbt)?;
+    } else if let Some(mob) = entity.as_mob() {
+        // Vanilla `SummonCommand` sets `finalizeSpawn` only without NBT.
         let _ = mob.finalize_spawn(world, EntitySpawnReason::Command, None);
     }
 
@@ -106,14 +131,39 @@ fn command_failed(translation: &'static Translation<0>) -> CommandSyntaxError {
     CommandSyntaxError::dynamic(TextComponent::from(translation))
 }
 
+/// Vanilla `SummonCommand.createEntity`'s NBT step: load the compound into the
+/// entity and then apply the processor's
+/// `snapTo(pos.x, pos.y, pos.z, getYRot(), getXRot())`, so the command position
+/// wins over the NBT's `Pos` while the NBT's `Rotation` is kept.
+fn apply_command_nbt(
+    entity: &SharedEntity,
+    position: DVec3,
+    nbt: &NbtCompound,
+) -> Result<(), CommandSyntaxError> {
+    entity.load_with_owned_components(nbt).map_err(|error| {
+        CommandSyntaxError::dynamic(format!("Failed to apply NBT to entity: {error}"))
+    })?;
+    let (yaw, pitch) = entity.rotation();
+    entity.snap_to(position, yaw, pitch);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::create_dispatcher;
+    use super::*;
     use crate::bootstrap::init_globals;
     use crate::command::{
         brigadier::{CommandDispatcher, NodeId},
         execution::{CommandSource, SteelArgumentType, SteelCommandRuntime},
     };
+    use crate::entity::entities::PigEntity;
+    use crate::entity::next_entity_id;
+    use crate::test_support::fresh_test_world;
+    use simdnbt::owned::{NbtList, NbtTag};
+    use steel_registry::vanilla_entities;
+    use steel_utils::text::DisplayResolutor;
+    use text_components::TextComponent;
 
     type Dispatcher = CommandDispatcher<CommandSource, SteelCommandRuntime>;
 
@@ -161,6 +211,51 @@ mod tests {
             dispatcher.node(position),
             Some(node) if node.is_executable()
         ));
-        assert!(dispatcher.children(position).is_some_and(<[_]>::is_empty));
+
+        // Vanilla nests `nbt` (`CompoundTagArgument`, like `/data merge`) under
+        // `pos`; it executes, and `pos` keeps the no-NBT branch.
+        let nbt = child(&dispatcher, position, "nbt");
+        assert_eq!(
+            dispatcher.node(nbt).and_then(|node| node.argument_type()),
+            Some(&SteelArgumentType::nbt_compound())
+        );
+        assert!(matches!(
+            dispatcher.node(nbt),
+            Some(node) if node.is_executable()
+        ));
+        assert!(dispatcher.children(nbt).is_some_and(<[_]>::is_empty));
+    }
+
+    #[test]
+    fn command_nbt_loads_before_snapping_to_the_command_position() {
+        init_globals();
+        let fixture = fresh_test_world("summon_command_nbt");
+        let position = DVec3::new(10.5, 64.0, -3.25);
+        let entity: SharedEntity = Arc::new(PigEntity::new(
+            &vanilla_entities::PIG,
+            next_entity_id(),
+            DVec3::new(0.0, -64.0, 0.0),
+            Arc::downgrade(&fixture.world),
+        ));
+
+        let mut nbt = NbtCompound::new();
+        // Vanilla stamping: the compound may carry a `Pos` that the command
+        // position must override.
+        nbt.insert("Pos", NbtList::Double(vec![100.0, 100.0, 100.0]));
+        nbt.insert("Rotation", NbtList::Float(vec![45.0, -10.0]));
+        nbt.insert("NoGravity", NbtTag::Byte(1));
+        nbt.insert("CustomName", TextComponent::plain("Bob").to_codec_nbt());
+
+        apply_command_nbt(&entity, position, &nbt).expect("command NBT should apply");
+
+        assert_eq!(entity.position(), position);
+        assert_eq!(entity.rotation(), (45.0, -10.0));
+        assert!(entity.is_no_gravity());
+        assert_eq!(
+            entity
+                .custom_name()
+                .map(|name| name.to_plain(&DisplayResolutor)),
+            Some("Bob".to_owned())
+        );
     }
 }

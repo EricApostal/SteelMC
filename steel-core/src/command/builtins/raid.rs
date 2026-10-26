@@ -159,6 +159,10 @@ fn play_raid_sound(
 }
 
 /// Vanilla `RaidCommand.spawnleader`.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "Command executors use a shared fallible callback signature."
+)]
 fn spawn_leader(context: &SteelCommandContext<CommandSource>) -> Result<i32, CommandSyntaxError> {
     let source = context.source();
     let world = source.world();

@@ -18,30 +18,30 @@ use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{
-    BlockStateProperties, BoolProperty, Direction, EnumProperty, FrontAndTop, StructureMode,
-    TestBlockMode,
+    BlockStateProperties, Direction, EnumProperty, FrontAndTop, StructureMode, TestBlockMode,
 };
 use steel_registry::vanilla_block_entity_types;
-use steel_utils::{BlockPos, BlockStateId};
+use steel_utils::{BlockPos, BlockStateId, Downcast as _};
 
 use crate::behavior::{
     BlockBehavior, BlockEntityCreation, BlockHitResult, BlockPlaceContext, InteractionResult,
     InventoryAccess,
 };
-use crate::block_entity::entities::StructureBlockEntity;
+use crate::block_entity::entities::{
+    CommandBlockEntity, StructureBlockEntity, TestInstanceBlockEntity,
+};
 use crate::block_entity::{BLOCK_ENTITIES, BlockEntityTicker};
 use crate::player::Player;
 use crate::world::{LevelReader, SignalGetter as _, SignalQueryContext, World};
 
 const FACING: &EnumProperty<Direction> = &BlockStateProperties::FACING;
-const CONDITIONAL: &BoolProperty = &BlockStateProperties::CONDITIONAL;
 const STRUCTURE_MODE: &EnumProperty<StructureMode> = &BlockStateProperties::STRUCTUREBLOCK_MODE;
 const ORIENTATION: &EnumProperty<FrontAndTop> = &BlockStateProperties::ORIENTATION;
 const TEST_BLOCK_MODE: &EnumProperty<TestBlockMode> = &BlockStateProperties::TEST_BLOCK_MODE;
 
 /// Vanilla `FrontAndTop.fromFrontAndTop`: builds the jigsaw orientation from the clicked face and
 /// the placer's horizontal direction.
-fn front_and_top(front: Direction, top: Direction) -> FrontAndTop {
+const fn front_and_top(front: Direction, top: Direction) -> FrontAndTop {
     match (front, top) {
         (Direction::Up, Direction::East) => FrontAndTop::UpEast,
         (Direction::Up, Direction::North) => FrontAndTop::UpNorth,
@@ -96,13 +96,10 @@ impl BlockBehavior for CommandBlock {
         _source_block: BlockRef,
         _moved_by_piston: bool,
     ) {
-        use steel_utils::Downcast as _;
         let Some(entity) = world.get_block_entity(pos) else {
             return;
         };
-        let Some(command_be) =
-            entity.downcast_ref::<crate::block_entity::entities::CommandBlockEntity>()
-        else {
+        let Some(command_be) = entity.downcast_ref::<CommandBlockEntity>() else {
             return;
         };
         // Vanilla `CommandBlock.setPoweredAndUpdate`: on a rising edge a non-automatic
@@ -115,13 +112,10 @@ impl BlockBehavior for CommandBlock {
     }
 
     fn tick(&self, _state: BlockStateId, world: &Arc<World>, pos: BlockPos) {
-        use steel_utils::Downcast as _;
         let Some(entity) = world.get_block_entity(pos) else {
             return;
         };
-        let Some(command_be) =
-            entity.downcast_ref::<crate::block_entity::entities::CommandBlockEntity>()
-        else {
+        let Some(command_be) = entity.downcast_ref::<CommandBlockEntity>() else {
             return;
         };
         command_be.server_tick(world, pos, self.block);
@@ -182,12 +176,11 @@ impl BlockBehavior for CommandBlock {
         _direction: Direction,
     ) -> i32 {
         // Vanilla `CommandBlock.getAnalogOutputSignal` → `BaseCommandBlock.getSuccessCount`.
-        use steel_utils::Downcast as _;
         let Some(entity) = world.get_block_entity(pos) else {
             return 0;
         };
         entity
-            .downcast_ref::<crate::block_entity::entities::CommandBlockEntity>()
+            .downcast_ref::<CommandBlockEntity>()
             .map_or(0, |command_be| command_be.success_count().clamp(0, 15))
     }
 }
@@ -227,7 +220,6 @@ impl BlockBehavior for StructureBlock {
         _source_block: BlockRef,
         _moved_by_piston: bool,
     ) {
-        use steel_utils::Downcast as _;
         let Some(entity) = world.get_block_entity(pos) else {
             return;
         };
@@ -471,12 +463,11 @@ impl BlockBehavior for TestInstanceBlock {
         if direction != Direction::Up {
             return 0;
         }
-        use steel_utils::Downcast as _;
         let Some(entity) = world.get_block_entity(pos) else {
             return 0;
         };
         entity
-            .downcast_ref::<crate::block_entity::entities::TestInstanceBlockEntity>()
+            .downcast_ref::<TestInstanceBlockEntity>()
             .map_or(0, |test_be| if test_be.is_complete() { 15 } else { 0 })
     }
 }

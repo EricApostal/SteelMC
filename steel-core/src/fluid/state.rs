@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use glam::DVec3;
 use steel_registry::REGISTRY;
+use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::BlockStateProperties;
 use steel_registry::fluid::{FluidRef, FluidState, is_lava_fluid, is_water_fluid};
@@ -289,7 +290,7 @@ where
 }
 
 /// Vanilla `block instanceof IceBlock` (matches `ice` and `frosted_ice`).
-fn is_ice_block(block: steel_registry::blocks::BlockRef) -> bool {
+fn is_ice_block(block: BlockRef) -> bool {
     block == &vanilla_blocks::ICE || block == &vanilla_blocks::FROSTED_ICE
 }
 

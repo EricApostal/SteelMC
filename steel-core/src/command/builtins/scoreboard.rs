@@ -825,19 +825,18 @@ fn set_score_display(
                 .component()
         }
     };
-    let message = match tracker.first(ElementType::NonZero) {
-        Some(holder) => holder_message(holder),
-        None => {
-            let count = TextComponent::from(tracker.count(ElementType::NonZero).to_string());
-            if let Some(display) = &display {
-                translations::COMMANDS_SCOREBOARD_PLAYERS_DISPLAY_NAME_SET_SUCCESS_MULTIPLE
-                    .message([display.clone(), count, objective.formatted_display_name()])
-                    .component()
-            } else {
-                translations::COMMANDS_SCOREBOARD_PLAYERS_DISPLAY_NAME_CLEAR_SUCCESS_MULTIPLE
-                    .message([count, objective.formatted_display_name()])
-                    .component()
-            }
+    let message = if let Some(holder) = tracker.first(ElementType::NonZero) {
+        holder_message(holder)
+    } else {
+        let count = TextComponent::from(tracker.count(ElementType::NonZero).to_string());
+        if let Some(display) = &display {
+            translations::COMMANDS_SCOREBOARD_PLAYERS_DISPLAY_NAME_SET_SUCCESS_MULTIPLE
+                .message([display.clone(), count, objective.formatted_display_name()])
+                .component()
+        } else {
+            translations::COMMANDS_SCOREBOARD_PLAYERS_DISPLAY_NAME_CLEAR_SUCCESS_MULTIPLE
+                .message([count, objective.formatted_display_name()])
+                .component()
         }
     };
     context.source().send_success(&message, true);
@@ -859,29 +858,26 @@ fn set_score_number_format(
         tracker.track(target.clone(), 1);
     }
 
-    let message = match tracker.first(ElementType::NonZero) {
-        Some(holder) => {
-            let key = if number_format.is_some() {
-                &translations::COMMANDS_SCOREBOARD_PLAYERS_DISPLAY_NUMBER_FORMAT_SET_SUCCESS_SINGLE
-            } else {
-                &translations::COMMANDS_SCOREBOARD_PLAYERS_DISPLAY_NUMBER_FORMAT_CLEAR_SUCCESS_SINGLE
-            };
-            key.message([
-                holder.feedback_display_name(),
-                objective.formatted_display_name(),
-            ])
+    let message = if let Some(holder) = tracker.first(ElementType::NonZero) {
+        let key = if number_format.is_some() {
+            &translations::COMMANDS_SCOREBOARD_PLAYERS_DISPLAY_NUMBER_FORMAT_SET_SUCCESS_SINGLE
+        } else {
+            &translations::COMMANDS_SCOREBOARD_PLAYERS_DISPLAY_NUMBER_FORMAT_CLEAR_SUCCESS_SINGLE
+        };
+        key.message([
+            holder.feedback_display_name(),
+            objective.formatted_display_name(),
+        ])
+        .component()
+    } else {
+        let count = TextComponent::from(tracker.count(ElementType::NonZero).to_string());
+        let key = if number_format.is_some() {
+            &translations::COMMANDS_SCOREBOARD_PLAYERS_DISPLAY_NUMBER_FORMAT_SET_SUCCESS_MULTIPLE
+        } else {
+            &translations::COMMANDS_SCOREBOARD_PLAYERS_DISPLAY_NUMBER_FORMAT_CLEAR_SUCCESS_MULTIPLE
+        };
+        key.message([count, objective.formatted_display_name()])
             .component()
-        }
-        None => {
-            let count = TextComponent::from(tracker.count(ElementType::NonZero).to_string());
-            let key = if number_format.is_some() {
-                &translations::COMMANDS_SCOREBOARD_PLAYERS_DISPLAY_NUMBER_FORMAT_SET_SUCCESS_MULTIPLE
-            } else {
-                &translations::COMMANDS_SCOREBOARD_PLAYERS_DISPLAY_NUMBER_FORMAT_CLEAR_SUCCESS_MULTIPLE
-            };
-            key.message([count, objective.formatted_display_name()])
-                .component()
-        }
     };
     context.source().send_success(&message, true);
     Ok(tracker.total_value())
@@ -972,7 +968,7 @@ impl ScoreTracker {
     }
 
     /// Vanilla `CommandResponseTracker.firstElement`.
-    pub(super) fn first(&self, element_type: ElementType) -> Option<&ScoreHolder> {
+    pub(super) const fn first(&self, element_type: ElementType) -> Option<&ScoreHolder> {
         match element_type {
             ElementType::Any => self.only_element.as_ref(),
             ElementType::NonZero => self.only_non_zero_element.as_ref(),

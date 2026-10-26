@@ -541,6 +541,10 @@ mod tests {
         child
     }
 
+    #[expect(
+        clippy::redundant_closure_for_method_calls,
+        reason = "the private CommandNode type cannot be named from this module"
+    )]
     fn assert_argument(
         dispatcher: &Dispatcher,
         parent: NodeId,
@@ -571,6 +575,7 @@ mod tests {
         node
     }
 
+    #[expect(clippy::too_many_lines, reason = "splitting would hurt readability")]
     #[test]
     fn bossbar_graph_matches_vanilla_tree() {
         init_vanilla_registry();

@@ -12,7 +12,7 @@
 //! weight. `/datapack` and the reload path are server-only in vanilla too.
 
 use std::{
-    fs, io,
+    env, fmt, fs, io,
     path::{Component, Path, PathBuf},
 };
 
@@ -56,6 +56,7 @@ pub(crate) enum PackSource {
 
 impl PackSource {
     /// Vanilla `PackSource.getPromotion`: the source name shown by `/datapack list`.
+    #[expect(dead_code, reason = "vanilla PackSource.getPromotion API surface")]
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Builtin => "builtin",
@@ -90,7 +91,7 @@ impl PackMetadataSection {
 pub(crate) const DATA_PACK_FORMAT: i32 = 121;
 
 /// A readable pack, mirroring vanilla `PackResources`.
-pub(crate) trait PackResources: std::fmt::Debug + Send + Sync {
+pub(crate) trait PackResources: fmt::Debug + Send + Sync {
     /// Vanilla `PackResources.packId`.
     fn location(&self) -> &PackLocationInfo;
 
@@ -221,7 +222,7 @@ pub(crate) struct PathPackResources {
 
 impl PathPackResources {
     /// Creates a directory-backed pack. The root is read lazily.
-    pub(crate) fn new(location: PackLocationInfo, root: PathBuf) -> Self {
+    pub(crate) const fn new(location: PackLocationInfo, root: PathBuf) -> Self {
         Self { location, root }
     }
 }
@@ -363,10 +364,10 @@ impl PackResources for VanillaPackResources {
 pub(crate) fn builtin_pack_root() -> Result<PathBuf, PackError> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
-    if let Some(root) = std::env::var_os("STEEL_DATAPACK_ROOT") {
+    if let Some(root) = env::var_os("STEEL_DATAPACK_ROOT") {
         candidates.push(PathBuf::from(root));
     }
-    if let Ok(exe) = std::env::current_exe()
+    if let Ok(exe) = env::current_exe()
         && let Some(dir) = exe.parent()
     {
         candidates.push(dir.join("datapacks"));

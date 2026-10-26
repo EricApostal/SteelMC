@@ -1,10 +1,7 @@
 //! Vanilla `Blaze` (`net.minecraft.world.entity.monster.Blaze`).
 
 use std::iter::empty;
-use std::sync::mpsc;
 use std::sync::{Arc, Weak};
-use std::thread;
-use std::time::Duration;
 
 use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;

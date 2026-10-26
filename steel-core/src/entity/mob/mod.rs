@@ -715,6 +715,16 @@ pub trait Mob: LivingEntity + Leashable {
     }
 
     fn requires_custom_persistence(&self) -> bool {
+        self.requires_custom_persistence_base()
+    }
+
+    /// The `super` half of [`Mob::requires_custom_persistence`], for overrides
+    /// that mirror a vanilla `super.requiresCustomPersistence()` call.
+    ///
+    /// An override must call this instead of `Mob::requires_custom_persistence(self)`:
+    /// the latter is virtual and dispatches straight back into the override
+    /// (unbounded recursion).
+    fn requires_custom_persistence_base(&self) -> bool {
         self.is_passenger() || self.is_leashed()
     }
 

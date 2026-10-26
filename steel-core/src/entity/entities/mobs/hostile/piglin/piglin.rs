@@ -35,9 +35,11 @@ use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier};
 
 use crate::behavior::InteractionResult;
+use crate::behavior::items::{MOB_ARROW_POWER, perform_mob_crossbow_attack};
 use crate::entity::ai::behavior::piglin::ai;
 use crate::entity::ai::brain::Brain;
 use crate::entity::ai::brain::memory::module_type;
+use crate::entity::ai::goal::RangedAttackMob;
 use crate::entity::ai::path::PathType;
 use crate::entity::attribute::{AttributeModifier, AttributeModifierOperation};
 use crate::entity::conversion::ConversionParams;
@@ -852,6 +854,38 @@ impl Monster for PiglinEntity {}
 
 impl PathfinderMob for PiglinEntity {}
 
+/// Vanilla `Piglin` is a `CrossbowAttackMob` too: the piglin brain's
+/// `CrossbowAttack` behavior releases the bolt through
+/// `CrossbowAttackMob.performCrossbowAttack`, which is what
+/// `Piglin.performRangedAttack` wraps.
+impl RangedAttackMob for PiglinEntity {
+    /// Vanilla `Piglin.performRangedAttack`: `performCrossbowAttack(this, 1.6F)`
+    /// aimed at `target`.
+    ///
+    /// Vanilla's `1.0F` argument only satisfies the `RangedAttackMob` signature;
+    /// the piglin discards it and hands over `CrossbowItem.MOB_ARROW_POWER`.
+    /// `onCrossbowAttackPerformed` then clears the no-action time, whether or not
+    /// the piglin actually held a crossbow.
+    fn perform_ranged_attack(&self, target: &SharedEntity, _power: f32) -> bool {
+        let Some(world) = self.level() else {
+            return false;
+        };
+        let Some(shooter) = world.get_entity_by_id(self.id()) else {
+            return false;
+        };
+
+        let released = perform_mob_crossbow_attack(
+            &world,
+            &shooter,
+            target,
+            MOB_ARROW_POWER,
+            self.ranged_attack_uncertainty(&world),
+        );
+        self.set_no_action_time(0);
+        released
+    }
+}
+
 impl PiglinEntity {
     /// Vanilla `Piglin.populateDefaultEquipmentSlots`: adults may wear golden armor.
     fn populate_default_equipment_slots(&self) {
@@ -914,17 +948,30 @@ use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 #[cfg(test)]
 mod tests {
     use simdnbt::owned::NbtCompound;
-    use std::sync::Weak;
+    use std::sync::{Arc, Weak};
     use steel_registry::vanilla_attributes;
 
     use glam::DVec3;
+    use steel_registry::data_components::components::ChargedProjectiles;
+    use steel_registry::data_components::vanilla_components::CHARGED_PROJECTILES;
+    use steel_registry::item_stack_template::ItemStackTemplate;
     use steel_registry::vanilla_item_tags::ItemTag;
     use steel_registry::{init_vanilla_registry, vanilla_entities, vanilla_items};
+    use steel_utils::types::InteractionHand;
+    use steel_utils::{ChunkPos, WorldAabb};
 
     use super::PiglinEntity;
+    use crate::behavior::init_behaviors;
+    use crate::behavior::items::{MOB_ARROW_POWER, is_charged};
     use crate::entity::ai::behavior::piglin::ai;
-    use crate::entity::{Entity, EntityEventSource as _, LivingEntity, Mob};
+    use crate::entity::ai::goal::RangedAttackMob;
+    use crate::entity::{Entity, EntityEventSource as _, LivingEntity, Mob, SharedEntity};
     use crate::inventory::equipment::EquipmentSlot;
+    use crate::player::Player;
+    use crate::test_support::{
+        TestPlayerBuilder, TestWorld, fresh_test_world, insert_ready_full_chunk,
+    };
+    use crate::world::World;
     use steel_registry::item_stack::ItemStack;
 
     fn piglin() -> PiglinEntity {
@@ -1027,5 +1074,118 @@ mod tests {
         assert_eq!(nbt.byte("CannotHunt"), Some(1));
         assert_eq!(nbt.byte("IsImmuneToZombification"), Some(1));
         assert_eq!(piglin.entity_type(), &vanilla_entities::PIGLIN);
+    }
+
+    /// A world with a crossbow-holding piglin and a player it shoots at.
+    fn ranged_fixture(
+        name: &'static str,
+        crossbow: ItemStack,
+    ) -> (TestWorld, Arc<PiglinEntity>, SharedEntity, SharedEntity) {
+        init_behaviors();
+        let world_fixture = fresh_test_world(name);
+        let world = &world_fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+
+        let target = TestPlayerBuilder::new(Arc::clone(world), "PiglinTarget", 5_250).build();
+        target
+            .try_set_position(DVec3::new(4.5, 65.0, 0.5))
+            .expect("the target starts inside the loaded chunk");
+        let target_body: SharedEntity = Arc::<Player>::clone(&target);
+        world
+            .try_add_entity(Arc::clone(&target_body))
+            .expect("the target joins the world");
+
+        let piglin = Arc::new(PiglinEntity::new(
+            &vanilla_entities::PIGLIN,
+            5_251,
+            DVec3::new(0.5, 65.0, 0.5),
+            Arc::downgrade(world),
+        ));
+        piglin.set_item_in_hand(InteractionHand::MainHand, crossbow);
+        let body: SharedEntity = Arc::<PiglinEntity>::clone(&piglin);
+        world
+            .try_add_entity(Arc::clone(&body))
+            .expect("the piglin joins the world");
+        (world_fixture, piglin, body, target_body)
+    }
+
+    /// The state a completed charge leaves in the piglin's hand.
+    fn charged_crossbow() -> ItemStack {
+        let mut crossbow = ItemStack::new(&vanilla_items::CROSSBOW);
+        let arrow = ItemStackTemplate::from_stack(&ItemStack::new(&vanilla_items::ARROW))
+            .expect("an arrow is a valid projectile template");
+        crossbow.set(
+            CHARGED_PROJECTILES,
+            ChargedProjectiles::new(vec![arrow]).expect("one projectile fits"),
+        );
+        crossbow
+    }
+
+    fn arrows(world: &Arc<World>) -> Vec<SharedEntity> {
+        world.get_entities_in_aabb_matching(
+            &WorldAabb::new(-16.0, 55.0, -16.0, 16.0, 75.0, 16.0),
+            |entity| entity.entity_type() == &vanilla_entities::ARROW,
+        )
+    }
+
+    /// Vanilla `Piglin` is a `CrossbowAttackMob`: without this capability the
+    /// brain's `CrossbowAttack` ready state released nothing.
+    #[test]
+    fn piglin_is_a_ranged_attack_mob() {
+        init_vanilla_registry();
+        let (_fixture, _piglin, body, _target) =
+            ranged_fixture("piglin_ranged_attack_capability", charged_crossbow());
+        assert!(body.as_ranged_attack_mob().is_some());
+    }
+
+    /// Vanilla `Piglin.performRangedAttack` is `performCrossbowAttack(this,
+    /// 1.6F)`, so the bolt flies at `CrossbowItem.MOB_ARROW_POWER` and
+    /// `onCrossbowAttackPerformed` clears the no-action time.
+    #[test]
+    fn piglin_fires_its_charged_crossbow_at_mob_arrow_power() {
+        init_vanilla_registry();
+        let (world_fixture, piglin, _body, target) =
+            ranged_fixture("piglin_ranged_attack_fire", charged_crossbow());
+        piglin.set_no_action_time(42);
+
+        assert!(RangedAttackMob::perform_ranged_attack(
+            piglin.as_ref(),
+            &target,
+            1.0
+        ));
+
+        let fired = piglin.get_item_in_hand(InteractionHand::MainHand);
+        assert!(
+            !is_charged(&fired),
+            "the shot clears the loaded projectiles"
+        );
+        assert_eq!(
+            piglin.no_action_time(),
+            0,
+            "`onCrossbowAttackPerformed` clears the no-action time"
+        );
+
+        let arrows = arrows(&world_fixture.world);
+        assert_eq!(arrows.len(), 1);
+        let velocity = arrows[0].velocity();
+        assert!(
+            (velocity.length() - f64::from(MOB_ARROW_POWER)).abs() < 0.2,
+            "the bolt flies at `MOB_ARROW_POWER` (1.6): {velocity:?}"
+        );
+    }
+
+    #[test]
+    fn uncharged_piglin_releases_nothing() {
+        init_vanilla_registry();
+        let (world_fixture, piglin, _body, target) = ranged_fixture(
+            "piglin_ranged_attack_uncharged",
+            ItemStack::new(&vanilla_items::CROSSBOW),
+        );
+
+        assert!(
+            !RangedAttackMob::perform_ranged_attack(piglin.as_ref(), &target, 1.0),
+            "an unloaded crossbow releases no bolt"
+        );
+        assert!(arrows(&world_fixture.world).is_empty());
     }
 }

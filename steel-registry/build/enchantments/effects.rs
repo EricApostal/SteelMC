@@ -234,6 +234,18 @@ pub(super) fn entity_predicate_token(predicate: &EntityPredicateJson) -> TokenSt
     let vehicle = entity_vehicle_predicate_token(&predicate.vehicle);
     let flags = entity_flags_predicate_token(&predicate.flags);
     let type_specific = entity_type_specific_predicate_token(&predicate.type_specific);
+    let location = if let Some(location) = &predicate.location {
+        let can_see_sky = optional_bool_token(location.can_see_sky);
+        let unsupported = location.unsupported;
+        quote! {
+            Some(EntityLocationPredicate {
+                can_see_sky: #can_see_sky,
+                unsupported: #unsupported,
+            })
+        }
+    } else {
+        quote! { None }
+    };
     let unsupported = predicate.unsupported;
     quote! {
         EntityPredicate {
@@ -241,8 +253,17 @@ pub(super) fn entity_predicate_token(predicate: &EntityPredicateJson) -> TokenSt
             vehicle: #vehicle,
             flags: #flags,
             type_specific: #type_specific,
+            location: #location,
             unsupported: #unsupported,
         }
+    }
+}
+
+pub(super) fn optional_bool_token(value: Option<bool>) -> TokenStream {
+    if let Some(value) = value {
+        quote! { Some(#value) }
+    } else {
+        quote! { None }
     }
 }
 
@@ -531,6 +552,19 @@ pub(super) fn generate_requirements_value(
         RequirementsJson::RandomChance { chance } => {
             let chance = generate_level_based_value_ref(prefix, chance, statics, counter);
             quote! { EnchantmentEffectRequirements::RandomChance { chance: #chance } }
+        }
+        RequirementsJson::WeatherCheck {
+            raining,
+            thundering,
+        } => {
+            let raining = optional_bool_token(*raining);
+            let thundering = optional_bool_token(*thundering);
+            quote! {
+                EnchantmentEffectRequirements::WeatherCheck {
+                    raining: #raining,
+                    thundering: #thundering,
+                }
+            }
         }
         RequirementsJson::MatchTool { items } => {
             let items = if let Some(items) = items {

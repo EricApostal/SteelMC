@@ -48,7 +48,7 @@ impl HopperBlock {
 
     /// Mirrors Vanilla's `checkPoweredState`: `ENABLED` is the inverse of the
     /// neighbor redstone signal.
-    fn check_powered_state(&self, world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
+    fn check_powered_state(world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
         let enabled = !world.has_neighbor_signal(pos);
         if state.get_value(ENABLED) != enabled {
             world.set_block(
@@ -86,7 +86,7 @@ impl BlockBehavior for HopperBlock {
         _moved_by_piston: bool,
     ) {
         if old_state.get_block() != state.get_block() {
-            self.check_powered_state(world, pos, state);
+            Self::check_powered_state(world, pos, state);
         }
     }
     fn handle_neighbor_changed(
@@ -97,7 +97,7 @@ impl BlockBehavior for HopperBlock {
         _source_block: BlockRef,
         _moved_by_piston: bool,
     ) {
-        self.check_powered_state(world, pos, state);
+        Self::check_powered_state(world, pos, state);
     }
 
     fn use_without_item(

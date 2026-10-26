@@ -201,6 +201,64 @@ impl BiomeSourceKind {
         result
     }
 
+    /// Vanilla `BiomeSource.findClosestBiome3d(...)` (used by `locate biome`):
+    /// returns the first biome matching `allowed` while visiting spiral rings of
+    /// `horizontal_resolution`-spaced columns around `origin` and, within each
+    /// column, the `Mth.outFromOrigin` y order of `vertical_resolution` steps over
+    /// `[min_y + 1, max_y + 1]`.
+    ///
+    /// The returned position is the located biome's *block* position (not the sampled
+    /// quart), exactly like vanilla's `new BlockPos(x, y, z)`.
+    ///
+    /// # Panics
+    /// Panics if `horizontal_resolution` or `vertical_resolution` is not positive.
+    #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "parameter list mirrors vanilla `BiomeSource.findClosestBiome3d(..., Predicate, minY, maxY)`; grouping them would break the correspondence"
+    )]
+    pub fn find_closest_biome_3d(
+        &self,
+        origin: BlockPos,
+        search_radius: i32,
+        horizontal_resolution: i32,
+        vertical_resolution: i32,
+        allowed: &dyn Fn(BiomeRef) -> bool,
+        min_y: i32,
+        max_y: i32,
+    ) -> Option<(BlockPos, BiomeRef)> {
+        assert!(
+            horizontal_resolution > 0,
+            "horizontal resolution must be positive"
+        );
+        assert!(
+            vertical_resolution > 0,
+            "vertical resolution must be positive"
+        );
+
+        // Vanilla filters `possibleBiomes()` by the argument predicate and bails out
+        // when nothing in the dimension can match.
+        if !self
+            .possible_biome_refs()
+            .iter()
+            .any(|biome| allowed(biome))
+        {
+            return None;
+        }
+
+        let mut sampler = self.chunk_sampler();
+        find_closest_biome_3d(
+            origin,
+            search_radius,
+            horizontal_resolution,
+            vertical_resolution,
+            min_y,
+            max_y,
+            |quart_x, quart_y, quart_z| sampler.sample(quart_x, quart_y, quart_z),
+            allowed,
+        )
+    }
+
     /// Returns vanilla's climate-based initial spawn search origin for dimensions that define one.
     #[must_use]
     pub fn initial_spawn_search_origin(&self) -> BlockPos {
@@ -224,6 +282,115 @@ fn distinct_biome_refs(biomes: Vec<BiomeRef>) -> Vec<BiomeRef> {
     }
 
     distinct
+}
+
+/// Vanilla `BiomeSource.findClosestBiome3d(...)` (used by `locate biome`): returns
+/// the first biome matching `allowed` while visiting spiral rings of
+/// `horizontal_resolution`-spaced columns around `origin` and, within each column,
+/// the `Mth.outFromOrigin` y order of `vertical_resolution` steps over
+/// `[min_y + 1, max_y + 1]`.
+///
+/// `sample` maps quart coordinates to a biome. The returned position is the located
+/// biome's *block* position (not the sampled quart), exactly like vanilla's
+/// `new BlockPos(x, y, z)`.
+///
+/// # Panics
+/// Panics if `horizontal_resolution` or `vertical_resolution` is not positive.
+#[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "parameter list mirrors vanilla `BiomeSource.findClosestBiome3d(..., Predicate, minY, maxY)`; grouping them would break the correspondence"
+)]
+pub fn find_closest_biome_3d(
+    origin: BlockPos,
+    search_radius: i32,
+    horizontal_resolution: i32,
+    vertical_resolution: i32,
+    min_y: i32,
+    max_y: i32,
+    mut sample: impl FnMut(i32, i32, i32) -> BiomeRef,
+    allowed: &dyn Fn(BiomeRef) -> bool,
+) -> Option<(BlockPos, BiomeRef)> {
+    assert!(
+        horizontal_resolution > 0,
+        "horizontal resolution must be positive"
+    );
+    assert!(
+        vertical_resolution > 0,
+        "vertical resolution must be positive"
+    );
+
+    let check_radius = search_radius.div_euclid(horizontal_resolution);
+    let y_values = out_from_origin(origin.0.y, min_y + 1, max_y + 1, vertical_resolution);
+
+    for offset in BlockPos::spiral_around(
+        BlockPos::ZERO,
+        check_radius,
+        steel_utils::Direction::East,
+        steel_utils::Direction::South,
+    ) {
+        let x = origin
+            .0
+            .x
+            .wrapping_add(offset.0.x.wrapping_mul(horizontal_resolution));
+        let z = origin
+            .0
+            .z
+            .wrapping_add(offset.0.z.wrapping_mul(horizontal_resolution));
+        let quart_x = x >> 2;
+        let quart_z = z >> 2;
+        for &y in &y_values {
+            let biome = sample(quart_x, y >> 2, quart_z);
+            if allowed(biome) {
+                return Some((BlockPos::new(x, y, z), biome));
+            }
+        }
+    }
+    None
+}
+
+/// Vanilla `Mth.outFromOrigin(origin, min, max, step)`: the y values a biome search
+/// samples, ordered outward from `origin` (alternating up and down, starting upward)
+/// and stopping once both sides stepped out of `[min, max]`.
+///
+/// The ground-truth order comes from the deobfuscated jar
+/// (`net.minecraft.util.Mth`, verified against live calls, e.g.
+/// `outFromOrigin(64, -63, 320, 64) == [64, 128, 0, 192, 256, 320]`).
+fn out_from_origin(origin: i32, min: i32, max: i32, step: i32) -> Vec<i32> {
+    let clamped = origin.clamp(min, max);
+    let mut values = Vec::new();
+    if !out_from_origin_continues(clamped, min, max, clamped) {
+        return values;
+    }
+    values.push(clamped);
+    let mut current = out_from_origin_next(clamped, step, max, min, clamped);
+    while out_from_origin_continues(clamped, min, max, current) {
+        values.push(current);
+        current = out_from_origin_next(clamped, step, max, min, current);
+    }
+    values
+}
+
+/// Vanilla `Mth.lambda$outFromOrigin$0`: the search continues while at least one side
+/// of the current value still reaches into `[min, max]`.
+const fn out_from_origin_continues(origin: i32, min: i32, max: i32, value: i32) -> bool {
+    let distance = value.wrapping_sub(origin).abs();
+    origin - distance >= min || origin + distance <= max
+}
+
+/// Vanilla `Mth.lambda$outFromOrigin$1`: the next y sample after `current`.
+const fn out_from_origin_next(origin: i32, step: i32, max: i32, min: i32, current: i32) -> i32 {
+    let ascending = current <= origin;
+    let distance = current.wrapping_sub(origin).abs();
+    if ascending && origin + distance + step <= max {
+        return origin + distance + step;
+    }
+    let descending = (origin - distance) - if ascending { step } else { 0 };
+    if descending >= min {
+        descending
+    } else {
+        origin + distance + step
+    }
 }
 
 /// Per-chunk biome sampler with internal caches.
@@ -668,5 +835,70 @@ mod tests {
         assert_eq!(sampler.sample(16, 0, 16), &*vanilla_biomes::PLAINS);
         // (-1,0): -1>>4 = -1 in Java (arithmetic shift) → -1 floormod 2 = 1.
         assert_eq!(sampler.sample(-1, 0, 0), &*vanilla_biomes::DESERT);
+    }
+
+    #[test]
+    fn out_from_origin_matches_the_jar_sequences() {
+        // Ground truth from live calls against the deobfuscated jar
+        // (`net.minecraft.util.Mth.outFromOrigin`).
+        assert_eq!(
+            out_from_origin(64, -63, 320, 64),
+            vec![64, 128, 0, 192, 256, 320]
+        );
+        assert_eq!(
+            out_from_origin(0, -63, 320, 64),
+            vec![0, 64, 128, 192, 256, 320]
+        );
+        assert_eq!(
+            out_from_origin(-100, -63, 320, 64),
+            vec![-63, 1, 65, 129, 193, 257]
+        );
+        assert_eq!(
+            out_from_origin(100, -63, 320, 64),
+            vec![100, 164, 36, 228, -28, 292]
+        );
+        assert_eq!(out_from_origin(64, 0, 128, 64), vec![64, 128, 0]);
+        assert_eq!(
+            out_from_origin(20, -63, 320, 64),
+            vec![20, 84, -44, 148, 212, 276]
+        );
+    }
+
+    #[test]
+    fn closest_biome_search_uses_spiral_order_then_y_order() {
+        // The search visits spiral rings and, within each column, the `outFromOrigin`
+        // y order, returning the first match (not the closest by distance).
+        let visits = |matches: fn(i32, i32, i32) -> bool| {
+            find_closest_biome_3d(
+                BlockPos::new(0, 64, 0),
+                64,
+                32,
+                64,
+                -64,
+                320,
+                |quart_x, quart_y, quart_z| {
+                    if matches(quart_x, quart_y, quart_z) {
+                        &vanilla_biomes::DESERT
+                    } else {
+                        &vanilla_biomes::PLAINS
+                    }
+                },
+                &|biome| biome.key == vanilla_biomes::DESERT.key,
+            )
+        };
+        // Column (0, 0) is visited first; its first y sample is 64.
+        assert_eq!(
+            visits(|_, _, _| true).map(|(pos, _)| pos),
+            Some(BlockPos::new(0, 64, 0))
+        );
+        // A match restricted to y = 128 is found at (0, 128, 0), before any other
+        // column, even though a different column could hold a 3D-nearer biome.
+        assert_eq!(
+            visits(|_, quart_y, _| quart_y == 32).map(|(pos, _)| pos),
+            Some(BlockPos::new(0, 128, 0))
+        );
+        // No match anywhere: the full 5×5 spiral (check radius 2) plus all y samples
+        // miss.
+        assert!(visits(|_, _, _| false).is_none());
     }
 }

@@ -567,6 +567,10 @@ mod tests {
         );
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one end-to-end fixture walking vanilla's shared bookshelf interaction path (`useItemOn` → slot state → occupied block state → comparator) in order; splitting it would break that narrative"
+    )]
     #[test]
     fn interactions_update_inventory_occupied_state_and_comparator() {
         init_globals();

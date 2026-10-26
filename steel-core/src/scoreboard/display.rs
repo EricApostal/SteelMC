@@ -147,6 +147,10 @@ impl DisplaySlot {
 
     /// Parses a vanilla display-slot name.
     #[must_use]
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "mirrors the vanilla display-slot name lookup; called by save-data and command parsers"
+    )]
     pub fn from_str(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|slot| slot.as_str() == name)
     }
@@ -204,7 +208,7 @@ impl DisplaySlot {
 
 #[cfg(test)]
 mod tests {
-    use super::DisplaySlot;
+    use super::{DisplaySlot, TeamColor};
 
     #[test]
     fn display_slots_match_vanilla_ids_and_names() {
@@ -221,9 +225,7 @@ mod tests {
     fn team_sidebar_slots_expose_their_color() {
         assert!(DisplaySlot::Sidebar.team_color().is_none());
         assert_eq!(
-            DisplaySlot::SidebarTeamRed
-                .team_color()
-                .map(|color| color.rgb()),
+            DisplaySlot::SidebarTeamRed.team_color().map(TeamColor::rgb),
             Some(0x00FF_5555)
         );
     }

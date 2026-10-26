@@ -12,6 +12,7 @@ use std::sync::{Arc, Weak};
 
 use steel_macros::block_behavior;
 use steel_registry::advancement::triggers::TriggerEvent;
+use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{
@@ -59,7 +60,7 @@ pub struct CrafterBlock {
 }
 
 /// Vanilla `FrontAndTop.fromFrontAndTop`.
-fn from_front_and_top(front: Direction, top: Direction) -> FrontAndTop {
+const fn from_front_and_top(front: Direction, top: Direction) -> FrontAndTop {
     match front {
         Direction::Down => match top {
             Direction::East => FrontAndTop::DownEast,
@@ -81,7 +82,7 @@ fn from_front_and_top(front: Direction, top: Direction) -> FrontAndTop {
 }
 
 /// Vanilla `FrontAndTop.front`.
-fn orientation_front(orientation: FrontAndTop) -> Direction {
+const fn orientation_front(orientation: FrontAndTop) -> Direction {
     match orientation {
         FrontAndTop::DownEast
         | FrontAndTop::DownNorth
@@ -406,7 +407,7 @@ impl BlockBehavior for CrafterBlock {
         &self,
         _world: &Arc<World>,
         _state: BlockStateId,
-        block_entity_type: steel_registry::block_entity_type::BlockEntityTypeRef,
+        block_entity_type: BlockEntityTypeRef,
     ) -> Option<BlockEntityTicker> {
         BlockEntityTicker::for_matching_entity_tick(
             block_entity_type,

@@ -84,19 +84,16 @@ mod tests {
         let Some(root) = root else {
             panic!("jfr root should exist");
         };
-        let names = dispatcher
-            .children(root)
-            .map(|children| {
-                children
-                    .iter()
-                    .filter_map(|child| dispatcher.node(*child))
-                    .map(|node| {
-                        assert!(node.is_executable());
-                        node.name()
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let names = dispatcher.children(root).map_or_default(|children| {
+            children
+                .iter()
+                .filter_map(|child| dispatcher.node(*child))
+                .map(|node| {
+                    assert!(node.is_executable());
+                    node.name()
+                })
+                .collect::<Vec<_>>()
+        });
         assert_eq!(names, ["start", "stop"]);
     }
 }

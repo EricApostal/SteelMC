@@ -119,22 +119,12 @@ impl ChestBlockEntity {
     pub fn open_count(level: &dyn LevelReader, pos: BlockPos) -> i32 {
         level
             .get_block_entity(pos)
-            .and_then(|entity| {
-                entity
-                    .container_viewers()
-                    .map(|viewers| viewers.open_count())
-            })
+            .and_then(|entity| entity.container_viewers().map(ContainerViewers::open_count))
             .unwrap_or(0)
     }
 
     /// Vanilla `ChestBlockEntity.playSound`.
-    fn play_sound(
-        &self,
-        world: &Arc<World>,
-        pos: BlockPos,
-        state: BlockStateId,
-        sound: SoundEventRef,
-    ) {
+    fn play_sound(world: &Arc<World>, pos: BlockPos, state: BlockStateId, sound: SoundEventRef) {
         let chest_type = state.get_value(&BlockStateProperties::CHEST_TYPE);
         // Vanilla skips the left half so a double chest only sounds once.
         if chest_type == ChestType::Left {
@@ -309,12 +299,12 @@ fn hinge_sound(state: BlockStateId, open: bool) -> SoundEventRef {
 impl ContainerOpenersHost for ChestBlockEntity {
     /// Vanilla `ChestBlockEntity.openersCounter.onOpen`.
     fn on_open(&self, world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
-        self.play_sound(world, pos, state, hinge_sound(state, true));
+        Self::play_sound(world, pos, state, hinge_sound(state, true));
     }
 
     /// Vanilla `ChestBlockEntity.openersCounter.onClose`.
     fn on_close(&self, world: &Arc<World>, pos: BlockPos, state: BlockStateId) {
-        self.play_sound(world, pos, state, hinge_sound(state, false));
+        Self::play_sound(world, pos, state, hinge_sound(state, false));
     }
 
     /// Vanilla `ChestBlockEntity.signalOpenCount`.
@@ -456,6 +446,9 @@ impl Container for ChestContainer {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
+    use simdnbt::borrow::read_compound;
     use simdnbt::owned::NbtCompound;
     use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_items};
 
@@ -496,9 +489,8 @@ mod tests {
 
         let mut encoded = Vec::new();
         nbt.write(&mut encoded);
-        let borrowed =
-            simdnbt::borrow::read_compound(&mut std::io::Cursor::new(encoded.as_slice()))
-                .expect("saved chest NBT should reparse");
+        let borrowed = read_compound(&mut Cursor::new(encoded.as_slice()))
+            .expect("saved chest NBT should reparse");
         chest.load_additional(&borrowed);
 
         let container = chest.container.lock();
@@ -536,9 +528,8 @@ mod tests {
         chest.save_additional(&mut nbt);
         let mut encoded = Vec::new();
         nbt.write(&mut encoded);
-        let borrowed =
-            simdnbt::borrow::read_compound(&mut std::io::Cursor::new(encoded.as_slice()))
-                .expect("saved chest NBT should reparse");
+        let borrowed = read_compound(&mut Cursor::new(encoded.as_slice()))
+            .expect("saved chest NBT should reparse");
         chest.load_additional(&borrowed);
 
         let container = chest.container.lock();

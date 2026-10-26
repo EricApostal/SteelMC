@@ -32,7 +32,7 @@ use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BoundingBox, ChunkPos, Identifier, Rotation};
 use steel_worldgen::biomes::obfuscate_biome_seed;
 use steel_worldgen::structure::{StructureBlockIgnore, StructureMirror};
-use text_components::TextComponent;
+use text_components::{TextComponent, translation::Translation};
 
 use super::super::{
     brigadier::{ArgumentType, CommandNodeBuilder, CommandSyntaxError},
@@ -68,6 +68,10 @@ pub(super) fn registration() -> CommandRegistration<CommandSource> {
     CommandRegistration::new(Identifier::vanilla_static("place"), |_| command())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one flat builder mirrors vanilla PlaceCommand.register's argument tree"
+)]
 fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
     literal("place")
         .then(
@@ -284,6 +288,7 @@ pub(crate) enum PlaceError {
     /// `BlockPosArgument.ERROR_NOT_LOADED`).
     NotLoaded,
     /// The placed-feature pipeline cannot run over live chunks.
+    #[expect(dead_code, reason = "vanilla PlaceError variant")]
     LiveFeatureUnsupported,
 }
 
@@ -297,8 +302,8 @@ until the feature layer goes level-generic";
 fn command_error(
     error: PlaceError,
     id: &Identifier,
-    invalid: &'static text_components::translation::Translation<1>,
-    failed: &'static text_components::translation::Translation<0>,
+    invalid: &'static Translation<1>,
+    failed: &'static Translation<0>,
 ) -> CommandSyntaxError {
     match error {
         PlaceError::Invalid => CommandSyntaxError::dynamic(
@@ -545,9 +550,8 @@ fn place_template_in_world(
     options: TemplateOptions,
 ) -> Result<(), PlaceError> {
     // Vanilla `StructureTemplateManager.get`: the id must name a bundled template.
-    let template = match StructureTemplate::load_vanilla(&REGISTRY, template_key) {
-        Ok(template) => template,
-        Err(_) => return Err(PlaceError::Invalid),
+    let Ok(template) = StructureTemplate::load_vanilla(&REGISTRY, template_key) else {
+        return Err(PlaceError::Invalid);
     };
 
     // Vanilla `checkLoaded` spans `pos` through `pos + template size`.
@@ -592,7 +596,7 @@ fn place_template_in_world(
     };
 
     let mut level = LiveLevel::new(world);
-    let mut random = WorldgenRandom::from_seed(options.seed as i64 as u64);
+    let mut random = WorldgenRandom::from_seed(i64::from(options.seed) as u64);
     if !template.place_in_world(
         &mut level,
         &REGISTRY,
@@ -641,6 +645,14 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::redundant_closure_for_method_calls,
+        reason = "the private CommandNode type cannot be named from this module"
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one table-shaped test keeps the whole /place graph on the same contract"
+    )]
     fn place_graph_has_vanilla_subcommands_and_typed_optional_arguments() {
         init_globals();
         init_vanilla_registry();

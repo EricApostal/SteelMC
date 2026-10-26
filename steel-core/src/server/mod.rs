@@ -33,10 +33,12 @@ use crate::command::{
     PendingCommandExecutionQueue, client_permission_event, command_suggestions_packet,
     command_tree_packet, create_registered_dispatcher,
 };
-#[cfg(any(test, feature = "test-framework"))]
-use crate::config::ResolvedDomainConfig;
-use crate::config::{ResolvedWorldConfig, RuntimeConfig, WorldsConfig, validate_login_security};
+use crate::config::{
+    ResolvedDomainConfig, ResolvedWorldConfig, RuntimeConfig, WorldsConfig, validate_login_security,
+};
+use crate::datapack::init as datapack_init;
 use crate::entity::damage::DamageHistory;
+use crate::entity::entities::mobs::npc::wandering_trader::WanderingTraderSpawner;
 use crate::entity::{
     Entity, EntityBase, PendingWorldChangeToken, RemovalReason, SharedEntity,
     boss::CustomBossEvents, change_entity_world,
@@ -111,7 +113,7 @@ use steel_utils::{
 use text_components::{Modifier, TextComponent, format::Color};
 use tick_rate_manager::{SprintReport, TickRateManager};
 use tokio::{
-    runtime::Runtime,
+    runtime::{Builder, Runtime},
     sync::Notify,
     task::{JoinSet, spawn_blocking},
     time::sleep,
@@ -722,7 +724,7 @@ impl Server {
         let player_lists = PlayerLists::load(&resolved_worlds.save_path, config.white_list)
             .await
             .map_err(|error| format!("failed to load server player lists: {error}"))?;
-        crate::datapack::init(&resolved_worlds.save_path)
+        datapack_init(&resolved_worlds.save_path)
             .map_err(|error| format!("failed to load data packs: {error}"))?;
         let mut worlds = WorldMap::new(
             resolved_worlds.default_domain.clone(),
@@ -791,11 +793,7 @@ impl Server {
                 .map_err(|e| format!("failed to initialize spawn for {}: {e}", world_entry.key))?;
             // Vanilla `MinecraftServer` registers one `WanderingTraderSpawner` per level.
             let wandering_trader_spawner =
-                crate::entity::entities::mobs::npc::wandering_trader::WanderingTraderSpawner::load(
-                    &world,
-                )
-                .await
-                .map_err(|e| {
+                WanderingTraderSpawner::load(&world).await.map_err(|e| {
                     format!(
                         "failed to load wandering trader data for {}: {e}",
                         world_entry.key
@@ -981,11 +979,8 @@ impl Server {
     /// `Send`; this mirrors `/save-all` and keeps the server tick thread free.
     pub async fn autosave(self: Arc<Self>) {
         let handle =
-            tokio::task::spawn_blocking(
-                move || match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
+            spawn_blocking(
+                move || match Builder::new_current_thread().enable_all().build() {
                     Ok(runtime) => {
                         runtime.block_on(self.save_everything(false));
                     }

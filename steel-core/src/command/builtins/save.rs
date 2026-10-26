@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use steel_utils::{Identifier, translations};
-use tokio::sync::oneshot;
+use tokio::{runtime::Builder as RuntimeBuilder, sync::oneshot, task::spawn_blocking};
 
 use super::super::{
     brigadier::{CommandNodeBuilder, CommandSyntaxError},
@@ -87,6 +87,10 @@ fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
 ///
 /// The save runs off the tick thread because it awaits file writes, so the
 /// command result is produced by [`SaveAllTask`] once the writes complete.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "Command executors use a shared fallible callback signature."
+)]
 fn start_save_all(
     context: &SteelCommandContext<CommandSource>,
 ) -> Result<SaveAllTask, CommandSyntaxError> {
@@ -100,11 +104,8 @@ fn start_save_all(
     // blocking pool with its own current-thread runtime instead: the command
     // still resumes across ticks, and the server tick thread is never blocked
     // (vanilla blocks it for the whole save).
-    drop(tokio::task::spawn_blocking(move || {
-        let saved = match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
+    drop(spawn_blocking(move || {
+        let saved = match RuntimeBuilder::new_current_thread().enable_all().build() {
             Ok(runtime) => runtime.block_on(run_save_all(&server)),
             Err(error) => {
                 log::error!("save-all could not start its save runtime: {error}");

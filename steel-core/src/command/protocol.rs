@@ -722,6 +722,19 @@ mod tests {
     }
 
     #[test]
+    fn steel_poi_argument_projects_vanilla_resource_or_tag_parser() {
+        let (argument, suggestions) = SteelArgumentType::poi_or_tag().protocol_argument();
+
+        assert!(matches!(
+            argument,
+            ProtocolArgumentType::ResourceOrTag {
+                identifier: "minecraft:point_of_interest_type"
+            }
+        ));
+        assert!(matches!(suggestions, Some(SuggestionType::AskServer)));
+    }
+
+    #[test]
     fn steel_structure_argument_projects_vanilla_resource_or_tag_key_parser() {
         let (argument, suggestions) = SteelArgumentType::structure_or_tag_key().protocol_argument();
 

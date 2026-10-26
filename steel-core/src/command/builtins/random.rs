@@ -4,7 +4,7 @@
 //! vanilla parse tree and messages. The `<sequence>` and `reset` branches are
 //! intentionally absent: vanilla draws those from the world's persistent
 //! `RandomSequences` saved data (`/tmp/vanilla/src/world/RandomSequences.java`),
-//! which Steel does not have yet (owner: SpawnerWorld).
+//! which Steel does not have yet (owner: `SpawnerWorld`).
 
 use steel_utils::{Identifier, translations};
 use text_components::TextComponent;

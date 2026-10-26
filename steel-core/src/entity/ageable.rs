@@ -363,17 +363,17 @@ pub trait AgeableMob: Mob {
         // Vanilla `AgeableMob.aiStep`: a forced-growth heart puff every fourth tick.
         let forced_age_timer = self.forced_age_timer();
         if forced_age_timer > 0 {
-            if forced_age_timer % 4 == 0 {
-                if let Some(world) = &world {
-                    let (x, y, z) = self.random_position(1.0, 0.0, 1.0);
-                    world.send_particles(
-                        ParticleData::simple(&vanilla_particle_types::HAPPY_VILLAGER),
-                        DVec3::new(x, y + 0.5, z),
-                        1,
-                        DVec3::ZERO,
-                        0.0,
-                    );
-                }
+            if forced_age_timer % 4 == 0
+                && let Some(world) = &world
+            {
+                let (x, y, z) = self.random_position(1.0, 0.0, 1.0);
+                world.send_particles(
+                    ParticleData::simple(&vanilla_particle_types::HAPPY_VILLAGER),
+                    DVec3::new(x, y + 0.5, z),
+                    1,
+                    DVec3::ZERO,
+                    0.0,
+                );
             }
             self.set_forced_age_timer(forced_age_timer - 1);
         }
@@ -388,24 +388,24 @@ pub trait AgeableMob: Mob {
         // Vanilla `AgeableMob.makeAgeLockedParticle`.
         let age_lock_particle_timer = self.age_lock_particle_timer();
         if age_lock_particle_timer > 0 {
-            if age_lock_particle_timer % 2 == 0 {
-                if let Some(world) = &world {
-                    let is_age_locked = self.is_age_locked();
-                    let y_particle_offset = if is_age_locked { 0.2 } else { 0.0 };
-                    let (x, y, z) = self.random_position(1.0, 0.2, 1.0);
-                    let height = f64::from(self.base().dimensions().height);
-                    world.send_particles(
-                        ParticleData::simple(if is_age_locked {
-                            &vanilla_particle_types::PAUSE_MOB_GROWTH
-                        } else {
-                            &vanilla_particle_types::RESET_MOB_GROWTH
-                        }),
-                        DVec3::new(x, y + height + y_particle_offset, z),
-                        1,
-                        DVec3::ZERO,
-                        0.0,
-                    );
-                }
+            if age_lock_particle_timer % 2 == 0
+                && let Some(world) = &world
+            {
+                let is_age_locked = self.is_age_locked();
+                let y_particle_offset = if is_age_locked { 0.2 } else { 0.0 };
+                let (x, y, z) = self.random_position(1.0, 0.2, 1.0);
+                let height = f64::from(self.base().dimensions().height);
+                world.send_particles(
+                    ParticleData::simple(if is_age_locked {
+                        &vanilla_particle_types::PAUSE_MOB_GROWTH
+                    } else {
+                        &vanilla_particle_types::RESET_MOB_GROWTH
+                    }),
+                    DVec3::new(x, y + height + y_particle_offset, z),
+                    1,
+                    DVec3::ZERO,
+                    0.0,
+                );
             }
             self.set_age_lock_particle_timer(age_lock_particle_timer - 1);
         }

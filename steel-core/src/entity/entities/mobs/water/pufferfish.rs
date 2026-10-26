@@ -405,6 +405,17 @@ impl Entity for PufferfishEntity {
         self.set_puff_state(nbt.int("PuffState").unwrap_or(0).min(MAX_PUFF_STATE));
     }
 
+    /// Vanilla `Pufferfish.loadFromBucketTag`, restored by `MobBucketItem.spawn`
+    /// on release.
+    fn load_from_bucket_tag(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
+        self.load_from_bucket_data(nbt);
+    }
+
+    /// Vanilla `Bucketable.setFromBucket`, flipped for every released mob.
+    fn set_from_bucket(&self, from_bucket: bool) {
+        PufferfishEntity::set_from_bucket(self, from_bucket);
+    }
+
     /// Vanilla `Pufferfish.playerTouch`.
     ///
     /// Deviation: vanilla only stings a `ServerPlayer`; every Steel player is

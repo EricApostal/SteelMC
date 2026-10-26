@@ -116,7 +116,11 @@ fn required_attribute(
 }
 
 fn attribute_description(attribute: AttributeRef) -> TextComponent {
-    TextComponent::translated(TranslatedMessage::new(attribute.translation_key, None))
+    TextComponent::translated(TranslatedMessage {
+        key: attribute.translation_key.into(),
+        fallback: None,
+        args: None,
+    })
 }
 
 fn no_such_attribute_error(target: &SharedEntity, attribute: AttributeRef) -> CommandSyntaxError {

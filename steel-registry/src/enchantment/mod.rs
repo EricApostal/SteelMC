@@ -543,6 +543,7 @@ mod tests {
             EnchantmentEffectRequirements::RandomChance { .. } => true,
             EnchantmentEffectRequirements::EntityProperties { .. }
             | EnchantmentEffectRequirements::DamageSourceProperties(_)
+            | EnchantmentEffectRequirements::WeatherCheck { .. }
             | EnchantmentEffectRequirements::MatchTool { .. }
             | EnchantmentEffectRequirements::Unsupported { .. } => false,
         }

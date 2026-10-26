@@ -3792,6 +3792,22 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
     /// Mirrors the overridable part of vanilla's `Entity.applyImplicitComponents`.
     fn apply_implicit_item_components(&self, _item_stack: &ItemStack) {}
 
+    /// Restores this entity's state from a mob bucket's `bucket_entity_data`
+    /// payload while the bucket releases it.
+    ///
+    /// Mirrors vanilla `Bucketable.loadFromBucketTag`. The mob-bucket release
+    /// path [`MobBucketItem`](crate::behavior::items::MobBucketItem) calls this
+    /// together with [`Entity::set_from_bucket`] on every mob it spawns; the
+    /// default is a no-op for entities that are not `Bucketable`.
+    fn load_from_bucket_tag(&self, _nbt: BorrowedNbtCompoundView<'_, '_>) {}
+
+    /// Marks this entity as released from a bucket.
+    ///
+    /// Mirrors vanilla `Bucketable.setFromBucket`, which
+    /// `MobBucketItem.spawn` calls right after `loadFromBucketTag`. The default
+    /// is a no-op for entities that are not `Bucketable`.
+    fn set_from_bucket(&self, _from_bucket: bool) {}
+
     /// Spawn-item data is merged into the entity's current save state before it
     /// is loaded. Keeping that merge at the entity boundary preserves defaults
     /// and entity-specific state when the component only overrides one field.

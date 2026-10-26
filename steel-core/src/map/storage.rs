@@ -29,6 +29,7 @@ use crate::inventory::equipment::EquipmentSlot;
 use crate::player::Player;
 use crate::player::player_inventory::PlayerInventory;
 use crate::world::World;
+use crate::world::level_reader::LevelReader;
 
 /// All maps belonging to one world, persisted through the world saved data.
 pub struct MapStorage {
@@ -43,18 +44,10 @@ struct PersistentMaps {
     maps: BTreeMap<i32, PersistentMapData>,
 }
 
+#[derive(Default)]
 struct MapStorageInner {
     index: MapIndex,
     maps: BTreeMap<i32, MapItemSavedData>,
-}
-
-impl Default for MapStorageInner {
-    fn default() -> Self {
-        Self {
-            index: MapIndex::new(),
-            maps: BTreeMap::new(),
-        }
-    }
 }
 
 impl MapStorage {
@@ -98,6 +91,10 @@ impl MapStorage {
     /// # Errors
     ///
     /// Returns an error when the saved maps cannot be written.
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "the save lock and the inner read guard intentionally cover the disk write so that concurrent saves cannot interleave; both are non-async locks and are released before `save` returns"
+    )]
     pub async fn save(&self, saved_data: &SavedDataManager) -> io::Result<usize> {
         let _save_guard = self.save_lock.lock();
         let inner = self.inner.read();
@@ -298,7 +295,7 @@ impl MapStorage {
     /// Returns `None` when the map id is unknown.
     pub fn toggle_banner(
         &self,
-        level: &dyn crate::world::level_reader::LevelReader,
+        level: &dyn LevelReader,
         map_id: i32,
         pos: steel_utils::BlockPos,
     ) -> Option<bool> {
@@ -371,7 +368,7 @@ fn carried_map_decorations(player: &Player, map_id: i32) -> Option<MapDecoration
     let inventory = player.inventory.lock();
     (0..=PlayerInventory::SLOT_OFFHAND).find_map(|slot| {
         let stack = inventory.get_item(slot);
-        if !stack.get(MAP_ID).is_some_and(|id| id.id() == map_id) {
+        if stack.get(MAP_ID).is_none_or(|id| id.id() != map_id) {
             return None;
         }
         stack.get(MAP_DECORATIONS).cloned()

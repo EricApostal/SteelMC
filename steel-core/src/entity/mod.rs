@@ -75,6 +75,7 @@ use crate::physics::{
     COLLISION_EPSILON, CollisionWorld, EntityPhysicsState, MoveResult, MoverType,
     WorldCollisionProvider, move_entity as resolve_entity_movement,
 };
+use crate::player::advancement::triggers::raise_started_riding;
 use crate::world::game_event::GameEventContext;
 use crate::world::{ClipBlockShape, ClipFluid, LevelReader, World};
 use crate::{enchantment_helper, entity::damage::DamageSource, player::Player};
@@ -835,6 +836,7 @@ pub use inside_block_effects::{
 };
 pub(crate) use item_based_steering::{ItemBasedSteering, ItemSteerable};
 pub use item_frame::ItemFrame;
+pub(crate) use leash::Leashable;
 pub use living_base::{
     ActiveItemUseState, ActiveMobEffect, DEATH_DURATION, DEFAULT_SWING_DURATION, LivingEntityBase,
     LivingRotationState, LivingSwingState, LivingTravelInput, MobEffectDurationTick,
@@ -973,7 +975,7 @@ pub(crate) fn start_riding_entities(
         }
         visited.push(entity.id());
         if let Some(player) = entity.as_player() {
-            crate::player::advancement::triggers::raise_started_riding(player);
+            raise_started_riding(player);
         }
         pending.extend(entity.passengers());
     }

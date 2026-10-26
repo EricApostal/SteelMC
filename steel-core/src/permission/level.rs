@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError, de::Visitor};
 use steel_utils::entity_events::EntityStatus;
 
 /// Vanilla's numeric operator permission level.
@@ -159,7 +159,7 @@ impl<'de> Deserialize<'de> for PermissionLevel {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct LevelVisitor;
 
-        impl serde::de::Visitor<'_> for LevelVisitor {
+        impl Visitor<'_> for LevelVisitor {
             type Value = PermissionLevel;
 
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

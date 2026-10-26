@@ -686,17 +686,16 @@ impl EnderDragonFight {
         if !self.dragon_killed || self.respawn_stage.is_some() {
             return;
         }
-        let location = match self.exit_portal_location {
-            Some(location) => location,
-            None => {
-                if self.find_exit_portal(world).is_none() {
-                    self.spawn_exit_portal(world, true);
-                }
-                let Some(location) = self.exit_portal_location else {
-                    return;
-                };
-                location
+        let location = if let Some(location) = self.exit_portal_location {
+            location
+        } else {
+            if self.find_exit_portal(world).is_none() {
+                self.spawn_exit_portal(world, true);
             }
+            let Some(location) = self.exit_portal_location else {
+                return;
+            };
+            location
         };
         let center = location.above_n(1);
         let mut crystals = Vec::new();
@@ -827,13 +826,12 @@ impl EnderDragonFight {
     /// cached exit-portal location, deriving one when the fight never resolved
     /// it (fresh or legacy worlds).
     fn spawn_exit_portal(&mut self, world: &Arc<World>, activated: bool) {
-        let location = match self.exit_portal_location {
-            Some(location) => location,
-            None => {
-                let location = self.derive_exit_portal_location(world);
-                self.exit_portal_location = Some(location);
-                location
-            }
+        let location = if let Some(location) = self.exit_portal_location {
+            location
+        } else {
+            let location = self.derive_exit_portal_location(world);
+            self.exit_portal_location = Some(location);
+            location
         };
         place_end_podium(world, location, activated);
         self.set_dirty();

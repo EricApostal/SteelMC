@@ -58,6 +58,7 @@ mod shield;
 mod snowball;
 mod solid_bucket_item;
 mod spawn_egg;
+mod spear;
 mod spyglass;
 mod standing_and_wall_block_item;
 mod throwable_potion;
@@ -79,7 +80,9 @@ pub use brush::BrushItem;
 pub use bucket::BucketItem;
 pub use bundle::BundleItem;
 pub use compass::CompassItem;
-pub use crossbow::CrossbowItem;
+pub use crossbow::{
+    CrossbowItem, MOB_ARROW_POWER, get_charge_duration, is_charged, perform_mob_crossbow_attack,
+};
 pub use cushion::CushionItem;
 pub use debug_stick::DebugStickItem;
 pub use default::DefaultItemBehavior;
@@ -118,6 +121,7 @@ pub use shield::ShieldItem;
 pub use snowball::SnowballItem;
 pub use solid_bucket_item::SolidBucketItem;
 pub use spawn_egg::SpawnEggItem;
+pub use spear::SpearItem;
 pub use spyglass::SpyglassItem;
 pub use standing_and_wall_block_item::StandingAndWallBlockItem;
 pub use throwable_potion::{LingeringPotionItem, SplashPotionItem};

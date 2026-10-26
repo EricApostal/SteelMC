@@ -31,11 +31,6 @@
 //!   depends on the constant today.
 //! - GAP(sulfur-cube): vanilla `SulfurCube.getLeashOffset` (`bbHeight / 2`); Steel has no
 //!   per-entity leash attachment offset hook.
-//! - GAP(sulfur-cube): vanilla `Bucketable.loadFromBucketTag` / `setFromBucket(true)` are applied
-//!   by `MobBucketItem.spawn`; Steel's `MobBucketItem` only applies the generic item components
-//!   (`behavior/items/mob_bucket.rs`), so a released cube keeps `from_bucket = false` and the
-//!   bucket's `age` / `age_locked` / `Health` / `NoAI`… payload is not restored.
-//!   [`SulfurCubeEntity::load_from_bucket_data`] holds the entity half for the lane that wires it.
 //! - GAP(sulfur-cube): vanilla `Entity.triggerOnDeathMobEffects(level, KILLED)` runs before the
 //!   fuse explosion discards the cube; Steel clears active effects through the shared death path
 //!   only, and the explosion path removes the entity without running mob-effect removal hooks.
@@ -1767,6 +1762,17 @@ impl Entity for SulfurCubeEntity {
         self.load_mob(nbt);
         *self.was_on_ground.lock() = nbt.byte("wasOnGround").is_some_and(|value| value != 0);
         self.load_ageable_mob(nbt);
+    }
+
+    /// Vanilla `SulfurCube.loadFromBucketTag`, restored by `MobBucketItem.spawn`
+    /// on release.
+    fn load_from_bucket_tag(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
+        self.load_from_bucket_data(nbt);
+    }
+
+    /// Vanilla `Bucketable.setFromBucket`, flipped for every released mob.
+    fn set_from_bucket(&self, from_bucket: bool) {
+        SulfurCubeEntity::set_from_bucket(self, from_bucket);
     }
 
     /// Vanilla `SulfurCube.playerTouch`.

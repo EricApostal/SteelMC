@@ -566,6 +566,10 @@ impl EndPortalTeleportJob {
 }
 
 impl ServerJob for EndPortalTeleportJob {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "end portal return state machine keeps vanilla's TeleportTransition phase order explicit"
+    )]
     fn poll(&mut self, _context: &mut ServerJobContext) -> JobPoll {
         if !self.still_valid() {
             self.clear_pending();

@@ -317,7 +317,7 @@ fn boss_bar_fixture_at(key: &'static str, center: BlockPos) -> (TestWorld, Arc<P
         .id_from_key(&vanilla_poi_types::HOME.key)
         .expect("home POI type is registered");
     world.poi_storage.lock().add(center, home, 1);
-    world.poi_storage.lock().reserve_ticket(center);
+    let _ = world.poi_storage.lock().reserve_ticket(center);
     insert_ready_full_chunk(&world, ChunkPos::from_block_pos(center));
 
     let player = TestPlayerBuilder::new(Arc::clone(&world), "RaidBarViewer", 1).build();

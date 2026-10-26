@@ -337,8 +337,8 @@ pub(super) trait Minecart: Entity + Sized {
             other.push_impulse(DVec3::new(movement.x + xa, 0.0, movement.z + za));
             self.set_velocity(DVec3::new(movement.x * 0.95, movement.y, movement.z * 0.95));
         } else {
-            let xdd = (other_movement.x + movement.x) / 2.0;
-            let zdd = (other_movement.z + movement.z) / 2.0;
+            let xdd = f64::midpoint(other_movement.x, movement.x);
+            let zdd = f64::midpoint(other_movement.z, movement.z);
             self.set_velocity(DVec3::new(movement.x * 0.2, movement.y, movement.z * 0.2));
             self.push_impulse(DVec3::new(xdd - xa, 0.0, zdd - za));
             other.set_velocity(DVec3::new(

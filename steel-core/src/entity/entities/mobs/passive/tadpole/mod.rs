@@ -16,10 +16,9 @@
 //!   navigation are used with the vanilla `WATER` malus of 0.
 //! - `WaterAnimal.handleAirSupply` is already covered by
 //!   `LivingEntity::base_tick_living_entity`'s air-supply tick, so it is not repeated.
-//! - GAP: vanilla `Bucketable.loadFromBucketTag` is not called by the bucket release
-//!   path yet (`MobBucketItem` applies generic item components only, see
-//!   `behavior/items/mob_bucket.rs`); [`TadpoleEntity::load_from_bucket_data`] holds
-//!   the entity half for the lane that wires it.
+//! - Release: `MobBucketItem` runs [`TadpoleEntity::load_from_bucket_data`] and
+//!   `setFromBucket(true)` on the spawned mob (vanilla `Bucketable` half of
+//!   `MobBucketItem.spawn`).
 
 mod brain;
 
@@ -464,6 +463,17 @@ impl Entity for TadpoleEntity {
         self.set_age(nbt.int("Age").unwrap_or(0));
         self.set_age_locked(nbt.byte("AgeLocked").is_some_and(|value| value != 0));
         self.set_from_bucket(nbt.byte("FromBucket").is_some_and(|value| value != 0));
+    }
+
+    /// Vanilla `Tadpole.loadFromBucketTag`, restored by `MobBucketItem.spawn` on
+    /// release.
+    fn load_from_bucket_tag(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
+        self.load_from_bucket_data(nbt);
+    }
+
+    /// Vanilla `Bucketable.setFromBucket`, flipped for every released mob.
+    fn set_from_bucket(&self, from_bucket: bool) {
+        TadpoleEntity::set_from_bucket(self, from_bucket);
     }
 }
 

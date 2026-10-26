@@ -10,6 +10,7 @@ use steel_utils::types::{InteractionHand, UpdateFlags};
 use steel_utils::{BlockPos, BlockStateId, ChunkPos, Direction, Downcast as _};
 
 use crate::behavior::{BlockHitResult, ITEM_BEHAVIORS, InteractionResult, UseOnContext};
+use crate::bootstrap::init_globals;
 use crate::entity::{Entity as _, entities::ItemEntity};
 use crate::inventory::container::Container as _;
 use crate::player::Player;
@@ -25,7 +26,7 @@ struct Interaction {
 
 impl Interaction {
     fn new(name: &'static str) -> Self {
-        crate::bootstrap::init_globals();
+        init_globals();
         let world_fixture = fresh_test_world(name);
         let world = &world_fixture.world;
         insert_ready_full_chunk(world, ChunkPos::new(0, 0));

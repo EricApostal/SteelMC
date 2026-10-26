@@ -11,6 +11,8 @@
 //! `ResourceKey` from the parsed identifier, so `style set` accepts the same
 //! unvalidated identifier vanilla accepts.
 
+use std::sync::Arc;
+
 use steel_protocol::packets::game::WaypointIcon;
 use steel_utils::{
     Identifier, RgbColor,
@@ -81,7 +83,7 @@ fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
 
 /// Vanilla `WaypointCommand.listWaypoints`.
 fn list_waypoints(context: &SteelCommandContext<CommandSource>) -> Result<i32, CommandSyntaxError> {
-    let world = context.source().world().clone();
+    let world = Arc::clone(context.source().world());
     let dimension = world.key.to_string();
     let transmitters = level_transmitters(&world);
     let Ok(count) = i32::try_from(transmitters.len()) else {
@@ -134,6 +136,7 @@ fn waypoint_entry(transmitter: &Player, dimension: &str) -> TextComponent {
 
 /// Vanilla `WaypointArgument.getWaypoint`: exactly one entity that transmits a
 /// locator-bar waypoint. Only players implement `WaypointTransmitter` in Steel.
+#[expect(dead_code, reason = "vanilla WaypointArgument.getWaypoint API surface")]
 fn waypoint_target(context: &SteelCommandContext<CommandSource>) -> Result<(), CommandSyntaxError> {
     let target = context.entity("waypoint")?;
     if target.as_player().is_none() {
@@ -148,7 +151,7 @@ fn waypoint_target(context: &SteelCommandContext<CommandSource>) -> Result<(), C
 fn set_color_team(context: &SteelCommandContext<CommandSource>) -> Result<i32, CommandSyntaxError> {
     let color = context.team_color("color")?;
     modify_icon(context, |icon| {
-        icon.color = Some(RgbColor::new(color.rgb()))
+        icon.color = Some(RgbColor::new(color.rgb()));
     })?;
 
     let message = COMMANDS_WAYPOINT_MODIFY_COLOR
@@ -247,15 +250,14 @@ fn format_list(entries: Vec<TextComponent>) -> TextComponent {
 #[cfg(test)]
 mod tests {
     use super::{format_list, icon_color};
-    use crate::command::brigadier::NodeId;
+    use crate::command::brigadier::{CommandDispatcher, NodeId};
     use crate::command::builtins::create_dispatcher;
     use crate::command::execution::{CommandSource, SteelCommandRuntime};
     use steel_registry::init_vanilla_registry;
     use steel_utils::RgbColor;
     use text_components::{Modifier as _, TextComponent, format::Color};
 
-    type Dispatcher =
-        crate::command::brigadier::CommandDispatcher<CommandSource, SteelCommandRuntime>;
+    type Dispatcher = CommandDispatcher<CommandSource, SteelCommandRuntime>;
 
     fn child(dispatcher: &Dispatcher, parent: NodeId, name: &str) -> NodeId {
         let Some(child) = dispatcher.children(parent).and_then(|children| {
@@ -322,6 +324,6 @@ mod tests {
                 TextComponent::plain("Bob"),
             ]
         );
-        assert!(format_list(Vec::new()).children.is_empty());
+        assert_eq!(format_list(Vec::new()).children, [] as [TextComponent; 0]);
     }
 }

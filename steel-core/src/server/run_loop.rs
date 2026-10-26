@@ -12,6 +12,10 @@ use super::{
     command_suggestions_packet, sleep, spawn_blocking,
 };
 
+use crate::datapack::{tick, tick_tags};
+use crate::entity::boss::custom::tick_custom_boss_events;
+use crate::scoreboard::tick_scoreboards;
+
 use steel_registry::vanilla_custom_stats;
 use steel_utils::threading::{available_worker_threads, worker_threads_for_available};
 use steel_utils::translations;
@@ -260,10 +264,10 @@ impl Server {
             self.process_player_joins();
             // Vanilla `ServerBossEvent` broadcasts from inside `/bossbar`; Steel delivers the
             // queued operations once per tick, after commands and joins.
-            crate::entity::boss::custom::tick_custom_boss_events(&self);
+            tick_custom_boss_events(&self);
             // Vanilla `ServerScoreboard` buffers per-domain score/team updates during the
             // tick and flushes them here, next to the boss-bar operations.
-            crate::scoreboard::tick_scoreboards(&self);
+            tick_scoreboards(&self);
 
             {
                 let server = Arc::clone(&self);
@@ -593,11 +597,11 @@ impl Server {
         if runs_normally {
             // Vanilla `MinecraftServer.tickChildren` runs the "commandFunctions" phase
             // (`#load`/`#tick`) before the level ticks, at the previous tick's game time.
-            crate::datapack::tick_tags(self);
+            tick_tags(self);
             // Vanilla `ServerLevel.tickTime` advances the level clock and then drains the
             // `/schedule` queue at the new game time, before block, fluid, and entity ticks.
             self.worlds.advance_domain_game_times();
-            crate::datapack::tick(self);
+            tick(self);
         }
         self.damage_history.expire();
         let all_timings = workers.tick_all(tick_count, runs_normally).await?;

@@ -157,7 +157,8 @@ fn suggest_scheduled(
         return;
     };
     let prefix = builder.remaining().to_owned();
-    for id in manager.schedules().read().pending_ids() {
+    let pending_ids = manager.schedules().read().pending_ids();
+    for id in pending_ids {
         // Vanilla's `IdentifierArgument` never matches a `#tag` key, so only
         // function ids are suggested.
         if !id.starts_with('#') && id.starts_with(&prefix) {

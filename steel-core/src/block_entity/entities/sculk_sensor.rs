@@ -22,8 +22,11 @@ use steel_utils::{
     BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier, locks::SyncMutex,
 };
 
-use crate::behavior::blocks::SculkSensorBlock;
+use crate::behavior::blocks::{
+    CalibratedSculkSensorBlock, SCULK_SENSOR_ACTIVE_TICKS, SculkSensorBlock,
+};
 use crate::block_entity::{BlockEntity, BlockEntityBase};
+use crate::entity::Entity;
 use crate::world::game_event::vibration::{
     CALIBRATED_SENSOR_LISTENER_RADIUS, NO_VIBRATION_FREQUENCY, SENSOR_LISTENER_RADIUS,
     VibrationCallback, VibrationInfo, VibrationListenerState, VibrationSystemListener,
@@ -215,7 +218,7 @@ impl SensorCallback {
         world: &Arc<World>,
         event: GameEventRef,
         distance: f32,
-        source_entity: Option<&dyn crate::entity::Entity>,
+        source_entity: Option<&dyn Entity>,
     ) {
         let state = world.get_block_state(self.pos);
         // Vanilla `VibrationUser.onReceiveVibration`: both the stored frequency and the computed
@@ -235,11 +238,11 @@ impl SensorCallback {
             power,
             frequency,
             source_entity,
-            crate::behavior::blocks::SCULK_SENSOR_ACTIVE_TICKS,
+            SCULK_SENSOR_ACTIVE_TICKS,
         );
     }
 
-    fn new(pos: BlockPos, radius: i32) -> Self {
+    const fn new(pos: BlockPos, radius: i32) -> Self {
         Self {
             pos,
             radius,
@@ -367,7 +370,7 @@ impl SculkSensorBlockEntity {
 
     /// The registered game-event listener.
     #[must_use]
-    pub fn vibration_listener(&self) -> &Arc<VibrationSystemListener> {
+    pub const fn vibration_listener(&self) -> &Arc<VibrationSystemListener> {
         &self.listener
     }
 
@@ -488,7 +491,7 @@ impl VibrationCallback for CalibratedCallback {
         let power = redstone_strength_for_distance(distance, self.inner.radius);
         *self.inner.power.lock() = power;
         *self.inner.frequency.lock() = frequency;
-        crate::behavior::blocks::CalibratedSculkSensorBlock::activate(
+        CalibratedSculkSensorBlock::activate(
             state.get_block(),
             world,
             self.inner.pos,
@@ -558,7 +561,7 @@ impl CalibratedSculkSensorBlockEntity {
 
     /// The registered game-event listener.
     #[must_use]
-    pub fn vibration_listener(&self) -> &Arc<VibrationSystemListener> {
+    pub const fn vibration_listener(&self) -> &Arc<VibrationSystemListener> {
         &self.listener
     }
 }

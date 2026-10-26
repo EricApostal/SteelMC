@@ -706,7 +706,7 @@ mod tests {
         assert!(restored.remove(&id).is_some());
         assert!(restored.is_dirty());
         assert!(restored.get(&id).is_none());
-        assert!(restored.ids().is_empty());
+        assert_eq!(restored.ids().as_slice(), [] as [Identifier; 0]);
     }
 
     /// Vanilla `CustomBossEvent.addPlayer`/`removePlayer`/`setPlayers`: a bar delivers its

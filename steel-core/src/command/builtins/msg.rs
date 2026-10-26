@@ -42,7 +42,7 @@ fn send_message(context: &SteelCommandContext<CommandSource>) -> Result<i32, Com
     };
 
     let source = context.source();
-    let content = context.message("message")?;
+    let text = context.message("message")?;
     let sender_name = source_display_name(source);
     let incoming_chat_type = bound_chat_type(
         vanilla_chat_types::MSG_COMMAND_INCOMING.id() as i32,
@@ -58,9 +58,9 @@ fn send_message(context: &SteelCommandContext<CommandSource>) -> Result<i32, Com
             sender_name.clone(),
             Some(target_name.clone()),
         );
-        send_outgoing(source, &content, outgoing_chat_type, &target_name);
+        send_outgoing(source, &text, outgoing_chat_type, &target_name);
         target.send_packet(CDisguisedChat::new(
-            &content,
+            &text,
             incoming_chat_type.clone(),
             target.as_ref(),
         ));

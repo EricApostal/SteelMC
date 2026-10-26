@@ -1,10 +1,12 @@
 //! Vanilla brigade of registry-backed and descriptor-string command arguments.
 
 use super::*;
+use crate::command::brigadier::ContextChain;
 use crate::command::execution::argument::{
     Angle, AngleValue, ColumnPosValue, FloatNumberProviderArg, FloatNumberProviderValue,
     IntNumberProviderArg, IntNumberProviderValue, MessageValue, Operation,
 };
+use crate::scoreboard::{DisplaySlot, TeamColor};
 use steel_registry::{
     data_components::vanilla_components::SwingAnimationType, loot_table::LootContext,
     vanilla_attributes, vanilla_mob_effects,
@@ -13,7 +15,7 @@ use steel_utils::{Identifier, rotation::Rotation};
 use steel_worldgen::structure::StructureMirror;
 
 fn parsed_value<T: DowncastType>(
-    chain: &crate::command::brigadier::ContextChain<TestSource, SteelCommandRuntime>,
+    chain: &ContextChain<TestSource, SteelCommandRuntime>,
 ) -> Result<&T, CommandSyntaxError> {
     chain
         .top_context()
@@ -27,7 +29,7 @@ fn parsed_value<T: DowncastType>(
 fn parse_value(
     dispatcher: &TestDispatcher,
     command: &str,
-) -> crate::command::brigadier::ContextChain<TestSource, SteelCommandRuntime> {
+) -> ContextChain<TestSource, SteelCommandRuntime> {
     let parse = dispatcher.parse(command, TestSource::new());
     match dispatcher.context_chain(parse) {
         Ok(chain) => chain,
@@ -84,7 +86,7 @@ fn message_argument_retains_greedy_text_and_selectors() {
     let Ok(message) = parsed_value::<MessageValue>(&chain) else {
         panic!("message should be retained");
     };
-    assert!(message.0.parts().is_empty());
+    assert_eq!(message.0.parts(), []);
     assert_eq!(message.0.text(), "mail@zample");
 
     let too_long = format!("resource {}", "a".repeat(257));
@@ -118,7 +120,7 @@ fn mob_effect_argument_resolves_registry_entries_and_suggests() {
     let chain = parse_value(&dispatcher, "resource minecraft:speed");
     assert_eq!(
         chain.top_context().mob_effect("value"),
-        Ok(&*vanilla_mob_effects::SPEED)
+        Ok(vanilla_mob_effects::SPEED)
     );
 
     let parse = dispatcher.parse("resource missing_effect", TestSource::new());
@@ -144,7 +146,7 @@ fn attribute_argument_resolves_registry_entries_and_suggests() {
     let chain = parse_value(&dispatcher, "resource minecraft:movement_speed");
     assert_eq!(
         chain.top_context().attribute("value"),
-        Ok(&*vanilla_attributes::MOVEMENT_SPEED)
+        Ok(vanilla_attributes::MOVEMENT_SPEED)
     );
 
     let parse = dispatcher.parse("resource missing_attribute", TestSource::new());
@@ -259,7 +261,6 @@ fn scoreboard_slot_argument_retains_vanilla_slots_and_suggests() {
     let Ok(slot) = chain.top_context().scoreboard_slot("value") else {
         panic!("display slot should parse");
     };
-    use crate::scoreboard::DisplaySlot;
     assert_eq!(slot, DisplaySlot::Sidebar);
 
     let chain = parse_value(&dispatcher, "resource sidebar.team.red");
@@ -288,7 +289,6 @@ fn team_and_team_color_arguments_parse_vanilla_names() {
     let dispatcher = resource_dispatcher(SteelArgumentType::team_color());
 
     let chain = parse_value(&dispatcher, "resource red");
-    use crate::scoreboard::{DisplaySlot, TeamColor};
     assert_eq!(chain.top_context().team_color("value"), Ok(TeamColor::Red));
     assert_eq!(TeamColor::Red.rgb() & 0xFF_FFFF, 0xFF_5555);
     assert_eq!(TeamColor::Red.display_slot(), DisplaySlot::SidebarTeamRed);
@@ -358,6 +358,9 @@ fn double_range_argument_retains_bounds_and_matches_floats() {
 fn nbt_tag_argument_retains_any_snbt_value() {
     use simdnbt::owned::NbtTag;
 
+    /// One expectation: the argument input and the predicate it must satisfy.
+    type Case = (&'static str, fn(&NbtTag) -> bool);
+
     fn is_int(tag: &NbtTag) -> bool {
         matches!(tag, NbtTag::Int(3))
     }
@@ -372,7 +375,7 @@ fn nbt_tag_argument_retains_any_snbt_value() {
     }
 
     let dispatcher = resource_dispatcher(SteelArgumentType::nbt_tag());
-    let cases: [(&str, fn(&NbtTag) -> bool); 4] = [
+    let cases: [Case; 4] = [
         ("resource 3", is_int),
         ("resource \"text\"", is_string),
         ("resource {value:3b}", is_compound),
@@ -511,16 +514,16 @@ fn style_argument_parses_format_fields_and_rejects_unknown() {
     assert!(dispatcher.context_chain(parse).is_err());
 }
 
+fn resource_protocol_discriminant(argument: &SteelArgumentType) -> u8 {
+    let (argument, _) = argument.protocol_argument();
+    let mut encoded = Vec::new();
+    assert!(argument.write(&mut encoded).is_ok());
+    encoded[0]
+}
+
 #[test]
 fn new_arguments_serialize_with_vanilla_protocol_ids() {
     init_vanilla_registry();
-
-    fn discriminant(argument: &SteelArgumentType) -> u8 {
-        let (argument, _) = argument.protocol_argument();
-        let mut encoded = Vec::new();
-        assert!(argument.write(&mut encoded).is_ok());
-        encoded[0]
-    }
 
     for (argument, expected) in [
         (SteelArgumentType::angle(), 28u8),             // minecraft:angle
@@ -534,6 +537,7 @@ fn new_arguments_serialize_with_vanilla_protocol_ids() {
         (SteelArgumentType::column_pos(), 9),           // minecraft:column_pos
         (SteelArgumentType::double_range(), 40),        // minecraft:float_range
         (SteelArgumentType::nbt_tag(), 22),             // minecraft:nbt_tag
+        (SteelArgumentType::nbt_compound(), 21),        // minecraft:nbt_compound_tag
         (SteelArgumentType::style(), 19),               // minecraft:style
         (SteelArgumentType::slots(), 35),               // minecraft:item_slots
         (SteelArgumentType::template_mirror(), 49),     // minecraft:template_mirror
@@ -544,7 +548,7 @@ fn new_arguments_serialize_with_vanilla_protocol_ids() {
         (SteelArgumentType::particle(), 27),            // minecraft:particle
         (SteelArgumentType::swing_animation(), 60),     // minecraft:swing_animation
     ] {
-        assert_eq!(discriminant(&argument), expected);
+        assert_eq!(resource_protocol_discriminant(&argument), expected);
     }
 
     let repeated = SteelArgumentType::angle();

@@ -27,7 +27,7 @@ impl World {
 
     /// The level's map storage (vanilla `ServerLevel`'s map saved data).
     #[must_use]
-    pub fn maps(&self) -> &MapStorage {
+    pub const fn maps(&self) -> &MapStorage {
         &self.maps
     }
 }

@@ -90,9 +90,7 @@ mod tests {
         };
         assert!(node.is_executable());
         assert!(
-            dispatcher
-                .children(root)
-                .is_some_and(<[crate::command::brigadier::NodeId]>::is_empty),
+            dispatcher.children(root).is_some_and(<[_]>::is_empty),
             "vanilla `/reload` is a bare literal with no subcommands"
         );
     }

@@ -1,14 +1,16 @@
 use super::{CSetChunkCenter, ChunkMap, ChunkPos, Entity, Player, PlayerChunkView};
 use crate::chunk::chunk_scheduler::PlayerTicketOperation;
+use crate::world::World;
+use steel_registry::vanilla_game_rules;
 
 impl ChunkMap {
     /// Vanilla `ChunkMap.skipPlayer`: a spectator is only a chunk-generation
     /// source while the `spectators_generate_chunks` game rule is enabled. A
     /// skipped player still tracks its chunk view, so it receives chunks other
     /// players already loaded, but it owns no loading ticket of its own.
-    fn player_owns_loading_tickets(player: &Player, world: &crate::world::World) -> bool {
+    fn player_owns_loading_tickets(player: &Player, world: &World) -> bool {
         !player.is_spectator()
-            || world.get_game_rule(&steel_registry::vanilla_game_rules::SPECTATORS_GENERATE_CHUNKS)
+            || world.get_game_rule(&vanilla_game_rules::SPECTATORS_GENERATE_CHUNKS)
     }
 
     /// Updates the player's status in the chunk map.

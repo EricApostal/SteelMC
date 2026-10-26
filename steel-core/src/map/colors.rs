@@ -11,6 +11,7 @@ use steel_registry::blocks::{MapColor, MapColorBrightness, block_state_ext::Bloc
 use steel_registry::vanilla_blocks;
 use steel_utils::{BlockPos, BlockStateId, ChunkPos, Direction};
 
+use crate::chunk::full_chunk::FullChunkRef;
 use crate::chunk::heightmap::HeightmapType;
 use crate::world::World;
 use crate::world::level_reader::LevelReader as _;
@@ -103,6 +104,9 @@ pub(crate) fn update_colors(data: &mut MapItemSavedData, level: &World, viewer: 
     }
 }
 
+/// One sampled map pixel: its color multiset, average surface height and water depth.
+type ColorSample = Option<(Vec<(MapColor, u32)>, f64, i32)>;
+
 /// Samples one map pixel's block area, returning its color multiset, average
 /// surface height and water depth.
 fn sample_area(
@@ -111,7 +115,7 @@ fn sample_area(
     area_min_z: i32,
     scale: i32,
     has_ceiling: bool,
-) -> Option<(Vec<(MapColor, u32)>, f64, i32)> {
+) -> ColorSample {
     let chunk_pos = ChunkPos::new(area_min_x >> 4, area_min_z >> 4);
     let min_y = level.min_y();
     level.chunk_map.with_full_chunk(chunk_pos, |chunk| {
@@ -164,12 +168,7 @@ fn sample_area(
 
 /// Vanilla's column walk: the first non-`NONE` map color below the world
 /// surface, or bedrock outside the build height.
-fn surface_state(
-    chunk: crate::chunk::full_chunk::FullChunkRef<'_>,
-    x: i32,
-    z: i32,
-    min_y: i32,
-) -> (i32, BlockStateId) {
+fn surface_state(chunk: FullChunkRef<'_>, x: i32, z: i32, min_y: i32) -> (i32, BlockStateId) {
     // Vanilla `chunk.getHeight(...) + 1` with `getHeight` returning
     // `getFirstAvailable() - 1`; Steel's `get_height` is `getFirstAvailable`.
     let mut column_y = chunk.get_height(

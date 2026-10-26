@@ -1,13 +1,9 @@
 //! Layered pack resource access and reload listeners, mirroring vanilla
 //! `net.minecraft.server.packs.resources`.
 
-use std::{
-    any::Any,
-    collections::BTreeMap,
-    sync::{Arc, RwLock},
-};
+use std::{any::Any, collections::BTreeMap, sync::Arc};
 
-use steel_utils::Identifier;
+use steel_utils::{Identifier, locks::SyncRwLock};
 
 use super::{
     pack::{PackError, PackResources, PackType},
@@ -18,6 +14,7 @@ use super::{
 #[derive(Debug, Clone)]
 pub(crate) struct Resource {
     /// Originating pack id.
+    #[expect(dead_code, reason = "vanilla Resource origin API surface")]
     pub(crate) source_pack: String,
     /// Raw bytes.
     pub(crate) bytes: Vec<u8>,
@@ -41,6 +38,10 @@ impl MultiPackResourceManager {
     }
 
     /// Vanilla `ResourceManager.getResource`: the highest-priority copy.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "vanilla ResourceManager.getResource API surface")
+    )]
     pub(crate) fn get_resource(
         &self,
         pack_type: PackType,
@@ -56,6 +57,10 @@ impl MultiPackResourceManager {
     }
 
     /// Vanilla `ResourceManager.getResourceStack`: every copy, highest priority first.
+    #[expect(
+        dead_code,
+        reason = "vanilla ResourceManager.getResourceStack API surface"
+    )]
     pub(crate) fn get_resource_stack(
         &self,
         pack_type: PackType,
@@ -136,6 +141,13 @@ impl MultiPackResourceManager {
 /// `SimpleReloadInstance`.
 pub(crate) trait PreparableReloadListener: Send + Sync {
     /// Vanilla `PreparableReloadListener.getName`: shown in reload logs.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "vanilla PreparableReloadListener.getName API surface"
+        )
+    )]
     fn name(&self) -> &'static str;
 
     /// Vanilla `prepare`: decode from `manager` into a detached value.
@@ -155,7 +167,7 @@ pub(crate) trait PreparableReloadListener: Send + Sync {
 /// Vanilla `ReloadableResourceManager`: owns the listeners and drives reloads.
 #[derive(Default)]
 pub(crate) struct ReloadableResourceManager {
-    listeners: RwLock<Vec<Box<dyn PreparableReloadListener>>>,
+    listeners: SyncRwLock<Vec<Box<dyn PreparableReloadListener>>>,
 }
 
 impl ReloadableResourceManager {
@@ -167,10 +179,7 @@ impl ReloadableResourceManager {
 
     /// Vanilla `ReloadableResourceManager.registerReloadListener`.
     pub(crate) fn register_listener(&self, listener: Box<dyn PreparableReloadListener>) {
-        self.listeners
-            .write()
-            .expect("reload listener lock poisoned")
-            .push(listener);
+        self.listeners.write().push(listener);
     }
 
     /// Vanilla `ReloadableResourceManager.createReload`: runs every listener.
@@ -180,10 +189,7 @@ impl ReloadableResourceManager {
     /// their prepared state, so a failed reload is reported rather than partially
     /// rolled back (vanilla behaves the same way for a listener that throws).
     pub(crate) fn reload(&self, manager: &MultiPackResourceManager) -> Result<(), PackError> {
-        let listeners = self
-            .listeners
-            .read()
-            .expect("reload listener lock poisoned");
+        let listeners = self.listeners.read();
         let mut prepared: Vec<(usize, Box<dyn Any + Send>)> = Vec::with_capacity(listeners.len());
         for (index, listener) in listeners.iter().enumerate() {
             prepared.push((index, listener.prepare(manager)?));
@@ -195,10 +201,16 @@ impl ReloadableResourceManager {
     }
 
     /// The registered listener names, in registration order.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "vanilla ReloadableResourceManager listener listing API surface"
+        )
+    )]
     pub(crate) fn listener_names(&self) -> Vec<&'static str> {
         self.listeners
             .read()
-            .expect("reload listener lock poisoned")
             .iter()
             .map(|listener| listener.name())
             .collect()
@@ -211,14 +223,13 @@ impl ReloadableResourceManager {
     reason = "these tests unwrap their own fixture data so failures point at the offending assertion"
 )]
 mod tests {
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicUsize, Ordering},
+    use std::{
+        any::Any,
+        sync::atomic::{AtomicUsize, Ordering},
     };
 
     use super::{MultiPackResourceManager, PreparableReloadListener, ReloadableResourceManager};
     use crate::datapack::pack::PackError;
-    use std::any::Any;
 
     #[derive(Debug)]
     struct CountingListener {
@@ -279,7 +290,6 @@ mod tests {
     #[test]
     fn listener_names_are_stable() {
         let manager = ReloadableResourceManager::new();
-        assert!(manager.listener_names().is_empty());
-        let _guard: Option<Mutex<()>> = None;
+        assert_eq!(manager.listener_names(), [] as [&str; 0]);
     }
 }

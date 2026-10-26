@@ -110,7 +110,7 @@ mod tests {
                 TextComponent::plain("Alice"),
                 separator.clone(),
                 TextComponent::plain("Bob"),
-                separator.clone(),
+                separator,
                 TextComponent::plain("Carol"),
             ]
         );
@@ -122,6 +122,6 @@ mod tests {
         assert_eq!(single.children, [TextComponent::plain("Alice")]);
 
         let empty = join_entries(Vec::new());
-        assert!(empty.children.is_empty());
+        assert_eq!(empty.children, [] as [TextComponent; 0]);
     }
 }

@@ -17,8 +17,11 @@ use crate::chunk::light::{
     LightLayer, LightSectionEmptinessChange, MAX_LIGHT_LEVEL, has_different_light_properties,
 };
 use crate::chunk::status::ChunkStatus;
+use crate::entity::boss::EnderDragonFight;
+use crate::entity::boss::dragon_fight::EnderDragonFightData;
 use crate::entity::damage::DamageHistory;
-use crate::entity::raid::Raids;
+use crate::entity::raid::{PatrolSpawner, Raids};
+use crate::map::MapStorage;
 use crate::poi::OccupationStatus;
 use crate::portal::WorldChangeRequest;
 use crate::world::custom_spawner::CustomSpawner;
@@ -26,6 +29,7 @@ use crate::world::game_event::{
     GameEventContext, GameEventDispatcher, GameEventListenerCount, GameEventListenerStorage,
     SharedGameEventListener,
 };
+use crate::world::levelgen::{CatSpawner, PhantomSpawner, VillageSiege};
 use crate::{chunk::chunk_map::ChunkMapGameTickTimings, world::weather::Weather};
 use steel_utils::saved_data::{SavedDataManager, names as saved_data_names};
 
@@ -90,7 +94,7 @@ use crate::{
     behavior::{BLOCK_BEHAVIORS, BlockCollisionContext, BlockLootContext, FLUID_BEHAVIORS},
     block_entity::{BlockEntity, SharedBlockEntity, entities::EndGatewayBlockEntity},
     chunk::{heightmap::HeightmapType, player_chunk_view::PlayerChunkView},
-    chunk_saver::{ChunkStorage, RamOnlyStorage, RegionManager},
+    chunk_saver::{AnvilStorage, ChunkStorage, RamOnlyStorage, RegionManager},
     entity::{
         AddEntityError, Entity, EntityChangeSenders, EntityChunkCallback, EntityLifecycleChanges,
         EntityMovementSyncPacket, EntityOwnership, EntityTracker, EntityVisibility,
@@ -325,14 +329,14 @@ pub struct World {
     /// Point of interest storage for efficient spatial queries of special blocks.
     pub poi_storage: SyncMutex<PointOfInterestStorage>,
     /// Vanilla `ServerLevel`'s map saved data (`Level.getMapData`/`setMapData`).
-    pub(crate) maps: crate::map::MapStorage,
+    pub(crate) maps: MapStorage,
     /// Vanilla `Raids` saved data: the raids currently running in this level.
     raids: SyncMutex<Raids>,
     /// Vanilla `SavedData.setDirty` for [`Self::raids`].
     raids_dirty: AtomicBool,
     /// Vanilla `ServerLevel.dragonFight`: the ender dragon fight, present only in
     /// dimensions whose type opts in with `has_ender_dragon_fight`.
-    ender_dragon_fight: Option<SyncMutex<crate::entity::boss::EnderDragonFight>>,
+    ender_dragon_fight: Option<SyncMutex<EnderDragonFight>>,
     /// Vanilla `ServerLevel.customSpawners`: per-level spawners ticked every tick.
     custom_spawners: SyncMutex<Vec<Box<dyn CustomSpawner>>>,
     /// World-change requests queued by world-local ticks for server safe-point processing.
@@ -372,6 +376,10 @@ impl World {
         .await
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "world construction mirrors vanilla ServerLevel bootstrap order one to one"
+    )]
     pub(crate) async fn new_with_config_and_encoding_pool(
         chunk_runtime: Arc<Runtime>,
         key: Identifier,
@@ -393,9 +401,9 @@ impl World {
             WorldStorageConfig::Disk { path } => {
                 Arc::new(ChunkStorage::Disk(RegionManager::new(path.clone())))
             }
-            WorldStorageConfig::Anvil { path } => Arc::new(ChunkStorage::Anvil(
-                crate::chunk_saver::AnvilStorage::new(path.clone()),
-            )),
+            WorldStorageConfig::Anvil { path } => {
+                Arc::new(ChunkStorage::Anvil(AnvilStorage::new(path.clone())))
+            }
             WorldStorageConfig::RamOnly => {
                 Arc::new(ChunkStorage::RamOnly(RamOnlyStorage::empty_world()))
             }
@@ -424,12 +432,10 @@ impl World {
         let raids = Raids::load(&saved_data, saved_data_names::RAIDS).await;
         let ender_dragon_fight = if dimension_type.has_ender_dragon_fight {
             let data = saved_data
-                .load_or_default::<crate::entity::boss::dragon_fight::EnderDragonFightData>(
-                    saved_data_names::ENDER_DRAGON_FIGHT,
-                )
+                .load_or_default::<EnderDragonFightData>(saved_data_names::ENDER_DRAGON_FIGHT)
                 .await
                 .unwrap_or_default();
-            let mut fight = crate::entity::boss::EnderDragonFight::from_saved(data);
+            let mut fight = EnderDragonFight::from_saved(data);
             fight.init(seed, BlockPos::new(0, 0, 0));
             Some(SyncMutex::new(fight))
         } else {
@@ -455,7 +461,7 @@ impl World {
             }
         }
 
-        let maps = crate::map::MapStorage::load(&saved_data).await?;
+        let maps = MapStorage::load(&saved_data).await?;
 
         let world = Arc::new_cyclic(|weak_self: &Weak<World>| {
             let chunk_map = Arc::new(ChunkMap::new_with_storage_and_ticket_storage(
@@ -523,10 +529,10 @@ impl World {
         // overworld only: `PhantomSpawner`, `PatrolSpawner`, `CatSpawner`,
         // `VillageSiege`, `WanderingTraderSpawner`. Other dimensions get none.
         if dimension_type.key == vanilla_dimension_types::OVERWORLD.key {
-            world.register_custom_spawner(Box::new(crate::world::levelgen::PhantomSpawner::new()));
-            world.register_custom_spawner(Box::new(crate::entity::raid::PatrolSpawner::default()));
-            world.register_custom_spawner(Box::new(crate::world::levelgen::CatSpawner::new()));
-            world.register_custom_spawner(Box::new(crate::world::levelgen::VillageSiege::new()));
+            world.register_custom_spawner(Box::new(PhantomSpawner::new()));
+            world.register_custom_spawner(Box::new(PatrolSpawner::default()));
+            world.register_custom_spawner(Box::new(CatSpawner::new()));
+            world.register_custom_spawner(Box::new(VillageSiege::new()));
         }
 
         Ok(world)
@@ -607,11 +613,15 @@ impl World {
 
     /// Vanilla `ServerLevel.getDragonFight`.
     #[must_use]
-    pub fn dragon_fight(&self) -> Option<&SyncMutex<crate::entity::boss::EnderDragonFight>> {
+    pub const fn dragon_fight(&self) -> Option<&SyncMutex<EnderDragonFight>> {
         self.ender_dragon_fight.as_ref()
     }
 
     /// Persists every custom spawner's counters.
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "holding the spawner list guard across await is safe here because it only happens during world shutdown"
+    )]
     async fn save_custom_spawners(&self) {
         let spawners = self.custom_spawners.lock();
         for spawner in spawners.iter() {

@@ -17,7 +17,7 @@ use rand::{Rng, RngExt};
 use steel_macros::block_behavior;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::blocks::properties::{BlockStateProperties, IntProperty};
-use steel_registry::feature::{ConfiguredFeature, ConfiguredFeatureKind};
+use steel_registry::feature::{ConfiguredFeature, ConfiguredFeatureKind, TrunkPlacer};
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::{REGISTRY, vanilla_blocks, vanilla_configured_features};
 use steel_utils::random::worldgen_random::WorldgenRandom;
@@ -206,7 +206,7 @@ impl SaplingBlock {
         let mut target = rng.random_range(0..total_weight);
         for entry in entries {
             if target < entry.weight {
-                return Some(&entry.feature);
+                return Some(entry.feature);
             }
             target -= entry.weight;
         }
@@ -225,15 +225,18 @@ impl SaplingBlock {
     }
 
     /// Vanilla `TreeGrower.findTwoByTwoSaplingPos`: the lower-left offset of a
-    /// 2x2 block of identical saplings, if any.
+    /// 2x2 block of identical saplings, if any. Vanilla iterates
+    /// `for (int i = 0; i >= -1; --i)`, i.e. 0 then -1, which in Rust is
+    /// `(-1..=0).rev()`; the tempting `(0..=-1).rev()` is an empty range and
+    /// would make every 2x2 tree (dark oak, mega spruce, mega jungle) un-growable.
     fn find_two_by_two(
         world: &dyn LevelReader,
         pos: BlockPos,
         state: BlockStateId,
     ) -> Option<(i32, i32)> {
         let block = state.get_block();
-        for dx in (0..=-1).rev() {
-            for dz in (0..=-1).rev() {
+        for dx in (-1..=0).rev() {
+            for dz in (-1..=0).rev() {
                 let matches = [
                     pos.offset(dx, 0, dz),
                     pos.offset(dx + 1, 0, dz),
@@ -375,8 +378,7 @@ impl SaplingBlock {
 }
 
 /// Vanilla `TrunkPlacer.getBaseHeight` for every placer kind.
-const fn trunk_base_height(placer: &steel_registry::feature::TrunkPlacer) -> i32 {
-    use steel_registry::feature::TrunkPlacer;
+const fn trunk_base_height(placer: &TrunkPlacer) -> i32 {
     match placer {
         TrunkPlacer::Straight(base)
         | TrunkPlacer::Giant(base)
@@ -521,6 +523,37 @@ mod tests {
             SaplingBlock::new(&vanilla_blocks::BAMBOO_SAPLING)
                 .grower()
                 .is_none()
+        );
+    }
+
+    /// Vanilla `TreeGrower.findTwoByTwoSaplingPos` walks `0` then `-1` on both axes
+    /// (`for (int i = 0; i >= -1; --i)`), so a 2x2 patch is found for the patch corner
+    /// at the sapling and for the sapling at the patch's south-east corner. The
+    /// empty-range form `(0..=-1).rev()` would find nothing and silently make dark
+    /// oak, mega spruce and mega jungle un-growable.
+    #[test]
+    fn two_by_two_detection_covers_both_offsets() {
+        init_vanilla_registry();
+        init_behaviors();
+        let block = &vanilla_blocks::DARK_OAK_SAPLING;
+        let state = block.default_state();
+
+        // Patch corner at (0, 0): the sapling sits at the north-west cell.
+        let corner = TestLevel::default()
+            .with_block(BlockPos::new(0, 64, 0), state)
+            .with_block(BlockPos::new(1, 64, 0), state)
+            .with_block(BlockPos::new(0, 64, 1), state)
+            .with_block(BlockPos::new(1, 64, 1), state);
+        assert_eq!(
+            SaplingBlock::find_two_by_two(&corner, BlockPos::new(0, 64, 0), state),
+            Some((0, 0))
+        );
+
+        // The sapling at the patch's south-east corner must also see the patch,
+        // which needs the `-1` offsets.
+        assert_eq!(
+            SaplingBlock::find_two_by_two(&corner, BlockPos::new(1, 64, 1), state),
+            Some((-1, -1))
         );
     }
 }

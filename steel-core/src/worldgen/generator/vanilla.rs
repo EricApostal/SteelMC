@@ -29,7 +29,8 @@ use crate::worldgen::carver::{
 };
 use crate::worldgen::feature::FeatureDecorationRunner;
 use crate::worldgen::generator::{
-    ChunkGenerator, GenerationChunk, TerrainPhase, worldgen_region_random_from_splitter,
+    ChunkGenerator, ClosestBiomeSearch, GenerationChunk, TerrainPhase,
+    worldgen_region_random_from_splitter,
 };
 use crate::worldgen::region::WorldGenRegion;
 use crate::worldgen::structure::{StructureGenerator, StructureStart, create_structures};
@@ -355,6 +356,23 @@ impl<N: VanillaPostNoiseStateType> ChunkGenerator for VanillaGenerator<N> {
         self.biome_source
             .chunk_sampler()
             .sample(quart_x, quart_y, quart_z)
+    }
+
+    fn find_closest_biome_3d(
+        &self,
+        search: ClosestBiomeSearch<'_>,
+    ) -> Option<(steel_utils::BlockPos, BiomeRef)> {
+        // Vanilla's caching resolver: one sampler for the whole search instead of one
+        // throwaway sampler per quart.
+        self.biome_source.find_closest_biome_3d(
+            search.origin,
+            search.search_radius,
+            search.horizontal_resolution,
+            search.vertical_resolution,
+            &|biome| search.permits(biome),
+            search.min_y,
+            search.max_y,
+        )
     }
 
     fn initial_spawn_search_origin(&self) -> steel_utils::BlockPos {

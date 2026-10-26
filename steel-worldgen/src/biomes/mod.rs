@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 pub use biome_source::{
     BiomeSourceKind, CheckerboardChunkBiomeSampler, CheckerboardColumnBiomeSource,
     ChunkBiomeSampler, EndBiomeSource, FixedBiomeSource, FixedChunkBiomeSampler, NetherBiomeSource,
-    OverworldBiomeSource,
+    OverworldBiomeSource, find_closest_biome_3d,
 };
 pub use climate_sampler::OverworldClimateSampler;
 pub use nether_climate_sampler::NetherClimateSampler;

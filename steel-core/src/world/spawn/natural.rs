@@ -24,6 +24,10 @@ use steel_utils::{BlockPos, ChunkPos, WorldAabb};
 
 use super::local_mob_cap::{LocalMobCapCalculator, players_close_for_spawning};
 use super::placement::SpawnPlacements;
+#[cfg(test)]
+use super::placement::{
+    DEFAULT_HEIGHTMAP, SpawnPlacementType, check_strider_spawn_rules, is_valid_empty_spawn_block,
+};
 use super::structure_spawns::{
     FORTRESS_ENEMIES, is_in_nether_fortress_bounds, structure_spawns_at,
 };
@@ -325,7 +329,6 @@ impl NaturalSpawner {
     /// Vanilla `NaturalSpawner.spawnCategoryForPosition`.
     #[expect(
         clippy::too_many_arguments,
-        clippy::too_many_lines,
         reason = "mirrors vanilla NaturalSpawner.spawnCategoryForPosition one to one"
     )]
     pub fn spawn_category_for_position(
@@ -1035,14 +1038,18 @@ mod tests {
 
     use steel_registry::entity_type::MobCategory;
     use steel_registry::vanilla_biomes;
-    use steel_registry::{RegistryEntry as _, vanilla_blocks, vanilla_dimension_types};
+    use steel_registry::{
+        RegistryEntry as _, vanilla_blocks, vanilla_dimension_types, vanilla_entities,
+    };
     use steel_utils::random::legacy_random::LegacyRandom;
     use steel_utils::types::UpdateFlags;
     use steel_utils::{BlockPos, ChunkPos};
 
     use super::*;
+    use crate::bootstrap::init_globals;
     use crate::chunk::chunk_holder::TickingReadiness;
     use crate::chunk::chunk_ticket_manager::ChunkTicketLevel;
+    use crate::entity::entities::StriderEntity;
     use crate::player::ResetReason;
     use crate::test_support::{
         TestPlayerBuilder, fresh_test_world_with_dimension_type, insert_ready_full_chunk,
@@ -1079,7 +1086,7 @@ mod tests {
         world
             .chunk_map
             .with_full_chunk(pos, |chunk| {
-                for section in chunk.sections().sections.iter() {
+                for section in &chunk.sections().sections {
                     let mut section = section.write();
                     for quart_x in 0..4 {
                         for quart_y in 0..4 {
@@ -1091,6 +1098,151 @@ mod tests {
                 }
             })
             .expect("prepared chunk should be loaded");
+    }
+
+    /// A strider row must exist with vanilla's lava placement and its own rule, and the
+    /// rule must look up past the lava column for a free block (`Strider.checkStriderSpawnRules`).
+    #[test]
+    fn strider_row_uses_lava_placement_and_vanilla_rules() {
+        init_globals();
+        let fixture = fresh_test_world_with_dimension_type(
+            "strider_placement",
+            "strider_placement",
+            &vanilla_dimension_types::THE_NETHER,
+        );
+        let world = &fixture.world;
+        let chunk = ChunkPos::new(0, 0);
+        prepare_nether_chunk(world, chunk);
+
+        let row = SpawnPlacements::data_for(&vanilla_entities::STRIDER)
+            .expect("vanilla registers a strider spawn placement");
+        assert_eq!(row.placement, SpawnPlacementType::InLava);
+        assert_eq!(
+            row.heightmap, DEFAULT_HEIGHTMAP,
+            "vanilla uses motion-blocking-no-leaves"
+        );
+        assert!(
+            row.predicate.is_some_and(|predicate| ptr::eq(
+                predicate as *const (),
+                check_strider_spawn_rules as *const ()
+            )),
+            "the strider row must use Strider's own rule, not a generic monster rule"
+        );
+
+        // Lava at the cell, free above: `IN_LAVA` accepts and the rule walks up to the air.
+        let lava_pos = BlockPos::new(4, FLOOR_Y + 1, 4);
+        assert!(
+            world.set_block(
+                lava_pos,
+                vanilla_blocks::LAVA.default_state(),
+                UpdateFlags::UPDATE_NONE
+            ),
+            "the lava pool should be placeable at {lava_pos:?}"
+        );
+        assert!(
+            SpawnPlacementType::InLava.is_spawn_position_ok(
+                world.as_ref(),
+                lava_pos,
+                &vanilla_entities::STRIDER
+            ),
+            "IN_LAVA requires lava at the spawn position"
+        );
+        assert!(
+            StriderEntity::check_strider_spawn_rules(
+                &vanilla_entities::STRIDER,
+                world,
+                EntitySpawnReason::Natural,
+                lava_pos,
+                &mut LegacyRandom::from_seed(1),
+            ),
+            "an open lava column with air above satisfies the strider rule"
+        );
+
+        // Blocking the column above the lava makes the rule refuse the same position.
+        let blocked_pos = BlockPos::new(4, FLOOR_Y + 2, 4);
+        assert!(
+            world.set_block(
+                blocked_pos,
+                vanilla_blocks::NETHERRACK.default_state(),
+                UpdateFlags::UPDATE_NONE
+            ),
+            "the blocking block should be placeable at {blocked_pos:?}"
+        );
+        assert!(
+            !StriderEntity::check_strider_spawn_rules(
+                &vanilla_entities::STRIDER,
+                world,
+                EntitySpawnReason::Natural,
+                lava_pos,
+                &mut LegacyRandom::from_seed(1),
+            ),
+            "the strider rule needs a free block above the lava column"
+        );
+    }
+
+    /// A valid empty spawn cell is an empty, non-fluid block; water and solid rock
+    /// both refuse. Tripwire for an inverted fluid check, which would silently
+    /// disable all natural ground spawning.
+    #[test]
+    fn empty_spawn_block_rejects_fluid_and_solid() {
+        init_globals();
+        let fixture = fresh_test_world_with_dimension_type(
+            "empty_spawn_block_polarity",
+            "empty_spawn_block_polarity",
+            &vanilla_dimension_types::THE_NETHER,
+        );
+        let world = &fixture.world;
+        let chunk = ChunkPos::new(11, 11);
+        prepare_nether_chunk(world, chunk);
+
+        let air_pos = BlockPos::new((11 << 4) + 4, FLOOR_Y + 3, (11 << 4) + 4);
+        assert!(
+            is_valid_empty_spawn_block(
+                world.as_ref(),
+                air_pos,
+                vanilla_blocks::AIR.default_state(),
+                &vanilla_entities::STRIDER
+            ),
+            "air is a valid empty spawn cell"
+        );
+
+        let water_pos = BlockPos::new((11 << 4) + 5, FLOOR_Y + 3, (11 << 4) + 5);
+        assert!(
+            world.set_block(
+                water_pos,
+                vanilla_blocks::WATER.default_state(),
+                UpdateFlags::UPDATE_NONE
+            ),
+            "the water cell should be placeable at {water_pos:?}"
+        );
+        assert!(
+            !is_valid_empty_spawn_block(
+                world.as_ref(),
+                water_pos,
+                world.get_block_state(water_pos),
+                &vanilla_entities::STRIDER
+            ),
+            "water is not an empty spawn cell"
+        );
+
+        let stone_pos = BlockPos::new((11 << 4) + 6, FLOOR_Y + 3, (11 << 4) + 6);
+        assert!(
+            world.set_block(
+                stone_pos,
+                vanilla_blocks::NETHERRACK.default_state(),
+                UpdateFlags::UPDATE_NONE
+            ),
+            "the solid cell should be placeable at {stone_pos:?}"
+        );
+        assert!(
+            !is_valid_empty_spawn_block(
+                world.as_ref(),
+                stone_pos,
+                world.get_block_state(stone_pos),
+                &vanilla_entities::STRIDER
+            ),
+            "a solid block is not an empty spawn cell"
+        );
     }
 
     /// Inserts one entity-ticking chunk whose whole column carries the
@@ -1126,7 +1278,7 @@ mod tests {
 
     #[test]
     fn nether_wastes_resolves_vanilla_monster_spawn_list() {
-        crate::bootstrap::init_globals();
+        init_globals();
         let fixture = fresh_test_world_with_dimension_type(
             "nether_biome_spawn_list",
             "nether_biome_spawn_list",
@@ -1171,7 +1323,7 @@ mod tests {
 
     #[test]
     fn nether_world_spawns_monsters_around_a_player() {
-        crate::bootstrap::init_globals();
+        init_globals();
         let fixture = fresh_test_world_with_dimension_type(
             "nether_natural_spawn",
             "nether_natural_spawn",

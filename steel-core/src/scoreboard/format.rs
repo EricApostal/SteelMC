@@ -10,6 +10,10 @@ use text_components::{TextComponent, format::Format};
 
 /// Vanilla `NumberFormat`: how a scoreboard value is rendered.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the fixed variant is the common per-score case; boxing it would add indirection for every rendered score"
+)]
 pub enum NumberFormat {
     /// Renders nothing instead of the value.
     #[default]

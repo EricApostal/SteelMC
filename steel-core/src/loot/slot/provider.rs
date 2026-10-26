@@ -90,7 +90,7 @@ impl SlotAccess for ContainerSlotAccess<'_, '_> {
     }
 }
 
-impl<'a> SlotProvider for ContainerSlots<'a> {
+impl SlotProvider for ContainerSlots<'_> {
     fn get_slot(&self, slot: i32) -> Option<Box<dyn SlotAccess + '_>> {
         let index = usize::try_from(slot).ok()?;
         if index >= self.container_size()? {

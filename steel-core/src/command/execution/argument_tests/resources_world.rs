@@ -1,4 +1,5 @@
 use super::*;
+use crate::entity::ENTITIES;
 
 #[test]
 fn biome_or_tag_argument_resolves_registry_entries_and_tags() {
@@ -41,6 +42,56 @@ fn biome_or_tag_argument_resolves_registry_entries_and_tags() {
             .list()
             .iter()
             .any(|suggestion| suggestion.text() == "#minecraft:is_overworld")
+    );
+}
+
+#[test]
+fn poi_type_or_tag_argument_resolves_registry_entries_and_tags() {
+    use steel_registry::{POI_TYPE_REGISTRY, vanilla_poi_types};
+
+    init_vanilla_registry();
+    assert_eq!(
+        POI_TYPE_REGISTRY.to_string(),
+        "minecraft:point_of_interest_type"
+    );
+    let dispatcher = resource_dispatcher(SteelArgumentType::poi_or_tag());
+
+    let parse = dispatcher.parse("resource home", TestSource::new());
+    let Ok(chain) = dispatcher.context_chain(parse) else {
+        panic!("registered POI type should parse");
+    };
+    assert!(matches!(
+        chain.top_context().poi_or_tag("value"),
+        Ok(PoiTypeOrTag::Type(poi_type)) if *poi_type == &vanilla_poi_types::HOME
+    ));
+
+    let parse = dispatcher.parse("resource #village", TestSource::new());
+    let Ok(chain) = dispatcher.context_chain(parse) else {
+        panic!("registered POI tag should parse");
+    };
+    let Ok(tag) = chain.top_context().poi_or_tag("value") else {
+        panic!("POI tag should be retained");
+    };
+    assert!(tag.matches(&vanilla_poi_types::HOME));
+    assert!(!tag.matches(&vanilla_poi_types::BEE_NEST));
+
+    for input in ["resource missing", "resource #missing"] {
+        let parse = dispatcher.parse(input, TestSource::new());
+        assert!(
+            dispatcher.context_chain(parse).is_err(),
+            "{input} should reject an unknown POI type or tag"
+        );
+    }
+
+    let parse = dispatcher.parse("resource #vill", TestSource::new());
+    let Ok(suggestions) = dispatcher.completion_suggestions(&parse) else {
+        panic!("POI tag suggestions should build");
+    };
+    assert!(
+        suggestions
+            .list()
+            .iter()
+            .any(|suggestion| suggestion.text() == "#minecraft:village")
     );
 }
 
@@ -356,7 +407,7 @@ fn summonable_entity_argument_suggests_only_registered_factories() {
 
     // More entity types gain factories as the fleet lands them, so the
     // expectation is derived from the live registry rather than hardcoded.
-    let Some(registry) = crate::entity::ENTITIES.get() else {
+    let Some(registry) = ENTITIES.get() else {
         panic!("entity registry should be initialized");
     };
     let mut expected = steel_registry::REGISTRY
@@ -368,7 +419,7 @@ fn summonable_entity_argument_suggests_only_registered_factories() {
         .collect::<Vec<_>>();
     expected.sort();
     let mut actual = suggestions;
-    actual.sort();
+    actual.sort_unstable();
     assert!(
         !expected.is_empty(),
         "the fixture must cover a summonable type"

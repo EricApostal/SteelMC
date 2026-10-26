@@ -5,6 +5,7 @@
 //! spreads it by `projectile_spread`, fires it at `power * 3` with a crit at
 //! full draw, damages the bow and awards the used-item stat.
 
+use std::iter;
 use std::sync::Arc;
 
 use steel_macros::item_behavior;
@@ -103,6 +104,12 @@ impl ItemBehavior for BowItem {
 
         let drawn = draw(stack, &ammo, player);
         if !drawn.is_empty() {
+            // Vanilla only crits on the exact full-draw charge of 1.0.
+            #[expect(
+                clippy::float_cmp,
+                reason = "vanilla charges to exactly 1.0 for a full draw; crit requires max charge"
+            )]
+            let is_max_charge = power == 1.0;
             shoot_arrows(
                 world,
                 player,
@@ -110,7 +117,7 @@ impl ItemBehavior for BowItem {
                 stack,
                 &drawn,
                 power * SHOOT_POWER_SCALE,
-                power == 1.0,
+                is_max_charge,
             );
         }
 
@@ -248,8 +255,8 @@ fn use_ammo(
 fn take_ammo(shooter: &Player, ammo: &ItemStack, amount: i32) -> ItemStack {
     let mut inventory = shooter.inventory.lock();
 
-    let slot = std::iter::once(PlayerInventory::SLOT_OFFHAND)
-        .chain(std::iter::once(usize::from(inventory.get_selected_slot())))
+    let slot = iter::once(PlayerInventory::SLOT_OFFHAND)
+        .chain(iter::once(usize::from(inventory.get_selected_slot())))
         .chain(0..PlayerInventory::INVENTORY_SIZE)
         .find(|slot| {
             let stack = inventory.get_item(*slot);
@@ -306,7 +313,7 @@ fn shoot_arrows(
         if projectile.is_empty() {
             continue;
         }
-        let angle = angle_offset + direction * ((index + 1) / 2) as f32 * angle_step;
+        let angle = angle_offset + direction * index.div_ceil(2) as f32 * angle_step;
         direction = -direction;
 
         let arrow = create_arrow(world, projectile, owner, Some(weapon));
@@ -360,7 +367,9 @@ mod tests {
 
         let player = TestPlayerBuilder::new(Arc::clone(world), "Shooter", 7).build();
         let player_entity: SharedEntity = Arc::<Player>::clone(&player);
-        player.try_set_position(DVec3::new(0.5, 65.0, 0.5)).unwrap();
+        player
+            .try_set_position(DVec3::new(0.5, 65.0, 0.5))
+            .expect("shooter spawns at a fixed test position");
         player.set_rotation((0.0, 0.0));
         world
             .try_add_entity(Arc::clone(&player_entity))

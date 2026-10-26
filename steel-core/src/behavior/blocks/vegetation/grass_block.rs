@@ -68,14 +68,12 @@ impl GrassBlock {
         let test_state = world.get_block_state(pos);
         if test_state.get_block() == &vanilla_blocks::SHORT_GRASS
             && rng.random::<f32>() < GROW_TALL_GRASS_CHANCE
-        {
-            if let Some(bonemealable) = BLOCK_BEHAVIORS
+            && let Some(bonemealable) = BLOCK_BEHAVIORS
                 .get_behavior_for_state(test_state)
                 .and_then(|behavior| behavior.as_bonemealable())
-                && bonemealable.is_valid_bonemeal_target(test_state, world.as_ref(), pos)
-            {
-                bonemealable.perform_bonemeal(test_state, world, rng, pos);
-            }
+            && bonemealable.is_valid_bonemeal_target(test_state, world.as_ref(), pos)
+        {
+            bonemealable.perform_bonemeal(test_state, world, rng, pos);
         }
 
         if !test_state.is_air() || world.is_outside_build_height(pos.y()) {
@@ -90,7 +88,7 @@ impl GrassBlock {
             let index = rng.random_range(0..features.len());
             Self::place_simple_block_feature(world, rng, features[index], pos);
         } else {
-            Self::place_simple_block_feature(world, rng, &*vanilla_configured_features::GRASS, pos);
+            Self::place_simple_block_feature(world, rng, &vanilla_configured_features::GRASS, pos);
         }
     }
 

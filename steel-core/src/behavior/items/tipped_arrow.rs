@@ -71,6 +71,7 @@ mod tests {
     use crate::behavior::ItemBehavior;
     use crate::behavior::items::{DispenseConfig, ProjectileItem};
     use crate::entity::entities::objects::projectiles::{AbstractArrow as _, ArrowEntity, Pickup};
+    use crate::test_support::test_world;
 
     /// Vanilla `TippedArrowItem extends ArrowItem`: the dispensed projectile
     /// carries the tipped stack (potion contents included) with pickup allowed.
@@ -98,7 +99,7 @@ mod tests {
             DispenseConfig::DEFAULT
         );
 
-        let world = crate::test_support::test_world();
+        let world = test_world();
         let position = glam::DVec3::new(8.5, 64.5, 8.5);
         let projectile = behavior
             .as_projectile(world, position, &stack, steel_utils::Direction::North)

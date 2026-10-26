@@ -911,7 +911,7 @@ pub fn get_hit_result_on_view_vector(
 
 /// Vanilla `ProjectileUtil.getEntityHitResult` (entity-margin overload): returns
 /// the nearest entity whose inflated box the segment `from -> to` enters.
-fn get_entity_hit_result(
+pub(crate) fn get_entity_hit_result(
     world: &World,
     from: DVec3,
     to: DVec3,

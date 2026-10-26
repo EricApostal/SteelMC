@@ -132,6 +132,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::redundant_closure_for_method_calls,
+        reason = "the private CommandNode type cannot be named from this module"
+    )]
     fn dialog_root_matches_vanillas_show_and_clear_subtrees() {
         init_vanilla_registry();
         let Ok(dispatcher) = create_dispatcher() else {

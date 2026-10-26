@@ -298,6 +298,16 @@ impl Entity for SalmonEntity {
         );
     }
 
+    /// Vanilla `Salmon.loadFromBucketTag`, restored by `MobBucketItem.spawn` on release.
+    fn load_from_bucket_tag(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
+        self.load_from_bucket_data(nbt);
+    }
+
+    /// Vanilla `Bucketable.setFromBucket`, flipped for every released mob.
+    fn set_from_bucket(&self, from_bucket: bool) {
+        SalmonEntity::set_from_bucket(self, from_bucket);
+    }
+
     fn as_schooling_fish(&self) -> Option<&dyn SchoolingFish> {
         Some(self)
     }

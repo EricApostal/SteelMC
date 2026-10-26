@@ -20,6 +20,7 @@ use steel_registry::advancement::predicates::EffectInstanceView;
 use steel_registry::advancement::triggers::TriggerEvent;
 use steel_registry::data_components::vanilla_components::PotionContents;
 use steel_registry::item_stack::ItemStack;
+use steel_registry::vanilla_entities;
 use steel_utils::{BlockPos, Identifier, WorldAabb};
 
 use crate::entity::{Entity, LivingEntity as _, living_loot_equipment, loot_equipment};
@@ -174,7 +175,7 @@ pub fn raise_player_interacted_with_entity(
 /// Raises `minecraft:enchanted_item` (`CriteriaTriggers.ENCHANTED_ITEM`).
 ///
 /// Vanilla `EnchantmentMenu.clickMenuButton` fires this after `awardStat`
-/// (ENCHANT_ITEM) with the enchanted stack and the experience levels the offer
+/// (`ENCHANT_ITEM`) with the enchanted stack and the experience levels the offer
 /// cost (`buttonId + 1`).
 pub fn raise_enchanted_item(player: &Player, item: &ItemStack, levels: i32) -> usize {
     let world = player.get_world();
@@ -294,9 +295,9 @@ pub fn raise_fishing_rod_hooked(
     let hook_equipment = loot_equipment(hook);
     let hook_view = entity_view(hook, &level, hook_equipment.as_ref());
     let hooked_equipment = hooked.and_then(loot_equipment);
-    let hooked_view = hooked
-        .map(|hooked| entity_view(hooked, &level, hooked_equipment.as_ref()))
-        .unwrap_or(hook_view);
+    let hooked_view = hooked.map_or(hook_view, |hooked| {
+        entity_view(hooked, &level, hooked_equipment.as_ref())
+    });
     raise(
         player,
         &Identifier::vanilla_static("fishing_rod_hooked"),
@@ -366,7 +367,7 @@ pub fn raise_construct_beacon(world: &Arc<World>, pos: BlockPos, levels: i32) ->
 
     let mut granted = 0;
     for entity in world.get_entities_in_aabb_matching(&area, |entity| {
-        entity.entity_type() == &steel_registry::vanilla_entities::PLAYER
+        entity.entity_type() == &vanilla_entities::PLAYER
     }) {
         let Some(player) = entity.as_player() else {
             continue;
@@ -444,6 +445,28 @@ pub fn raise_shot_crossbow(player: &Player, world: &Arc<World>, item: &ItemStack
     )
 }
 
+/// Raises `minecraft:spear_mobs` (`CriteriaTriggers.SPEAR_MOBS_TRIGGER`).
+///
+/// Vanilla `KineticWeapon.damageEntities` fires this for the `ServerPlayer`
+/// whose thrust landed at least one stab, with the count of entities remembered
+/// by `LivingEntity.stabbedEntities` — every distinct target stabbed during the
+/// current kinetic-weapon use, filtered to living entities.
+pub fn raise_spear_mobs(player: &Player, world: &Arc<World>, count: i32) -> usize {
+    let origin = player.block_position();
+    let level = WorldLevelView::new(world, origin);
+    let equipment = living_loot_equipment(player);
+    let known = player.recipe_book().unlocked_identifiers().to_vec();
+    let view = player_view(player, &level, Some(&equipment), &known);
+    raise(
+        player,
+        &Identifier::vanilla_static("spear_mobs"),
+        &TriggerEvent::SpearMobs {
+            base: event_base(&view, &level, origin),
+            count,
+        },
+    )
+}
+
 /// Assertions shared by the advancement call-site tests.
 #[cfg(test)]
 pub(crate) mod test_support {
@@ -484,6 +507,8 @@ pub(crate) mod test_support {
 mod tests {
     use std::sync::Arc;
 
+    use glam::DVec3;
+    use steel_registry::entity_type::EntityTypeRef;
     use steel_registry::item_stack::ItemStack;
     use steel_registry::registry_reference::RegistryReference;
     use steel_registry::{
@@ -499,11 +524,13 @@ mod tests {
         raise_fishing_rod_hooked, raise_item_used_on_block, raise_placed_block,
         raise_player_interacted_with_entity, raise_player_sheared_equipment, raise_used_ender_eye,
     };
-    use crate::entity::MobEffectInstance;
+    use crate::behavior::init_behaviors;
+    use crate::entity::entities::objects::vehicles::BoatEntity;
     use crate::entity::{Entity as _, LivingEntity as _};
+    use crate::entity::{MobEffectInstance, SharedEntity, start_riding_entities};
     use crate::player::Player;
     use crate::player::advancement::triggers::{
-        WorldLevelView, raise_levitation, raise_started_riding,
+        WorldLevelView, raise_levitation, raise_using_item,
     };
     use crate::test_support::{
         TestEntity, TestPlayerBuilder, TestWorld, fresh_test_world, insert_ready_full_chunk,
@@ -511,12 +538,15 @@ mod tests {
 
     const COPPER_POS: BlockPos = BlockPos::new(8, 64, 8);
 
+    /// The player spawn used by the trigger tests.
+    const SPAWN: DVec3 = DVec3::new(8.0, 64.0, 8.0);
+
     /// A world holding a copper block, and a player to raise the trigger for.
     fn fixture(name: &'static str) -> (TestWorld, Arc<Player>) {
         init_vanilla_registry();
         // `World::set_block` needs the block behavior registry; the other suites
         // only get it populated by whichever test happens to initialize it first.
-        crate::behavior::init_behaviors();
+        init_behaviors();
         let world_fixture = fresh_test_world(name);
         let world = &world_fixture.world;
         insert_ready_full_chunk(world, ChunkPos::from_block_pos(COPPER_POS));
@@ -599,27 +629,136 @@ mod tests {
     /// `husbandry/ride_a_boat_with_a_goat` listens for `started_riding` with a
     /// `player.vehicle` term requiring a boat carrying a goat.
     ///
-    /// IMPORTANT: the positive case cannot be asserted yet. `entity_view` leaves
-    /// `EntityView.vehicle`/`passenger` as `None`, so the player view the trigger
-    /// builds never exposes the ridden vehicle and the criterion can never match.
-    /// Populating those needs recursively built child views (a real change to the
-    /// view plumbing), so `started_riding` is reported as a raise-wired gap, not a
-    /// landed trigger. This test pins the part that does hold today: mounting alone
-    /// raises nothing until the trigger is raised, and the raise addresses the
-    /// vanilla trigger.
+    /// The goat boards first and the player second, so the player is passenger
+    /// index 0 (`EntityBase::start_riding_relationship` inserts players first) and
+    /// the goat is the vehicle's *second* passenger - the criterion only completes
+    /// because `minecraft:passenger` matches when any passenger matches.
     #[test]
-    fn started_riding_addresses_the_vanilla_trigger() {
-        let (_world, player) = fixture("advancement_hooks_started_riding");
+    fn started_riding_grants_ride_a_boat_with_a_goat() {
+        let (world_fixture, player) = fixture("advancement_hooks_ride_a_boat_with_a_goat");
+        let world = &world_fixture.world;
+
+        let boat: SharedEntity = Arc::new(BoatEntity::new(
+            &vanilla_entities::OAK_BOAT,
+            2,
+            SPAWN,
+            Arc::downgrade(world),
+        ));
+        let goat = TestEntity::shared(3, SPAWN, Arc::downgrade(world), &vanilla_entities::GOAT);
+
+        assert!(start_riding_entities(&goat, &boat), "the goat boards first");
+        let player_entity: SharedEntity = Arc::<Player>::clone(&player);
         assert!(
-            !REGISTRY
-                .advancements
-                .criteria_for_trigger(&Identifier::vanilla_static("started_riding"))
-                .is_empty(),
-            "vanilla ships `husbandry/ride_a_boat_with_a_goat` on `started_riding`"
+            start_riding_entities(&player_entity, &boat),
+            "the boat accepts the player as its second passenger"
         );
-        // The view carries no `vehicle`, so nothing can match; the raise must not
-        // fabricate progress either.
-        assert_eq!(raise_started_riding(&player), 0);
+        assert_eq!(
+            boat.passengers()
+                .iter()
+                .map(|passenger| passenger.entity_type().key.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                Identifier::vanilla_static("player"),
+                Identifier::vanilla_static("goat")
+            ],
+            "vanilla inserts the player at passenger index 0"
+        );
+
+        // `Entity.startRiding` raises the trigger as part of boarding, so the mount
+        // itself must already have granted the criterion.
+        assert!(criterion_granted(
+            &player,
+            "husbandry/ride_a_boat_with_a_goat",
+            "ride_a_boat_with_a_goat"
+        ));
+    }
+
+    /// `adventure/spyglass_at_*` listens for `using_item` with a
+    /// `type_specific/player.looking_at` term, so the player view must carry the
+    /// entity the *view vector* lands on: anything in the way masks a target
+    /// further along the ray, and the reach stops at vanilla
+    /// `PlayerPredicate.LOOKING_AT_RANGE` (100 blocks).
+    ///
+    /// Yaw 0 faces `+Z`, and the player's eyes sit 1.62 blocks above its feet, so
+    /// the targets are placed at eye height ten blocks along the ray.
+    #[test]
+    fn using_item_spyglass_grants_only_within_looking_range() {
+        let spyglass = ItemStack::new(&vanilla_items::SPYGLASS);
+
+        // A target ten blocks ahead is picked, but an enderman fails the
+        // criterion's `parrot` term - and the pick does not fall through to
+        // anything further along the ray.
+        let (_blocked, blocked_player) = spyglass_scenario(
+            "advancement_hooks_spyglass_blocked",
+            &vanilla_entities::ENDERMAN,
+            18.0,
+        );
+        assert_eq!(raise_using_item(&blocked_player, &spyglass), 0);
+        assert!(!criterion_granted(
+            &blocked_player,
+            "adventure/spyglass_at_parrot",
+            "spyglass_at_parrot"
+        ));
+
+        // The same shot at a parrot grants the advancement.
+        let (_near, near_player) = spyglass_scenario(
+            "advancement_hooks_spyglass_parrot",
+            &vanilla_entities::PARROT,
+            18.0,
+        );
+        assert!(raise_using_item(&near_player, &spyglass) >= 1);
+        assert!(criterion_granted(
+            &near_player,
+            "adventure/spyglass_at_parrot",
+            "spyglass_at_parrot"
+        ));
+        // The criterion is already granted, so a second raise adds nothing.
+        assert_eq!(raise_using_item(&near_player, &spyglass), 0);
+
+        // A parrot 150 blocks out is past the 100-block view-vector reach.
+        let (_far, far_player) = spyglass_scenario(
+            "advancement_hooks_spyglass_far_parrot",
+            &vanilla_entities::PARROT,
+            158.0,
+        );
+        assert_eq!(raise_using_item(&far_player, &spyglass), 0);
+        assert!(!criterion_granted(
+            &far_player,
+            "adventure/spyglass_at_parrot",
+            "spyglass_at_parrot"
+        ));
+    }
+
+    /// A world holding a player looking straight along `+Z` from its spawn, with
+    /// one `entity_type` target `z` blocks ahead of the player's eyes.
+    fn spyglass_scenario(
+        name: &'static str,
+        entity_type: EntityTypeRef,
+        z: f64,
+    ) -> (TestWorld, Arc<Player>) {
+        init_vanilla_registry();
+        init_behaviors();
+        let world_fixture = fresh_test_world(name);
+        let world = &world_fixture.world;
+        let player = TestPlayerBuilder::new(Arc::clone(world), "Spyglass", 1).build();
+        player
+            .try_set_position(SPAWN)
+            .expect("the player spawns at a fixed test position");
+        player.set_rotation((0.0, 0.0));
+
+        // The target sits at the player's eye height, so the flat ray enters its
+        // box instead of passing underneath it.
+        let target = TestEntity::shared(
+            2,
+            DVec3::new(SPAWN.x, player.get_eye_y(), z),
+            Arc::downgrade(world),
+            entity_type,
+        );
+        insert_ready_full_chunk(world, ChunkPos::from_entity_pos(target.position()));
+        world
+            .try_add_entity(target)
+            .expect("the target joins a loaded chunk");
+        (world_fixture, player)
     }
 
     /// `nether/all_potions` listens for `effects_changed` with an `effects` term
@@ -630,7 +769,7 @@ mod tests {
     fn effects_changed_grants_all_potions_for_the_full_effect_set() {
         init_vanilla_registry();
         let world_fixture = fresh_test_world("advancement_hooks_effects_changed");
-        crate::behavior::init_behaviors();
+        init_behaviors();
         let player =
             TestPlayerBuilder::new(Arc::clone(&world_fixture.world), "EffectsChanged", 1).build();
 
@@ -655,14 +794,14 @@ mod tests {
         ];
         let (last, rest) = all_effects.split_last().expect("non-empty effect set");
         for effect in rest {
-            player.add_mob_effect(MobEffectInstance::new(*effect, 0));
+            player.add_mob_effect(MobEffectInstance::new(effect, 0));
         }
         assert!(
             !criterion_granted(&player, "nether/all_potions", "all_effects"),
             "the criterion needs every listed effect"
         );
 
-        player.add_mob_effect(MobEffectInstance::new(*last, 0));
+        player.add_mob_effect(MobEffectInstance::new(last, 0));
         assert!(criterion_granted(
             &player,
             "nether/all_potions",
@@ -676,7 +815,7 @@ mod tests {
     fn levitation_grants_levitate_for_a_long_climb() {
         init_vanilla_registry();
         let world_fixture = fresh_test_world("advancement_hooks_levitation");
-        crate::behavior::init_behaviors();
+        init_behaviors();
         let player =
             TestPlayerBuilder::new(Arc::clone(&world_fixture.world), "Levitation", 1).build();
         let world = player.get_world();

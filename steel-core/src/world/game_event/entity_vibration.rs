@@ -267,11 +267,7 @@ impl EntityVibrationListener {
         }
 
         let origin = BlockPos::from(vibration.pos);
-        let destination = self
-            .user
-            .listener_position()
-            .map(BlockPos::from)
-            .unwrap_or(origin);
+        let destination = self.user.listener_position().map_or(origin, BlockPos::from);
         state.set_current_vibration(None);
         drop(state);
 

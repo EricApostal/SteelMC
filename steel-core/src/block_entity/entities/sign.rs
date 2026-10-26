@@ -739,7 +739,7 @@ mod tests {
         nbt.insert("allow_op_features", 1_i8);
         let mut bytes = Vec::new();
         nbt.write(&mut bytes);
-        let borrowed = simdnbt::borrow::read_compound(&mut Cursor::new(bytes.as_slice()))
+        let borrowed = read_compound(&mut Cursor::new(bytes.as_slice()))
             .expect("allow_op_features NBT should reborrow");
         sign.load_additional(&borrowed);
         assert!(sign.allows_op_features());

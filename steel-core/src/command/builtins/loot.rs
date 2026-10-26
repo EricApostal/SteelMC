@@ -254,23 +254,24 @@ fn drop_kill_loot(
     context: &SteelCommandContext<CommandSource>,
     target: Target,
 ) -> Result<i32, CommandSyntaxError> {
-    let killed = context.entity("target")?;
-    let Some(loot_table) = entity_loot_table(killed.as_ref()) else {
+    let victim = context.entity("target")?;
+    let Some(loot_table) = entity_loot_table(victim.as_ref()) else {
         return Err(CommandSyntaxError::dynamic(
             translations::COMMANDS_DROP_NO_LOOT_TABLE_ENTITY
-                .message([killed.display_name()])
+                .message([victim.display_name()])
                 .component(),
         ));
     };
 
     let source = context.source();
     let origin = source.position();
-    let killer = source.entity().map(AsRef::as_ref);
-    let killer_is_player = killer.is_some_and(|killer| killer.as_player().is_some());
-    let killer_equipment = killer.and_then(loot_equipment);
-    let killed_equipment = loot_equipment(killed.as_ref());
-    let this_entity = entity_loot_ref(killed.as_ref(), killed_equipment.as_ref());
-    let killer_ref = killer.map(|killer| entity_loot_ref(killer, killer_equipment.as_ref()));
+    let attacker = source.entity().map(AsRef::as_ref);
+    let attacker_is_player = attacker.is_some_and(|attacker| attacker.as_player().is_some());
+    let attacker_equipment = attacker.and_then(loot_equipment);
+    let victim_equipment = loot_equipment(victim.as_ref());
+    let this_entity = entity_loot_ref(victim.as_ref(), victim_equipment.as_ref());
+    let attacker_ref =
+        attacker.map(|attacker| entity_loot_ref(attacker, attacker_equipment.as_ref()));
     let damage_source = DamageSourceInfo {
         damage_type: Some(&vanilla_damage_types::MAGIC.key),
         tags: &[],
@@ -281,15 +282,15 @@ fn drop_kill_loot(
     let mut params = LootContext::new(&mut rng)
         .with_origin(origin.x, origin.y, origin.z)
         .with_game_time(source.world().game_time())
-        .with_killed_by_player(killer_is_player)
+        .with_killed_by_player(attacker_is_player)
         .with_this_entity(this_entity)
         .with_damage_source(damage_source);
-    if let Some(killer_ref) = killer_ref {
+    if let Some(attacker_ref) = attacker_ref {
         params = params
-            .with_killer_entity(killer_ref)
-            .with_direct_killer_entity(killer_ref);
-        if killer_is_player {
-            params = params.with_last_damage_player(killer_ref);
+            .with_killer_entity(attacker_ref)
+            .with_direct_killer_entity(attacker_ref);
+        if attacker_is_player {
+            params = params.with_last_damage_player(attacker_ref);
         }
     }
 
@@ -354,14 +355,14 @@ fn deliver(
             entity_replace(context, &drops, explicit_count, &mut tracker)?;
         }
     }
-    report(context, &tracker, loot_table)
+    Ok(report(context, &tracker, loot_table))
 }
 
 fn report(
     context: &SteelCommandContext<CommandSource>,
     tracker: &ResponseTracker,
     loot_table: Option<&Identifier>,
-) -> Result<i32, CommandSyntaxError> {
+) -> i32 {
     let message = match (&tracker.only_non_zero_element, loot_table) {
         (Some(stack), None) => translations::COMMANDS_DROP_SUCCESS_SINGLE
             .message([
@@ -389,7 +390,7 @@ fn report(
             .component(),
     };
     context.source().send_success(&message, false);
-    Ok(tracker.total_value)
+    tracker.total_value
 }
 
 /// Vanilla `dropInWorld`.
@@ -455,9 +456,7 @@ fn distribute_to_container(
     id: ContainerId,
     mut stack: ItemStack,
 ) -> bool {
-    let size = guard
-        .get(id)
-        .map_or(0, |container| container.get_container_size());
+    let size = guard.get(id).map_or(0, Container::get_container_size);
     let mut changed = false;
     for slot in 0..size {
         if stack.is_empty() {
@@ -511,9 +510,7 @@ fn block_replace(
     let container = block_container(context.source(), pos)?;
     let id = container.container_id();
     let mut guard = ContainerLockGuard::lock_all(&[&container]);
-    let max_slot = guard
-        .get(id)
-        .map_or(0, |container| container.get_container_size());
+    let max_slot = guard.get(id).map_or(0, Container::get_container_size);
 
     if usize::try_from(start_slot)
         .ok()

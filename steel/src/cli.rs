@@ -154,6 +154,7 @@ fn usage() -> String {
 mod tests {
     use super::CliArgs;
     use std::ffi::OsString;
+    use std::path::Path;
 
     fn parse(args: &[&str]) -> Result<CliArgs, String> {
         CliArgs::parse(args.iter().map(|arg| OsString::from(*arg)))
@@ -173,7 +174,7 @@ mod tests {
         .expect("valid flags should parse");
         assert_eq!(args.port, Some(25566));
         assert_eq!(args.world.as_deref(), Some("adventure"));
-        assert_eq!(args.universe.as_deref(), Some(std::path::Path::new("data")));
+        assert_eq!(args.universe.as_deref(), Some(Path::new("data")));
         assert!(!args.init_settings);
     }
 

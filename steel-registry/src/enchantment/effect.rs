@@ -237,7 +237,30 @@ pub struct EntityPredicate {
     pub vehicle: EntityVehiclePredicate,
     pub flags: EntityFlagsPredicate,
     pub type_specific: EntityTypeSpecificPredicate,
+    pub location: Option<EntityLocationPredicate>,
     pub unsupported: bool,
+}
+
+/// Vanilla `LocationPredicate` subset used by enchantment entity predicates.
+#[derive(Debug, PartialEq, Eq)]
+pub struct EntityLocationPredicate {
+    pub can_see_sky: Option<bool>,
+    pub unsupported: bool,
+}
+
+impl EntityLocationPredicate {
+    #[must_use]
+    pub const fn any() -> Self {
+        Self {
+            can_see_sky: None,
+            unsupported: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn has_constraints(&self) -> bool {
+        self.can_see_sky.is_some() || self.unsupported
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -327,6 +350,12 @@ pub enum EnchantmentEffectRequirements {
     RandomChance {
         chance: &'static LevelBasedValue,
     },
+    /// Vanilla `WeatherCheck`: matches when each present flag equals the
+    /// level's weather state.
+    WeatherCheck {
+        raining: Option<bool>,
+        thundering: Option<bool>,
+    },
     MatchTool {
         items: Option<EnchantmentItemSet>,
     },
@@ -338,6 +367,9 @@ pub enum EnchantmentEffectRequirements {
 impl EnchantmentEffectRequirements {
     /// Evaluates the subset of loot conditions supported by Vanilla's item-only
     /// enchantment context. `None` keeps unsupported contexts fail-closed.
+    ///
+    /// Weather is not an item property, so `WeatherCheck` is unknown here;
+    /// evaluate it through the world-weather folds instead.
     #[must_use]
     pub fn matches_item_context(&self, item: ItemRef) -> Option<bool> {
         match self {
@@ -370,6 +402,7 @@ impl EnchantmentEffectRequirements {
             Self::EntityProperties { .. }
             | Self::DamageSourceProperties(_)
             | Self::RandomChance { .. }
+            | Self::WeatherCheck { .. }
             | Self::Unsupported { .. } => None,
         }
     }

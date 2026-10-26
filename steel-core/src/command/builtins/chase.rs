@@ -9,6 +9,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::{self, Builder};
 use std::time::{Duration, Instant};
 
 use steel_utils::Identifier;
@@ -47,7 +48,8 @@ struct Session {
 impl Session {
     fn stop(&self) {
         self.shutdown.store(true, Ordering::Relaxed);
-        if let Some(socket) = self.socket.lock().take() {
+        let socket = self.socket.lock().take();
+        if let Some(socket) = socket {
             let _ = socket.shutdown(Shutdown::Both);
         }
     }
@@ -102,8 +104,7 @@ fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
                     argument("host", ArgumentType::string())
                         .executes(|context| follow(context, DEFAULT_CONNECT_HOST, DEFAULT_PORT))
                         .then(
-                            argument("port", ArgumentType::integer(1, 65535))
-                                .executes(|context| follow_port(context)),
+                            argument("port", ArgumentType::integer(1, 65535)).executes(follow_port),
                         ),
                 )
                 .executes(|context| follow(context, DEFAULT_CONNECT_HOST, DEFAULT_PORT)),
@@ -115,7 +116,7 @@ fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
                         .executes(|context| lead(context, DEFAULT_BIND_ADDRESS, DEFAULT_PORT))
                         .then(
                             argument("port", ArgumentType::integer(1024, 65535))
-                                .executes(|context| lead_port(context)),
+                                .executes(lead_port),
                         ),
                 )
                 .executes(|context| lead(context, DEFAULT_BIND_ADDRESS, DEFAULT_PORT)),
@@ -164,6 +165,10 @@ fn already_running(context: &SteelCommandContext<CommandSource>) -> bool {
     clippy::cast_possible_truncation,
     reason = "the command grammar already bounds the port to 1024..=65535"
 )]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "Command executors use a shared fallible callback signature."
+)]
 fn lead(
     context: &SteelCommandContext<CommandSource>,
     bind_address: &str,
@@ -188,7 +193,7 @@ fn lead(
     let shutdown = Arc::new(AtomicBool::new(false));
     let server = Arc::clone(context.source().server());
     let worker_shutdown = Arc::clone(&shutdown);
-    let spawn_result = std::thread::Builder::new()
+    let spawn_result = Builder::new()
         .name("chase-server".to_owned())
         .spawn(move || run_server(listener, &server, &worker_shutdown));
     if let Err(error) = spawn_result {
@@ -214,9 +219,8 @@ fn lead(
 
 /// Vanilla `ChaseCommand.follow`.
 #[expect(
-    clippy::cast_sign_loss,
-    clippy::cast_possible_truncation,
-    reason = "the command grammar already bounds the port to 1..=65535"
+    clippy::unnecessary_wraps,
+    reason = "Command executors use a shared fallible callback signature."
 )]
 fn follow(
     context: &SteelCommandContext<CommandSource>,
@@ -234,7 +238,7 @@ fn follow(
     let worker_socket = Arc::clone(&socket);
     let address = format!("{host}:{port}");
     let client_address = address.clone();
-    let spawn_result = std::thread::Builder::new()
+    let spawn_result = Builder::new()
         .name("chase-client".to_owned())
         .spawn(move || run_client(&client_address, &server, &worker_shutdown, &worker_socket));
     if let Err(error) = spawn_result {
@@ -256,6 +260,10 @@ fn follow(
 }
 
 /// Vanilla `ChaseCommand.stop`.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "Command executors use a shared fallible callback signature."
+)]
 fn stop_chase(context: &SteelCommandContext<CommandSource>) -> Result<i32, CommandSyntaxError> {
     let (client, server) = {
         let mut state = CHASE.lock();
@@ -304,7 +312,7 @@ fn run_server(listener: TcpListener, server: &Arc<Server>, shutdown: &AtomicBool
             last_position = Some(position);
         }
 
-        std::thread::sleep(Duration::from_millis(BROADCAST_INTERVAL_MS));
+        thread::sleep(Duration::from_millis(BROADCAST_INTERVAL_MS));
     }
 
     tracing::info!("chase server stopped");
@@ -375,13 +383,14 @@ fn run_client(
             }
         }
 
-        if let Some(stream) = socket.lock().take() {
+        let stream = socket.lock().take();
+        if let Some(stream) = stream {
             let _ = stream.shutdown(Shutdown::Both);
         }
 
         let deadline = Instant::now() + RECONNECT_INTERVAL;
         while Instant::now() < deadline && !shutdown.load(Ordering::Relaxed) {
-            std::thread::sleep(Duration::from_millis(BROADCAST_INTERVAL_MS));
+            thread::sleep(Duration::from_millis(BROADCAST_INTERVAL_MS));
         }
     }
 }

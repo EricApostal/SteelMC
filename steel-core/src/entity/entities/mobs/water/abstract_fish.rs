@@ -377,7 +377,7 @@ pub(crate) fn load_default_bucket_data(entity: &dyn Mob, nbt: BorrowedNbtCompoun
 /// Vanilla `AbstractFish.requiresCustomPersistence` (the `super` half is
 /// `Mob.requiresCustomPersistence`).
 pub(crate) fn requires_custom_persistence(entity: &dyn Mob, from_bucket: bool) -> bool {
-    Mob::requires_custom_persistence(entity) || from_bucket
+    entity.requires_custom_persistence_base() || from_bucket
 }
 
 /// Vanilla `AbstractFish.removeWhenFarAway`.

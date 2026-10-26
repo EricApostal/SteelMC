@@ -135,7 +135,6 @@ impl BeehiveBlock {
     ///
     /// Vanilla only calls this with `BeeReleaseStatus.EMERGENCY`.
     fn release_bees_and_reset_honey_level(
-        &self,
         world: &Arc<World>,
         state: BlockStateId,
         pos: BlockPos,
@@ -285,7 +284,7 @@ impl BlockBehavior for BeehiveBlock {
                     player.position(),
                     1.0,
                     1.0,
-                    Some(player.id()),
+                    None,
                 );
                 hive_emptied = true;
                 world.game_event(
@@ -311,7 +310,7 @@ impl BlockBehavior for BeehiveBlock {
             if Self::hive_contains_bees(world, pos) {
                 Self::anger_nearby_bees(world, pos);
             }
-            self.release_bees_and_reset_honey_level(world, state, pos, Some(player));
+            Self::release_bees_and_reset_honey_level(world, state, pos, Some(player));
         }
 
         InteractionResult::Success

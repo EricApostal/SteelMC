@@ -49,24 +49,36 @@ fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
         .then(literal("reload").executes_suspended(start_reload))
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "Command executors use a shared fallible callback signature."
+)]
 fn start_enable(
     context: &SteelCommandContext<CommandSource>,
 ) -> Result<ModerationSuspension, CommandSyntaxError> {
     let source = context.source().clone();
     Ok(ModerationSuspension::spawn(source.clone(), async move {
-        enable_whitelist(&source).await
+        enable_whitelist(&source)
     }))
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "Command executors use a shared fallible callback signature."
+)]
 fn start_disable(
     context: &SteelCommandContext<CommandSource>,
 ) -> Result<ModerationSuspension, CommandSyntaxError> {
     let source = context.source().clone();
     Ok(ModerationSuspension::spawn(source.clone(), async move {
-        disable_whitelist(&source).await
+        disable_whitelist(&source)
     }))
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "Command executors use a shared fallible callback signature."
+)]
 fn start_reload(
     context: &SteelCommandContext<CommandSource>,
 ) -> Result<ModerationSuspension, CommandSyntaxError> {
@@ -97,23 +109,21 @@ fn start_remove_players(
 }
 
 /// Vanilla `WhitelistCommand.enableWhitelist`.
-async fn enable_whitelist(source: &CommandSource) -> Result<ModerationOutcome, CommandSyntaxError> {
+fn enable_whitelist(source: &CommandSource) -> Result<ModerationOutcome, CommandSyntaxError> {
     let server = source.server();
     if server.allowlist().is_enabled() {
         return Err(already_enabled());
     }
 
     server.allowlist().set_enabled(true);
-    server.kick_unlisted_players().await;
+    server.kick_unlisted_players();
     Ok(single_message(TextComponent::from(
         &translations::COMMANDS_WHITELIST_ENABLED,
     )))
 }
 
 /// Vanilla `WhitelistCommand.disableWhitelist`.
-async fn disable_whitelist(
-    source: &CommandSource,
-) -> Result<ModerationOutcome, CommandSyntaxError> {
+fn disable_whitelist(source: &CommandSource) -> Result<ModerationOutcome, CommandSyntaxError> {
     let server = source.server();
     if !server.allowlist().is_enabled() {
         return Err(already_disabled());
@@ -131,7 +141,7 @@ async fn reload_whitelist(source: &CommandSource) -> Result<ModerationOutcome, C
     if let Err(error) = server.allowlist().reload().await {
         log::warn!("Failed to reload the allowlist: {error}");
     }
-    server.kick_unlisted_players().await;
+    server.kick_unlisted_players();
     Ok(single_message(TextComponent::from(
         &translations::COMMANDS_WHITELIST_RELOADED,
     )))
@@ -203,7 +213,7 @@ async fn remove_players(
         )));
     }
 
-    server.kick_unlisted_players().await;
+    server.kick_unlisted_players();
     Ok(ModerationOutcome {
         messages,
         result: success,

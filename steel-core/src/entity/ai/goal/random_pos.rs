@@ -212,6 +212,44 @@ pub(crate) fn air_and_water_random_pos(
     })
 }
 
+/// Vanilla `AirRandomPos.getPosTowards(mob, xz, y, flyingHeight, towardsPos, maxXZRadians)`:
+/// the [`air_and_water_random_pos`] search steered toward `towardsPos`, rejecting water.
+pub(crate) fn air_random_pos_towards(
+    mob: &dyn PathfinderMob,
+    horizontal_dist: i32,
+    vertical_dist: i32,
+    flying_height: i32,
+    towards_pos: DVec3,
+    max_xz_radians_from_dir: f64,
+) -> Option<DVec3> {
+    let dir = towards_pos - mob.position();
+    let restrict = mob_restricted(mob, f64::from(horizontal_dist));
+    generate_random_pos(mob, || {
+        let direction = {
+            let mut random = LegacyRandom::from_seed(rand::random());
+            generate_random_direction_within_radians(
+                &mut random,
+                0.0,
+                f64::from(horizontal_dist),
+                vertical_dist,
+                flying_height,
+                dir.x,
+                dir.z,
+                max_xz_radians_from_dir,
+            )
+        }?;
+        let pos = generate_random_pos_toward_direction(mob, f64::from(horizontal_dist), direction);
+        if is_outside_limits(mob, pos) || is_restricted(restrict, mob, pos) {
+            return None;
+        }
+        let pos = move_up_out_of_solid(mob, pos)?;
+        if has_malus(mob, pos) || is_water(mob, pos) {
+            return None;
+        }
+        Some(pos)
+    })
+}
+
 /// Vanilla `RandomPos.moveUpToAboveSolid`.
 fn move_up_to_above_solid(
     mob: &dyn PathfinderMob,

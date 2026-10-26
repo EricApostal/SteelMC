@@ -74,6 +74,10 @@ impl Player {
         }
         *self.advancements.lock() = old_player.advancements.lock().clone();
         *self.seen_credits.lock() = *old_player.seen_credits.lock();
+        // Vanilla `ServerPlayer.restoreFrom` copies the Nether entry position to
+        // the replacement so a post-death return to the Overworld still fires
+        // `nether_travel` from it.
+        *self.entered_nether_position.lock() = *old_player.entered_nether_position.lock();
         let residence = old_player.residence.lock().clone();
         *self.residence.lock() = residence;
 

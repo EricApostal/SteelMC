@@ -27,13 +27,13 @@ fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
 
 fn emote(context: &SteelCommandContext<CommandSource>) -> Result<i32, CommandSyntaxError> {
     let source = context.source();
-    let content = context.message("action")?;
+    let text = context.message("action")?;
     let logged = translations::CHAT_TYPE_EMOTE
-        .message([source_display_name(source), content.clone()])
+        .message([source_display_name(source), text.clone()])
         .component();
     broadcast_command_chat(
         source,
-        &content,
+        &text,
         vanilla_chat_types::EMOTE_COMMAND.id() as i32,
         &logged,
     );

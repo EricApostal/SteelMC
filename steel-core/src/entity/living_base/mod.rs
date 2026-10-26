@@ -724,6 +724,20 @@ pub struct LivingEntityBase {
     equipment_attribute_modifiers:
         SyncMutex<[Vec<EquipmentAttributeModifierKey>; EquipmentSlot::ALL.len()]>,
     combat_tracker: SyncMutex<CombatTracker>,
+    /// Vanilla `LivingEntity.recentKineticEnemies`: the entities this living
+    /// entity has already stabbed during the current kinetic-weapon use. Created
+    /// when a `KINETIC_WEAPON` use starts, cleared when the use stops.
+    recent_kinetic_enemies: SyncMutex<Option<FxHashMap<i32, RecentKineticEnemy>>>,
+}
+
+/// One entry of [`LivingEntityBase::recent_kinetic_enemies`].
+#[derive(Debug, Clone, Copy)]
+struct RecentKineticEnemy {
+    /// Game time the stab landed.
+    stabbed_at: i64,
+    /// Whether the target was a living entity (vanilla's `stabbedEntities`
+    /// counts only living targets).
+    living: bool,
 }
 
 #[derive(Debug)]
@@ -771,7 +785,60 @@ impl LivingEntityBase {
             pending_equipment_changes: SyncMutex::new(array::from_fn(|_| None)),
             equipment_attribute_modifiers: SyncMutex::new(array::from_fn(|_| Vec::new())),
             combat_tracker: SyncMutex::new(CombatTracker::new()),
+            recent_kinetic_enemies: SyncMutex::new(None),
         }
+    }
+
+    /// Vanilla `LivingEntity.startUsingItem`'s kinetic-weapon bookkeeping: a
+    /// fresh, empty recent-stab map for a use that carries `KINETIC_WEAPON`.
+    pub fn start_kinetic_enemy_tracking(&self) {
+        *self.recent_kinetic_enemies.lock() = Some(FxHashMap::default());
+    }
+
+    /// Vanilla `LivingEntity.stopUsingItem`'s `recentKineticEnemies = null`.
+    ///
+    /// Runs on the server path only in vanilla (`!level.isClientSide`); every use
+    /// here is server-side.
+    pub fn stop_kinetic_enemy_tracking(&self) {
+        *self.recent_kinetic_enemies.lock() = None;
+    }
+
+    /// Vanilla `LivingEntity.wasRecentlyStabbed`: whether `target_id` was stabbed
+    /// within the last `ticks` game ticks of the current use.
+    #[must_use]
+    pub fn was_recently_stabbed(&self, target_id: i32, ticks: i32, game_time: i64) -> bool {
+        let guard = self.recent_kinetic_enemies.lock();
+        let Some(enemies) = guard.as_ref() else {
+            return false;
+        };
+        let Some(&enemy) = enemies.get(&target_id) else {
+            return false;
+        };
+        game_time - enemy.stabbed_at < i64::from(ticks)
+    }
+
+    /// Vanilla `LivingEntity.rememberStabbedEntity`.
+    pub fn remember_stabbed_entity(&self, target_id: i32, game_time: i64, living: bool) {
+        let mut guard = self.recent_kinetic_enemies.lock();
+        if let Some(enemies) = guard.as_mut() {
+            enemies.insert(
+                target_id,
+                RecentKineticEnemy {
+                    stabbed_at: game_time,
+                    living,
+                },
+            );
+        }
+    }
+
+    /// Vanilla `LivingEntity.stabbedEntities(e -> e instanceof LivingEntity)`:
+    /// the number of remembered stab targets that were living entities.
+    #[must_use]
+    pub fn stabbed_living_entities(&self) -> i32 {
+        let guard = self.recent_kinetic_enemies.lock();
+        guard.as_ref().map_or(0, |enemies| {
+            enemies.values().filter(|enemy| enemy.living).count() as i32
+        })
     }
 
     /// Returns this entity's vanilla `CombatTracker`.

@@ -101,7 +101,11 @@ impl BuiltinPackSource {
     }
 
     /// Creates the builtin source over an explicit vanilla pack root.
-    pub(crate) fn new(vanilla_root: PathBuf) -> Self {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "vanilla test fixture API surface")
+    )]
+    pub(crate) const fn new(vanilla_root: PathBuf) -> Self {
         Self { vanilla_root }
     }
 }
@@ -168,7 +172,7 @@ pub(crate) struct WorldPackSource {
 
 impl WorldPackSource {
     /// Creates a source over a world's `datapacks/` directory.
-    pub(crate) fn new(root: PathBuf) -> Self {
+    pub(crate) const fn new(root: PathBuf) -> Self {
         Self { root }
     }
 }
@@ -224,14 +228,13 @@ fn read_required_features(resources: &dyn PackResources) -> Vec<Identifier> {
     json.get("features")
         .and_then(|features| features.get("enabled"))
         .and_then(serde_json::Value::as_array)
-        .map(|flags| {
+        .map_or_else(Vec::new, |flags| {
             flags
                 .iter()
                 .filter_map(serde_json::Value::as_str)
                 .filter_map(|flag| flag.parse::<Identifier>().ok())
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 /// Where a newly enabled pack is inserted in the load order.
@@ -317,8 +320,7 @@ impl PackRepository {
         let disabled = self
             .selection_file
             .as_deref()
-            .map(read_selection_file)
-            .unwrap_or_default()
+            .map_or_default(read_selection_file)
             .disabled;
 
         let mut enabled: Vec<String> = Vec::new();
@@ -365,7 +367,7 @@ impl PackRepository {
             source.discover(&mut candidates)?;
         }
 
-        let saved = selection_file.map(read_selection_file).unwrap_or_default();
+        let saved = selection_file.map_or_default(read_selection_file);
 
         let mut packs = Vec::with_capacity(candidates.len());
         for candidate in candidates {
@@ -440,10 +442,10 @@ impl PackRepository {
     }
 
     /// The feature flags `id` requires.
+    #[expect(dead_code, reason = "vanilla Pack feature-flags API surface")]
     pub(crate) fn features_enabled_by(&self, id: &str) -> Vec<Identifier> {
         self.pack(id)
-            .map(|pack| pack.required_features.clone())
-            .unwrap_or_default()
+            .map_or_default(|pack| pack.required_features.clone())
     }
 
     /// Enabled packs in load order, used by the resource manager.
@@ -583,14 +585,13 @@ fn read_selection_file(path: &Path) -> Selection {
     let ids = |name: &str| -> Vec<String> {
         json.get(name)
             .and_then(serde_json::Value::as_array)
-            .map(|values| {
+            .map_or_default(|values| {
                 values
                     .iter()
                     .filter_map(serde_json::Value::as_str)
                     .map(ToOwned::to_owned)
                     .collect()
             })
-            .unwrap_or_default()
     };
     Selection {
         enabled: ids("enabled"),
@@ -631,10 +632,12 @@ pub(crate) fn world_datapack_dir(save_path: &Path) -> PathBuf {
 /// instead of duplicating the helper.
 #[cfg(test)]
 pub(crate) fn temp_dir(label: &str) -> PathBuf {
-    let base = std::env::temp_dir().join(format!(
+    use std::{env, process, thread};
+
+    let base = env::temp_dir().join(format!(
         "steel-datapack-{label}-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
+        process::id(),
+        thread::current().id()
     ));
     fs::create_dir_all(&base).expect("temporary directory should be creatable");
     base
@@ -646,7 +649,10 @@ pub(crate) fn temp_dir(label: &str) -> PathBuf {
     reason = "these tests unwrap their own fixture data so failures point at the offending assertion"
 )]
 mod tests {
+    use std::{fs, sync::Arc};
+
     use super::{PackInsert, PackRepository, RepositorySource, WorldPackSource};
+    use crate::datapack::pack::PackType;
 
     #[test]
     fn missing_world_directory_discovers_no_packs() {
@@ -659,8 +665,8 @@ mod tests {
     #[test]
     fn repository_without_sources_is_empty() {
         let repository = PackRepository::new(Vec::new(), None).unwrap();
-        assert!(repository.available_ids().is_empty());
-        assert!(repository.enabled_ids().is_empty());
+        assert_eq!(repository.available_ids(), [] as [String; 0]);
+        assert_eq!(repository.enabled_ids(), [] as [String; 0]);
         assert!(!repository.is_enabled("vanilla"));
     }
 
@@ -676,18 +682,18 @@ mod tests {
 
     #[test]
     fn world_pack_type_directory_is_data() {
-        assert_eq!(crate::datapack::pack::PackType::Server.directory(), "data");
+        assert_eq!(PackType::Server.directory(), "data");
     }
 
     #[test]
     fn rediscover_picks_up_a_pack_added_after_construction() {
         let root = super::temp_dir("rediscover");
         let packs = root.join("datapacks");
-        std::fs::create_dir_all(&packs).unwrap();
+        fs::create_dir_all(&packs).unwrap();
 
-        let sources: Vec<std::sync::Arc<dyn RepositorySource>> = vec![
-            std::sync::Arc::new(super::BuiltinPackSource::new(root.clone())),
-            std::sync::Arc::new(WorldPackSource::new(packs.clone())),
+        let sources: Vec<Arc<dyn RepositorySource>> = vec![
+            Arc::new(super::BuiltinPackSource::new(root.clone())),
+            Arc::new(WorldPackSource::new(packs.clone())),
         ];
         let mut repository = PackRepository::new(sources, None).unwrap();
         assert!(!repository.is_enabled("file/late_pack"));
@@ -695,8 +701,8 @@ mod tests {
 
         // A pack directory that appears while the server runs must become available.
         let late = packs.join("late_pack");
-        std::fs::create_dir_all(late.join("data/minecraft")).unwrap();
-        std::fs::write(
+        fs::create_dir_all(late.join("data/minecraft")).unwrap();
+        fs::write(
             late.join("pack.mcmeta"),
             format!(
                 "{{\"pack\":{{\"min_format\":{format},\"max_format\":{format},\"description\":\"late\"}}}}",
@@ -720,7 +726,7 @@ mod tests {
         assert!(repository.discover_new_packs().unwrap());
         assert!(repository.is_enabled("file/late_pack"));
 
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 
     #[test]
@@ -728,8 +734,8 @@ mod tests {
         let root = super::temp_dir("rediscover-disabled");
         let packs = root.join("datapacks");
         let pack = packs.join("my_pack");
-        std::fs::create_dir_all(pack.join("data/minecraft")).unwrap();
-        std::fs::write(
+        fs::create_dir_all(pack.join("data/minecraft")).unwrap();
+        fs::write(
             pack.join("pack.mcmeta"),
             format!(
                 "{{\"pack\":{{\"min_format\":{format},\"max_format\":{format}}}}}",
@@ -738,10 +744,10 @@ mod tests {
         )
         .unwrap();
 
-        let sources = || -> Vec<std::sync::Arc<dyn RepositorySource>> {
+        let sources = || -> Vec<Arc<dyn RepositorySource>> {
             vec![
-                std::sync::Arc::new(super::BuiltinPackSource::new(root.clone())),
-                std::sync::Arc::new(WorldPackSource::new(packs.clone())),
+                Arc::new(super::BuiltinPackSource::new(root.clone())),
+                Arc::new(WorldPackSource::new(packs.clone())),
             ]
         };
         let selection = root.join(super::SELECTION_FILE);
@@ -769,7 +775,7 @@ mod tests {
         let reopened = PackRepository::new(sources(), Some(selection)).unwrap();
         assert!(!reopened.is_enabled("file/my_pack"));
 
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 
     #[test]
@@ -777,8 +783,8 @@ mod tests {
         let root = super::temp_dir("rediscover-drop");
         let packs = root.join("datapacks");
         let pack = packs.join("gone_soon");
-        std::fs::create_dir_all(pack.join("data/minecraft")).unwrap();
-        std::fs::write(
+        fs::create_dir_all(pack.join("data/minecraft")).unwrap();
+        fs::write(
             pack.join("pack.mcmeta"),
             format!(
                 "{{\"pack\":{{\"min_format\":{format},\"max_format\":{format}}}}}",
@@ -787,14 +793,14 @@ mod tests {
         )
         .unwrap();
 
-        let sources: Vec<std::sync::Arc<dyn RepositorySource>> = vec![
-            std::sync::Arc::new(super::BuiltinPackSource::new(root.clone())),
-            std::sync::Arc::new(WorldPackSource::new(packs.clone())),
+        let sources: Vec<Arc<dyn RepositorySource>> = vec![
+            Arc::new(super::BuiltinPackSource::new(root.clone())),
+            Arc::new(WorldPackSource::new(packs)),
         ];
         let mut repository = PackRepository::new(sources, None).unwrap();
         assert!(repository.is_enabled("file/gone_soon"));
 
-        std::fs::remove_dir_all(&pack).unwrap();
+        fs::remove_dir_all(&pack).unwrap();
         assert!(repository.rediscover().unwrap());
         assert!(
             !repository
@@ -803,6 +809,6 @@ mod tests {
         );
         assert!(!repository.is_enabled("file/gone_soon"));
 
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 }

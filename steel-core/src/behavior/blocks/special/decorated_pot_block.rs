@@ -241,7 +241,7 @@ impl BlockBehavior for DecoratedPotBlock {
         if !destroyed_with
             .item()
             .has_tag(&vanilla_item_tags::ItemTag::BREAKS_DECORATED_POTS)
-            || prevents_shattering(&destroyed_with)
+            || prevents_shattering(destroyed_with)
         {
             return state;
         }

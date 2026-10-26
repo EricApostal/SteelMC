@@ -1,6 +1,7 @@
 //! Authoritative chunk ticket source storage.
 
 use std::cmp::Ordering;
+use std::ptr;
 
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
@@ -325,7 +326,7 @@ impl ChunkTicketStorage {
         self.tickets.get(&pos).is_some_and(|tickets| {
             tickets
                 .iter()
-                .any(|stored| std::ptr::eq(stored.ticket.ticket_type(), ticket_type))
+                .any(|stored| ptr::eq(stored.ticket.ticket_type(), ticket_type))
         })
     }
 
@@ -341,7 +342,7 @@ impl ChunkTicketStorage {
             .filter(|(_, tickets)| {
                 tickets
                     .iter()
-                    .any(|stored| std::ptr::eq(stored.ticket.ticket_type(), ticket_type))
+                    .any(|stored| ptr::eq(stored.ticket.ticket_type(), ticket_type))
             })
             .map(|(&pos, _)| pos)
             .collect();

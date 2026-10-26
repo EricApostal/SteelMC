@@ -22,6 +22,7 @@ use steel_utils::{BlockPos, BlockStateId, value_providers::IntProvider};
 
 use crate::behavior::{BlockBehavior, BlockEntityCreation, BlockPlaceContext, try_drop_experience};
 use crate::block_entity::BlockEntityTicker;
+use crate::block_entity::entities::SculkCatalystBlockEntity;
 use crate::world::World;
 
 /// Vanilla `SculkCatalystBlockEntity.CatalystListener.PULSE_TICKS`.
@@ -98,9 +99,7 @@ impl BlockBehavior for SculkCatalystBlock {
     ) -> BlockEntityCreation {
         // Constructed directly (like the sculk sensors) so the game-event listener exists even
         // before the registry factory line lands; disk loading still goes through `BLOCK_ENTITIES`.
-        BlockEntityCreation::Created(Arc::new(
-            crate::block_entity::entities::SculkCatalystBlockEntity::new(level, pos, state),
-        ))
+        BlockEntityCreation::Created(Arc::new(SculkCatalystBlockEntity::new(level, pos, state)))
     }
 
     fn get_block_entity_ticker(

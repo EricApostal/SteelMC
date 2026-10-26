@@ -403,7 +403,7 @@ impl VaultBlockEntity {
         next: VaultState,
     ) {
         let next_state = current_state.set_value(&BlockStateProperties::VAULT_STATE, next);
-        world.set_block(pos, next_state, steel_utils::types::UpdateFlags::UPDATE_ALL);
+        world.set_block(pos, next_state, UpdateFlags::UPDATE_ALL);
         let is_ominous = current_state.get_value(&BlockStateProperties::OMINOUS);
         let ominous_param = i32::from(is_ominous);
         let current = current_state.get_value(&BlockStateProperties::VAULT_STATE);

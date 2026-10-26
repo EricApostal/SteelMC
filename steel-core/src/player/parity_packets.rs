@@ -8,7 +8,7 @@
 //! [`Player::handle_awaiting_foundation`], which names the exact missing dependency
 //! instead of silently dropping the packet.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use glam::DVec3;
 use serde_json::Value;
@@ -38,6 +38,8 @@ use steel_utils::translations;
 use steel_utils::types::GameType;
 use text_components::Modifier as _;
 use text_components::TextComponent;
+use text_components::format::Color;
+use text_components::translation::Translation;
 
 use crate::block_entity::entities::JigsawBlockEntity;
 use crate::entity::Entity;
@@ -52,7 +54,7 @@ use crate::player::player_inventory::PlayerInventory;
 use crate::portal::{TeleportPostTransition, TeleportTransition};
 
 /// Vanilla's `Permissions.COMMANDS_GAMEMASTER` (permission level 2).
-fn gamemaster_permission() -> PermissionExpr {
+const fn gamemaster_permission() -> PermissionExpr {
     PermissionExpr::Level(PermissionLevel::Gamemasters)
 }
 
@@ -773,10 +775,11 @@ impl Player {
             self.try_pick_item(item_stack);
         }
 
-        if packet.include_data && self.can_use_game_master_blocks() {
-            if entity.downcast_ref::<MannequinEntity>().is_some() {
-                self.send_message(&fetch_profile_body(&entity));
-            }
+        if packet.include_data
+            && self.can_use_game_master_blocks()
+            && entity.downcast_ref::<MannequinEntity>().is_some()
+        {
+            self.send_message(&fetch_profile_body(&entity));
         }
     }
 
@@ -788,24 +791,23 @@ impl Player {
         }
 
         let mut inventory = self.inventory.lock();
-        match inventory.find_slot_matching_item_with_same_components(&item_stack) {
-            Some(slot_with_item) => {
-                if PlayerInventory::is_hotbar_slot(slot_with_item) {
-                    inventory.set_selected_slot(slot_with_item);
-                } else {
-                    let slot = inventory.get_suitable_hotbar_slot();
-                    inventory.set_selected_slot(slot);
-                    inventory.pick_slot(slot_with_item);
-                }
-            }
-            None => {
-                if !self.has_infinite_materials() {
-                    return;
-                }
+        if let Some(slot_with_item) =
+            inventory.find_slot_matching_item_with_same_components(&item_stack)
+        {
+            if PlayerInventory::is_hotbar_slot(slot_with_item) {
+                inventory.set_selected_slot(slot_with_item);
+            } else {
                 let slot = inventory.get_suitable_hotbar_slot();
                 inventory.set_selected_slot(slot);
-                inventory.add_and_pick_item(item_stack);
+                inventory.pick_slot(slot_with_item);
             }
+        } else {
+            if !self.has_infinite_materials() {
+                return;
+            }
+            let slot = inventory.get_suitable_hotbar_slot();
+            inventory.set_selected_slot(slot);
+            inventory.add_and_pick_item(item_stack);
         }
 
         let selected = inventory.get_selected_slot();
@@ -966,7 +968,7 @@ fn fetch_profile_body(entity: &SharedEntity) -> TextComponent {
         }
         ResolvableProfileContents::StaticPartial(profile) => (
             profile.name().unwrap_or_default().to_owned(),
-            profile.id().map(|id| id.to_string()).unwrap_or_default(),
+            profile.id().map_or_else(String::new, |id| id.to_string()),
         ),
         ResolvableProfileContents::DynamicName(name) => (name.clone(), String::new()),
         ResolvableProfileContents::DynamicId(id) => (String::new(), id.to_string()),
@@ -985,18 +987,17 @@ fn spawn_egg_for(entity_type: &Identifier) -> Option<ItemRef> {
     use steel_registry::data_components::components::EntityData;
     use steel_registry::data_components::vanilla_components::ENTITY_DATA;
 
-    static SPAWN_EGGS: std::sync::LazyLock<rustc_hash::FxHashMap<Identifier, ItemRef>> =
-        std::sync::LazyLock::new(|| {
-            REGISTRY
-                .items
-                .iter()
-                .map(|(_, item)| item)
-                .filter_map(|item| {
-                    let entity_data: &EntityData = item.components.get_ref(ENTITY_DATA)?;
-                    Some((entity_data.entity_type().key.clone(), item))
-                })
-                .collect()
-        });
+    static SPAWN_EGGS: LazyLock<rustc_hash::FxHashMap<Identifier, ItemRef>> = LazyLock::new(|| {
+        REGISTRY
+            .items
+            .iter()
+            .map(|(_, item)| item)
+            .filter_map(|item| {
+                let entity_data: &EntityData = item.components.get_ref(ENTITY_DATA)?;
+                Some((entity_data.entity_type().key.clone(), item))
+            })
+            .collect()
+    });
 
     SPAWN_EGGS.get(entity_type).copied()
 }
@@ -1020,7 +1021,7 @@ fn describe_test_instance(test: &Identifier) -> TextComponent {
 
     let Some(entry) = REGISTRY.test_instances.by_key(test) else {
         return TextComponent::translated(translations::TEST_INSTANCE_DESCRIPTION_NO_TEST.msg())
-            .color(text_components::format::Color::Red);
+            .color(Color::Red);
     };
 
     let (type_component, function_row, info) = match &entry.instance {
@@ -1064,13 +1065,8 @@ fn describe_test_instance(test: &Identifier) -> TextComponent {
 }
 
 /// Vanilla `GameTestInstance.descriptionRow`: the translation with the blue value and a newline.
-fn description_row(
-    key: &text_components::translation::Translation<1>,
-    value: TextComponent,
-) -> TextComponent {
-    let mut row = key
-        .message([value.color(text_components::format::Color::Blue)])
-        .component();
+fn description_row(key: &Translation<1>, value: TextComponent) -> TextComponent {
+    let mut row = key.message([value.color(Color::Blue)]).component();
     row.children.push(TextComponent::plain("\n"));
     row
 }

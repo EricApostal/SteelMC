@@ -198,7 +198,8 @@ pub fn ip_from_socket_address(address: &SocketAddr) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::time::{Duration, SystemTime};
 
     use serde_json::json;
 
@@ -206,7 +207,7 @@ mod tests {
 
     #[test]
     fn ip_bans_serialize_with_the_vanilla_ip_property() {
-        let expires = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        let expires = SystemTime::now() + Duration::from_secs(60);
         let entry = IpBanEntry::new(
             "203.0.113.7".to_owned(),
             None,
@@ -224,7 +225,7 @@ mod tests {
 
     #[test]
     fn socket_addresses_reduce_to_their_address() {
-        let address = std::net::SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 25565);
+        let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 25565);
         assert_eq!(super::ip_from_socket_address(&address), "10.0.0.1");
     }
 }

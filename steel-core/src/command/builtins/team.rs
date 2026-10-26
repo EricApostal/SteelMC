@@ -26,6 +26,7 @@ pub(super) fn registration() -> CommandRegistration<CommandSource> {
 
 type Builder = CommandNodeBuilder<CommandSource, SteelCommandRuntime>;
 
+#[expect(clippy::too_many_lines, reason = "splitting would hurt readability")]
 fn command() -> Builder {
     literal("team")
         .then(

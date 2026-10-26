@@ -338,6 +338,10 @@ impl BlockStateProviderEvaluator {
     pub(crate) fn noise_state_index(state_count: usize, noise_value: f64) -> usize {
         // Vanilla: `Mth.clamp((1.0F + noiseValue) / 2.0F, 0.0F, 0.9999F)`.
         // `f32::midpoint` is not bit-identical to `(1.0 + n) / 2.0` for every input.
+        #[expect(
+            clippy::manual_midpoint,
+            reason = "vanilla divides by two here; f32::midpoint is not bit-identical for every input"
+        )]
         let placement_value = ((1.0_f32 + noise_value as f32) / 2.0).clamp(0.0, 0.9999);
         (placement_value * state_count as f32) as usize
     }

@@ -4,28 +4,34 @@
 //! SculkSensorBlock`. Same phase/power/waterlogged states plus `HORIZONTAL_FACING`; output is
 //! directional (no signal toward `FACING`, full `POWER` elsewhere). Resonance filtering and the
 //! 16-block radius live in
-//! [`CalibratedSculkSensorBlockEntity`](crate::block_entity::entities::CalibratedSculkSensorBlockEntity);
+//! [`CalibratedSculkSensorBlockEntity`](CalibratedSculkSensorBlockEntity);
 //! this behavior owns placement, redstone output (10 active ticks, Vanilla `getActiveTicks`) and
 //! direct-signal rules.
 
 use std::sync::{Arc, Weak};
 
 use steel_macros::block_behavior;
+use steel_protocol::packets::game::SoundSource;
 use steel_registry::block_entity_type::BlockEntityTypeRef;
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{
     BlockStateProperties, BoolProperty, Direction, EnumProperty, IntProperty, SculkSensorPhase,
 };
-use steel_registry::{vanilla_block_entity_types, vanilla_game_events};
+use steel_registry::item_stack::ItemStack;
+use steel_registry::{sound_events, vanilla_block_entity_types, vanilla_game_events};
 use steel_utils::types::UpdateFlags;
 use steel_utils::{BlockPos, BlockStateId, value_providers::IntProvider};
 
+use crate::behavior::block::schedule_water_tick_if_waterlogged;
 use crate::behavior::blocks::sculk::sculk_sensor_block::SculkSensorBlock;
 use crate::behavior::{BlockBehavior, BlockEntityCreation, BlockPlaceContext, try_drop_experience};
 use crate::block_entity::BlockEntityTicker;
+use crate::block_entity::entities::{CalibratedSculkSensorBlockEntity, SculkSensorBlockEntity};
+use crate::entity::Entity;
 use crate::entity::ai::path::PathComputationType;
-use crate::world::{LevelReader, SignalQueryContext, World};
+use crate::world::game_event::GameEventContext;
+use crate::world::{LevelReader, ScheduledTickAccess, SignalQueryContext, World};
 
 /// Vanilla `CalibratedSculkSensorBlock.getActiveTicks`.
 pub const CALIBRATED_SCULK_SENSOR_ACTIVE_TICKS: i32 = 10;
@@ -57,7 +63,7 @@ impl CalibratedSculkSensorBlock {
         state: BlockStateId,
         power: i32,
         vibration_frequency: i32,
-        source_entity: Option<&dyn crate::entity::Entity>,
+        source_entity: Option<&dyn Entity>,
     ) {
         let active = state
             .set_value(PHASE, SculkSensorPhase::Active)
@@ -71,13 +77,13 @@ impl CalibratedSculkSensorBlock {
         world.game_event(
             &vanilla_game_events::SCULK_SENSOR_TENDRILS_CLICKING,
             pos,
-            &crate::world::game_event::GameEventContext::new(source_entity, None),
+            &GameEventContext::new(source_entity, None),
         );
         if !state.get_value(WATERLOGGED) {
             let pitch = rand::random::<f32>() * 0.2 + 0.8;
             world.play_sound(
-                &steel_registry::sound_events::BLOCK_SCULK_SENSOR_CLICKING,
-                steel_protocol::packets::game::SoundSource::Blocks,
+                &sound_events::BLOCK_SCULK_SENSOR_CLICKING,
+                SoundSource::Blocks,
                 pos,
                 1.0,
                 pitch,
@@ -118,24 +124,18 @@ impl BlockBehavior for CalibratedSculkSensorBlock {
     fn update_shape(
         &self,
         state: BlockStateId,
-        world: &dyn crate::world::ScheduledTickAccess,
+        world: &dyn ScheduledTickAccess,
         pos: BlockPos,
         _direction: Direction,
         _neighbor_pos: BlockPos,
         _neighbor_state: BlockStateId,
     ) -> BlockStateId {
         // Vanilla inherits `SculkSensorBlock.updateShape` (the waterlogged fluid tick).
-        crate::behavior::block::schedule_water_tick_if_waterlogged(state, world, pos);
+        schedule_water_tick_if_waterlogged(state, world, pos);
         state
     }
 
-    fn step_on(
-        &self,
-        state: BlockStateId,
-        world: &Arc<World>,
-        pos: BlockPos,
-        entity: &dyn crate::entity::Entity,
-    ) {
+    fn step_on(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos, entity: &dyn Entity) {
         // Vanilla inherits `SculkSensorBlock.stepOn`; Steel must re-declare it because behaviors
         // dispatch per block instead of by Java class inheritance.
         SculkSensorBlock::schedule_step_vibration(world, pos, state, entity);
@@ -228,14 +228,12 @@ impl BlockBehavior for CalibratedSculkSensorBlock {
             return 0;
         };
         // Calibrated sensors use their own entity type; both variants expose the frequency.
-        if let Some(sensor) =
-            entity.downcast_ref::<crate::block_entity::entities::CalibratedSculkSensorBlockEntity>()
-        {
+        if let Some(sensor) = entity.downcast_ref::<CalibratedSculkSensorBlockEntity>() {
             return sensor.last_vibration_frequency();
         }
         entity
-            .downcast_ref::<crate::block_entity::entities::SculkSensorBlockEntity>()
-            .map_or(0, |sensor| sensor.last_vibration_frequency())
+            .downcast_ref::<SculkSensorBlockEntity>()
+            .map_or(0, SculkSensorBlockEntity::last_vibration_frequency)
     }
 
     fn new_block_entity(
@@ -244,9 +242,9 @@ impl BlockBehavior for CalibratedSculkSensorBlock {
         pos: BlockPos,
         state: BlockStateId,
     ) -> BlockEntityCreation {
-        BlockEntityCreation::Created(Arc::new(
-            crate::block_entity::entities::CalibratedSculkSensorBlockEntity::new(level, pos, state),
-        ))
+        BlockEntityCreation::Created(Arc::new(CalibratedSculkSensorBlockEntity::new(
+            level, pos, state,
+        )))
     }
 
     fn get_block_entity_ticker(
@@ -266,7 +264,7 @@ impl BlockBehavior for CalibratedSculkSensorBlock {
         _state: BlockStateId,
         world: &Arc<World>,
         pos: BlockPos,
-        tool: &steel_registry::item_stack::ItemStack,
+        tool: &ItemStack,
         drop_experience: bool,
     ) {
         if drop_experience {

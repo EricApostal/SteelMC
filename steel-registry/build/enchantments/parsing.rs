@@ -1,7 +1,7 @@
 use super::{
     DamageSourcePredicateJson, DamageSourceTagPredicateJson, EnchantmentTargetJson,
-    EntityEffectJson, EntityFlagsPredicateJson, EntityPredicateJson, EntityTargetJson,
-    EntityTypePredicateJson, EntityTypeSetJson, EntityTypeSpecificPredicateJson,
+    EntityEffectJson, EntityFlagsPredicateJson, EntityLocationPredicateJson, EntityPredicateJson,
+    EntityTargetJson, EntityTypePredicateJson, EntityTypeSetJson, EntityTypeSpecificPredicateJson,
     EntityVehiclePredicateJson, FloatProviderJson, GameType, Ident, Identifier, ItemHolderSetJson,
     LevelBasedValueJson, MobEffectSelectionJson, ParticlePositionSourceJson,
     ParticleVelocitySourceJson, PlayerPredicateJson, RequirementsJson, Span, TokenStream, quote,
@@ -437,6 +437,8 @@ pub(super) fn parse_entity_predicate_json(
                 | "minecraft:flags"
                 | "type_specific"
                 | "minecraft:type_specific/player"
+                | "location"
+                | "minecraft:location"
         )
     });
     let entity_type = match aliased_object_field(object, &["type", "minecraft:entity_type"])? {
@@ -464,12 +466,37 @@ pub(super) fn parse_entity_predicate_json(
             Some(value) => parse_type_specific_predicate_json(value)?,
             None => EntityTypeSpecificPredicateJson::Any,
         };
+    let location = aliased_object_field(object, &["location", "minecraft:location"])?
+        .map(parse_entity_location_predicate_json)
+        .transpose()?
+        .unwrap_or_else(EntityLocationPredicateJson::any);
 
     Ok(EntityPredicateJson {
         entity_type,
         vehicle,
         flags,
         type_specific,
+        location: location.has_constraints().then_some(location),
+        unsupported,
+    })
+}
+
+pub(super) fn parse_entity_location_predicate_json(
+    value: &serde_json::Value,
+) -> Result<EntityLocationPredicateJson, String> {
+    let Some(object) = value.as_object() else {
+        return Err("entity location predicate must be an object".to_owned());
+    };
+    let mut unsupported = object.keys().any(|key| key != "can_see_sky");
+    let can_see_sky = optional_bool_field(object, "can_see_sky")?;
+    if can_see_sky.is_none() && !unsupported {
+        // Keep fail-closed semantics: an empty location predicate says nothing about
+        // the world, so drop it back into the unknown bucket.
+        unsupported = true;
+    }
+
+    Ok(EntityLocationPredicateJson {
+        can_see_sky,
         unsupported,
     })
 }
@@ -716,6 +743,24 @@ pub(super) fn parse_requirements_json(
             }
             Ok(RequirementsJson::RandomChance {
                 chance: parse_random_chance_value(object_field(object, "chance")?)?,
+            })
+        }
+        "minecraft:weather_check" => {
+            for key in object.keys() {
+                if key != "type" && key != "raining" && key != "thundering" {
+                    return Err(format!(
+                        "unsupported weather_check requirement field `{key}`"
+                    ));
+                }
+            }
+            let raining = optional_bool_field(object, "raining")?;
+            let thundering = optional_bool_field(object, "thundering")?;
+            if raining.is_none() && thundering.is_none() {
+                return Err("weather_check requirement needs `raining` or `thundering`".to_owned());
+            }
+            Ok(RequirementsJson::WeatherCheck {
+                raining,
+                thundering,
             })
         }
         "minecraft:match_tool" => {

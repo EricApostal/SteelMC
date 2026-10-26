@@ -120,8 +120,7 @@ mod tests {
         assert_eq!(outcome, InteractionResult::Success);
         assert!(
             player.recipe_book().contains(&key),
-            "taking a knowledge book unlocks {}",
-            key
+            "taking a knowledge book unlocks {key}"
         );
     }
 
@@ -141,6 +140,6 @@ mod tests {
         );
 
         assert_eq!(outcome, InteractionResult::Fail);
-        assert!(player.recipe_book().unlocked_identifiers().is_empty());
+        assert_eq!(player.recipe_book().unlocked_identifiers(), []);
     }
 }

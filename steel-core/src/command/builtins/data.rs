@@ -1,18 +1,20 @@
 //! Vanilla `/data` command.
 //!
-//! Mirrors `DataCommands` for the `get`, `merge` and `remove` verbs across
-//! vanilla's three `DataAccessor` providers: `entity`, `block` and `storage`.
-//!
-//! `modify` is not wired yet: it needs vanilla's `NbtTagArgument` values plus
-//! the loot `ResourceOrIdArgument` number providers for `compute`, and Steel's
-//! command runtime has neither.
+//! Mirrors `DataCommands` for the `get`, `merge`, `modify` and `remove` verbs
+//! across vanilla's three `DataAccessor` providers: `entity`, `block` and
+//! `storage`. `modify` covers the `insert`/`prepend`/`append`/`set`/`merge`
+//! operations with `value` sources; the `from`/`string` forms are not wired
+//! yet, and `compute` waits on a loot-context subsystem for vanilla's
+//! `ResourceOrIdArgument` number providers.
 
 use std::sync::Arc;
 
 use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_utils::{
     BlockPos, Identifier,
-    nbt::{NbtNumeric as _, NbtPath, merge_nbt_compounds, nbt_compounds_equal},
+    nbt::{
+        NbtNumeric as _, NbtPath, NbtPathMutationError, merge_nbt_compounds, nbt_compounds_equal,
+    },
     text::command_nbt_component,
     translations,
 };
@@ -50,7 +52,8 @@ fn command() -> Builder {
         root = root
             .then(merge_target(target))
             .then(get_target(target))
-            .then(remove_target(target));
+            .then(remove_target(target))
+            .then(modify_target(target));
     }
     root
 }
@@ -245,7 +248,7 @@ fn merge_target(target: DataTarget) -> Builder {
     literal("merge").then(
         literal(target.provider()).then(
             argument("target", target.argument_type()).then(
-                argument("nbt", SteelArgumentType::nbt_tag())
+                argument("nbt", SteelArgumentType::nbt_compound())
                     .executes(move |context| merge_data(context, target)),
             ),
         ),
@@ -264,13 +267,40 @@ fn remove_target(target: DataTarget) -> Builder {
     )
 }
 
+/// Builds the `modify` subtree for one provider, matching
+/// `DataCommands.decorateModification` for the `value` source: `modify
+/// <target> <targetPath> (insert <index>|prepend|append|set|merge) value
+/// <value>`.
+fn modify_target(target: DataTarget) -> Builder {
+    let indexed = argument("index", ArgumentType::integer(i32::MIN, i32::MAX))
+        .then(value_branch(DataManipulator::Insert, target));
+    let target_path = argument("targetPath", SteelArgumentType::nbt_path())
+        .then(literal("insert").then(indexed))
+        .then(value_branch(DataManipulator::Prepend, target))
+        .then(value_branch(DataManipulator::Append, target))
+        .then(value_branch(DataManipulator::Set, target))
+        .then(value_branch(DataManipulator::Merge, target));
+    literal("modify").then(
+        literal(target.provider())
+            .then(argument("target", target.argument_type()).then(target_path)),
+    )
+}
+
+/// Builds the `value <value>` source for one manipulator literal.
+fn value_branch(manipulator: DataManipulator, target: DataTarget) -> Builder {
+    literal(manipulator.name()).then(
+        argument("value", SteelArgumentType::nbt_tag())
+            .executes(move |context| manipulate_value(context, target, manipulator)),
+    )
+}
+
 /// Resolves the provider's `DataAccessor` the way vanilla's `access(context)` does.
 ///
 /// `/function ... with` reuses this, exactly like vanilla's shared `SOURCE_PROVIDERS`.
-pub(super) fn resolve<'a>(
-    context: &'a SteelCommandContext<CommandSource>,
+pub(super) fn resolve(
+    context: &SteelCommandContext<CommandSource>,
     target: DataTarget,
-) -> Result<DataAccessor<'a>, CommandSyntaxError> {
+) -> Result<DataAccessor<'_>, CommandSyntaxError> {
     match target {
         DataTarget::Entity => Ok(DataAccessor::Entity(context.entity("target")?)),
         DataTarget::Block => {
@@ -358,14 +388,8 @@ fn merge_data(
     target: DataTarget,
 ) -> Result<i32, CommandSyntaxError> {
     let accessor = resolve(context, target)?;
-    let nbt = context.nbt_tag("nbt")?;
-    // Vanilla's `CompoundTagArgument` parses only compounds, so anything else is
-    // rejected with `argument.nbt.expected.compound`.
-    let NbtTag::Compound(nbt) = nbt else {
-        return Err(CommandSyntaxError::dynamic(TextComponent::from(
-            &translations::ARGUMENT_NBT_EXPECTED_COMPOUND,
-        )));
-    };
+    // Vanilla's `CompoundTagArgument` parses a compound, never another value.
+    let nbt = context.nbt_compound("nbt")?;
     if compound_is_too_deep(nbt, 0) {
         return Err(data_too_deep());
     }
@@ -406,6 +430,196 @@ fn remove_data(
     let message = accessor.modified_message();
     context.source().send_success(&message, true);
     Ok(result)
+}
+
+/// One vanilla `DataCommands$DataManipulator` for the `value` branch of
+/// `DataCommands.register`'s `insert`/`prepend`/`append`/`set`/`merge`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DataManipulator {
+    Set,
+    Merge,
+    Insert,
+    Prepend,
+    Append,
+}
+
+impl DataManipulator {
+    /// Manipulator literal, matching `DataCommands.register`'s `BiConsumer`.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Set => "set",
+            Self::Merge => "merge",
+            Self::Insert => "insert",
+            Self::Prepend => "prepend",
+            Self::Append => "append",
+        }
+    }
+
+    /// Insert offset for the list manipulators: `prepend` is `insert(0)`,
+    /// `append` is `insert(-1)`, `insert` reads the `index` argument.
+    fn insert_index(
+        self,
+        context: &SteelCommandContext<CommandSource>,
+    ) -> Result<i32, CommandSyntaxError> {
+        match self {
+            Self::Insert => context.integer("index"),
+            Self::Append => Ok(-1),
+            // `prepend` is `insert(0)`; `set`/`merge` never prepend either.
+            Self::Prepend | Self::Set | Self::Merge => Ok(0),
+        }
+    }
+}
+
+/// Vanilla `DataCommands.manipulateData` for the `value` source: wraps
+/// `NbtTagArgument.getNbtTag`'s tag in a singleton list like
+/// `DataCommands$19` and runs the manipulator.
+fn manipulate_value(
+    context: &SteelCommandContext<CommandSource>,
+    target: DataTarget,
+    manipulator: DataManipulator,
+) -> Result<i32, CommandSyntaxError> {
+    let value = context.nbt_tag("value")?.clone();
+    manipulate_data(context, target, manipulator, vec![value])
+}
+
+/// Vanilla `DataCommands.manipulateData`: applies one `DataManipulator` to the
+/// target's compound and writes it back, failing with `ERROR_MERGE_UNCHANGED`
+/// (`commands.data.merge.failed`) when nothing changed.
+fn manipulate_data(
+    context: &SteelCommandContext<CommandSource>,
+    target: DataTarget,
+    manipulator: DataManipulator,
+    values: Vec<NbtTag>,
+) -> Result<i32, CommandSyntaxError> {
+    let accessor = resolve(context, target)?;
+    let path = context.nbt_path("targetPath")?.clone();
+    let mut root = NbtTag::Compound(accessor.data());
+
+    // Vanilla `DataCommands$9`/`$10`/`$11` read the index from the context
+    // (`insert`) or hard-code it (`prepend` 0, `append` -1).
+    let modified = match manipulator {
+        DataManipulator::Set => set_data_tag(&path, &mut root, &values)?,
+        DataManipulator::Merge => merge_data_tags(&path, &mut root, &values)?,
+        DataManipulator::Insert | DataManipulator::Prepend | DataManipulator::Append => {
+            insert_data_tags(
+                &path,
+                &mut root,
+                manipulator.insert_index(context)?,
+                &values,
+            )?
+        }
+    };
+
+    if modified == 0 {
+        return Err(merge_unchanged());
+    }
+    let NbtTag::Compound(data) = root else {
+        return Err(CommandSyntaxError::dynamic(
+            "Modifying an NBT path replaced the compound root",
+        ));
+    };
+
+    accessor.set_data(data)?;
+    let message = accessor.modified_message();
+    context.source().send_success(&message, true);
+    Ok(1)
+}
+
+/// Vanilla `NbtPath.set` manipulator: the value branch always supplies one tag,
+/// mirroring `Iterables.getLast(list)` in `DataCommands$12`.
+fn set_data_tag(
+    path: &NbtPath,
+    root: &mut NbtTag,
+    values: &[NbtTag],
+) -> Result<usize, CommandSyntaxError> {
+    let Some(value) = values.last() else {
+        return Ok(0);
+    };
+    path.set(root, value.clone()).map_err(mutation_error)
+}
+
+/// Vanilla `DataCommands$13` (merge): every value is checked for depth, must be
+/// a compound, is merged into one accumulator, and that accumulator is merged
+/// into every tag `getOrCreate` selects, counting real changes.
+fn merge_data_tags(
+    path: &NbtPath,
+    root: &mut NbtTag,
+    values: &[NbtTag],
+) -> Result<usize, CommandSyntaxError> {
+    let mut merged = NbtCompound::new();
+    for value in values {
+        // Vanilla `DataCommands$13` checks each value with `isTooDeep(value, 0)`.
+        if tag_is_too_deep(value, 0) {
+            return Err(data_too_deep());
+        }
+        let NbtTag::Compound(compound) = value else {
+            return Err(expected_object(value));
+        };
+        merge_nbt_compounds(&mut merged, compound);
+    }
+
+    // Vanilla `DataCommands$13` gets the whole selection back when there is
+    // nothing to create and errors on the first non-compound it finds.
+    for selected in path.get(root) {
+        if !matches!(selected, NbtTag::Compound(_)) {
+            return Err(expected_object(&selected));
+        }
+    }
+
+    path.get_or_create(root, NbtTag::Compound(NbtCompound::new()), |tag| {
+        // The pre-check above guarantees every selected tag is a compound:
+        // creation only inserts compound defaults.
+        let NbtTag::Compound(selected) = tag else {
+            return Ok(false);
+        };
+        let before = selected.clone();
+        merge_nbt_compounds(selected, &merged);
+        Ok(*selected != before)
+    })
+    .map_err(mutation_error)
+}
+
+/// Vanilla `DataCommands$9`/`$10`/`$11` (insert/prepend/append): values are
+/// checked for depth inside `NbtPath.insert`, then inserted so the first copy
+/// stays with the first collection, matching `NbtPath.insert`.
+fn insert_data_tags(
+    path: &NbtPath,
+    root: &mut NbtTag,
+    index: i32,
+    values: &[NbtTag],
+) -> Result<usize, CommandSyntaxError> {
+    path.insert(index, root, values).map_err(mutation_error)
+}
+
+/// Vanilla `DataCommands.ERROR_EXPECTED_OBJECT` (`commands.data.modify.expected_object`).
+fn expected_object(tag: &NbtTag) -> CommandSyntaxError {
+    CommandSyntaxError::dynamic(
+        translations::COMMANDS_DATA_MODIFY_EXPECTED_OBJECT
+            .message([command_nbt_component(tag, false)])
+            .component(),
+    )
+}
+
+/// Maps a path mutation error to its vanilla translation.
+fn mutation_error(error: NbtPathMutationError) -> CommandSyntaxError {
+    match error {
+        NbtPathMutationError::TooDeep => data_too_deep(),
+        NbtPathMutationError::NothingFound(prefix) => CommandSyntaxError::dynamic(
+            translations::ARGUMENTS_NBTPATH_NOTHING_FOUND
+                .message([TextComponent::from(prefix)])
+                .component(),
+        ),
+        NbtPathMutationError::ExpectedList(tag) => CommandSyntaxError::dynamic(
+            translations::COMMANDS_DATA_MODIFY_EXPECTED_LIST
+                .message([TextComponent::from(tag)])
+                .component(),
+        ),
+        NbtPathMutationError::InvalidIndex(index) => CommandSyntaxError::dynamic(
+            translations::COMMANDS_DATA_MODIFY_INVALID_INDEX
+                .message([index.to_string()])
+                .component(),
+        ),
+    }
 }
 
 /// Vanilla `DataCommands.getSingleTag` without vanilla's `EndTag` placeholder.
@@ -449,7 +663,7 @@ fn tag_result(tag: &NbtTag) -> i32 {
 }
 
 /// Vanilla `CollectionTag.size()` for a list tag.
-fn list_len(list: &NbtList) -> usize {
+const fn list_len(list: &NbtList) -> usize {
     match list {
         NbtList::Empty => 0,
         NbtList::Byte(values) => values.len(),
@@ -556,6 +770,7 @@ fn missing_command_storage(domain: &str) -> CommandSyntaxError {
 mod tests {
     use steel_registry::init_vanilla_registry;
     use steel_utils::nbt::parse_nbt_path;
+    use text_components::content::Content;
 
     use super::super::create_dispatcher;
     use super::*;
@@ -632,7 +847,7 @@ mod tests {
                 &dispatcher,
                 merge_target,
                 "nbt",
-                &SteelArgumentType::nbt_tag(),
+                &SteelArgumentType::nbt_compound(),
             );
             assert_executable(&dispatcher, nbt);
 
@@ -645,6 +860,44 @@ mod tests {
                 &SteelArgumentType::nbt_path(),
             );
             assert_executable(&dispatcher, remove_path);
+
+            let provider_modify = child(&dispatcher, child(&dispatcher, data, "modify"), provider);
+            let modify_target =
+                argument_node(&dispatcher, provider_modify, "target", &argument_type);
+            let target_path = argument_node(
+                &dispatcher,
+                modify_target,
+                "targetPath",
+                &SteelArgumentType::nbt_path(),
+            );
+
+            for name in ["prepend", "append", "set", "merge"] {
+                let operation = child(&dispatcher, target_path, name);
+                let value = argument_node(
+                    &dispatcher,
+                    operation,
+                    "value",
+                    &SteelArgumentType::nbt_tag(),
+                );
+                assert_executable(&dispatcher, value);
+            }
+            let insert = child(&dispatcher, target_path, "insert");
+            let insert_index = argument_node(
+                &dispatcher,
+                insert,
+                "index",
+                &SteelArgumentType::from(ArgumentType::integer(i32::MIN, i32::MAX)),
+            );
+            // Vanilla nests the manipulator literal under its index:
+            // `insert <index> insert value <value>`.
+            let insert_operation = child(&dispatcher, insert_index, "insert");
+            let insert_value = argument_node(
+                &dispatcher,
+                insert_operation,
+                "value",
+                &SteelArgumentType::nbt_tag(),
+            );
+            assert_executable(&dispatcher, insert_value);
         }
     }
 
@@ -751,5 +1004,266 @@ mod tests {
                 "depth {depth} should match vanilla's 512 limit"
             );
         }
+    }
+
+    /// Parses a path without panicking in every modify assertion below.
+    fn modify_path(input: &str) -> NbtPath {
+        parse_nbt_path(input).expect("modify path should parse")
+    }
+
+    /// Unwraps a mutated root back into a compound.
+    fn root_compound(root: NbtTag) -> NbtCompound {
+        let NbtTag::Compound(compound) = root else {
+            panic!("modify keeps the compound root");
+        };
+        compound
+    }
+
+    /// Returns the vanilla translation key of a command error message.
+    fn message_key(component: &TextComponent) -> &str {
+        let Content::Translate(message) = &component.content else {
+            panic!("modify errors stay translatable, got {component:?}");
+        };
+        &message.key
+    }
+
+    #[test]
+    fn modify_set_follows_vanilla_list_compound_and_array_semantics() {
+        // Lists: one index is replaced, and an unchanged value reports nothing.
+        let mut root = NbtTag::Compound({
+            let mut compound = NbtCompound::new();
+            compound.insert("values", NbtList::Int(vec![1, 2, 3]));
+            compound
+        });
+        let path = modify_path("values[1]");
+        assert_eq!(
+            set_data_tag(&path, &mut root, &[NbtTag::Int(9)]).expect("set should apply"),
+            1
+        );
+        assert_eq!(
+            root_compound(root.clone()).list("values"),
+            Some(&NbtList::Int(vec![1, 9, 3]))
+        );
+        assert_eq!(
+            set_data_tag(&path, &mut root, &[NbtTag::Int(9)]).expect("set should apply"),
+            0
+        );
+
+        // Compounds: missing parents are created, matching `getOrCreateParents`.
+        let mut created = NbtTag::Compound(NbtCompound::new());
+        let path = modify_path("a.b.c");
+        assert_eq!(
+            set_data_tag(&path, &mut created, &[NbtTag::String("leaf".into())]).expect("apply"),
+            1
+        );
+        let compound = root_compound(created);
+        let inner = compound
+            .compound("a")
+            .and_then(|a| a.compound("b"))
+            .expect("set creates each missing compound parent");
+        assert_eq!(
+            inner.string("c").map(|value| value.to_str().into_owned()),
+            Some("leaf".to_owned())
+        );
+
+        // Typed arrays keep their element type.
+        let mut arrays = NbtTag::Compound({
+            let mut compound = NbtCompound::new();
+            compound.insert("bytes", NbtTag::ByteArray(vec![1, 2]));
+            compound
+        });
+        let path = modify_path("bytes[0]");
+        assert_eq!(
+            set_data_tag(&path, &mut arrays, &[NbtTag::Byte(7)]).expect("apply"),
+            1
+        );
+        assert_eq!(
+            root_compound(arrays).get("bytes"),
+            Some(&NbtTag::ByteArray(vec![7, 2]))
+        );
+    }
+
+    #[test]
+    fn modify_insert_prepend_append_use_vanilla_indices() {
+        fn list_root() -> NbtTag {
+            NbtTag::Compound({
+                let mut compound = NbtCompound::new();
+                compound.insert("values", NbtList::Int(vec![1, 2, 3]));
+                compound
+            })
+        }
+        let path = modify_path("values");
+
+        // `insert <index> value <value>`.
+        let mut root = list_root();
+        assert_eq!(
+            insert_data_tags(&path, &mut root, 1, &[NbtTag::Int(9)]).expect("insert should apply"),
+            1
+        );
+        assert_eq!(
+            root_compound(root).list("values"),
+            Some(&NbtList::Int(vec![1, 9, 2, 3]))
+        );
+
+        // `prepend` is `insert 0`.
+        let mut root = list_root();
+        assert_eq!(
+            insert_data_tags(&path, &mut root, 0, &[NbtTag::Int(9)]).expect("prepend should apply"),
+            1
+        );
+        assert_eq!(
+            root_compound(root).list("values"),
+            Some(&NbtList::Int(vec![9, 1, 2, 3]))
+        );
+
+        // `append` is `insert -1`, which vanilla resolves as `size + index + 1`.
+        let mut root = list_root();
+        assert_eq!(
+            insert_data_tags(&path, &mut root, -1, &[NbtTag::Int(9)]).expect("append should apply"),
+            1
+        );
+        assert_eq!(
+            root_compound(root).list("values"),
+            Some(&NbtList::Int(vec![1, 2, 3, 9]))
+        );
+
+        // Every inserted value advances the index, so order is preserved.
+        let mut root = list_root();
+        assert_eq!(
+            insert_data_tags(&path, &mut root, 1, &[NbtTag::Int(8), NbtTag::Int(9)])
+                .expect("apply"),
+            1
+        );
+        assert_eq!(
+            root_compound(root).list("values"),
+            Some(&NbtList::Int(vec![1, 8, 9, 2, 3]))
+        );
+
+        // Typed arrays accept vanilla's insertion too.
+        let mut arrays = NbtTag::Compound({
+            let mut compound = NbtCompound::new();
+            compound.insert("ints", NbtTag::IntArray(vec![1, 2]));
+            compound
+        });
+        let ints = modify_path("ints");
+        assert!(
+            insert_data_tags(&ints, &mut arrays, -1, &[NbtTag::Int(3)]).is_ok(),
+            "append should accept an int array"
+        );
+        assert_eq!(
+            root_compound(arrays).get("ints"),
+            Some(&NbtTag::IntArray(vec![1, 2, 3]))
+        );
+
+        // A non-collection target and an out-of-range index are errors.
+        let mut scalar = NbtTag::Compound({
+            let mut compound = NbtCompound::new();
+            compound.insert("value", 1);
+            compound
+        });
+        let scalar_path = modify_path("value");
+        let error = insert_data_tags(&scalar_path, &mut scalar, 0, &[NbtTag::Int(9)])
+            .expect_err("vanilla rejects a non-list insert target");
+        assert_eq!(
+            message_key(&error.message_component()),
+            translations::COMMANDS_DATA_MODIFY_EXPECTED_LIST.0,
+            "non-list insert should use `commands.data.modify.expected_list`"
+        );
+
+        let mut root = list_root();
+        let error = insert_data_tags(&path, &mut root, 9, &[NbtTag::Int(9)])
+            .expect_err("vanilla rejects an out-of-range index");
+        assert_eq!(
+            message_key(&error.message_component()),
+            translations::COMMANDS_DATA_MODIFY_INVALID_INDEX.0,
+            "bad insert index should use `commands.data.modify.invalid_index`"
+        );
+    }
+
+    #[test]
+    fn modify_merge_creates_parents_and_requires_compounds() {
+        // Missing parents are created and hold the merged compound.
+        let mut root = NbtTag::Compound(NbtCompound::new());
+        let path = modify_path("a.b");
+        let value = NbtTag::Compound({
+            let mut compound = NbtCompound::new();
+            compound.insert("x", 1);
+            compound
+        });
+        assert_eq!(
+            merge_data_tags(&path, &mut root, &[value]).expect("merge should apply"),
+            1
+        );
+        let compound = root_compound(root);
+        let inner = compound
+            .compound("a")
+            .and_then(|a| a.compound("b"))
+            .expect("merge creates each missing compound parent");
+        assert_eq!(inner.int("x"), Some(1));
+
+        // Existing compounds merge deeply instead of being replaced.
+        let mut root = NbtTag::Compound({
+            let mut compound = NbtCompound::new();
+            let mut nested = NbtCompound::new();
+            nested.insert("keep", 1);
+            compound.insert("nested", nested);
+            compound
+        });
+        let path = modify_path("nested");
+        let mut incoming = NbtCompound::new();
+        incoming.insert("added", 2);
+        assert_eq!(
+            merge_data_tags(&path, &mut root, &[NbtTag::Compound(incoming)])
+                .expect("merge should apply"),
+            1
+        );
+        let nested = root_compound(root)
+            .compound("nested")
+            .cloned()
+            .expect("nested stays a compound");
+        assert_eq!(nested.int("keep"), Some(1));
+        assert_eq!(nested.int("added"), Some(2));
+
+        // Merging the same values again changes nothing.
+        let mut same = NbtCompound::new();
+        same.insert("added", 2);
+        let mut root = NbtTag::Compound({
+            let mut compound = NbtCompound::new();
+            compound.insert("nested", same);
+            compound
+        });
+        let path = modify_path("nested");
+        let mut incoming = NbtCompound::new();
+        incoming.insert("added", 2);
+        assert_eq!(
+            merge_data_tags(&path, &mut root, &[NbtTag::Compound(incoming)])
+                .expect("merge should apply"),
+            0
+        );
+
+        // Vanilla only accepts compounds for `merge`'s values ...
+        let mut root = NbtTag::Compound(NbtCompound::new());
+        let path = modify_path("value");
+        let error = merge_data_tags(&path, &mut root, &[NbtTag::Int(1)])
+            .expect_err("merge rejects non-compound values");
+        assert_eq!(
+            message_key(&error.message_component()),
+            translations::COMMANDS_DATA_MODIFY_EXPECTED_OBJECT.0,
+            "non-compound merge value should use `commands.data.modify.expected_object`"
+        );
+
+        // ... and for every tag the path already selects.
+        let mut root = NbtTag::Compound({
+            let mut compound = NbtCompound::new();
+            compound.insert("value", 1);
+            compound
+        });
+        let error = merge_data_tags(&path, &mut root, &[NbtTag::Compound(NbtCompound::new())])
+            .expect_err("merge rejects non-compound targets");
+        assert_eq!(
+            message_key(&error.message_component()),
+            translations::COMMANDS_DATA_MODIFY_EXPECTED_OBJECT.0,
+            "non-compound merge target should use `commands.data.modify.expected_object`"
+        );
     }
 }

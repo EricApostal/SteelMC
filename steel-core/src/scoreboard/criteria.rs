@@ -34,6 +34,10 @@ impl RenderType {
 
     /// Vanilla `RenderType.CODEC` name lookup.
     #[must_use]
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "mirrors the vanilla criteria registry name lookup; called by save-data and command parsers"
+    )]
     pub fn from_str(name: &str) -> Option<Self> {
         match name {
             "integer" => Some(Self::Integer),

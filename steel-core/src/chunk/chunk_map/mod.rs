@@ -1413,9 +1413,7 @@ impl ChunkMap {
         for chunk_z in (min_quart_z >> 2)..=(max_quart_z >> 2) {
             for chunk_x in (min_quart_x >> 2)..=(max_quart_x >> 2) {
                 let pos = ChunkPos::new(chunk_x, chunk_z);
-                if self.with_full_chunk(pos, |_| ()).is_none() {
-                    return None;
-                }
+                self.with_full_chunk(pos, |_| ())?;
                 positions.push(pos);
             }
         }

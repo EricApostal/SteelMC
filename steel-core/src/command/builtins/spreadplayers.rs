@@ -268,7 +268,7 @@ fn next_double(random: &mut RandomSource, min: f64, max: f64) -> f64 {
 }
 
 /// Vanilla `Mth.floor`.
-fn floor_i32(value: f64) -> i32 {
+const fn floor_i32(value: f64) -> i32 {
     value.floor() as i32
 }
 
@@ -301,24 +301,24 @@ fn spread_positions(
 ) -> Result<(), CommandSyntaxError> {
     let (min_x, min_z, max_x, max_z) = bounds;
     let mut has_collisions = true;
-    let mut min_distance = f64::MAX;
+    let mut min_distance: Option<f64> = None;
     let mut iteration = 0;
     while iteration < MAX_ITERATION_COUNT && has_collisions {
         has_collisions = false;
-        min_distance = f64::MAX;
+        min_distance = None;
 
         for i in 0..positions.len() {
             let mut neighbour_count = 0;
             let mut average_x = 0.0;
             let mut average_z = 0.0;
             let position = positions[i];
-            for j in 0..positions.len() {
+            for (j, neighbour) in positions.iter().copied().enumerate() {
                 if i == j {
                     continue;
                 }
-                let neighbour = positions[j];
                 let dist = position.dist(neighbour);
-                min_distance = min_distance.min(dist);
+                let closest = min_distance.unwrap_or(f64::MAX);
+                min_distance = Some(closest.min(dist));
                 if dist < spread_distance {
                     neighbour_count += 1;
                     average_x += neighbour.x - position.x;
@@ -355,9 +355,8 @@ fn spread_positions(
         iteration += 1;
     }
 
-    if min_distance == f64::MAX {
-        min_distance = 0.0;
-    }
+    // Vanilla reports `0.0` when no pair was measured (fewer than two entities).
+    let min_distance = min_distance.unwrap_or(0.0);
 
     if iteration >= MAX_ITERATION_COUNT {
         let translation = if respect_teams {
@@ -368,8 +367,8 @@ fn spread_positions(
         let message = translation
             .message([
                 TextComponent::from(positions.len().to_string()),
-                TextComponent::from(format!("{}", min_x)),
-                TextComponent::from(format!("{}", min_z)),
+                TextComponent::from(format!("{min_x}")),
+                TextComponent::from(format!("{min_z}")),
                 TextComponent::from(format!("{min_distance:.2}")),
             ])
             .component();
@@ -394,14 +393,17 @@ fn set_player_positions(
     for entity in entities {
         let position = if respect_teams {
             let team = player_team_name(world, entity);
-            match team_positions.iter().find(|(name, _)| *name == team) {
-                Some((_, index)) => positions[*index],
-                None => {
-                    let index = position_index;
-                    position_index += 1;
-                    team_positions.push((team, index));
-                    positions[index]
-                }
+            let existing = team_positions
+                .iter()
+                .find(|(name, _)| *name == team)
+                .map(|(_, index)| *index);
+            if let Some(index) = existing {
+                positions[index]
+            } else {
+                let index = position_index;
+                position_index += 1;
+                team_positions.push((team, index));
+                positions[index]
             }
         } else {
             let index = position_index;
@@ -427,7 +429,10 @@ fn set_player_positions(
 
         let mut closest = f64::MAX;
         for test in positions {
-            if test.x != position.x || test.z != position.z {
+            // Vanilla skips candidates sitting exactly on the entity's column.
+            #[expect(clippy::float_cmp, reason = "vanilla compares exactly")]
+            let same_column = test.x == position.x && test.z == position.z;
+            if !same_column {
                 closest = closest.min(position.dist(*test));
             }
         }

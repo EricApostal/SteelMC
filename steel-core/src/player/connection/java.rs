@@ -84,6 +84,10 @@ pub(crate) enum ScheduledPacketExecution {
     Exclusive,
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "each variant wraps one serverbound play packet, mirroring vanilla's per-packet listener dispatch; the largest variant is rare and boxing it would add indirection on the hot decode path"
+)]
 enum ScheduledPlayPacketKind {
     AcceptTeleportation(SAcceptTeleportation),
     Attack(SAttack),
@@ -161,6 +165,10 @@ enum ImmediatePlayPacket {
     Unknown(i32),
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "scheduled versus immediate is the fundamental decode fork and both shapes are small aside from the wrapped scheduled packet; boxing would only add indirection on the hot decode path"
+)]
 enum DecodedPlayPacket {
     Scheduled(ScheduledPlayPacket),
     Immediate(ImmediatePlayPacket),
@@ -265,7 +273,8 @@ impl ScheduledPlayPacket {
             | ScheduledPlayPacketKind::EntityTagQuery(_)
             | ScheduledPlayPacketKind::EditBook(_) => ScheduledPacketExecution::Serialized,
             // Combat spans source and target state, custom payloads have no constrained resource
-            // contract, and the unimplemented menu handlers have no auditable transaction yet.
+            // contract, the unimplemented menu handlers have no auditable transaction yet, and
+            // re-entering configuration is a terminal connection-state transition.
             ScheduledPlayPacketKind::Attack(_)
             | ScheduledPlayPacketKind::Interact(_)
             | ScheduledPlayPacketKind::CustomPayload(_)
@@ -288,11 +297,9 @@ impl ScheduledPlayPacket {
             | ScheduledPlayPacketKind::PlaceRecipe(_)
             | ScheduledPlayPacketKind::RecipeBookChangeSettings(_)
             | ScheduledPlayPacketKind::RecipeBookSeenRecipe(_)
-            | ScheduledPlayPacketKind::ChatCommandSigned(_) => {
-                ScheduledPacketExecution::Exclusive
-            }
+            | ScheduledPlayPacketKind::ChatCommandSigned(_)
             // Re-entering configuration is a terminal connection-state transition.
-            ScheduledPlayPacketKind::ConfigurationAcknowledged => {
+            | ScheduledPlayPacketKind::ConfigurationAcknowledged => {
                 ScheduledPacketExecution::Exclusive
             }
         }

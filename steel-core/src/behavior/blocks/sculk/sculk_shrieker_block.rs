@@ -17,10 +17,12 @@ use steel_registry::blocks::properties::{BlockStateProperties, BoolProperty};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_block_entity_types;
 use steel_utils::types::UpdateFlags;
-use steel_utils::{BlockPos, BlockStateId, value_providers::IntProvider};
+use steel_utils::{BlockPos, BlockStateId, Downcast as _, value_providers::IntProvider};
 
 use crate::behavior::{BlockBehavior, BlockEntityCreation, BlockPlaceContext, try_drop_experience};
 use crate::block_entity::BlockEntityTicker;
+use crate::block_entity::entities::SculkShriekerBlockEntity;
+use crate::entity::Entity;
 use crate::world::{LevelReader, World};
 
 /// Vanilla `SculkShriekerBlockEntity.SHRIEKING_TICKS`.
@@ -94,11 +96,8 @@ impl BlockBehavior for SculkShriekerBlock {
         );
         // Vanilla `tick`: clear `SHRIEKING`, then delegate to the BE's `tryRespond`. The
         // `PARTICLES_SCULK_SHRIEK` level event is emitted by the BE when the shriek *starts*.
-        use steel_utils::Downcast as _;
         if let Some(block_entity) = world.get_block_entity(pos)
-            && let Some(shrieker) = block_entity
-                .downcast_ref::<crate::block_entity::entities::SculkShriekerBlockEntity>(
-            )
+            && let Some(shrieker) = block_entity.downcast_ref::<SculkShriekerBlockEntity>()
         {
             shrieker.try_respond(world);
         }
@@ -107,23 +106,14 @@ impl BlockBehavior for SculkShriekerBlock {
     // Vanilla `SculkShriekerBlock` has no `canSurvive` override; `updateShape` only maintains the
     // waterlogged tick, handled by the generic waterlogged path.
 
-    fn step_on(
-        &self,
-        state: BlockStateId,
-        world: &Arc<World>,
-        pos: BlockPos,
-        entity: &dyn crate::entity::Entity,
-    ) {
+    fn step_on(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos, entity: &dyn Entity) {
         // Vanilla `stepOn` resolves the stepping entity through
         // `SculkShriekerBlockEntity.tryGetPlayer` (direct player, controlling passenger,
         // projectile owner, or item owner); the BE resolves that rule from the source UUID.
-        if let Some(block_entity) = world.get_block_entity(pos) {
-            use steel_utils::Downcast as _;
-            if let Some(shrieker) = block_entity
-                .downcast_ref::<crate::block_entity::entities::SculkShriekerBlockEntity>(
-            ) {
-                shrieker.try_shriek(world, Some(entity.uuid()));
-            }
+        if let Some(block_entity) = world.get_block_entity(pos)
+            && let Some(shrieker) = block_entity.downcast_ref::<SculkShriekerBlockEntity>()
+        {
+            shrieker.try_shriek(world, Some(entity.uuid()));
         }
         self.default_step_on(state, world, pos, entity);
     }
@@ -134,9 +124,7 @@ impl BlockBehavior for SculkShriekerBlock {
         pos: BlockPos,
         state: BlockStateId,
     ) -> BlockEntityCreation {
-        BlockEntityCreation::Created(Arc::new(
-            crate::block_entity::entities::SculkShriekerBlockEntity::new(level, pos, state),
-        ))
+        BlockEntityCreation::Created(Arc::new(SculkShriekerBlockEntity::new(level, pos, state)))
     }
 
     fn get_block_entity_ticker(

@@ -25,14 +25,14 @@ impl MapIndex {
     }
 
     /// Vanilla `MapIndex.getNextMapId`.
-    pub fn next_map_id(&mut self) -> i32 {
+    pub const fn next_map_id(&mut self) -> i32 {
         self.last_map_id += 1;
         self.last_map_id
     }
 
     /// Returns the most recently handed-out id.
     #[must_use]
-    pub const fn last_map_id(&self) -> i32 {
+    pub const fn last_map_id(self) -> i32 {
         self.last_map_id
     }
 

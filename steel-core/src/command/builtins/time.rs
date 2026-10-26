@@ -245,6 +245,7 @@ fn set_paused(
     Ok(1)
 }
 
+#[expect(clippy::float_cmp, reason = "vanilla compares exactly")]
 fn set_rate(
     context: &SteelCommandContext<CommandSource>,
     selection: ClockSelection,

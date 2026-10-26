@@ -364,6 +364,10 @@ enum RequirementsJson {
     RandomChance {
         chance: LevelBasedValueJson,
     },
+    WeatherCheck {
+        raining: Option<bool>,
+        thundering: Option<bool>,
+    },
     MatchTool {
         items: Option<ItemHolderSetJson>,
     },
@@ -401,7 +405,28 @@ struct EntityPredicateJson {
     vehicle: EntityVehiclePredicateJson,
     flags: EntityFlagsPredicateJson,
     type_specific: EntityTypeSpecificPredicateJson,
+    location: Option<EntityLocationPredicateJson>,
     unsupported: bool,
+}
+
+/// Vanilla `LocationPredicate` subset used by entity predicates.
+#[derive(Debug)]
+struct EntityLocationPredicateJson {
+    can_see_sky: Option<bool>,
+    unsupported: bool,
+}
+
+impl EntityLocationPredicateJson {
+    const fn any() -> Self {
+        Self {
+            can_see_sky: None,
+            unsupported: false,
+        }
+    }
+
+    const fn has_constraints(&self) -> bool {
+        self.can_see_sky.is_some() || self.unsupported
+    }
 }
 
 #[derive(Debug)]
@@ -574,7 +599,8 @@ pub(crate) fn build() -> TokenStream {
             CrossbowChargingSounds, DamageSourcePredicate, DamageSourceTagPredicate,
             EnchantmentAttributeEffect, EnchantmentEffectRequirements, EnchantmentEffects,
             EnchantmentEntityEffect, EnchantmentEntityTarget, EnchantmentItemSet, EnchantmentTarget,
-            EnchantmentValueEffect, EntityFlagsPredicate, EntityPredicate,
+            EnchantmentValueEffect, EntityFlagsPredicate, EntityLocationPredicate,
+            EntityPredicate,
             EntityTypePredicate, EntityTypeSpecificPredicate, EntityVehiclePredicate,
             EntityTypeSet, LevelBasedValue, MobEffectSelection, ParticlePositionSource,
             ParticlePositionSourceType, ParticleVelocitySource, PlayerPredicate,

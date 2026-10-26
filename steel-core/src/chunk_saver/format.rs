@@ -538,7 +538,7 @@ pub struct PersistentTick {
 ///
 /// Only valid structure starts (those with at least one piece) are stored.
 /// Vanilla's `INVALID_START` sentinel is represented by absence from the vec.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, SchemaWrite, SchemaRead)]
 pub struct PersistentStructureStart {
     /// Structure type identifier (e.g., "minecraft:village").
     pub structure: Identifier,
@@ -597,7 +597,7 @@ impl PersistentBoundingBox {
 ///
 /// Common fields are stored directly; type-specific placement data is in
 /// `payload`.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, SchemaWrite, SchemaRead)]
 pub struct PersistentStructurePiece {
     /// Piece type identifier (e.g., "minecraft:jigsaw").
     pub piece_type: Identifier,
@@ -618,7 +618,7 @@ pub struct PersistentStructurePiece {
 }
 
 /// Persisted type-specific structure piece placement data.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, SchemaWrite, SchemaRead)]
 pub enum PersistentStructurePiecePayload {
     /// Jigsaw pool piece payload.
     Jigsaw(PersistentJigsawPieceData),
@@ -629,7 +629,7 @@ pub enum PersistentStructurePiecePayload {
 }
 
 /// Steel-native persistent state for a jigsaw pool piece.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, SchemaWrite, SchemaRead)]
 pub struct PersistentJigsawPieceData {
     /// Selected pool element.
     pub pool_element: PersistentPoolElement,
@@ -642,7 +642,7 @@ pub struct PersistentJigsawPieceData {
 }
 
 /// Persisted template-backed non-jigsaw piece data.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, SchemaWrite, SchemaRead)]
 pub struct PersistentTemplatePieceData {
     /// Structure template identifier.
     pub template_id: Identifier,
@@ -676,7 +676,7 @@ pub struct PersistentTemplatePieceData {
 }
 
 /// Persisted processors for template-backed non-jigsaw pieces.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, SchemaWrite, SchemaRead)]
 pub enum PersistentTemplateProcessorList {
     /// Direct empty processor list.
     Empty,
@@ -709,7 +709,7 @@ pub enum PersistentTemplateProcessorList {
 }
 
 /// Persisted template position adjustment.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub enum PersistentTemplatePlacementAdjustment {
     /// Place at the persisted template position.
     None,
@@ -730,7 +730,7 @@ pub enum PersistentTemplatePlacementAdjustment {
 }
 
 /// Persisted procedural piece data.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub enum PersistentProceduralPieceData {
     /// Procedural family whose placement state has not been captured yet.
     Unimplemented,
@@ -753,7 +753,7 @@ pub enum PersistentProceduralPieceData {
 }
 
 /// Persisted stronghold door variant.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub enum PersistentStrongholdSmallDoorType {
     /// Three-block cave-air opening.
     Opening,
@@ -766,7 +766,7 @@ pub enum PersistentStrongholdSmallDoorType {
 }
 
 /// Persisted piece-specific stronghold data.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub enum PersistentStrongholdPieceData {
     /// Straight corridor with optional side exits.
     Straight {
@@ -851,7 +851,7 @@ pub enum PersistentStrongholdPieceData {
 }
 
 /// Persisted piece-specific nether fortress data.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub enum PersistentNetherFortressPieceData {
     /// Bridge crossing piece.
     BridgeCrossing,
@@ -896,7 +896,7 @@ pub enum PersistentNetherFortressPieceData {
 }
 
 /// Persisted desert pyramid piece payload.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct PersistentDesertPyramidPieceData {
     /// Vanilla `ScatteredFeaturePiece.heightPosition`; -1 means not height-adjusted yet.
     pub height_position: i32,
@@ -905,7 +905,7 @@ pub struct PersistentDesertPyramidPieceData {
 }
 
 /// Persisted jungle temple piece payload.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct PersistentJungleTemplePieceData {
     /// Vanilla `ScatteredFeaturePiece.heightPosition`; -1 means not height-adjusted yet.
     pub height_position: i32,
@@ -920,7 +920,7 @@ pub struct PersistentJungleTemplePieceData {
 }
 
 /// Persisted mineshaft piece payload.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct PersistentMineshaftPieceData {
     /// Mineshaft type: 0=normal, 1=mesa.
     pub mineshaft_type: i8,
@@ -929,7 +929,7 @@ pub struct PersistentMineshaftPieceData {
 }
 
 /// Persisted piece-specific mineshaft data.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub enum PersistentMineshaftPieceKind {
     /// Start room.
     Room {
@@ -959,7 +959,7 @@ pub enum PersistentMineshaftPieceKind {
 }
 
 /// Persisted swamp hut piece payload.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct PersistentSwampHutPieceData {
     /// Vanilla `ScatteredFeaturePiece.heightPosition`; -1 means not height-adjusted yet.
     pub height_position: i32,
@@ -970,14 +970,14 @@ pub struct PersistentSwampHutPieceData {
 }
 
 /// Persisted ocean monument building payload.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct PersistentOceanMonumentPieceData {
     /// Internal child pieces generated by vanilla `MonumentBuilding`.
     pub child_pieces: Vec<PersistentOceanMonumentChildPiece>,
 }
 
 /// Persisted internal ocean monument child piece.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct PersistentOceanMonumentChildPiece {
     /// World-space child bounding box after building-relative offset.
     pub bounding_box: PersistentBoundingBox,
@@ -986,7 +986,7 @@ pub struct PersistentOceanMonumentChildPiece {
 }
 
 /// Persisted ocean monument child piece variant.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub enum PersistentOceanMonumentChildPieceKind {
     /// `OceanMonumentEntryRoom`.
     EntryRoom {
@@ -1060,7 +1060,7 @@ pub enum PersistentOceanMonumentChildPieceKind {
 }
 
 /// Persisted ocean monument room snapshot.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct PersistentOceanMonumentRoomData {
     /// Vanilla room index.
     pub index: i32,
@@ -1071,7 +1071,7 @@ pub struct PersistentOceanMonumentRoomData {
 }
 
 /// Persisted pool element selected during jigsaw assembly.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, SchemaWrite, SchemaRead)]
 pub enum PersistentPoolElement {
     /// Single structure template piece.
     Single {
@@ -1110,7 +1110,7 @@ pub enum PersistentPoolElement {
 }
 
 /// Persisted processor list holder for single pool elements.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub enum PersistentProcessorList {
     /// Direct empty processor list.
     Empty,
@@ -1119,7 +1119,7 @@ pub enum PersistentProcessorList {
 }
 
 /// A persisted jigsaw junction used by Beardifier terrain adaptation.
-#[derive(SchemaWrite, SchemaRead)]
+#[derive(Debug, PartialEq, Eq, SchemaWrite, SchemaRead)]
 pub struct PersistentJigsawJunction {
     /// World X.
     pub source_x: i32,

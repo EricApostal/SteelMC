@@ -87,7 +87,7 @@ use steel_registry::vanilla_game_rules::{
 use steel_registry::vanilla_mob_effects;
 use steel_registry::{
     level_events, sound_events, vanilla_attributes, vanilla_custom_stats, vanilla_damage_type_tags,
-    vanilla_entities, vanilla_game_events,
+    vanilla_dimension_types, vanilla_entities, vanilla_game_events,
 };
 use steel_utils::{entity_events::EntityStatus, locks::Shared, translations};
 use tick_state::PlayerTickState;
@@ -103,6 +103,7 @@ use text_components::{
 };
 use text_components::{content::Resolvable, custom::CustomData};
 
+use crate::behavior::advancement_hooks::raise_effects_changed;
 use crate::behavior::{
     BlockStateBehaviorExt as _, ITEM_BEHAVIORS, InteractionResult, InventoryTickContext,
     ItemBehavior, apply_use_remainder,
@@ -131,6 +132,10 @@ use crate::permission::{
     PermissionSet, PermissionState,
 };
 use crate::physics::MoveResult;
+use crate::player::advancement::triggers::{
+    WorldLevelView, raise_entity_killed_player, raise_levitation, raise_location,
+    raise_player_killed_entity, raise_tick, raise_using_item,
+};
 use crate::player::experience::Experience;
 use crate::player::player_data::{PersistentEnderPearl, PersistentRootVehicle};
 use crate::player::player_inventory::{
@@ -248,6 +253,12 @@ pub struct Player {
     sleep_state: SyncMutex<PlayerSleepState>,
     /// Vanilla `ServerPlayer`'s levitation tracking for the `levitation` trigger.
     levitation: SyncMutex<LevitationTracking>,
+    /// Vanilla `ServerPlayer.enteredNetherPosition`: where the player was when it
+    /// entered the Nether, used by the `nether_travel` trigger on the way back.
+    ///
+    /// Runtime-only for now: vanilla stores it under `entered_nether_pos` in player
+    /// data, which Steel's player-data payload does not carry yet (reported gap).
+    entered_nether_position: SyncMutex<Option<DVec3>>,
     /// Persisted personal bed or respawn-anchor target.
     respawn_config: SyncMutex<Option<PlayerRespawnConfig>>,
     /// Vanilla `ServerPlayer.raidOmenPosition`: where a pending raid omen converts into a
@@ -383,7 +394,6 @@ impl PlayerResidenceState {
 
 impl Player {
     /// Returns this player's server-side recipe book.
-    #[must_use]
     pub fn recipe_book(&self) -> parking_lot::MutexGuard<'_, recipe_book::ServerRecipeBook> {
         self.recipe_book.lock()
     }
@@ -497,7 +507,7 @@ impl Player {
         self.inventory.lock().set_item_in_hand(hand, item);
         // we re-read active here since behavior.release_using might have already ended the use
         if use_on_release && let Some(active) = self.living_base.active_item_use() {
-            self.tick_active_item_use_with_behavior(entity, behavior, active);
+            self.tick_active_item_use_with_behavior(entity, behavior, active, false);
         }
         self.stop_using_item();
     }
@@ -507,14 +517,21 @@ impl Player {
             return;
         };
         let behavior = ITEM_BEHAVIORS.get_behavior(active.item());
-        self.tick_active_item_use_with_behavior(entity, behavior, active);
+        self.tick_active_item_use_with_behavior(entity, behavior, active, true);
     }
 
+    /// Advances one tick of active item use.
+    ///
+    /// `fire_using_item` mirrors vanilla `ServerPlayer.updateUsingItem`, which
+    /// fires `USING_ITEM` once per tick before the use tick; the release path
+    /// re-enters this helper for use-on-release items after the tick's own
+    /// `USING_ITEM` already fired, so it passes `false`.
     fn tick_active_item_use_with_behavior(
         &self,
         entity: &SharedEntity,
         behavior: &dyn ItemBehavior,
         active: ActiveItemUseState,
+        fire_using_item: bool,
     ) {
         let hand = active.hand();
         let item_matches = {
@@ -530,6 +547,9 @@ impl Player {
             let current = inventory.get_item_in_hand(hand);
             current.clone()
         };
+        if fire_using_item {
+            raise_using_item(self, &item);
+        }
         let world = self.get_world();
         let Some(user) = LivingEntityRef::new(entity) else {
             panic!("active item use requires a living entity");
@@ -680,6 +700,7 @@ impl Player {
             tick_state: SyncMutex::new(PlayerTickState::new()),
             sleep_state: SyncMutex::new(PlayerSleepState::new()),
             levitation: SyncMutex::new(LevitationTracking::default()),
+            entered_nether_position: SyncMutex::new(None),
             respawn_config: SyncMutex::new(None),
             raid_omen_position: SyncMutex::new(None),
             warden_spawn_tracker: SyncMutex::new(WardenSpawnTracker::fresh()),
@@ -2010,7 +2031,7 @@ impl Entity for Player {
             // `Entity.awardKillScore` default that raises `ENTITY_KILLED_PLAYER`
             // for a killed player.
             if let Some(victim_player) = victim.as_player() {
-                crate::player::advancement::triggers::raise_entity_killed_player(
+                raise_entity_killed_player(
                     victim_player,
                     self.as_entity_event_source(),
                     killing_blow,
@@ -2025,11 +2046,7 @@ impl Entity for Player {
             // TODO: Handle team kill
             // Vanilla `ServerPlayer.awardKillScore` raises `PLAYER_KILLED_ENTITY`
             // with the killed entity and the killing blow, after the kill stats.
-            crate::player::advancement::triggers::raise_player_killed_entity(
-                self,
-                victim,
-                killing_blow,
-            );
+            raise_player_killed_entity(self, victim, killing_blow);
         }
     }
 }
@@ -2046,13 +2063,13 @@ struct LevitationTracking {
 
 impl LevitationTracking {
     /// Vanilla `ServerPlayer.onEffectAdded`'s levitation branch.
-    fn begin(&mut self, position: DVec3, tick_count: i32) {
+    const fn begin(&mut self, position: DVec3, tick_count: i32) {
         self.start_pos = Some(position);
         self.start_time = tick_count;
     }
 
     /// Vanilla `ServerPlayer.onEffectsRemoved`'s levitation branch.
-    fn clear(&mut self) {
+    const fn clear(&mut self) {
         self.start_pos = None;
     }
 
@@ -2090,12 +2107,24 @@ impl Player {
         self.raise_effects_changed();
     }
 
+    /// Vanilla `ServerPlayer.enteredNetherPosition`: where the player was when it
+    /// entered the Nether.
+    #[must_use]
+    pub(crate) fn entered_nether_position(&self) -> Option<DVec3> {
+        *self.entered_nether_position.lock()
+    }
+
+    /// Sets vanilla `ServerPlayer.enteredNetherPosition`.
+    pub(crate) fn set_entered_nether_position(&self, position: Option<DVec3>) {
+        *self.entered_nether_position.lock() = position;
+    }
+
     /// Raises `minecraft:effects_changed` with the player's current effects.
     ///
     /// Vanilla also passes the effect's source entity; Steel's effect API does
     /// not carry one, so the event's source is always absent (reported as a gap).
     fn raise_effects_changed(&self) {
-        crate::behavior::advancement_hooks::raise_effects_changed(self);
+        raise_effects_changed(self);
     }
 }
 
@@ -2111,6 +2140,10 @@ impl LivingEntity for Player {
         Some(&self.entity_data)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "player tick phase order mirrors vanilla ServerPlayer.tick one to one"
+    )]
     fn tick_living_entity(&self, entity: &SharedEntity) {
         self.advance_tick();
         // Vanilla `ServerPlayer.tick` runs the warden spawn tracker before `super.tick()`.
@@ -2120,20 +2153,18 @@ impl LivingEntity for Player {
         {
             let world = self.get_world();
             let origin = self.block_position();
-            let level = crate::player::advancement::triggers::WorldLevelView::new(&world, origin);
-            crate::player::advancement::triggers::raise_tick(self, &level, origin);
+            let level = WorldLevelView::new(&world, origin);
+            raise_tick(self, &level, origin);
             // Vanilla `ServerPlayer.doTick` raises `LOCATION` every 20 ticks.
             if Entity::tick_count(self) % 20 == 0 {
-                crate::player::advancement::triggers::raise_location(self, &world, origin);
+                raise_location(self, &world, origin);
             }
             // Vanilla `ServerPlayer.tick` raises `LEVITATION` after `TICK` while the
             // effect is active, with the start position and the ticks elapsed.
             let tick_count = Entity::tick_count(self);
             let pending = self.levitation.lock().pending(tick_count);
             if let Some((start, duration)) = pending {
-                crate::player::advancement::triggers::raise_levitation(
-                    self, &level, start, duration,
-                );
+                raise_levitation(self, &level, start, duration);
             }
         }
         self.tick_item_cooldowns();

@@ -265,7 +265,7 @@ impl MapItemSavedData {
         copy.banner_markers = self.banner_markers.clone();
         self.decorations.clone_into(&mut copy.decorations);
         copy.tracked_decoration_count = self.tracked_decoration_count;
-        copy.colors = self.colors.clone();
+        copy.colors.clone_from(&self.colors);
         copy
     }
 

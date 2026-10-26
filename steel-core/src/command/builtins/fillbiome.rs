@@ -116,9 +116,7 @@ fn fill_biomes(
         .and_then(|id| u16::try_from(id).ok())
         .ok_or_else(|| unknown_biome(&biome.key.to_string()))?;
     let Some(result) = world.chunk_map.fill_biomes(raw_from, raw_to, |current| {
-        let Some(current_biome) = REGISTRY.biomes.by_id(usize::from(current)) else {
-            return None;
-        };
+        let current_biome = REGISTRY.biomes.by_id(usize::from(current))?;
         if filter.is_some_and(|filter| !filter.matches(current_biome)) {
             return None;
         }

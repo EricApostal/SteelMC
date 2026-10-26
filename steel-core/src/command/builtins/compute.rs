@@ -26,6 +26,7 @@
 //!   `ArithmeticException` message.
 
 use glam::DVec3;
+use rand::rngs::ThreadRng;
 use steel_registry::loot_table::{BlockEntityRef, LootContext};
 use steel_utils::{Identifier, translations};
 use text_components::TextComponent;
@@ -123,6 +124,7 @@ fn compute_as_integer(
 }
 
 /// Vanilla `ComputeCommand.computeAsFloat`.
+#[expect(clippy::float_cmp, reason = "vanilla compares exactly")]
 fn compute_as_float(
     context: &SteelCommandContext<CommandSource>,
     source: ComputeSource,
@@ -205,7 +207,7 @@ fn plain_id(id: &Identifier) -> TextComponent {
 }
 
 /// Java `Mth.floor(float)`: floor, then the saturating `(int)` cast.
-fn floor_to_int(value: f32) -> i32 {
+const fn floor_to_int(value: f32) -> i32 {
     value.floor() as i32
 }
 
@@ -242,7 +244,7 @@ const INT_INVALID_REASON: &str = "arithmetic error";
 fn with_params<T>(
     context: &SteelCommandContext<CommandSource>,
     source: ComputeSource,
-    evaluate: impl FnOnce(&mut LootContext<'_, rand::rngs::ThreadRng>) -> T,
+    evaluate: impl FnOnce(&mut LootContext<'_, ThreadRng>) -> T,
 ) -> Result<T, CommandSyntaxError> {
     let command_source = context.source();
     let origin: DVec3 = command_source.position();

@@ -67,6 +67,10 @@ fn smart_usages(
     node: NodeId,
     source: &CommandSource,
 ) -> Vec<String> {
+    #[expect(
+        clippy::redundant_closure_for_method_calls,
+        reason = "the private CommandNode type cannot be named from this module"
+    )]
     let inner = dispatcher
         .node(node)
         .is_some_and(|node| node.is_executable());

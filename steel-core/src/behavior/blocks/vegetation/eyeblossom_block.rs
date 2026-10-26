@@ -17,7 +17,7 @@ use glam::DVec3;
 use rand::{Rng, RngExt};
 use steel_macros::block_behavior;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
-use steel_registry::blocks::properties::BlockStateProperties;
+use steel_registry::blocks::properties::{BlockStateProperties, Half};
 use steel_registry::particle_type::{ParticleData, TrailParticleOption};
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::timeline::{Ease, KeyframeValue, TimelineRef, Track};
@@ -271,14 +271,14 @@ impl BlockBehavior for EyeblossomBlock {
         let Some(bee) = entity.as_living_entity() else {
             return;
         };
-        if bee.has_mob_effect(&vanilla_mob_effects::POISON) {
+        if bee.has_mob_effect(vanilla_mob_effects::POISON) {
             return;
         }
 
         // Vanilla `EyeblossomBlock.getBeeInteractionEffect` is always poison,
         // regardless of the open/closed type's own effect.
         bee.add_mob_effect(MobEffectInstance::with_duration(
-            &vanilla_mob_effects::POISON,
+            vanilla_mob_effects::POISON,
             25,
             0,
         ));
@@ -300,8 +300,7 @@ fn attracts_bees(state: BlockStateId) -> bool {
         return false;
     }
     if state.get_block() == &vanilla_blocks::SUNFLOWER {
-        return state.try_get_value(&BlockStateProperties::HALF)
-            == Some(steel_registry::blocks::properties::Half::Top);
+        return state.try_get_value(&BlockStateProperties::HALF) == Some(Half::Top);
     }
     true
 }

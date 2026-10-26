@@ -580,7 +580,7 @@ impl ItemAccessor for EntityItemAccessor {
                     .map(|source| source as &dyn SlotProvider),
                 slots,
             );
-            let changed = setter(ItemElement::Entity(entity.clone()), collection.as_ref());
+            let changed = setter(ItemElement::Entity(Arc::clone(entity)), collection.as_ref());
             // Vanilla `EntityItemAccessor.setItems`: a changed server player
             // pushes the new inventory to its open container menu.
             if changed > 0
@@ -980,6 +980,10 @@ mod tests {
     /// Vanilla `wrapSetItems` attaches `from entity`, `from block` and `with`
     /// to the `<slots>` node, and `count` only under `with`.
     #[test]
+    #[expect(
+        clippy::redundant_closure_for_method_calls,
+        reason = "the private CommandNode type cannot be named from this module"
+    )]
     fn replace_slots_node_offers_from_and_with() {
         let (dispatcher, item) = item_root();
         let replace = child(&dispatcher, item, "replace");
@@ -1038,6 +1042,10 @@ mod tests {
     /// Vanilla `modify` takes a slot source and an `item_modifier` on both
     /// target providers.
     #[test]
+    #[expect(
+        clippy::redundant_closure_for_method_calls,
+        reason = "the private CommandNode type cannot be named from this module"
+    )]
     fn modify_takes_slot_source_and_item_modifier() {
         let (dispatcher, item) = item_root();
         let modify = child(&dispatcher, item, "modify");

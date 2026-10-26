@@ -44,7 +44,7 @@ use crate::entity::entities::{
     EndermiteEntity, FoxEntity, FrogEntity, GhastEntity, GlowSquidEntity, GoatEntity,
     GuardianEntity, HoglinEntity, MagmaCubeEntity, MushroomCowEntity, OcelotEntity, ParrotEntity,
     PigEntity, SilverfishEntity, SkeletonHorseEntity, SlimeEntity, SquidEntity, StrayEntity,
-    TurtleEntity, WolfEntity, ZombieEntity, ZombifiedPiglinEntity,
+    StriderEntity, TurtleEntity, WolfEntity, ZombieEntity, ZombifiedPiglinEntity,
 };
 use crate::world::is_redstone_conductor as world_is_redstone_conductor;
 use crate::world::{LevelReader, World};
@@ -57,10 +57,6 @@ pub enum SpawnPlacementType {
     /// Vanilla `SpawnPlacementTypes.IN_WATER`.
     InWater,
     /// Vanilla `SpawnPlacementTypes.IN_LAVA`.
-    #[expect(
-        dead_code,
-        reason = "vanilla selects this placement for striders; Steel has no lava placement row yet"
-    )]
     InLava,
     /// Vanilla `SpawnPlacementTypes.ON_GROUND`.
     OnGround,
@@ -525,6 +521,17 @@ fn check_hoglin_spawn_rules(
     <HoglinEntity as Mob>::check_mob_spawn_rules(entity_type, level, spawn_reason, pos)
 }
 
+/// Vanilla `Strider.checkStriderSpawnRules`.
+pub(super) fn check_strider_spawn_rules(
+    entity_type: EntityTypeRef,
+    level: &World,
+    spawn_reason: EntitySpawnReason,
+    pos: BlockPos,
+    random: &mut RandomSource,
+) -> bool {
+    StriderEntity::check_strider_spawn_rules(entity_type, level, spawn_reason, pos, random)
+}
+
 /// Vanilla `Piglin.checkPiglinSpawnRules`.
 fn check_piglin_placement_spawn_rules(
     _entity_type: EntityTypeRef,
@@ -876,6 +883,12 @@ impl SpawnPlacements {
             heightmap: DEFAULT_HEIGHTMAP,
             placement: SpawnPlacementType::OnGround,
             predicate: Some(check_surface_monsters_spawn_rules),
+        },
+        SpawnPlacementsData {
+            entity_type: &vanilla_entities::STRIDER,
+            heightmap: DEFAULT_HEIGHTMAP,
+            placement: SpawnPlacementType::InLava,
+            predicate: Some(check_strider_spawn_rules),
         },
         SpawnPlacementsData {
             entity_type: &vanilla_entities::TURTLE,

@@ -262,7 +262,7 @@ impl CommandAuthorizationContext {
     }
 
     /// Vanilla `PermissionSet.union` for a level-based set: keeps the lower cap.
-    fn with_maximum_permission(mut self, level: PermissionLevel) -> Self {
+    const fn with_maximum_permission(mut self, level: PermissionLevel) -> Self {
         if !level.is_equal_or_higher_than(self.maximum_level) {
             self.maximum_level = level;
         }
@@ -351,10 +351,6 @@ impl CommandSource {
         }
     }
 
-    #[expect(
-        dead_code,
-        reason = "source-aware runtime extensions need access to the original sender"
-    )]
     pub(crate) const fn sender(&self) -> &CommandSender {
         &self.sender
     }

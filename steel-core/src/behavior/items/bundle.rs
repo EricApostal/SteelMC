@@ -122,13 +122,12 @@ impl ItemBehavior for BundleItem {
         };
 
         let is_first_tick = ticks_remaining == USE_DURATION;
-        if is_first_tick
+        if (is_first_tick
             || (ticks_remaining < USE_DURATION - TICKS_AFTER_FIRST_THROW
-                && ticks_remaining % TICKS_BETWEEN_THROWS == 0)
+                && ticks_remaining % TICKS_BETWEEN_THROWS == 0))
+            && Self::drop_content(world, player, stack)
         {
-            if Self::drop_content(world, player, stack) {
-                player.award_stat(&vanilla_stat_types::ITEM_USED, stack.item());
-            }
+            player.award_stat(&vanilla_stat_types::ITEM_USED, stack.item());
         }
     }
 }

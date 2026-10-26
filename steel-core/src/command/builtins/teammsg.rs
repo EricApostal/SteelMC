@@ -47,7 +47,7 @@ fn teammsg(context: &SteelCommandContext<CommandSource>) -> Result<i32, CommandS
             &translations::COMMANDS_TEAMMSG_FAILED_NOTEAM,
         ))
     })?;
-    let content = context.message("message")?;
+    let text = context.message("message")?;
 
     let sender_name = source_display_name(source);
     let shown_team = suggestive_team_name(source, &team_name);
@@ -84,7 +84,7 @@ fn teammsg(context: &SteelCommandContext<CommandSource>) -> Result<i32, CommandS
         } else {
             incoming_chat_type.clone()
         };
-        receiver.send_packet(CDisguisedChat::new(&content, chat_type, receiver.as_ref()));
+        receiver.send_packet(CDisguisedChat::new(&text, chat_type, receiver.as_ref()));
     }
 
     Ok(result)

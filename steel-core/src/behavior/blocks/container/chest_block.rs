@@ -122,7 +122,7 @@ fn chest_type_for(
     }
 }
 
-fn state_for_placement(block: BlockRef, context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
+fn state_for_placement(block: BlockRef, context: &BlockPlaceContext<'_>) -> BlockStateId {
     let mut facing = context.horizontal_direction().opposite();
     let mut chest_type = ChestType::Single;
 
@@ -152,13 +152,11 @@ fn state_for_placement(block: BlockRef, context: &BlockPlaceContext<'_>) -> Opti
         chest_type = chest_type_for(context.world, block, context.place_pos(), facing);
     }
 
-    Some(
-        block
-            .default_state()
-            .set_value(FACING, facing)
-            .set_value(CHEST_TYPE, chest_type)
-            .set_value(WATERLOGGED, context.is_water_source()),
-    )
+    block
+        .default_state()
+        .set_value(FACING, facing)
+        .set_value(CHEST_TYPE, chest_type)
+        .set_value(WATERLOGGED, context.is_water_source())
 }
 
 fn update_shape(
@@ -343,7 +341,7 @@ fn place_new_block_entity(
 
 impl BlockBehavior for ChestBlock {
     fn get_state_for_placement(&self, context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
-        state_for_placement(self.block, context)
+        Some(state_for_placement(self.block, context))
     }
 
     fn update_shape(
@@ -430,7 +428,7 @@ impl BlockBehavior for ChestBlock {
 
 impl BlockBehavior for TrappedChestBlock {
     fn get_state_for_placement(&self, context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
-        state_for_placement(self.block, context)
+        Some(state_for_placement(self.block, context))
     }
 
     fn update_shape(

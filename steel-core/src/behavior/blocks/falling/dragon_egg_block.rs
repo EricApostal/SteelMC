@@ -181,7 +181,7 @@ mod tests {
 
         assert_eq!(
             DragonEggBlock::pack_difference_in_position(origin, target, 16, 8, 16),
-            (19 << 16) | (6 << 8) | 13
+            (19 << 16) | (6 << 8) | 0x0d
         );
     }
 }

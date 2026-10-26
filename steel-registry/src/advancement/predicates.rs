@@ -9,7 +9,7 @@
 use crate::data_components::components::ItemEnchantments;
 use crate::equipment::EquipmentSlot;
 pub use crate::item_predicate::{DoubleBounds, IntBounds};
-use crate::loot_table::{ItemSetPredicate, PropertyCheck, ToolPredicate};
+use crate::loot_table::{EntityEquipmentSlots, ItemSetPredicate, PropertyCheck, ToolPredicate};
 use crate::{DyeColor, REGISTRY, RegistryExt, TaggedRegistryExt, item_stack::ItemStack};
 use steel_utils::{BlockPos, BlockStateId, Identifier};
 use text_components::TextComponent;
@@ -774,6 +774,17 @@ impl DamagePredicate {
     }
 }
 
+/// The number of nested entity-graph levels an [`EntityView`] snapshot keeps.
+///
+/// Steel builds the whole vehicle/passenger/`lookingAt` graph eagerly while
+/// vanilla evaluates it lazily per predicate, so a cap (plus a per-path cycle
+/// cut in the builder) keeps a cyclic graph like rider <-> boat finite.
+pub const MAX_ENTITY_VIEW_DEPTH: u8 = 8;
+
+/// Vanilla `PlayerPredicate.LOOKING_AT_RANGE`: the view-vector reach of the
+/// `looking_at` entity pick, in blocks.
+pub const LOOKING_AT_RANGE: f64 = 100.0;
+
 /// The live entity facts tested by an [`EntityPredicate`].
 #[derive(Clone)]
 pub struct EntityView<'a> {
@@ -782,17 +793,19 @@ pub struct EntityView<'a> {
     pub level: &'a dyn LevelView,
     pub stepping_on: Option<&'a dyn LevelView>,
     pub flags: EntityViewFlags,
-    pub equipment: Option<&'a crate::loot_table::EntityEquipmentSlots>,
+    pub equipment: Option<EntityEquipmentSlots>,
     pub effects: Vec<EffectInstanceView<'a>>,
     pub components: EntityComponentsPredicate,
-    pub vehicle: Option<&'a EntityView<'a>>,
-    /// The entity riding this one (vanilla `minecraft:passenger`).
-    pub passenger: Option<&'a EntityView<'a>>,
+    /// The vehicle this entity is riding (vanilla `minecraft:vehicle`).
+    pub vehicle: Option<Box<EntityView<'a>>>,
+    /// This entity's direct passengers (vanilla `minecraft:passenger`
+    /// matches when *any* of them matches).
+    pub passengers: Vec<EntityView<'a>>,
     pub player: Option<PlayerView<'a>>,
     pub lightning: Option<LightningView<'a>>,
     /// The stack held in the entity's main hand, used by `fishing_rod_hooked`'s
     /// hooked-item check.
-    pub held_item: Option<&'a ItemStack>,
+    pub held_item: Option<ItemStack>,
 }
 
 impl EntityView<'_> {
@@ -800,6 +813,7 @@ impl EntityView<'_> {
     #[must_use]
     pub fn held_item_matches(&self, predicate: &ItemPredicate) -> bool {
         self.held_item
+            .as_ref()
             .is_some_and(|stack| item_predicate_matches(predicate, stack))
     }
 }
@@ -830,7 +844,11 @@ pub struct EntityViewFlags {
 /// Player-only facts of an [`EntityView`].
 #[derive(Debug, Clone, Default)]
 pub struct PlayerView<'a> {
-    pub looking_at: Option<&'a EntityView<'a>>,
+    /// The entity the player's view vector resolves to, mirroring vanilla
+    /// `PlayerPredicate`'s `lookingAt`: the nearest non-spectator entity the
+    /// view vector reaches within [`LOOKING_AT_RANGE`] blocks that the player
+    /// also has line of sight to.
+    pub looking_at: Option<Box<EntityView<'a>>>,
     pub unlocked_recipes: &'a [Identifier],
 }
 
@@ -1019,7 +1037,7 @@ impl EntityPredicate {
             return false;
         }
         if let Some(equipment) = &self.equipment
-            && !equipment.matches(entity.equipment)
+            && !equipment.matches(entity.equipment.as_ref())
         {
             return false;
         }
@@ -1029,20 +1047,20 @@ impl EntityPredicate {
             return false;
         }
         if let Some(vehicle) = &self.vehicle {
-            let Some(actual) = entity.vehicle else {
+            let Some(actual) = entity.vehicle.as_deref() else {
                 return false;
             };
             if !vehicle.matches(actual) {
                 return false;
             }
         }
-        if let Some(passenger) = &self.passenger {
-            let Some(actual) = entity.passenger else {
-                return false;
-            };
-            if !passenger.matches(actual) {
-                return false;
-            }
+        if let Some(passenger) = &self.passenger
+            && !entity
+                .passengers
+                .iter()
+                .any(|actual| passenger.matches(actual))
+        {
+            return false;
         }
         if let Some(player) = &self.player
             && !player.matches(entity.player.as_ref())
@@ -1096,6 +1114,7 @@ impl PlayerPredicate {
         if let Some(looking_at) = &self.looking_at
             && !player
                 .looking_at
+                .as_deref()
                 .is_some_and(|entity| looking_at.matches(entity))
         {
             return false;

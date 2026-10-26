@@ -7,8 +7,9 @@ use item_in_use::EnchantedItemInUse;
 use steel_registry::enchantment::EnchantmentRef;
 use steel_registry::enchantment_effect::{
     DamageSourcePredicate, EnchantmentEffectComponent, EnchantmentEffectRequirements,
-    EnchantmentEntityEffect, EnchantmentEntityTarget, EnchantmentTarget, EntityPredicate,
-    EntityTypePredicate, EntityTypeSpecificPredicate, EntityVehiclePredicate, MobEffectSelection,
+    EnchantmentEntityEffect, EnchantmentEntityTarget, EnchantmentTarget, EntityLocationPredicate,
+    EntityPredicate, EntityTypePredicate, EntityTypeSet, EntityTypeSpecificPredicate,
+    EntityVehiclePredicate, MobEffectSelection,
 };
 use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::item_stack::ItemStack;
@@ -23,11 +24,42 @@ use crate::inventory::equipment::EquipmentSlot;
 use crate::world::World;
 use steel_registry::attribute::AttributeRef;
 
-#[derive(Debug, Clone, Copy)]
+/// A snapshot of the world's weather taken once per enchantment fold so that
+/// requirement evaluation never re-locks the weather mutex per term.
+///
+/// Fold sites without a world keep `None`, which leaves `WeatherCheck` unknown
+/// (fail-closed) exactly like the other context-less predicates.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct WeatherSnapshot {
+    raining: bool,
+    thundering: bool,
+}
+
+impl WeatherSnapshot {
+    /// Reads the world's rain/thunder state while holding the weather lock once.
+    pub(crate) fn from_world(world: &World) -> Self {
+        let weather = world.weather.lock();
+        Self {
+            raining: world.is_raining_with_guard(&weather),
+            thundering: world.is_thundering_with_guard(&weather),
+        }
+    }
+
+    /// Vanilla `WeatherCheck.test`: every present flag must equal the level state.
+    fn matches(self, raining: Option<bool>, thundering: Option<bool>) -> bool {
+        raining.is_none_or(|raining| raining == self.raining)
+            && thundering.is_none_or(|thundering| thundering == self.thundering)
+    }
+}
+
+#[derive(Clone, Copy)]
 pub(crate) struct EnchantmentDamageContext<'a> {
     this_entity_type: EntityTypeRef,
     attacker_entity_type: Option<EntityTypeRef>,
     direct_attacker_entity_type: Option<EntityTypeRef>,
+    this_entity: Option<&'a dyn Entity>,
+    attacker_entity: Option<&'a SharedEntity>,
+    direct_attacker_entity: Option<&'a SharedEntity>,
     damage_source: &'a DamageSource,
 }
 
@@ -43,8 +75,26 @@ impl<'a> EnchantmentDamageContext<'a> {
             this_entity_type,
             attacker_entity_type,
             direct_attacker_entity_type,
+            this_entity: None,
+            attacker_entity: None,
+            direct_attacker_entity: None,
             damage_source,
         }
+    }
+
+    /// Attaches the concrete entities behind each target so predicates that need
+    /// world state (e.g. `location.can_see_sky`) can be evaluated.
+    #[must_use]
+    pub(crate) const fn with_entities(
+        mut self,
+        this_entity: Option<&'a dyn Entity>,
+        attacker_entity: Option<&'a SharedEntity>,
+        direct_attacker_entity: Option<&'a SharedEntity>,
+    ) -> Self {
+        self.this_entity = this_entity;
+        self.attacker_entity = attacker_entity;
+        self.direct_attacker_entity = direct_attacker_entity;
+        self
     }
 
     #[must_use]
@@ -73,6 +123,16 @@ impl<'a> EnchantmentDamageContext<'a> {
             EnchantmentEntityTarget::DirectAttacker => self.direct_attacker_entity_type,
         }
     }
+
+    fn entity(self, target: EnchantmentEntityTarget) -> Option<&'a dyn Entity> {
+        match target {
+            EnchantmentEntityTarget::This => self.this_entity,
+            EnchantmentEntityTarget::Attacker => self.attacker_entity.map(AsRef::as_ref),
+            EnchantmentEntityTarget::DirectAttacker => {
+                self.direct_attacker_entity.map(AsRef::as_ref)
+            }
+        }
+    }
 }
 
 pub(crate) struct EnchantmentPostAttackContext<'a> {
@@ -99,6 +159,11 @@ impl<'a> EnchantmentPostAttackContext<'a> {
             self.attacker.map(|entity| entity.entity_type()),
             self.direct_attacker.map(|entity| entity.entity_type()),
             self.damage_source,
+        )
+        .with_entities(
+            Some(self.victim.as_ref()),
+            self.attacker,
+            self.direct_attacker,
         )
     }
 
@@ -167,7 +232,13 @@ pub(crate) fn for_each_enchantment_attribute_modifier(
 }
 
 /// Vanilla `EnchantmentHelper.getEnchantmentLevel`: the best level of
-/// `enchantment` across the slots the enchantment supports.
+/// `enchantment` across the slots the enchantment supports. No caller yet;
+/// keeping it for the enchantment checks (noiseless XP tiers, silent armor
+/// faces, strider warmth gating) that all delegate to this single scan.
+#[expect(
+    dead_code,
+    reason = "vanilla API surface; no caller yet — all future level scans should use this"
+)]
 pub(crate) fn get_enchantment_level<V: LivingEntity + ?Sized>(
     enchantment: EnchantmentRef,
     entity: &V,
@@ -187,7 +258,7 @@ pub(crate) fn get_enchantment_level<V: LivingEntity + ?Sized>(
 
 /// Vanilla `EnchantmentHelper.processMobExperience`: folds every equipped
 /// `minecraft:mob_experience` effect of `killer` over the dropped amount.
-pub(crate) fn process_mob_experience(killer: &dyn Entity, killed: &dyn Entity, amount: i32) -> i32 {
+pub(crate) fn process_mob_experience(killer: &dyn Entity, victim: &dyn Entity, amount: i32) -> i32 {
     let Some(living_killer) = killer.as_living_entity() else {
         return amount;
     };
@@ -198,7 +269,7 @@ pub(crate) fn process_mob_experience(killer: &dyn Entity, killed: &dyn Entity, a
             value = apply_entity_value_effects(
                 item,
                 EnchantmentEffectComponent::MobExperience,
-                killed,
+                victim,
                 value,
             );
         });
@@ -223,6 +294,11 @@ pub(crate) fn modify_equipment_drop_chance(
     chance: f32,
 ) -> f32 {
     let context = EnchantmentDamageContext::from_damage_source(entity.entity_type(), damage_source);
+    // The equipment-drops fold has no level handle; derive the weather from the
+    // victim's level, keeping `WeatherCheck` unknown (fail-closed) when offline.
+    let weather = entity
+        .level()
+        .map(|world| WeatherSnapshot::from_world(&world));
     let mut value = chance;
     // Vanilla threads the victim's `RandomSource` through every effect.
     let mut random = WorldgenRandom::from_seed(rand::random());
@@ -234,6 +310,7 @@ pub(crate) fn modify_equipment_drop_chance(
                 slot,
                 EnchantmentTarget::Victim,
                 &context,
+                weather,
                 &mut random,
                 value,
             );
@@ -250,6 +327,7 @@ pub(crate) fn modify_equipment_drop_chance(
                     slot,
                     EnchantmentTarget::Attacker,
                     &context,
+                    weather,
                     &mut random,
                     value,
                 );
@@ -268,6 +346,7 @@ fn apply_equipment_drop_effects(
     slot: EquipmentSlot,
     enchanted: EnchantmentTarget,
     context: &EnchantmentDamageContext<'_>,
+    weather: Option<WeatherSnapshot>,
     random: &mut WorldgenRandom,
     input: f32,
 ) -> f32 {
@@ -293,7 +372,12 @@ fn apply_equipment_drop_effects(
         for effect in enchantment.effects.equipment_drops {
             if effect.enchanted != enchanted
                 || effect.affected != EnchantmentTarget::Victim
-                || !post_attack_requirements_match(effect.requirements, context, *level as i32)
+                || !post_attack_requirements_match(
+                    effect.requirements,
+                    context,
+                    *level as i32,
+                    weather,
+                )
             {
                 continue;
             }
@@ -321,6 +405,9 @@ fn apply_entity_value_effects(
         return input;
     };
 
+    let weather = entity
+        .level()
+        .map(|world| WeatherSnapshot::from_world(&world));
     let mut value = input;
     let mut random = WorldgenRandom::from_seed(rand::random());
     for (key, level) in enchantments.iter() {
@@ -333,7 +420,7 @@ fn apply_entity_value_effects(
         let level = *level as i32;
 
         for effect in enchantment.effects.value_effects(component) {
-            if !entity_requirements_match(effect.requirements, entity, level) {
+            if !entity_requirements_match(effect.requirements, entity, level, weather) {
                 continue;
             }
             value = effect.effect.process_with_random(level, &mut random, value);
@@ -583,6 +670,7 @@ fn apply_post_attack_effects(
         return false;
     };
     let damage_context = context.damage_context();
+    let weather = Some(WeatherSnapshot::from_world(world));
     let mut enchanted_item_broke = false;
 
     for (key, level) in enchantments.iter() {
@@ -604,8 +692,12 @@ fn apply_post_attack_effects(
             let Some(enchanted_entity) = context.affected_entity(enchanted_target) else {
                 continue;
             };
-            let requirements_match =
-                post_attack_requirements_match(effect.requirements, &damage_context, level);
+            let requirements_match = post_attack_requirements_match(
+                effect.requirements,
+                &damage_context,
+                level,
+                weather,
+            );
             if !requirements_match {
                 continue;
             }
@@ -650,10 +742,11 @@ pub(crate) fn on_projectile_spawned(
         })
         .collect::<Vec<_>>();
 
+    let weather = Some(WeatherSnapshot::from_world(world));
     for (enchantment, level) in enchantments {
         let level = level as i32;
         for effect in enchantment.effects.projectile_spawned {
-            if entity_requirements_match(effect.requirements, projectile, level) {
+            if entity_requirements_match(effect.requirements, projectile, level, weather) {
                 let _ = apply_entity_effect(
                     world,
                     &effect.effect,
@@ -678,6 +771,7 @@ pub(crate) fn do_post_piercing_attack_effects(world: &World, user: &dyn LivingEn
     };
 
     let item_ref = item_stack.item;
+    let weather = Some(WeatherSnapshot::from_world(world));
     for (key, level) in enchantments.iter() {
         if *level == 0 {
             continue;
@@ -691,7 +785,7 @@ pub(crate) fn do_post_piercing_attack_effects(world: &World, user: &dyn LivingEn
 
         let level = *level as i32;
         for effect in enchantment.effects.post_piercing_attack {
-            if !entity_requirements_match(effect.requirements, user, level) {
+            if !entity_requirements_match(effect.requirements, user, level, weather) {
                 continue;
             }
             if apply_post_piercing_entity_effect(world, &effect.effect, level, user) {
@@ -730,20 +824,26 @@ fn entity_effect_is_supported(effect: &EnchantmentEntityEffect) -> bool {
             .all(|effect| entity_effect_is_supported(effect)),
         EnchantmentEntityEffect::ApplyExhaustion { .. }
         | EnchantmentEntityEffect::ApplyImpulse { .. }
-        | EnchantmentEntityEffect::PlaySound { .. }
-        | EnchantmentEntityEffect::SummonEntity { .. }
         | EnchantmentEntityEffect::SpawnParticles { .. }
         | EnchantmentEntityEffect::Attribute(_)
         | EnchantmentEntityEffect::Unsupported { .. } => false,
+        EnchantmentEntityEffect::PlaySound { sounds, .. } => !sounds.is_empty(),
         EnchantmentEntityEffect::ChangeItemDamage { .. }
         | EnchantmentEntityEffect::DamageEntity { .. }
-        | EnchantmentEntityEffect::Ignite { .. } => true,
+        | EnchantmentEntityEffect::Ignite { .. }
+        | EnchantmentEntityEffect::SummonEntity { .. } => true,
         EnchantmentEntityEffect::ApplyMobEffect { to_apply, .. } => {
             matches!(to_apply, MobEffectSelection::Single(_))
         }
     }
 }
 
+/// Vanilla `EnchantmentHelper.applySupportedEntityEffect`: dispatch over every
+/// supported entity effect.
+#[expect(
+    clippy::too_many_lines,
+    reason = "single dispatch over every vanilla entity effect, mirroring one vanilla `applySupportedEntityEffect`; splitting would scatter the effect table"
+)]
 fn apply_supported_entity_effect(
     world: &World,
     effect: &EnchantmentEntityEffect,
@@ -794,6 +894,36 @@ fn apply_supported_entity_effect(
             entity.ignite_for_ticks(ticks);
             false
         }
+        EnchantmentEntityEffect::SummonEntity {
+            entity_types,
+            join_team,
+        } => {
+            summon_entity_effect(entity, entity_types, *join_team, enchanted_entity);
+            false
+        }
+        EnchantmentEntityEffect::PlaySound {
+            sounds,
+            volume,
+            pitch,
+        } => {
+            if entity.is_silent() || sounds.is_empty() {
+                return false;
+            }
+            // Vanilla `PlaySoundEffect.apply` clamps `level - 1` into the sound list.
+            let index = (level - 1).clamp(0, sounds.len() as i32 - 1) as usize;
+            let mut random = WorldgenRandom::from_seed(rand::random());
+            let volume = volume.sample(&mut random);
+            let pitch = pitch.sample(&mut random);
+            world.play_sound_at(
+                sounds[index],
+                entity.sound_source(),
+                entity.position(),
+                volume,
+                pitch,
+                None,
+            );
+            false
+        }
         EnchantmentEntityEffect::ApplyMobEffect {
             to_apply: MobEffectSelection::Single(effect),
             min_duration,
@@ -822,8 +952,6 @@ fn apply_supported_entity_effect(
         EnchantmentEntityEffect::ApplyMobEffect { .. }
         | EnchantmentEntityEffect::ApplyExhaustion { .. }
         | EnchantmentEntityEffect::ApplyImpulse { .. }
-        | EnchantmentEntityEffect::PlaySound { .. }
-        | EnchantmentEntityEffect::SummonEntity { .. }
         | EnchantmentEntityEffect::SpawnParticles { .. }
         | EnchantmentEntityEffect::Attribute(_)
         | EnchantmentEntityEffect::Unsupported { .. } => false,
@@ -947,6 +1075,58 @@ fn java_round(value: f32) -> i32 {
     (value + 0.5).floor() as i32
 }
 
+/// Vanilla `SummonEntityEffect.apply`.
+///
+/// Only `minecraft:lightning_bolt` can be spawned: Steel has no generic
+/// `EntityType.spawn` equivalent for arbitrary types, so a data set that
+/// requests anything else spawns nothing and is reported as a named limitation
+/// rather than faked. Rejects positions outside vanilla's spawn bounds and
+/// resolves the set element exactly as `HolderSet.getRandomElement` does.
+fn summon_entity_effect(
+    entity: &dyn Entity,
+    entity_types: &EntityTypeSet,
+    join_team: bool,
+    enchanted_entity: Option<&SharedEntity>,
+) {
+    let Some(world) = entity.level() else {
+        return;
+    };
+    let pos = entity.block_position();
+    if !World::is_in_spawnable_bounds(pos) {
+        return;
+    }
+    let mut random = WorldgenRandom::from_seed(rand::random());
+    let Some(entity_type) = entity_types.get_random_element(&mut random) else {
+        return;
+    };
+    if entity_type != &vanilla_entities::LIGHTNING_BOLT {
+        // Named limitation, not a silent drop.
+        log::warn!(
+            "summon_entity cannot spawn `{}` yet; only minecraft:lightning_bolt is supported",
+            entity_type.key
+        );
+        return;
+    }
+    if join_team {
+        // Vanilla adds the summoned entity to the enchanted item owner's team.
+        // Steel's scoreboard supports manual team editing but entities carry no
+        // team binding yet, so the flag is a documented no-op applied only when
+        // data asks for it (no shipped data sets it today).
+        log::debug!(
+            "summon_entity joined the summoned lightning bolt to no team: join_team is not implemented"
+        );
+    }
+    // Vanilla `LightningBolt.setCause(ServerPlayer)`.
+    let cause = enchanted_entity
+        .and_then(|owner| owner.as_player())
+        .map(Entity::uuid);
+    if let Some(bolt) = world.spawn_lightning_bolt_with_cause(pos, false, cause) {
+        // Vanilla `Entity.snapTo` the effect position, keeping the fresh bolt's yaw/pitch.
+        let (yaw, pitch) = bolt.rotation();
+        bolt.snap_to(entity.position(), yaw, pitch);
+    }
+}
+
 fn requirements_match(
     requirements: Option<&'static EnchantmentEffectRequirements>,
     context: &EnchantmentDamageContext<'_>,
@@ -962,13 +1142,14 @@ fn post_attack_requirements_match(
     requirements: Option<&'static EnchantmentEffectRequirements>,
     context: &EnchantmentDamageContext<'_>,
     level: i32,
+    weather: Option<WeatherSnapshot>,
 ) -> bool {
     let Some(requirements) = requirements else {
         return true;
     };
 
     matches!(
-        requirements_state_with_random(requirements, context, level),
+        requirements_state_with_random(requirements, context, level, weather),
         Some(true)
     )
 }
@@ -1003,13 +1184,16 @@ fn requirements_state(
         EnchantmentEffectRequirements::Inverted(term) => {
             requirements_state(term, context).map(|matched| !matched)
         }
-        EnchantmentEffectRequirements::EntityProperties { entity, predicate } => context
-            .entity_type(*entity)
-            .and_then(|entity_type| entity_predicate_matches_type(predicate, entity_type)),
+        EnchantmentEffectRequirements::EntityProperties { entity, predicate } => {
+            context.entity_type(*entity).and_then(|entity_type| {
+                entity_predicate_matches_type(predicate, entity_type, context.entity(*entity))
+            })
+        }
         EnchantmentEffectRequirements::DamageSourceProperties(predicate) => Some(
             damage_source_predicate_matches(predicate, context.damage_source),
         ),
         EnchantmentEffectRequirements::RandomChance { .. }
+        | EnchantmentEffectRequirements::WeatherCheck { .. }
         | EnchantmentEffectRequirements::MatchTool { .. }
         | EnchantmentEffectRequirements::Unsupported { .. } => None,
     }
@@ -1019,12 +1203,13 @@ fn requirements_state_with_random(
     requirements: &'static EnchantmentEffectRequirements,
     context: &EnchantmentDamageContext<'_>,
     level: i32,
+    weather: Option<WeatherSnapshot>,
 ) -> Option<bool> {
     match requirements {
         EnchantmentEffectRequirements::AllOf(terms) => {
             let mut has_unknown = false;
             for term in *terms {
-                match requirements_state_with_random(term, context, level) {
+                match requirements_state_with_random(term, context, level, weather) {
                     Some(true) => {}
                     Some(false) => return Some(false),
                     None => has_unknown = true,
@@ -1035,7 +1220,7 @@ fn requirements_state_with_random(
         EnchantmentEffectRequirements::AnyOf(terms) => {
             let mut has_unknown = false;
             for term in *terms {
-                match requirements_state_with_random(term, context, level) {
+                match requirements_state_with_random(term, context, level, weather) {
                     Some(true) => return Some(true),
                     Some(false) => {}
                     None => has_unknown = true,
@@ -1044,14 +1229,20 @@ fn requirements_state_with_random(
             if has_unknown { None } else { Some(false) }
         }
         EnchantmentEffectRequirements::Inverted(term) => {
-            requirements_state_with_random(term, context, level).map(|matched| !matched)
+            requirements_state_with_random(term, context, level, weather).map(|matched| !matched)
         }
-        EnchantmentEffectRequirements::EntityProperties { entity, predicate } => context
-            .entity_type(*entity)
-            .and_then(|entity_type| entity_predicate_matches_type(predicate, entity_type)),
+        EnchantmentEffectRequirements::EntityProperties { entity, predicate } => {
+            context.entity_type(*entity).and_then(|entity_type| {
+                entity_predicate_matches_type(predicate, entity_type, context.entity(*entity))
+            })
+        }
         EnchantmentEffectRequirements::DamageSourceProperties(predicate) => Some(
             damage_source_predicate_matches(predicate, context.damage_source),
         ),
+        EnchantmentEffectRequirements::WeatherCheck {
+            raining,
+            thundering,
+        } => weather.map(|weather| weather.matches(*raining, *thundering)),
         EnchantmentEffectRequirements::RandomChance { chance } => {
             Some(rand::random::<f32>() < chance.calculate(level))
         }
@@ -1064,13 +1255,14 @@ fn entity_requirements_match(
     requirements: Option<&'static EnchantmentEffectRequirements>,
     entity: &dyn Entity,
     level: i32,
+    weather: Option<WeatherSnapshot>,
 ) -> bool {
     let Some(requirements) = requirements else {
         return true;
     };
 
     matches!(
-        entity_requirements_state(requirements, entity, level),
+        entity_requirements_state(requirements, entity, level, weather),
         Some(true)
     )
 }
@@ -1079,12 +1271,13 @@ fn entity_requirements_state(
     requirements: &'static EnchantmentEffectRequirements,
     entity: &dyn Entity,
     level: i32,
+    weather: Option<WeatherSnapshot>,
 ) -> Option<bool> {
     match requirements {
         EnchantmentEffectRequirements::AllOf(terms) => {
             let mut has_unknown = false;
             for term in *terms {
-                match entity_requirements_state(term, entity, level) {
+                match entity_requirements_state(term, entity, level, weather) {
                     Some(true) => {}
                     Some(false) => return Some(false),
                     None => has_unknown = true,
@@ -1095,7 +1288,7 @@ fn entity_requirements_state(
         EnchantmentEffectRequirements::AnyOf(terms) => {
             let mut has_unknown = false;
             for term in *terms {
-                match entity_requirements_state(term, entity, level) {
+                match entity_requirements_state(term, entity, level, weather) {
                     Some(true) => return Some(true),
                     Some(false) => {}
                     None => has_unknown = true,
@@ -1104,12 +1297,16 @@ fn entity_requirements_state(
             if has_unknown { None } else { Some(false) }
         }
         EnchantmentEffectRequirements::Inverted(term) => {
-            entity_requirements_state(term, entity, level).map(|matched| !matched)
+            entity_requirements_state(term, entity, level, weather).map(|matched| !matched)
         }
         EnchantmentEffectRequirements::EntityProperties {
             entity: EnchantmentEntityTarget::This,
             predicate,
         } => entity_predicate_matches_entity(predicate, entity),
+        EnchantmentEffectRequirements::WeatherCheck {
+            raining,
+            thundering,
+        } => weather.map(|weather| weather.matches(*raining, *thundering)),
         EnchantmentEffectRequirements::RandomChance { chance } => {
             Some(rand::random::<f32>() < chance.calculate(level))
         }
@@ -1123,6 +1320,7 @@ fn entity_requirements_state(
 fn entity_predicate_matches_type(
     predicate: &EntityPredicate,
     entity_type: EntityTypeRef,
+    entity: Option<&dyn Entity>,
 ) -> Option<bool> {
     if predicate.unsupported
         || !matches!(predicate.vehicle, EntityVehiclePredicate::Any)
@@ -1134,6 +1332,13 @@ fn entity_predicate_matches_type(
     let type_matches = entity_type_predicate_matches(&predicate.entity_type, entity_type)?;
     if !type_matches {
         return Some(false);
+    }
+
+    if let Some(location) = &predicate.location {
+        let entity = entity?;
+        if !entity_location_predicate_matches(location, entity)? {
+            return Some(false);
+        }
     }
 
     match &predicate.type_specific {
@@ -1194,6 +1399,12 @@ fn entity_predicate_matches_entity(
         return Some(false);
     }
 
+    if let Some(location) = &predicate.location
+        && !entity_location_predicate_matches(location, entity)?
+    {
+        return Some(false);
+    }
+
     match &predicate.type_specific {
         EntityTypeSpecificPredicate::Any => Some(true),
         EntityTypeSpecificPredicate::Unsupported => None,
@@ -1220,6 +1431,26 @@ fn entity_predicate_matches_entity(
             Some(true)
         }
     }
+}
+
+/// Vanilla `EntityPredicate.test` location side: only `can_see_sky` is
+/// supported yet. A constraint that cannot be evaluated against the entity's
+/// live world stays unknown (`None`) so the fold keeps its fail-closed
+/// three-valued semantics.
+fn entity_location_predicate_matches(
+    location: &EntityLocationPredicate,
+    entity: &dyn Entity,
+) -> Option<bool> {
+    if location.unsupported {
+        return None;
+    }
+    if let Some(expected) = location.can_see_sky {
+        let world = entity.level()?;
+        if world.can_see_sky(entity.block_position()) != expected {
+            return Some(false);
+        }
+    }
+    Some(true)
 }
 
 fn entity_type_predicate_matches(
@@ -1281,13 +1512,17 @@ mod tests {
 
     impl TestLivingEntity {
         fn new(id: i32, entity_type: EntityTypeRef) -> Self {
+            Self::new_at(test_world(), id, entity_type, DVec3::ZERO)
+        }
+
+        fn new_at(
+            world: &Arc<World>,
+            id: i32,
+            entity_type: EntityTypeRef,
+            position: DVec3,
+        ) -> Self {
             Self {
-                base: EntityBase::new(
-                    id,
-                    DVec3::ZERO,
-                    entity_type.dimensions,
-                    Arc::downgrade(test_world()),
-                ),
+                base: EntityBase::new(id, position, entity_type.dimensions, Arc::downgrade(world)),
                 living_base: LivingEntityBase::new(entity_type),
                 health: SyncMutex::new(20.0),
                 broken_slots: SyncMutex::new(Vec::new()),
@@ -1701,8 +1936,196 @@ mod tests {
         let user = TestLivingEntity::new(1, &vanilla_entities::ZOMBIE);
         let effects = vanilla_enchantments::LUNGE.effects.post_piercing_attack;
         assert_eq!(effects.len(), 1);
-        assert!(entity_requirements_match(effects[0].requirements, &user, 1));
+        assert!(entity_requirements_match(
+            effects[0].requirements,
+            &user,
+            1,
+            None
+        ));
         assert!(post_piercing_entity_effect_is_supported(&effects[0].effect));
+    }
+
+    #[test]
+    fn post_attack_play_sound_fires_unless_entity_is_silent() {
+        use steel_registry::sound_event::SoundEventRef;
+        use steel_registry::sound_events;
+        use steel_utils::ChunkPos;
+        use steel_utils::value_providers::FloatProvider;
+
+        use crate::player::ResetReason;
+        use crate::player::connection::PlayerConnection;
+        use crate::test_support::{
+            TestConnection, TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk,
+        };
+
+        static SOUNDS: &[SoundEventRef] = &[&sound_events::ITEM_TRIDENT_THUNDER];
+
+        init_vanilla_registry();
+        init_behaviors();
+
+        let world_fixture = fresh_test_world("post_attack_play_sound");
+        let world = &world_fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+
+        let connection = TestConnection::default();
+        let recorded = connection.sent_handle();
+        let listener = TestPlayerBuilder::new(Arc::clone(world), "SoundListener", 1)
+            .connection(Arc::new(PlayerConnection::Other(Box::new(connection))))
+            .build();
+        assert!(world.add_player(Arc::clone(&listener), ResetReason::InitialJoin));
+        let sent_since_join = || recorded.lock().len();
+        let packets_before_action = sent_since_join();
+
+        let effect = EnchantmentEntityEffect::PlaySound {
+            sounds: SOUNDS,
+            volume: FloatProvider::Constant(5.0),
+            pitch: FloatProvider::Constant(1.0),
+        };
+        assert!(entity_effect_is_supported(&effect));
+
+        let mut item = ItemStack::empty();
+        let mut enchanted_item = EnchantedItemInUse::Stack(&mut item);
+        let source = TestLivingEntity::new_at(world, 2, &vanilla_entities::ZOMBIE, DVec3::ZERO);
+        apply_supported_entity_effect(world, &effect, 1, &source, None, &mut enchanted_item);
+        assert!(
+            sent_since_join() > packets_before_action,
+            "a non-silent entity should broadcast the enchantment sound"
+        );
+
+        let packets_before_silence = sent_since_join();
+        source.set_silent(true);
+        apply_supported_entity_effect(world, &effect, 1, &source, None, &mut enchanted_item);
+        assert_eq!(
+            sent_since_join(),
+            packets_before_silence,
+            "a silent entity should suppress the enchantment sound"
+        );
+    }
+
+    #[test]
+    fn weather_check_matches_each_flag_against_the_snapshot() {
+        static REQUIREMENTS: EnchantmentEffectRequirements =
+            EnchantmentEffectRequirements::WeatherCheck {
+                raining: None,
+                thundering: Some(true),
+            };
+
+        let snapshot = Some(WeatherSnapshot {
+            raining: false,
+            thundering: true,
+        });
+        assert!(post_attack_requirements_match(
+            Some(&REQUIREMENTS),
+            &EnchantmentDamageContext::new(
+                &vanilla_entities::TRIDENT,
+                None,
+                None,
+                &DamageSource::environment(&vanilla_damage_types::TRIDENT)
+            ),
+            1,
+            snapshot
+        ));
+        let calm = None;
+        assert!(!post_attack_requirements_match(
+            Some(&REQUIREMENTS),
+            &EnchantmentDamageContext::new(
+                &vanilla_entities::TRIDENT,
+                None,
+                None,
+                &DamageSource::environment(&vanilla_damage_types::TRIDENT)
+            ),
+            1,
+            calm
+        ));
+    }
+
+    #[test]
+    fn channeling_summons_lightning_with_thrower_as_cause_only_while_thundering() {
+        use steel_utils::ChunkPos;
+        use uuid::Uuid;
+
+        use steel_utils::Downcast as _;
+
+        use crate::entity::entities::LightningBoltEntity;
+        use crate::entity::init_entities;
+        use crate::player::Player;
+        use crate::test_support::{
+            TestEntity, TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk,
+        };
+        use steel_utils::WorldAabb;
+
+        init_vanilla_registry();
+        init_behaviors();
+        init_entities();
+
+        for thundering in [true, false] {
+            let world_fixture = fresh_test_world(if thundering {
+                "channeling_thunder"
+            } else {
+                "channeling_calm"
+            });
+            let world = &world_fixture.world;
+            insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+
+            {
+                let mut weather = world.weather.lock();
+                weather.rain_level = 1.0;
+                weather.thunder_level = if thundering { 1.0 } else { 0.0 };
+            }
+
+            let thrower =
+                TestPlayerBuilder::new(Arc::clone(world), format!("Channeler{thundering}"), 10)
+                    .uuid(Uuid::new_v4())
+                    .build();
+            let thrower_uuid = thrower.uuid();
+            let thrower_entity: SharedEntity = Arc::<Player>::clone(&thrower);
+            let victim = Arc::new(TestLivingEntity::new_at(
+                world,
+                11,
+                &vanilla_entities::ZOMBIE,
+                DVec3::new(8.0, 65.0, 8.0),
+            ));
+            let victim_entity: SharedEntity = Arc::<TestLivingEntity>::clone(&victim);
+            let trident = TestEntity::shared(
+                12,
+                DVec3::new(8.0, 65.0, 8.0),
+                Arc::downgrade(world),
+                &vanilla_entities::TRIDENT,
+            );
+            let damage_source = DamageSource::environment(&vanilla_damage_types::TRIDENT)
+                .with_causing_entity(thrower_entity)
+                .with_direct_entity(trident);
+            let context = EnchantmentPostAttackContext::new(&victim_entity, &damage_source);
+
+            let trident_stack = enchanted_item(
+                &vanilla_items::TRIDENT,
+                Identifier::vanilla_static("channeling"),
+                1,
+            );
+            do_post_attack_effects_with_item_source(
+                world,
+                victim.as_ref(),
+                &trident_stack,
+                &context,
+            );
+
+            let bounds = WorldAabb::of_size(DVec3::new(8.0, 65.0, 8.0), 4.0, 4.0, 4.0);
+            let bolts = world.get_entities_in_aabb_matching(&bounds, |entity| {
+                entity.entity_type() == &vanilla_entities::LIGHTNING_BOLT
+            });
+            if thundering {
+                assert_eq!(bolts.len(), 1, "channeling should strike during thunder");
+                let Some(bolt) = bolts[0].as_ref().downcast_ref::<LightningBoltEntity>() else {
+                    panic!("summoned entity should be a lightning bolt");
+                };
+                assert_eq!(bolt.cause(), Some(thrower_uuid));
+            } else {
+                assert!(
+                    bolts.is_empty(),
+                    "the weather_check gate must suppress channeling without thunder"
+                );
+            }
+        }
     }
 
     #[test]

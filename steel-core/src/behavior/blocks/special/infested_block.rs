@@ -94,7 +94,7 @@ impl InfestedBlock {
     /// Vanilla `InfestedBlock.isCompatibleHostBlock`: the state belongs to one of the
     /// seven regular host blocks (stone/cobblestone/stone-bricks family).
     ///
-    /// Derived from the registry-wide InfestedBlock host↔infested map in the generated
+    /// Derived from the registry-wide `InfestedBlock` host↔infested map in the generated
     /// `register_block_behaviors` table (regular hosts map to `InfestedBlock` blocks,
     /// `deepslate` maps to `InfestedRotatedPillarBlock`).
     #[must_use]
@@ -236,7 +236,6 @@ impl BlockBehavior for InfestedBlock {
 pub struct InfestedRotatedPillarBlock {
     block: BlockRef,
     /// See [`InfestedBlock::host_block`].
-    #[expect(dead_code, reason = "host mapping is fully encoded in extracted data")]
     #[json_arg(vanilla_blocks, json = "host_block")]
     host_block: BlockRef,
 }

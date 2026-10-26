@@ -90,10 +90,7 @@ pub(crate) fn calculate_transition(
         )
     } else {
         // Vanilla `NetherPortalBlock.getExitPortal`: spectators never generate a new portal.
-        if entity
-            .as_player()
-            .is_some_and(|player| player.is_spectator())
-        {
+        if entity.as_player().is_some_and(Entity::is_spectator) {
             return None;
         }
 

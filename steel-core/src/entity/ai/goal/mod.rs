@@ -45,7 +45,7 @@ mod panic_goal;
 mod pathfind_to_raid;
 mod raid_raider_goals;
 mod random_look_around;
-mod random_pos;
+pub(crate) mod random_pos;
 mod random_stand;
 mod random_stroll;
 mod random_swimming;

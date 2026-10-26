@@ -2,6 +2,7 @@
 
 use std::{error::Error, fmt, io::Cursor, sync::Arc};
 
+use parking_lot::MutexGuard;
 use simdnbt::{
     borrow::read_compound as read_borrowed_compound,
     owned::{NbtCompound, NbtTag},
@@ -9,19 +10,27 @@ use simdnbt::{
 use steel_utils::{
     Identifier,
     nbt::{NbtPath, NbtPathMutationError},
+    translations,
 };
 
 use super::super::super::{
-    brigadier::{ArgumentType, CommandNodeBuilder, CommandRedirectTarget, CommandSyntaxError},
+    brigadier::{
+        ArgumentType, CommandNodeBuilder, CommandRedirectTarget, CommandSyntaxError,
+        SuggestionsBuilder,
+    },
     execution::{
         CommandResultCallback, CommandSource, ExecutionCommandSource as _, ScoreHolderWildcard,
-        SteelArgumentType, SteelCommandContext, SteelCommandRuntime, argument, literal,
+        SteelArgumentType, SteelCommandContext, SteelCommandRuntime, SteelSuggestionContext,
+        argument, literal, suggest_list,
     },
 };
 use super::{
     condition::{invalid_block_data_source, loaded_block_position},
     objective, source_command_storage, source_scoreboard,
 };
+use crate::entity::SharedEntity;
+use crate::entity::ai::behavior::villager;
+use crate::entity::boss::{CustomBossEvent, CustomBossEvents};
 use crate::scoreboard::{ScoreHolder, Scoreboard, ScoreboardError, ScoreboardObjective};
 use crate::{block_entity::SharedBlockEntity, command::storage::CommandStorage};
 
@@ -30,20 +39,6 @@ type Builder = CommandNodeBuilder<CommandSource, SteelCommandRuntime>;
 const EXECUTE_ROOT: CommandRedirectTarget = CommandRedirectTarget::CommandRoot;
 
 pub(super) fn target(name: &'static str, store_result: bool) -> Builder {
-    // TODO: Add `bossbar` once Steel has a persistent custom-bossbar manager.
-    // Vanilla redirects `store <result|success> bossbar <id> (max|value)` into
-    // `BossBarCommands.getBossBar`/`storeValue`, i.e. the server-wide
-    // `ServerBossEvents` map. Steel has no boss-bar manager and no
-    // `ClientboundBossEventPacket`; `entity/raid` records the same gap for
-    // `ServerBossEvent`. Owner: `Bosses` lane (`entity/boss/custom.rs`).
-    // TODO: Add `entity` once a live entity can be reloaded from an owned compound.
-    // Vanilla `store <result|success> entity <target> <path> <type> <scale>` writes
-    // the NBT path on `Entity.saveWithoutId` output and then calls `Entity.load` so
-    // every command-visible field is refreshed. Steel exposes
-    // `Entity::save_additional`/`load_additional` for creation-time loading only and
-    // has no owned-compound reload bridge on a live entity (nor `setData` for
-    // `EntityDataAccessor` fields). Owner: entity lane
-    // (`entity/entity/mod.rs`, `entity/living_entity.rs`).
     literal(name)
         .then(
             literal("score").then(
@@ -53,6 +48,13 @@ pub(super) fn target(name: &'static str, store_result: bool) -> Builder {
                             store_score(context, store_result)
                         }),
                 ),
+            ),
+        )
+        .then(bossbar_source(store_result))
+        .then(
+            literal("entity").then(
+                argument("target", SteelArgumentType::entity())
+                    .then(data_path(StoreDataTarget::Entity, store_result)),
             ),
         )
         .then(
@@ -67,6 +69,69 @@ pub(super) fn target(name: &'static str, store_result: bool) -> Builder {
                     .then(data_path(StoreDataTarget::Storage, store_result)),
             ),
         )
+}
+
+/// Vanilla `addBossBarSubcommands`: `bossbar <id> (value|max)`.
+fn bossbar_source(store_result: bool) -> Builder {
+    literal("bossbar").then(
+        argument("id", SteelArgumentType::identifier_argument())
+            .suggests(
+                |context: &SteelSuggestionContext<'_, CommandSource>,
+                 builder: &mut SuggestionsBuilder<'_>| {
+                    let ids = lock_boss_events(context.source()).ids();
+                    suggest_list(builder, ids.iter().map(ToString::to_string));
+                },
+            )
+            .then(
+                literal("value").redirects_with(EXECUTE_ROOT, move |context| {
+                    store_bossbar(context, true, store_result)
+                }),
+            )
+            .then(literal("max").redirects_with(EXECUTE_ROOT, move |context| {
+                store_bossbar(context, false, store_result)
+            })),
+    )
+}
+
+fn lock_boss_events(source: &CommandSource) -> MutexGuard<'_, CustomBossEvents> {
+    source.server().custom_boss_events.lock()
+}
+
+/// Vanilla `BossBarCommands.getBossBar`.
+fn require_bossbar<'events>(
+    events: &'events CustomBossEvents,
+    id: &Identifier,
+) -> Result<&'events CustomBossEvent, CommandSyntaxError> {
+    let Some(bar) = events.get(id) else {
+        return Err(CommandSyntaxError::dynamic(
+            translations::COMMANDS_BOSSBAR_UNKNOWN
+                .message([id.to_string()])
+                .component(),
+        ));
+    };
+    Ok(bar)
+}
+
+/// Vanilla `BossBarCommands.getBossBar`, for the mutating store callback.
+fn require_bossbar_mut<'events>(
+    events: &'events mut CustomBossEvents,
+    id: &Identifier,
+) -> Result<&'events mut CustomBossEvent, CommandSyntaxError> {
+    if events.get(id).is_none() {
+        return Err(CommandSyntaxError::dynamic(
+            translations::COMMANDS_BOSSBAR_UNKNOWN
+                .message([id.to_string()])
+                .component(),
+        ));
+    }
+    let Some(bar) = events.get_mut(id) else {
+        return Err(CommandSyntaxError::dynamic(
+            translations::COMMANDS_BOSSBAR_UNKNOWN
+                .message([id.to_string()])
+                .component(),
+        ));
+    };
+    Ok(bar)
 }
 
 fn data_path(target: StoreDataTarget, store_result: bool) -> Builder {
@@ -111,6 +176,7 @@ fn data_type(
 #[derive(Clone, Copy)]
 enum StoreDataTarget {
     Block,
+    Entity,
     Storage,
 }
 
@@ -146,6 +212,7 @@ fn store_data(
 ) -> Result<CommandSource, CommandSyntaxError> {
     match target {
         StoreDataTarget::Block => store_block_data(context, data_type, store_result),
+        StoreDataTarget::Entity => store_entity_data(context, data_type, store_result),
         StoreDataTarget::Storage => store_storage_data(context, data_type, store_result),
     }
 }
@@ -168,6 +235,75 @@ fn store_block_data(
         let value = stored_value(store_result, success, result);
         if store_block_data_value(&block_entity, &path, data_type.tag(value, scale)).is_ok() {
             world.send_block_updated(position);
+        }
+    });
+    let callback = CommandResultCallback::chain(source.callback(), callback);
+    Ok(source.with_callback(callback))
+}
+
+/// Vanilla `addBossBarSubcommands` store: resolve the bar during the
+/// redirect like `BossBarCommands.getBossBar`, then store the command's
+/// result/success into its value or max.
+fn store_bossbar(
+    context: &SteelCommandContext<CommandSource>,
+    store_into_value: bool,
+    store_result: bool,
+) -> Result<CommandSource, CommandSyntaxError> {
+    let id = context.identifier("id")?.clone();
+    let source = context.source();
+    let _ = require_bossbar(&lock_boss_events(source), &id)?;
+    let server = Arc::clone(source.server());
+    let callback = CommandResultCallback::new(move |success, result| {
+        let value = stored_value(store_result, success, result);
+        let _ = store_bossbar_value(
+            &mut server.custom_boss_events.lock(),
+            &id,
+            store_into_value,
+            value,
+        );
+    });
+    let callback = CommandResultCallback::chain(source.callback(), callback);
+    Ok(source.with_callback(callback))
+}
+
+/// Vanilla `ExecuteCommand.storeValue(source, event, storeIntoValue, storeResult)`.
+fn store_bossbar_value(
+    events: &mut CustomBossEvents,
+    id: &Identifier,
+    store_into_value: bool,
+    value: i32,
+) -> Result<(), CommandSyntaxError> {
+    let bar = require_bossbar_mut(events, id)?;
+    if store_into_value {
+        bar.set_value(value);
+    } else {
+        bar.set_max(value);
+    }
+    Ok(())
+}
+
+/// Vanilla `EntityDataAccessor` store: write the scaled value into the path on
+/// the entity's compare NBT (`NbtPredicate.getEntityTagToCompare`), then reload
+/// the live entity (`EntityDataAccessor#setData`).
+fn store_entity_data(
+    context: &SteelCommandContext<CommandSource>,
+    data_type: StoreDataType,
+    store_result: bool,
+) -> Result<CommandSource, CommandSyntaxError> {
+    let entity = context.entity("target")?;
+    let path = parsed_path(context)?;
+    let scale = parsed_scale(context)?;
+    let source = context.source();
+    let callback = CommandResultCallback::new(move |success, result| {
+        let value = stored_value(store_result, success, result);
+        let applied = mutate_compound_path(
+            entity.nbt_for_data_compare(),
+            &path,
+            data_type.tag(value, scale),
+        )
+        .and_then(|data| store_entity_data_value(&entity, &data));
+        if let Err(error) = applied {
+            tracing::warn!(%error, "failed to store execute result in entity data");
         }
     });
     let callback = CommandResultCallback::chain(source.callback(), callback);
@@ -251,6 +387,25 @@ fn store_score_value(
     Ok(())
 }
 
+/// Vanilla `EntityDataAccessor#setData`: players are rejected, the live
+/// entity reloads from the mutated compound, and villagers run
+/// `Entity#postDataManipulated`.
+fn store_entity_data_value(
+    entity: &SharedEntity,
+    data: &NbtCompound,
+) -> Result<(), StoreDataMutationError> {
+    if entity.as_player().is_some() {
+        return Err(StoreDataMutationError::PlayerTarget);
+    }
+    entity
+        .load_with_owned_components(data)
+        .map_err(StoreDataMutationError::EntityReload)?;
+    if let Some(villager_entity) = villager::as_villager(entity) {
+        villager_entity.post_data_manipulated();
+    }
+    Ok(())
+}
+
 fn store_storage_data_value(
     storage: &CommandStorage,
     id: &Identifier,
@@ -296,6 +451,11 @@ enum StoreDataMutationError {
     Path(NbtPathMutationError),
     ExpectedCompoundRoot,
     InvalidWrittenNbt,
+    /// Vanilla `EntityDataAccessor#setData` rejects players:
+    /// `commands.data.entity.invalid`.
+    PlayerTarget,
+    /// The live entity failed to reload from the mutated compare NBT.
+    EntityReload(simdnbt::Error),
 }
 
 impl fmt::Display for StoreDataMutationError {
@@ -304,6 +464,8 @@ impl fmt::Display for StoreDataMutationError {
             Self::Path(error) => write!(formatter, "{error}"),
             Self::ExpectedCompoundRoot => write!(formatter, "NBT mutation replaced compound root"),
             Self::InvalidWrittenNbt => write!(formatter, "mutated NBT could not be reborrowed"),
+            Self::PlayerTarget => write!(formatter, "only non-player entities may store NBT"),
+            Self::EntityReload(error) => write!(formatter, "entity NBT reload failed: {error}"),
         }
     }
 }
@@ -312,9 +474,88 @@ impl Error for StoreDataMutationError {}
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Weak;
+
+    use glam::DVec3;
+    use steel_registry::{init_vanilla_registry, vanilla_entities};
     use steel_utils::nbt::parse_nbt_path_argument;
 
     use super::*;
+    use crate::entity::entities::PigEntity;
+
+    #[test]
+    fn bossbar_store_round_trip_covers_value_max_result_and_success() {
+        let mut events = CustomBossEvents::new();
+        let id = Identifier::from_steel("store_round_trip");
+        events.create(&id);
+
+        for (store_into_value, store_result, success, result, expected) in [
+            (true, true, true, 7, 7),
+            (true, false, true, 7, 1),
+            (true, false, false, 7, 0),
+            (false, true, true, 20, 20),
+            (false, false, false, 20, 0),
+        ] {
+            events.remove(&id);
+            events.create(&id);
+            let value = stored_value(store_result, success, result);
+            assert_eq!(value, expected);
+            store_bossbar_value(&mut events, &id, store_into_value, value)
+                .expect("known bar should store");
+            let bar = events.get(&id).expect("bar should exist");
+            if store_into_value {
+                assert_eq!(bar.value(), expected);
+            } else {
+                assert_eq!(bar.max(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn bossbar_store_rejects_unknown_bar() {
+        let events = CustomBossEvents::new();
+        let missing = Identifier::from_steel("missing_bar");
+        let expected = translations::COMMANDS_BOSSBAR_UNKNOWN
+            .message([missing.to_string()])
+            .component()
+            .to_string();
+        let Err(error) = require_bossbar(&events, &missing) else {
+            panic!("unknown bar should fail");
+        };
+        assert_eq!(error.raw_message(), expected);
+    }
+
+    #[test]
+    fn entity_store_applies_scaled_int_and_double_values() {
+        init_vanilla_registry();
+        let entity: SharedEntity = Arc::new(PigEntity::new(
+            &vanilla_entities::PIG,
+            1,
+            DVec3::ZERO,
+            Weak::new(),
+        ));
+
+        let (air_path, _) = parse_nbt_path_argument("Air").expect("Air path should parse");
+        let air = mutate_compound_path(
+            entity.nbt_for_data_compare(),
+            &air_path,
+            StoreDataType::Int.tag(3, 2.5),
+        )
+        .expect("Air path should exist");
+        store_entity_data_value(&entity, &air).expect("entity store should apply");
+        assert_eq!(entity.air_supply(), 7);
+
+        let (fall_path, _) =
+            parse_nbt_path_argument("fall_distance").expect("fall path should parse");
+        let fall = mutate_compound_path(
+            entity.nbt_for_data_compare(),
+            &fall_path,
+            StoreDataType::Double.tag(-3, 2.5),
+        )
+        .expect("fall path should exist");
+        store_entity_data_value(&entity, &fall).expect("entity store should apply");
+        assert_eq!(entity.fall_distance(), -7.5);
+    }
 
     #[test]
     fn score_store_creates_and_updates_each_holder() {

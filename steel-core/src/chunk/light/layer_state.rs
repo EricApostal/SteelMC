@@ -174,7 +174,7 @@ impl LayerLightState {
 
     /// Returns the vanilla `SectionPos.of(sectionNode)`.
     #[must_use]
-    pub fn section_from_node(section_node: i64) -> SectionPos {
+    pub const fn section_from_node(section_node: i64) -> SectionPos {
         steel_utils::PackedSectionPos::from_raw(section_node).to_section_pos()
     }
 
@@ -398,10 +398,9 @@ impl LayerLightState {
             if self
                 .columns_to_retain_queued_data_for
                 .contains(&Self::zero_node_of(node))
+                && let Some(queued) = queued
             {
-                if let Some(queued) = queued {
-                    self.queued_sections.insert(node, queued);
-                }
+                self.queued_sections.insert(node, queued);
             }
             self.changed_sections.insert(node);
         }
@@ -484,7 +483,7 @@ impl LevelLightState {
 
     /// Returns one layer's state, or `None` for a sky layer on a skyless dimension.
     #[must_use]
-    pub fn layer(&self, layer: LightLayer) -> Option<&LayerLightState> {
+    pub const fn layer(&self, layer: LightLayer) -> Option<&LayerLightState> {
         match layer {
             LightLayer::Block => Some(&self.block),
             LightLayer::Sky if self.has_skylight => Some(&self.sky),
@@ -493,7 +492,7 @@ impl LevelLightState {
     }
 
     /// Returns one layer's state mutably, or `None` for a sky layer on a skyless dimension.
-    pub fn layer_mut(&mut self, layer: LightLayer) -> Option<&mut LayerLightState> {
+    pub const fn layer_mut(&mut self, layer: LightLayer) -> Option<&mut LayerLightState> {
         match layer {
             LightLayer::Block => Some(&mut self.block),
             LightLayer::Sky if self.has_skylight => Some(&mut self.sky),
@@ -551,7 +550,7 @@ impl LevelLightState {
 
     /// Vanilla `LevelLightEngine.hasLightWork`'s storage half.
     #[must_use]
-    pub fn has_inconsistencies(&self) -> bool {
+    pub const fn has_inconsistencies(&self) -> bool {
         self.block.has_inconsistencies() || (self.has_skylight && self.sky.has_inconsistencies())
     }
 

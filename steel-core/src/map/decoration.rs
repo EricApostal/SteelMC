@@ -2,7 +2,8 @@
 //!
 //! Mirrors vanilla `MapDecoration`, `MapBanner` and `MapFrame`.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::Error as DeError};
+use steel_registry::blocks::Block;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::map_decoration_type::MapDecorationTypeRef;
 use steel_registry::{DyeColor, REGISTRY, RegistryExt as _, vanilla_map_decoration_types};
@@ -30,7 +31,7 @@ pub struct MapDecoration {
 impl MapDecoration {
     /// Creates a decoration, masking the rotation like vanilla's constructor.
     #[must_use]
-    pub fn new(
+    pub const fn new(
         decoration_type: MapDecorationTypeRef,
         x: i8,
         y: i8,
@@ -193,7 +194,7 @@ pub const fn banner_decoration_type(color: DyeColor) -> MapDecorationTypeRef {
 /// banner blocks are one registry entry per color, so the color is read from
 /// the registry key (`white_banner`, `white_wall_banner`, ...).
 #[must_use]
-pub fn banner_color(block: &steel_registry::blocks::Block) -> Option<DyeColor> {
+pub fn banner_color(block: &Block) -> Option<DyeColor> {
     let key = block.key.path.as_ref();
     let color_name = key
         .strip_suffix("_wall_banner")
@@ -211,7 +212,7 @@ impl Serialize for MapBanner {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         BannerWire {
             pos: [self.pos.x(), self.pos.y(), self.pos.z()],
-            color: self.color,
+            color: DyeColorName(self.color),
             name: self.name.clone(),
         }
         .serialize(serializer)
@@ -223,7 +224,7 @@ impl<'de> Deserialize<'de> for MapBanner {
         let wire = BannerWire::deserialize(deserializer)?;
         Ok(Self::new(
             BlockPos::new(wire.pos[0], wire.pos[1], wire.pos[2]),
-            wire.color,
+            wire.color.0,
             wire.name,
         ))
     }
@@ -234,36 +235,35 @@ impl<'de> Deserialize<'de> for MapBanner {
 #[serde(deny_unknown_fields)]
 struct BannerWire {
     pos: [i32; 3],
-    #[serde(with = "dye_color_serde", default = "default_banner_color")]
-    color: DyeColor,
+    #[serde(default = "default_banner_color")]
+    color: DyeColorName,
     #[serde(default)]
     name: Option<TextComponent>,
 }
 
-/// Serializes [`DyeColor`] using vanilla's serialized color names.
-mod dye_color_serde {
-    use serde::{Deserialize as _, Deserializer, Serializer};
+/// Serde adapter for [`DyeColor`] using vanilla's serialized color names.
+///
+/// Vanilla writes a banner color as its name (`white`, `light_blue`, ...); the
+/// registry enum has no `serde` derive of its own, so the wire field wraps it.
+struct DyeColorName(DyeColor);
 
-    use super::DyeColor;
-
-    pub(super) fn serialize<S: Serializer>(
-        color: &DyeColor,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(color.serialized_name())
-    }
-
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<DyeColor, D::Error> {
-        let name = String::deserialize(deserializer)?;
-        DyeColor::from_serialized_name(&name)
-            .ok_or_else(|| serde::de::Error::custom(format!("unknown dye color: {name}")))
+impl Serialize for DyeColorName {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialized_name().serialize(serializer)
     }
 }
 
-const fn default_banner_color() -> DyeColor {
-    DyeColor::White
+impl<'de> Deserialize<'de> for DyeColorName {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        DyeColor::from_serialized_name(&name)
+            .map(DyeColorName)
+            .ok_or_else(|| DeError::custom(format!("unknown dye color: {name}")))
+    }
+}
+
+const fn default_banner_color() -> DyeColorName {
+    DyeColorName(DyeColor::White)
 }
 
 impl Serialize for MapFrame {

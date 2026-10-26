@@ -5,5 +5,6 @@
     reason = "vanilla mirrors one class per directory (bee); renaming would churn every consumer"
 )]
 pub mod bee;
+pub(crate) mod goals;
 
 pub use bee::BeeEntity;

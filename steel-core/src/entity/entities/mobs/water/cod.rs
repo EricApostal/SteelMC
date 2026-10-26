@@ -240,6 +240,16 @@ impl Entity for CodEntity {
         self.set_from_bucket(nbt.byte("FromBucket").is_some_and(|value| value != 0));
     }
 
+    /// Vanilla `Cod.loadFromBucketTag`, restored by `MobBucketItem.spawn` on release.
+    fn load_from_bucket_tag(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
+        self.load_from_bucket_data(nbt);
+    }
+
+    /// Vanilla `Bucketable.setFromBucket`, flipped for every released mob.
+    fn set_from_bucket(&self, from_bucket: bool) {
+        CodEntity::set_from_bucket(self, from_bucket);
+    }
+
     fn as_schooling_fish(&self) -> Option<&dyn SchoolingFish> {
         Some(self)
     }

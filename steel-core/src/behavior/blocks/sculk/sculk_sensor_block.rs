@@ -22,7 +22,7 @@ use steel_registry::vanilla_entities::WARDEN;
 use steel_registry::vanilla_game_events::SCULK_SENSOR_TENDRILS_CLICKING;
 use steel_registry::{sound_events, vanilla_block_entity_types, vanilla_game_events};
 use steel_utils::types::UpdateFlags;
-use steel_utils::{BlockPos, BlockStateId, value_providers::IntProvider};
+use steel_utils::{BlockPos, BlockStateId, Downcast as _, value_providers::IntProvider};
 
 use crate::behavior::block::schedule_water_tick_if_waterlogged;
 use crate::behavior::blocks::NoteBlock;
@@ -76,6 +76,10 @@ impl SculkSensorBlock {
     /// Sound playback beyond the game event is server-side audible context handled by listeners;
     /// particle emission (`DustColorTransitionOptions.SCULK_TO_REDSTONE`) is client-local
     /// `animateTick` and has no server equivalent.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors vanilla activate signature (block/world/pos/state/power/frequency/entity/ticks)"
+    )]
     pub fn activate(
         block: BlockRef,
         world: &Arc<World>,
@@ -122,13 +126,13 @@ impl SculkSensorBlock {
         pos: BlockPos,
         vibration_frequency: i32,
     ) {
-        let Some(resonance_event) = resonance_event_by_frequency(vibration_frequency) else {
-            return;
-        };
         // Vanilla `RESONANCE_PITCH_BEND`, built from `NoteBlock.getPitchFromNote` over the
         // resonance tone map `{0,0,2,4,6,7,9,10,12,14,15,18,19,21,22,24}`.
         const RESONANCE_TONE_MAP: [u8; 16] =
             [0, 0, 2, 4, 6, 7, 9, 10, 12, 14, 15, 18, 19, 21, 22, 24];
+        let Some(resonance_event) = resonance_event_by_frequency(vibration_frequency) else {
+            return;
+        };
         let pitch = NoteBlock::pitch_from_note(
             RESONANCE_TONE_MAP[vibration_frequency.clamp(0, 15) as usize],
         );
@@ -229,7 +233,7 @@ impl SculkSensorBlock {
         world: &Arc<World>,
         pos: BlockPos,
         state: BlockStateId,
-        entity: &dyn crate::entity::Entity,
+        entity: &dyn Entity,
     ) {
         if !Self::can_activate(state) || entity.entity_type() == &WARDEN {
             return;
@@ -237,7 +241,6 @@ impl SculkSensorBlock {
         let Some(block_entity) = world.get_block_entity(pos) else {
             return;
         };
-        use steel_utils::Downcast as _;
         let probe = GameEventContext::new(None, Some(state));
         let listener = if let Some(sensor) = block_entity.downcast_ref::<SculkSensorBlockEntity>() {
             if !sensor.can_receive_vibration(world, pos, &vanilla_game_events::STEP, &probe) {
@@ -284,13 +287,7 @@ impl BlockBehavior for SculkSensorBlock {
         state
     }
 
-    fn step_on(
-        &self,
-        state: BlockStateId,
-        world: &Arc<World>,
-        pos: BlockPos,
-        entity: &dyn crate::entity::Entity,
-    ) {
+    fn step_on(&self, state: BlockStateId, world: &Arc<World>, pos: BlockPos, entity: &dyn Entity) {
         // Vanilla `stepOn` runs the vibration half first, then `super.stepOn`.
         Self::schedule_step_vibration(world, pos, state, entity);
         self.default_step_on(state, world, pos, entity);
@@ -374,7 +371,6 @@ impl BlockBehavior for SculkSensorBlock {
         pos: BlockPos,
         _direction: Direction,
     ) -> i32 {
-        use steel_utils::Downcast as _;
         // Vanilla returns the BE's last vibration frequency while active.
         if Self::phase(state) != SculkSensorPhase::Active {
             return 0;
@@ -384,7 +380,7 @@ impl BlockBehavior for SculkSensorBlock {
         };
         entity
             .downcast_ref::<SculkSensorBlockEntity>()
-            .map_or(0, |sensor| sensor.last_vibration_frequency())
+            .map_or(0, SculkSensorBlockEntity::last_vibration_frequency)
     }
 
     fn new_block_entity(
@@ -426,8 +422,8 @@ impl BlockBehavior for SculkSensorBlock {
 #[cfg(test)]
 mod tests {
     use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_game_events};
+    use steel_utils::ChunkPos;
     use steel_utils::types::UpdateFlags;
-    use steel_utils::{ChunkPos, Downcast as _};
 
     use super::*;
     use crate::behavior::init_behaviors;

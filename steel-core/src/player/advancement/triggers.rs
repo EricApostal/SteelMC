@@ -10,19 +10,29 @@
 
 use std::sync::Arc;
 
-use crate::entity::{Entity, entity_loot_ref, living_loot_equipment, loot_equipment};
+use glam::DVec3;
+
+use crate::entity::damage::DamageSource;
+use crate::entity::projectile::get_entity_hit_result;
+use crate::entity::{Entity, LivingEntity, entity_loot_ref, living_loot_equipment, loot_equipment};
+use crate::fluid::state::get_fluid_state;
 use crate::player::Player;
 use crate::world::{LevelReader as _, World};
 use steel_registry::REGISTRY;
 use steel_registry::advancement::predicates::{
     DamageView, EffectInstanceView, EntityComponentsPredicate, EntityView, EntityViewFlags,
-    LevelView, PlayerView,
+    LOOKING_AT_RANGE, LevelView, MAX_ENTITY_VIEW_DEPTH, PlayerView,
 };
 use steel_registry::advancement::triggers::{EventBase, TriggerEvent};
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::equipment::EquipmentSlot;
 use steel_registry::item_stack::ItemStack;
-use steel_utils::{BlockPos, BlockStateId, Identifier};
+use steel_registry::loot_table::EntityEquipmentSlots;
+use steel_registry::vanilla_dimension_types;
+use steel_utils::{BlockPos, BlockStateId, Identifier, WorldAabb};
+
+/// Vanilla `PlayerPredicate` wraps the view-vector pick box in a 1-block margin.
+const LOOKING_AT_MARGIN: f64 = 1.0;
 
 /// [`LevelView`] over a live [`World`] at one position.
 pub struct WorldLevelView<'a> {
@@ -66,7 +76,7 @@ impl LevelView for WorldLevelView<'_> {
     }
 
     fn fluid_at(&self, position: (f64, f64, f64)) -> Option<&Identifier> {
-        let state = crate::fluid::state::get_fluid_state(self.world, block_pos(position));
+        let state = get_fluid_state(self.world, block_pos(position));
         Some(&state.fluid_id.key)
     }
 
@@ -87,7 +97,7 @@ impl LevelView for WorldLevelView<'_> {
     }
 }
 
-fn block_pos(position: (f64, f64, f64)) -> BlockPos {
+const fn block_pos(position: (f64, f64, f64)) -> BlockPos {
     #[expect(
         clippy::cast_possible_truncation,
         reason = "vanilla BlockPos.containing truncates the world position the same way"
@@ -101,66 +111,143 @@ fn block_pos(position: (f64, f64, f64)) -> BlockPos {
 
 /// Builds the [`EntityView`] for a live entity.
 ///
-/// The returned view owns its effect list; it must outlive any event that refers
-/// to it.
+/// The whole local vehicle/passenger graph is folded into the returned view:
+/// both are owned child views (see [`steel_registry::advancement::predicates::MAX_ENTITY_VIEW_DEPTH`]),
+/// so callers keep the entity graph borrowed for no longer than the call that
+/// builds the view.
 #[must_use]
 pub fn entity_view<'a>(
-    entity: &'a dyn Entity,
+    entity: &dyn Entity,
     level: &'a dyn LevelView,
-    equipment: Option<&'a steel_registry::loot_table::EntityEquipmentSlots>,
+    equipment: Option<&EntityEquipmentSlots>,
 ) -> EntityView<'a> {
-    let loot_ref = entity_loot_ref(entity, equipment);
-    let effects = entity
-        .as_living_entity()
-        .map(|living| {
-            living
-                .active_mob_effects()
-                .into_iter()
-                .map(|effect| EffectInstanceView {
-                    effect: &effect.effect().key,
-                    amplifier: effect.amplifier(),
-                    duration: effect.duration(),
-                    ambient: effect.is_ambient(),
-                    visible: effect.is_visible(),
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    build_entity_view(entity, level, equipment.cloned(), 0, &mut Vec::new(), None)
+}
+
+/// The player-owned facts a nested view copies when it resolves to the trigger
+/// owner itself (a rider is a passenger of its own vehicle).
+struct RootPlayerFacts<'a> {
+    player_id: i32,
+    unlocked_recipes: &'a [Identifier],
+}
+
+/// Builds the view for `entity` plus its vehicle/passenger children.
+///
+/// `depth` counts nested graph levels (`0` is the entity the view is built for)
+/// and is capped at [`MAX_ENTITY_VIEW_DEPTH`]; `path` holds the entity IDs on the
+/// way down so a cyclic graph (a rider is its own vehicle's passenger) stops
+/// expanding instead of recursing forever.
+fn build_entity_view<'a>(
+    entity: &dyn Entity,
+    level: &'a dyn LevelView,
+    equipment: Option<EntityEquipmentSlots>,
+    depth: u8,
+    path: &mut Vec<i32>,
+    player_facts: Option<&RootPlayerFacts<'a>>,
+) -> EntityView<'a> {
+    let equipment = equipment.or_else(|| loot_equipment(entity));
+    let loot_ref = entity_loot_ref(entity, equipment.as_ref());
+    let effects = entity.as_living_entity().map_or_default(|living| {
+        living
+            .active_mob_effects()
+            .into_iter()
+            .map(|effect| EffectInstanceView {
+                effect: &effect.effect().key,
+                amplifier: effect.amplifier(),
+                duration: effect.duration(),
+                ambient: effect.is_ambient(),
+                visible: effect.is_visible(),
+            })
+            .collect()
+    });
     let position = entity.position();
     let is_flying = entity
         .as_player()
         .is_some_and(|player| player.abilities.lock().flying);
+    // Steel builds the graph eagerly, so a rider resolving to a player carries
+    // that player's own facts; any other player node keeps `player: None` because
+    // its recipe book and progression are not reachable from the `Entity` API.
+    let player = player_facts.and_then(|facts| {
+        (entity.id() == facts.player_id).then(|| PlayerView {
+            // Only the trigger owner's own view resolves `looking_at`; vanilla
+            // evaluates it per predicate evaluation, not per graph node.
+            looking_at: None,
+            unlocked_recipes: facts.unlocked_recipes,
+        })
+    });
+
+    let on_path = path.contains(&entity.id());
+    let (vehicle, passengers) = if on_path || depth >= MAX_ENTITY_VIEW_DEPTH {
+        (None, Vec::new())
+    } else {
+        path.push(entity.id());
+        let vehicle = entity.vehicle().map(|vehicle| {
+            Box::new(build_entity_view(
+                vehicle.as_ref(),
+                level,
+                None,
+                depth + 1,
+                path,
+                player_facts,
+            ))
+        });
+        let passengers = entity
+            .passengers()
+            .into_iter()
+            .map(|passenger| {
+                build_entity_view(
+                    passenger.as_ref(),
+                    level,
+                    None,
+                    depth + 1,
+                    path,
+                    player_facts,
+                )
+            })
+            .collect();
+        path.pop();
+        (vehicle, passengers)
+    };
+
+    // Read everything `loot_ref` exposes - including the held stack - before the
+    // owned equipment snapshot is moved into the view.
+    let held_item = loot_ref
+        .equipment
+        .map(|equipment| equipment.get(EquipmentSlot::MainHand).clone());
+    let flags = EntityViewFlags {
+        is_on_ground: entity.on_ground(),
+        is_on_fire: loot_ref.flags.is_on_fire,
+        is_sneaking: loot_ref.flags.is_sneaking,
+        is_sprinting: loot_ref.flags.is_sprinting,
+        is_swimming: loot_ref.flags.is_swimming,
+        is_flying,
+        is_baby: loot_ref.flags.is_baby,
+    };
+    let components = EntityComponentsPredicate {
+        cat_variant: None,
+        frog_variant: None,
+        wolf_variant: None,
+        sheep_color: loot_ref.sheep_color,
+        sheep_sheared: loot_ref.sheep_sheared,
+        chicken_variant: loot_ref.chicken_variant.cloned(),
+    };
+
     EntityView {
-        entity_type: loot_ref.entity_type,
+        // Registry entity types live for the whole process, so the view keeps the
+        // type key without borrowing the entity it was built from.
+        entity_type: Some(&entity.entity_type().key),
         position: (position.x, position.y, position.z),
         level,
         stepping_on: None,
-        flags: EntityViewFlags {
-            is_on_ground: entity.on_ground(),
-            is_on_fire: loot_ref.flags.is_on_fire,
-            is_sneaking: loot_ref.flags.is_sneaking,
-            is_sprinting: loot_ref.flags.is_sprinting,
-            is_swimming: loot_ref.flags.is_swimming,
-            is_flying,
-            is_baby: loot_ref.flags.is_baby,
-        },
+        flags,
         equipment,
         effects,
-        components: EntityComponentsPredicate {
-            cat_variant: None,
-            frog_variant: None,
-            wolf_variant: None,
-            sheep_color: loot_ref.sheep_color,
-            sheep_sheared: loot_ref.sheep_sheared,
-            chicken_variant: loot_ref.chicken_variant.cloned(),
-        },
-        vehicle: None,
-        passenger: None,
-        player: None,
+        components,
+        vehicle,
+        passengers,
+        player,
         lightning: None,
-        held_item: loot_ref
-            .equipment
-            .map(|equipment| equipment.get(EquipmentSlot::MainHand)),
+        held_item,
     }
 }
 
@@ -174,15 +261,65 @@ pub fn entity_view<'a>(
 pub fn player_view<'a>(
     player: &'a Player,
     level: &'a dyn LevelView,
-    equipment: Option<&'a steel_registry::loot_table::EntityEquipmentSlots>,
+    equipment: Option<&EntityEquipmentSlots>,
     unlocked_recipes: &'a [Identifier],
 ) -> EntityView<'a> {
-    let mut view = entity_view(player, level, equipment);
+    let facts = RootPlayerFacts {
+        player_id: player.id(),
+        unlocked_recipes,
+    };
+    let mut view = build_entity_view(
+        player,
+        level,
+        equipment.cloned(),
+        0,
+        &mut Vec::new(),
+        Some(&facts),
+    );
     view.player = Some(PlayerView {
-        looking_at: None,
+        looking_at: looking_at_view(player, level).map(Box::new),
         unlocked_recipes,
     });
     view
+}
+
+/// Resolves the entity the player's view vector lands on, like vanilla
+/// `PlayerPredicate`'s `lookingAt` term.
+///
+/// Vanilla `PlayerPredicate.matches` casts from the eye along the view vector for
+/// `LOOKING_AT_RANGE` blocks, takes the nearest non-spectator entity whose box the
+/// segment enters (vanilla `ProjectileUtil.getEntityHitResult`, no block clip),
+/// and then requires both the `looking_at` predicate and
+/// `ServerPlayer.hasLineOfSight` to hold. Steel resolves the sight test while
+/// building the view, which is the same conjunction in the other order.
+fn looking_at_view<'a>(player: &Player, level: &'a dyn LevelView) -> Option<EntityView<'a>> {
+    let world = player.level()?;
+    let position = player.position();
+    let from = DVec3::new(position.x, player.get_eye_y(), position.z);
+    let to = from + player.look_angle() * LOOKING_AT_RANGE;
+    let search_box =
+        WorldAabb::new(from.x, from.y, from.z, to.x, to.y, to.z).inflate(LOOKING_AT_MARGIN);
+    let player_id = player.id();
+    let hit = get_entity_hit_result(
+        &world,
+        from,
+        to,
+        search_box,
+        // Vanilla passes a `0.0` entity margin from the predicate.
+        0.0,
+        |entity| entity.id() != player_id && !entity.is_spectator(),
+    )?;
+    if !LivingEntity::has_line_of_sight(player, hit.entity.as_ref()) {
+        return None;
+    }
+    Some(build_entity_view(
+        hit.entity.as_ref(),
+        level,
+        None,
+        0,
+        &mut Vec::new(),
+        None,
+    ))
 }
 
 /// Raises `trigger` for `player` with `event`, granting every matching criterion.
@@ -283,6 +420,30 @@ pub fn raise_started_riding(player: &Player) -> usize {
         player,
         &Identifier::vanilla_static("started_riding"),
         &TriggerEvent::StartRiding(event_base(&view, &level, origin)),
+    )
+}
+
+/// Raises `minecraft:using_item` (`CriteriaTriggers.USING_ITEM`).
+///
+/// Vanilla `ServerPlayer.updateUsingItem` fires this once per tick while
+/// `updatingUsingItem` still sees the use item in hand, before the use tick
+/// itself.
+pub fn raise_using_item(player: &Player, item: &ItemStack) -> usize {
+    let Some(world) = player.level() else {
+        return 0;
+    };
+    let origin = player.block_position();
+    let level = WorldLevelView::new(&world, origin);
+    let equipment = living_loot_equipment(player);
+    let known = player.recipe_book().unlocked_identifiers().to_vec();
+    let view = player_view(player, &level, Some(&equipment), &known);
+    raise(
+        player,
+        &Identifier::vanilla_static("using_item"),
+        &TriggerEvent::UsingItem {
+            base: event_base(&view, &level, origin),
+            item,
+        },
     )
 }
 
@@ -409,9 +570,9 @@ pub fn raise_hero_of_the_village(
 /// zeroes. The hurt triggers (`entity_hurt_player`/`player_hurt_entity`) pass the
 /// dealt (`original`) and taken (`actual`) amounts vanilla forwards.
 fn damage_view<'a>(
-    source: &'a crate::entity::damage::DamageSource,
-    source_view: &'a Option<EntityView<'a>>,
-    direct_view: &'a Option<EntityView<'a>>,
+    source: &'a DamageSource,
+    source_view: Option<&'a EntityView<'a>>,
+    direct_view: Option<&'a EntityView<'a>>,
     original: f32,
     actual: f32,
     blocked: bool,
@@ -420,8 +581,8 @@ fn damage_view<'a>(
         original,
         actual,
         blocked,
-        source_entity: source_view.as_ref(),
-        direct_entity: direct_view.as_ref(),
+        source_entity: source_view,
+        direct_entity: direct_view,
         type_key: Some(&source.damage_type.key),
         is_direct: source.is_direct(),
     }
@@ -434,7 +595,7 @@ fn damage_view<'a>(
 pub fn raise_player_killed_entity(
     player: &Player,
     victim: &dyn Entity,
-    killing_blow: &crate::entity::damage::DamageSource,
+    killing_blow: &DamageSource,
 ) -> usize {
     let Some(world) = player.level() else {
         return 0;
@@ -461,7 +622,14 @@ pub fn raise_player_killed_entity(
         .direct_entity()
         .map(|entity| entity_view(&**entity, &level, direct_equipment.as_ref()));
 
-    let damage = damage_view(killing_blow, &source_view, &direct_view, 0.0, 0.0, false);
+    let damage = damage_view(
+        killing_blow,
+        source_view.as_ref(),
+        direct_view.as_ref(),
+        0.0,
+        0.0,
+        false,
+    );
     raise(
         player,
         &Identifier::vanilla_static("player_killed_entity"),
@@ -481,7 +649,7 @@ pub fn raise_player_killed_entity(
 pub fn raise_entity_killed_player(
     player: &Player,
     killer: &dyn Entity,
-    killing_blow: &crate::entity::damage::DamageSource,
+    killing_blow: &DamageSource,
 ) -> usize {
     let Some(world) = player.level() else {
         return 0;
@@ -508,7 +676,14 @@ pub fn raise_entity_killed_player(
         .direct_entity()
         .map(|entity| entity_view(&**entity, &level, direct_equipment.as_ref()));
 
-    let damage = damage_view(killing_blow, &source_view, &direct_view, 0.0, 0.0, false);
+    let damage = damage_view(
+        killing_blow,
+        source_view.as_ref(),
+        direct_view.as_ref(),
+        0.0,
+        0.0,
+        false,
+    );
     raise(
         player,
         &Identifier::vanilla_static("entity_killed_player"),
@@ -528,7 +703,7 @@ pub fn raise_entity_killed_player(
 /// blocked by an item.
 pub fn raise_entity_hurt_player(
     player: &Player,
-    source: &crate::entity::damage::DamageSource,
+    source: &DamageSource,
     original: f32,
     actual: f32,
     blocked: bool,
@@ -558,8 +733,8 @@ pub fn raise_entity_hurt_player(
 
     let damage = damage_view(
         source,
-        &source_view,
-        &direct_view,
+        source_view.as_ref(),
+        direct_view.as_ref(),
         original,
         actual,
         blocked,
@@ -579,7 +754,7 @@ pub fn raise_entity_hurt_player(
 pub fn raise_player_hurt_entity(
     player: &Player,
     victim: &dyn Entity,
-    source: &crate::entity::damage::DamageSource,
+    source: &DamageSource,
     original: f32,
     actual: f32,
     blocked: bool,
@@ -611,8 +786,8 @@ pub fn raise_player_hurt_entity(
 
     let damage = damage_view(
         source,
-        &source_view,
-        &direct_view,
+        source_view.as_ref(),
+        direct_view.as_ref(),
         original,
         actual,
         blocked,
@@ -674,6 +849,63 @@ pub fn raise_changed_dimension(player: &Player, from: &Identifier, to: &Identifi
             to,
         },
     )
+}
+
+/// Raises `minecraft:nether_travel` (`CriteriaTriggers.NETHER_TRAVEL`).
+///
+/// Vanilla `ServerPlayer.triggerDimensionChangeTriggers` fires this when the
+/// player returns from the Nether to the Overworld, with the position it entered
+/// the Nether at; `DistanceTriggerInstance` measures the player's position in the
+/// new level against it.
+pub fn raise_nether_travel(player: &Player, entered_position: DVec3) -> usize {
+    let Some(world) = player.level() else {
+        return 0;
+    };
+    let origin = player.block_position();
+    let level = WorldLevelView::new(&world, origin);
+    let equipment = living_loot_equipment(player);
+    let known = player.recipe_book().unlocked_identifiers().to_vec();
+    let view = player_view(player, &level, Some(&equipment), &known);
+    raise(
+        player,
+        &Identifier::vanilla_static("nether_travel"),
+        &TriggerEvent::Distance {
+            base: event_base(&view, &level, origin),
+            start: (entered_position.x, entered_position.y, entered_position.z),
+        },
+    )
+}
+
+/// Vanilla `ServerPlayer.triggerDimensionChangeTriggers(oldLevel)`.
+///
+/// Fires `changed_dimension` for the transition, then — for a Nether-to-Overworld
+/// return — `nether_travel` from the recorded entry position, and finally drops
+/// that position unless the player is still in the Nether. The caller must run
+/// this once the player has joined the new level, because the `nether_travel`
+/// distance is measured from the player's position there; `Player::change_world_within_domain`
+/// is that call site and also records the Overworld position an entry into the
+/// Nether leaves from.
+///
+/// Vanilla compares level keys; the Steel equivalent of `Level.OVERWORLD` and
+/// `Level.NETHER` is the world's dimension type, the same mapping
+/// `FireBlock::in_portal_world` uses.
+///
+/// Returns the number of criteria newly granted by both triggers.
+pub fn raise_dimension_change_triggers(player: &Player, old_world: &World) -> usize {
+    let Some(new_world) = player.level() else {
+        return 0;
+    };
+    let mut granted = raise_changed_dimension(player, &old_world.key, &new_world.key);
+    if old_world.dimension_type == &vanilla_dimension_types::THE_NETHER
+        && new_world.dimension_type == &vanilla_dimension_types::OVERWORLD
+        && let Some(entered_position) = player.entered_nether_position()
+    {
+        granted += raise_nether_travel(player, entered_position);
+    }
+    if new_world.dimension_type != &vanilla_dimension_types::THE_NETHER {
+        player.set_entered_nether_position(None);
+    }
+    granted
 }
 
 /// Raises `minecraft:slept_in_bed` (`CriteriaTriggers.SLEPT_IN_BED`).
@@ -763,17 +995,23 @@ mod tests {
     use std::sync::Arc;
 
     use glam::DVec3;
+    use steel_registry::entity_type::EntityTypeRef;
     use steel_registry::item_stack::ItemStack;
     use steel_registry::{
-        REGISTRY, init_vanilla_registry, vanilla_damage_types, vanilla_entities, vanilla_items,
+        REGISTRY, init_vanilla_registry, vanilla_damage_types, vanilla_dimension_types,
+        vanilla_entities, vanilla_items,
     };
     use steel_utils::Identifier;
 
     use super::*;
     use crate::behavior::advancement_hooks::test_support::criterion_granted;
+    use crate::entity::SharedEntity;
     use crate::entity::damage::DamageSource;
     use crate::player::Player;
-    use crate::test_support::{TestEntity, TestPlayerBuilder, TestWorld, fresh_test_world};
+    use crate::test_support::{
+        TestEntity, TestPlayerBuilder, TestWorld, fresh_test_world,
+        fresh_test_world_with_dimension_type,
+    };
 
     const SPAWN: DVec3 = DVec3::new(8.0, 64.0, 8.0);
 
@@ -791,11 +1029,7 @@ mod tests {
     }
 
     /// A throwaway entity of `entity_type` at the world spawn.
-    fn entity(
-        world: &Arc<World>,
-        id: i32,
-        entity_type: steel_registry::entity_type::EntityTypeRef,
-    ) -> crate::entity::SharedEntity {
+    fn entity(world: &Arc<World>, id: i32, entity_type: EntityTypeRef) -> SharedEntity {
         TestEntity::shared(id, SPAWN, Arc::downgrade(world), entity_type)
     }
 
@@ -823,11 +1057,11 @@ mod tests {
         let level = WorldLevelView::new(&world, origin);
         raise_tick(&player, &level, origin);
         raise_location(&player, &world, origin);
-        assert!(
-            !REGISTRY
+        assert_ne!(
+            REGISTRY
                 .advancements
-                .criteria_for_trigger(&Identifier::vanilla_static("location"))
-                .is_empty()
+                .criteria_for_trigger(&Identifier::vanilla_static("location")),
+            []
         );
     }
 
@@ -945,5 +1179,70 @@ mod tests {
             "adventure/shoot_arrow",
             "shot_arrow"
         ));
+    }
+
+    /// Vanilla `ServerPlayer.triggerDimensionChangeTriggers`: returning to the
+    /// Overworld from the Nether fires `nether_travel` with the position recorded
+    /// when the player entered the Nether, and `nether/fast_travel` needs 7000
+    /// horizontal blocks between the two.
+    #[test]
+    fn nether_travel_grants_fast_travel_for_the_recorded_entry_position() {
+        init_vanilla_registry();
+        let overworld = fresh_test_world_with_dimension_type(
+            "triggers_nether_travel",
+            "overworld",
+            &vanilla_dimension_types::OVERWORLD,
+        );
+        let nether = fresh_test_world_with_dimension_type(
+            "triggers_nether_travel",
+            "the_nether",
+            &vanilla_dimension_types::THE_NETHER,
+        );
+        let player = TestPlayerBuilder::new(Arc::clone(&overworld.world), "TrigTester", 1).build();
+        let entered = player.position() - DVec3::new(7100.0, 0.0, 0.0);
+        player.set_entered_nether_position(Some(entered));
+
+        raise_dimension_change_triggers(&player, &nether.world);
+
+        assert!(criterion_granted(
+            &player,
+            "nether/fast_travel",
+            "travelled"
+        ));
+        // Vanilla drops the entry position unless the destination is the Nether.
+        assert_eq!(player.entered_nether_position(), None);
+    }
+
+    /// The short-return case and the "still in the Nether" retention rule.
+    #[test]
+    fn nether_travel_ignores_a_short_return_and_keeps_the_entry_position_in_the_nether() {
+        init_vanilla_registry();
+        let overworld = fresh_test_world_with_dimension_type(
+            "triggers_nether_travel_short",
+            "overworld",
+            &vanilla_dimension_types::OVERWORLD,
+        );
+        let nether = fresh_test_world_with_dimension_type(
+            "triggers_nether_travel_short",
+            "the_nether",
+            &vanilla_dimension_types::THE_NETHER,
+        );
+
+        let returning =
+            TestPlayerBuilder::new(Arc::clone(&overworld.world), "TrigTester", 1).build();
+        returning
+            .set_entered_nether_position(Some(returning.position() - DVec3::new(16.0, 0.0, 0.0)));
+        assert_eq!(raise_nether_travel(&returning, returning.position()), 0);
+        assert!(!criterion_granted(
+            &returning,
+            "nether/fast_travel",
+            "travelled"
+        ));
+
+        let inside = TestPlayerBuilder::new(Arc::clone(&nether.world), "TrigTester", 2).build();
+        let entered = inside.position() - DVec3::new(7100.0, 0.0, 0.0);
+        inside.set_entered_nether_position(Some(entered));
+        raise_dimension_change_triggers(&inside, &overworld.world);
+        assert_eq!(inside.entered_nether_position(), Some(entered));
     }
 }

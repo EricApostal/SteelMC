@@ -170,11 +170,11 @@ fn steel_main() {
             return;
         }
     };
-    if let Some(path) = &args.pid_file {
-        if let Err(error) = write_pid_file(path) {
-            eprintln!("Failed to write pid file {}: {error}", path.display());
-            return;
-        }
+    if let Some(path) = &args.pid_file
+        && let Err(error) = write_pid_file(path)
+    {
+        eprintln!("Failed to write pid file {}: {error}", path.display());
+        return;
     }
 
     // Load config once at startup
@@ -195,11 +195,7 @@ fn steel_main() {
     // the operator agrees.
     let eula = eula::Eula::load(Path::new(EULA_PATH));
     if args.init_settings {
-        println!(
-            "Initialized '{}' and '{}'",
-            display_path(Path::new(CONFIG_PATH)),
-            display_path(Path::new(EULA_PATH))
-        );
+        print_init_settings();
         return;
     }
 
@@ -234,6 +230,13 @@ fn steel_main() {
     drop(chunk_runtime);
 }
 
+/// Boot sequence in vanilla's `Main.main` order: panic hook, logger, datafixer
+/// check, migrations and backup, then networking/JMX. Kept in one function to
+/// match that order step for step instead of threading boot state between helpers.
+#[expect(
+    clippy::too_many_lines,
+    reason = "boot sequence mirrors vanilla Main.main step for step in one read-through"
+)]
 async fn main_async(
     chunk_runtime: Arc<Runtime>,
     steel_config: config::SteelConfig,
@@ -491,6 +494,21 @@ fn apply_startup_overrides(
 /// Writes the process id to `path`, like vanilla `Main#writePidFile`.
 fn write_pid_file(path: &Path) -> io::Result<()> {
     fs::write(path, process::id().to_string())
+}
+
+/// Prints the `--init-settings` confirmation. Operators run this to stamp out the
+/// default config and read what was created; that is the binary's stdout answer,
+/// not log spam.
+#[expect(
+    clippy::print_stdout,
+    reason = "user-facing CLI confirmation for --init-settings, shown by design"
+)]
+fn print_init_settings() {
+    println!(
+        "Initialized '{}' and '{}'",
+        display_path(Path::new(CONFIG_PATH)),
+        display_path(Path::new(EULA_PATH))
+    );
 }
 
 /// Absolute display path for startup messages (vanilla `Path#toAbsolutePath`).

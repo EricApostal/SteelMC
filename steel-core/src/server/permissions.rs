@@ -132,7 +132,7 @@ impl Server {
     /// Vanilla `MinecraftServer.kickUnlistedPlayers`.
     ///
     /// Only runs when the allowlist is both enabled and enforced.
-    pub async fn kick_unlisted_players(self: &Arc<Self>) {
+    pub fn kick_unlisted_players(self: &Arc<Self>) {
         if !self.allowlist().is_enabled() || !self.config.enforce_whitelist {
             return;
         }
@@ -146,9 +146,7 @@ impl Server {
                 "Kicking {} because they are not allow-listed",
                 player.gameprofile.name()
             );
-            player.disconnect(
-                steel_utils::translations::MULTIPLAYER_DISCONNECT_NOT_WHITELISTED.msg(),
-            );
+            player.disconnect(translations::MULTIPLAYER_DISCONNECT_NOT_WHITELISTED.msg());
         }
     }
 
