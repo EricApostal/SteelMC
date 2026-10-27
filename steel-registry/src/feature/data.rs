@@ -133,11 +133,11 @@ pub enum ConfiguredFeatureKind {
 }
 
 /// Block refs decoded from vanilla's single-or-list codec shape at build time.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockRefList(pub Vec<BlockRef>);
 
 /// Fluid refs decoded from vanilla's single-or-list codec shape at build time.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FluidRefList(pub Vec<FluidRef>);
 
 /// Block holder set decoded from vanilla's holder-set codec shape at build time.
@@ -148,7 +148,7 @@ pub enum BlockHolderSet {
 }
 
 /// Block state data emitted by the feature generator without baking a state id.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockStateData {
     /// Referenced block entry.
     pub block: BlockRef,
@@ -169,7 +169,7 @@ pub struct FluidStateData {
 pub type Offset = IVec3;
 
 /// Block predicates used by placement modifiers and feature configs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockPredicate {
     True,
     AllOf {
@@ -208,6 +208,11 @@ pub enum BlockPredicate {
         offset: Offset,
     },
     InsideWorldBounds {
+        offset: Offset,
+    },
+    /// Vanilla `UnobstructedPredicate`: the full-block box at `offset` is free
+    /// of colliding blocks and entities (`LevelAccessor.isUnobstructed`).
+    Unobstructed {
         offset: Offset,
     },
     HeightRange {

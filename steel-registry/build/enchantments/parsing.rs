@@ -1,7 +1,8 @@
 use super::{
-    DamageSourcePredicateJson, DamageSourceTagPredicateJson, EnchantmentTargetJson,
-    EntityEffectJson, EntityFlagsPredicateJson, EntityLocationPredicateJson, EntityPredicateJson,
-    EntityTargetJson, EntityTypePredicateJson, EntityTypeSetJson, EntityTypeSpecificPredicateJson,
+    BlockPredicateJson, BlockStateShorthandJson, DamageSourcePredicateJson,
+    DamageSourceTagPredicateJson, EnchantmentTargetJson, EntityEffectJson,
+    EntityFlagsPredicateJson, EntityLocationPredicateJson, EntityPredicateJson, EntityTargetJson,
+    EntityTypePredicateJson, EntityTypeSetJson, EntityTypeSpecificPredicateJson,
     EntityVehiclePredicateJson, FloatProviderJson, GameType, Ident, Identifier, ItemHolderSetJson,
     LevelBasedValueJson, MobEffectSelectionJson, ParticlePositionSourceJson,
     ParticleVelocitySourceJson, PlayerPredicateJson, RequirementsJson, Span, TokenStream, quote,
@@ -219,6 +220,47 @@ pub(super) fn parse_entity_effect_json(
                 duration: parse_level_based_value_json(object_field(object, "duration")?)?,
             })
         }
+        "minecraft:replace_disk" => {
+            for key in object.keys() {
+                if !matches!(
+                    key.as_str(),
+                    "type"
+                        | "radius"
+                        | "height"
+                        | "offset"
+                        | "predicate"
+                        | "block_state"
+                        | "trigger_game_event"
+                ) {
+                    return Err(format!("unsupported replace_disk effect field `{key}`"));
+                }
+            }
+            Ok(EntityEffectJson::ReplaceDisk {
+                radius: parse_level_based_value_json(object_field(object, "radius")?)?,
+                height: parse_level_based_value_json(object_field(object, "height")?)?,
+                offset: match object.get("offset") {
+                    Some(value) => parse_vec3i_json(value)?,
+                    None => [0, 0, 0],
+                },
+                predicate: match object.get("predicate") {
+                    Some(value) => Some(parse_block_predicate_json(value)?),
+                    None => None,
+                },
+                block_state: parse_block_state_shorthand_json(object_field(
+                    object,
+                    "block_state",
+                )?)?,
+                trigger_game_event: match object.get("trigger_game_event") {
+                    Some(value) => {
+                        let raw = value.as_str().ok_or_else(|| {
+                            "replace_disk `trigger_game_event` must be a string".to_owned()
+                        })?;
+                        Some(parse_identifier(raw)?)
+                    }
+                    None => None,
+                },
+            })
+        }
         "minecraft:apply_mob_effect" => {
             for key in object.keys() {
                 if !matches!(
@@ -396,6 +438,170 @@ pub(super) fn parse_vec3_json(value: &serde_json::Value) -> Result<[f64; 3], Str
     ])
 }
 
+/// Parses a vanilla `Vec3i` (`offset`) as three whole-number components,
+/// mirroring `Vec3i.CODEC`'s integer stream.
+pub(super) fn parse_vec3i_json(value: &serde_json::Value) -> Result<[i32; 3], String> {
+    let Some(values) = value.as_array() else {
+        return Err("vec3i must be an array".to_owned());
+    };
+    let [x, y, z] = values.as_slice() else {
+        return Err("vec3i must have exactly three values".to_owned());
+    };
+
+    let component = |component: &serde_json::Value, axis: char| {
+        component
+            .as_i64()
+            .and_then(|value| i32::try_from(value).ok())
+            .ok_or_else(|| format!("vec3i {axis} must be a whole number in i32 range"))
+    };
+    Ok([component(x, 'x')?, component(y, 'y')?, component(z, 'z')?])
+}
+
+/// Parses a vanilla `HolderSet` restricted to direct ids (a single id or an id
+/// list). Tag references are rejected: the runtime holder-set data these feed
+/// only carries direct refs.
+pub(super) fn parse_identifier_list_json(
+    value: &serde_json::Value,
+    field: &str,
+) -> Result<Vec<Identifier>, String> {
+    let raw = match value {
+        serde_json::Value::String(raw) => vec![raw.as_str()],
+        serde_json::Value::Array(values) => values
+            .iter()
+            .map(|entry| {
+                entry
+                    .as_str()
+                    .ok_or_else(|| format!("`{field}` entries must be strings"))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => return Err(format!("`{field}` must be a string or string array")),
+    };
+
+    raw.into_iter()
+        .map(|entry| {
+            if entry.starts_with('#') {
+                return Err(format!(
+                    "`{field}` tag holder sets are not supported for enchantment predicates"
+                ));
+            }
+            parse_identifier(entry)
+        })
+        .collect()
+}
+
+/// Parses the inline `{"id": ..., "properties": {...}}` block-state shorthand
+/// used by `ReplaceDisk.block_state`.
+pub(super) fn parse_block_state_shorthand_json(
+    value: &serde_json::Value,
+) -> Result<BlockStateShorthandJson, String> {
+    let Some(object) = value.as_object() else {
+        return Err("replace_disk `block_state` must be an inline block state object".to_owned());
+    };
+    for key in object.keys() {
+        if key != "id" && key != "properties" {
+            return Err(format!("unsupported block state field `{key}`"));
+        }
+    }
+    let Some(raw) = object.get("id").and_then(serde_json::Value::as_str) else {
+        return Err("block state `id` must be a string".to_owned());
+    };
+    let name = parse_identifier(raw)?;
+    let mut properties = Vec::new();
+    if let Some(raw) = object.get("properties") {
+        let Some(object) = raw.as_object() else {
+            return Err("block state `properties` must be an object".to_owned());
+        };
+        for (key, value) in object {
+            let Some(value) = value.as_str() else {
+                return Err(format!("block state property `{key}` must be a string"));
+            };
+            properties.push((key.clone(), value.to_owned()));
+        }
+    }
+
+    Ok(BlockStateShorthandJson { name, properties })
+}
+
+/// Parses a vanilla block predicate used by `ReplaceDisk.predicate`.
+/// Only the types vanilla enchantment data uses are accepted.
+pub(super) fn parse_block_predicate_json(
+    value: &serde_json::Value,
+) -> Result<BlockPredicateJson, String> {
+    let Some(object) = value.as_object() else {
+        return Err("block predicate must be an object".to_owned());
+    };
+    let predicate_type = string_field(object, "type")?;
+
+    match predicate_type.as_str() {
+        "minecraft:all_of" => {
+            let predicates = object_field(object, "predicates")?
+                .as_array()
+                .ok_or_else(|| "all_of block predicate `predicates` must be an array".to_owned())?
+                .iter()
+                .map(parse_block_predicate_json)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(BlockPredicateJson::AllOf(predicates))
+        }
+        "minecraft:matching_block_tag" => {
+            for key in object.keys() {
+                if key != "type" && key != "tag" && key != "offset" {
+                    return Err(format!("unsupported matching_block_tag field `{key}`"));
+                }
+            }
+            Ok(BlockPredicateJson::MatchingBlockTag {
+                tag: parse_identifier(&string_field(object, "tag")?)?,
+                offset: parse_block_predicate_offset(object)?,
+            })
+        }
+        "minecraft:matching_blocks" => {
+            for key in object.keys() {
+                if key != "type" && key != "blocks" && key != "offset" {
+                    return Err(format!("unsupported matching_blocks field `{key}`"));
+                }
+            }
+            Ok(BlockPredicateJson::MatchingBlocks {
+                blocks: parse_identifier_list_json(object_field(object, "blocks")?, "blocks")?,
+                offset: parse_block_predicate_offset(object)?,
+            })
+        }
+        "minecraft:matching_fluids" => {
+            for key in object.keys() {
+                if key != "type" && key != "fluids" && key != "offset" {
+                    return Err(format!("unsupported matching_fluids field `{key}`"));
+                }
+            }
+            Ok(BlockPredicateJson::MatchingFluids {
+                fluids: parse_identifier_list_json(object_field(object, "fluids")?, "fluids")?,
+                offset: parse_block_predicate_offset(object)?,
+            })
+        }
+        "minecraft:unobstructed" => {
+            for key in object.keys() {
+                if key != "type" && key != "offset" {
+                    return Err(format!("unsupported unobstructed field `{key}`"));
+                }
+            }
+            Ok(BlockPredicateJson::Unobstructed {
+                offset: parse_block_predicate_offset(object)?,
+            })
+        }
+        other => Err(format!(
+            "unsupported block predicate type `{other}` for enchantment effects"
+        )),
+    }
+}
+
+/// Reads a state-testing predicate `offset`, defaulting to zero like vanilla's
+/// `stateTestingCodec` (`Vec3i.CODEC.optionalFieldOf("offset", Vec3i.ZERO)`).
+fn parse_block_predicate_offset(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Result<[i32; 3], String> {
+    match object.get("offset") {
+        Some(value) => parse_vec3i_json(value),
+        None => Ok([0, 0, 0]),
+    }
+}
+
 pub(super) fn parse_sound_list_json(value: &serde_json::Value) -> Result<Vec<Identifier>, String> {
     match value {
         serde_json::Value::String(raw) => Ok(vec![parse_identifier(raw)?]),
@@ -529,13 +735,15 @@ pub(super) fn parse_entity_flags_predicate_json(
     };
     let unsupported = object
         .keys()
-        .any(|key| key != "is_fall_flying" && key != "is_in_water");
+        .any(|key| !(key == "is_fall_flying" || key == "is_in_water" || key == "is_on_ground"));
     let is_fall_flying = optional_bool_field(object, "is_fall_flying")?;
     let is_in_water = optional_bool_field(object, "is_in_water")?;
+    let is_on_ground = optional_bool_field(object, "is_on_ground")?;
 
     Ok(EntityFlagsPredicateJson {
         is_fall_flying,
         is_in_water,
+        is_on_ground,
         unsupported,
     })
 }

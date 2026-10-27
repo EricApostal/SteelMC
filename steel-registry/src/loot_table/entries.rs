@@ -2,6 +2,11 @@ use super::{
     ConditionalLootFunction, Identifier, ItemStack, LootCondition, LootContext, LootType,
     NumberProvider, REGISTRY, RegistryExt, RngExt, TaggedRegistryExt,
 };
+use crate::slot_source::SlotSourceHolder;
+
+/// Vanilla `ShulkerBoxBlock.CONTENTS`: the dynamic-drop id a container block
+/// registers for its own slots (`Identifier.withDefaultNamespace("contents")`).
+const CONTENTS_DYNAMIC_DROP: Identifier = Identifier::vanilla_static("contents");
 
 /// A loot table entry that can generate items.
 #[derive(Debug, Clone)]
@@ -59,31 +64,25 @@ pub enum LootEntry {
         weight: i32,
         conditions: &'static [LootCondition],
     },
-    /// Dynamic content (e.g., block entity contents).
+    /// Dynamic content, resolved from the context's dynamic drops.
+    ///
+    /// Vanilla `DynamicLoot`: the `name` keys the `LootParams` dynamic-drop map
+    /// the looted block registers (`minecraft:contents` from a container block
+    /// entity, `minecraft:sherds` from a decorated pot).
     Dynamic {
         name: Identifier,
         conditions: &'static [LootCondition],
     },
-    /// Select items from specific block entity slots.
+    /// Items read from a `slot_source`, e.g. a container's slots.
+    ///
+    /// Vanilla `SlotLoot` (`minecraft:slots`): the entry streams
+    /// `SlotSource.provide(context).itemCopies()`.
     Slots {
-        /// Slots to select from (can be single slot or range).
-        slots: SlotRange,
+        /// The vanilla `slot_source` holder the entry reads.
+        slot_source: &'static SlotSourceHolder,
         conditions: &'static [LootCondition],
         functions: &'static [ConditionalLootFunction],
     },
-}
-
-/// A range of slots for the Slots entry type.
-#[derive(Debug, Clone, Copy)]
-pub enum SlotRange {
-    /// A single specific slot index.
-    Single(i32),
-    /// A range of slots (inclusive).
-    Range { min: i32, max: i32 },
-    /// All contents slots.
-    Contents,
-    /// Specific named slots (for entities).
-    Named(&'static [&'static str]),
 }
 
 impl LootEntry {
@@ -318,8 +317,8 @@ impl LootEntry {
     /// `LootPoolEntryContainer.expand`.
     ///
     /// `minecraft:set_contents` / `minecraft:modify_contents` use this to build
-    /// container contents; dynamic and slot entries contribute nothing because
-    /// Steel's loot context does not model live block-entity inventories.
+    /// container contents; dynamic entries contribute the context's container
+    /// contents and slot entries the slots their `slot_source` resolves to.
     #[must_use]
     pub fn expand_items<R: rand::Rng>(&self, ctx: &mut LootContext<'_, R>) -> Vec<ItemStack> {
         let mut result = Vec::new();
@@ -472,29 +471,52 @@ impl LootEntry {
                 // Empty entry produces nothing
             }
             LootEntry::Dynamic { name, .. } => {
-                // Dynamic entries are used for block entity contents (like shulker boxes)
-                // The name identifies what content to retrieve:
-                // - "contents" = block entity inventory contents
-                // - Other names may exist for specific use cases
+                // Vanilla `DynamicLoot.createItemStack` calls
+                // `LootContext.addDynamicDrops(name, consumer)`, which reaches
+                // the drop the looted block registered under `name` (vanilla
+                // `LootParams.Builder.withDynamicDrop`). A name nothing
+                // registered drops nothing, exactly like an absent map entry.
                 //
-                // TODO: Implement when block entity system supports inventory retrieval
-                // This requires:
-                // 1. Block entity reference in LootContext
-                // 2. Method to get inventory contents from block entity
-                // 3. Adding those items to the result
-                let _ = name;
+                // Steel's context models the one dynamic drop the block-drop
+                // paths can supply: `minecraft:contents`, the container
+                // contents vanilla's container blocks register from their own
+                // slot list. Vanilla's only other id, `minecraft:sherds` on a
+                // decorated pot, comes from the block's own component data,
+                // which Steel's block behaviour supplies through its
+                // `get_drops` override.
+                if *name == CONTENTS_DYNAMIC_DROP
+                    && let Some(inventory) = ctx
+                        .block_entity
+                        .and_then(|block_entity| block_entity.inventory)
+                {
+                    // Vanilla's container drop pushes every slot, and pushing an
+                    // empty stack is a no-op for the callers that spawn drops.
+                    result.extend(inventory.iter().filter(|stack| !stack.is_empty()).cloned());
+                }
             }
             LootEntry::Slots {
-                slots, functions, ..
+                slot_source,
+                functions,
+                ..
             } => {
-                // Slots entries select items from specific block entity slots
-                // TODO: Implement when block entity system supports slot access
-                // This requires:
-                // 1. Block entity reference in LootContext
-                // 2. Method to get items from specific slots
-                // 3. Apply functions to each retrieved item
-                let _ = slots;
-                let _ = functions;
+                // Vanilla `SlotLoot.createItemStack`: stream
+                // `slot_source.provide(context).itemCopies()`, dropping the
+                // empty stacks, and hand each stack to the entry's functions.
+                if let Some(resolver) = ctx.slot_sources {
+                    for mut item in resolver.slot_source_items(slot_source) {
+                        if item.is_empty() {
+                            continue;
+                        }
+                        for cond_func in *functions {
+                            if cond_func.conditions.iter().all(|c| c.test(ctx)) {
+                                cond_func.function.apply(&mut item, ctx);
+                            }
+                        }
+                        if item.count > 0 {
+                            result.push(item);
+                        }
+                    }
+                }
             }
         }
     }

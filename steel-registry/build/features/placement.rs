@@ -59,6 +59,10 @@ pub(super) fn generate_block_predicate(predicate: &BlockPredicate) -> TokenStrea
             let offset = generate_offset(offset);
             quote! { BlockPredicate::InsideWorldBounds { offset: #offset } }
         }
+        BlockPredicate::Unobstructed { offset } => {
+            let offset = generate_offset(offset);
+            quote! { BlockPredicate::Unobstructed { offset: #offset } }
+        }
         BlockPredicate::HeightRange {
             min_inclusive,
             max_inclusive,

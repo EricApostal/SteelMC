@@ -1705,6 +1705,33 @@ pub trait LivingEntity: Entity {
         }
 
         self.tick_living_air_supply();
+
+        // Vanilla `LivingEntity.baseTick` tail: when the entity stepped into a
+        // new block, `onChangedBlock` runs the location-based enchantment
+        // effects (Frost Walker freezes water underfoot here). Vanilla puts
+        // this check behind `level instanceof ServerLevel`; every live Steel
+        // world is a server level.
+        self.tick_location_changed_effects();
+    }
+
+    /// Vanilla `LivingEntity.baseTick` block-position check:
+    /// `EnchantmentHelper.runLocationChangedEffects` only runs after a move
+    /// into a new block, and vanilla `ServerPlayer.onChangedBlock` skips
+    /// spectators.
+    fn tick_location_changed_effects(&self) {
+        if !self
+            .living_base()
+            .update_last_changed_block_pos(self.block_position())
+        {
+            return;
+        }
+        if self.is_spectator() {
+            return;
+        }
+        let Some(world) = self.level() else {
+            return;
+        };
+        enchantment_helper::run_location_changed_effects(self, &world);
     }
 
     /// Returns whether this entity is affected by fluid physics; true by default.

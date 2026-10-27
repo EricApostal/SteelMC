@@ -3,11 +3,14 @@ use crate::TaggedRegistryExt;
 use crate::attribute::{AttributeModifierOperation, AttributeRef};
 use crate::damage_type::DamageTypeRef;
 use crate::entity_type::EntityTypeRef;
+use crate::feature::{BlockPredicate, BlockStateData};
+use crate::game_events::GameEventRef;
 use crate::items::ItemRef;
 use crate::mob_effect::MobEffectRef;
 use crate::particle_type::ParticleTypeRef;
 use crate::sound_event::SoundEventRef;
-use glam::DVec3;
+use glam::{DVec3, IVec3};
+use std::sync::LazyLock;
 use steel_utils::Identifier;
 use steel_utils::random::Random;
 use steel_utils::types::GameType;
@@ -274,6 +277,9 @@ pub enum EntityVehiclePredicate {
 pub struct EntityFlagsPredicate {
     pub is_fall_flying: Option<bool>,
     pub is_in_water: Option<bool>,
+    /// Vanilla `EntityFlagsPredicate` `is_on_ground` flag (used by
+    /// frost walker's `location_changed` requirement).
+    pub is_on_ground: Option<bool>,
     pub unsupported: bool,
 }
 
@@ -283,13 +289,17 @@ impl EntityFlagsPredicate {
         Self {
             is_fall_flying: None,
             is_in_water: None,
+            is_on_ground: None,
             unsupported: false,
         }
     }
 
     #[must_use]
     pub const fn has_constraints(&self) -> bool {
-        self.is_fall_flying.is_some() || self.is_in_water.is_some() || self.unsupported
+        self.is_fall_flying.is_some()
+            || self.is_in_water.is_some()
+            || self.is_on_ground.is_some()
+            || self.unsupported
     }
 }
 
@@ -519,6 +529,15 @@ impl ParticleVelocitySource {
     }
 }
 
+/// A lazily materialized [`BlockPredicate`] referenced by generated
+/// enchantment data.
+///
+/// `BlockPredicate`'s combining variants hold `Vec`s, so a populated predicate
+/// cannot be built in a `static` initializer; generated data stores it behind
+/// [`LazyLock`] (the same idiom the generated feature data uses) and
+/// dereferences it on first use.
+pub type BlockPredicateRef = &'static LazyLock<BlockPredicate>;
+
 #[derive(Debug)]
 pub enum EnchantmentEntityEffect {
     AllOf(&'static [&'static EnchantmentEntityEffect]),
@@ -571,6 +590,19 @@ pub enum EnchantmentEntityEffect {
     /// `minecraft:location_changed` (the component is not a valid
     /// `minecraft:post_attack` effect).
     Attribute(&'static EnchantmentAttributeEffect),
+    /// Vanilla `ReplaceDisk`: replaces the blocks in a disk around the
+    /// origin with `block_state`, gated on `predicate` (frost walker).
+    ReplaceDisk {
+        radius: &'static LevelBasedValue,
+        height: &'static LevelBasedValue,
+        /// Vanilla `Vec3i offset` (zero when the datapack omits it).
+        offset: IVec3,
+        predicate: Option<BlockPredicateRef>,
+        /// Inline `{"id": ..., "properties": {...}}` block state; resolved
+        /// against [`REGISTRY`] by the applying code.
+        block_state: BlockStateData,
+        trigger_game_event: Option<GameEventRef>,
+    },
     Unsupported {
         effect_type: Identifier,
     },
@@ -778,7 +810,7 @@ impl EnchantmentEffects {
 mod tests {
     use steel_utils::random::{Random as _, xoroshiro::Xoroshiro};
 
-    use super::{EnchantmentValueEffect, LevelBasedValue};
+    use super::{EnchantmentEntityEffect, EnchantmentValueEffect, LevelBasedValue};
 
     static HALF: LevelBasedValue = LevelBasedValue::Constant(0.5);
     static THREE_TENTHS: LevelBasedValue = LevelBasedValue::Constant(0.3);
@@ -816,5 +848,96 @@ mod tests {
             REMOVE_THREE_TENTHS.process_with_random(1, &mut actual_random, input),
             input - expected_removed
         );
+    }
+
+    /// Frost walker's `location_changed` effect must be generated as
+    /// `ReplaceDisk` with the vanilla disk, predicate, block state and game
+    /// event from `data/minecraft/enchantment/frost_walker.json`, not as
+    /// `Unsupported`.
+    #[test]
+    fn frost_walker_replace_disk_matches_vanilla_data() {
+        use crate::blocks::block_state_ext::BlockStateExt as _;
+        use crate::feature::{BlockPredicate, BlockRefList, BlockStateData, FluidRefList};
+        use crate::{init_vanilla_registry, vanilla_blocks, vanilla_enchantments, vanilla_fluids};
+        use glam::IVec3;
+        use steel_utils::Identifier;
+
+        static LINEAR: LevelBasedValue = LevelBasedValue::Linear {
+            base: 3.0,
+            per_level_above_first: 1.0,
+        };
+
+        let effects = vanilla_enchantments::FROST_WALKER.effects.location_changed;
+        let [conditional] = effects else {
+            panic!("frost walker should have exactly one location_changed effect");
+        };
+        let EnchantmentEntityEffect::ReplaceDisk {
+            radius,
+            height,
+            offset,
+            predicate,
+            block_state,
+            trigger_game_event,
+        } = &conditional.effect
+        else {
+            panic!("frost walker's location_changed effect should be replace_disk");
+        };
+
+        assert_eq!(
+            **radius,
+            LevelBasedValue::Clamped {
+                value: &LINEAR,
+                min: 0.0,
+                max: 16.0,
+            }
+        );
+        assert_eq!(**height, LevelBasedValue::Constant(1.0));
+        assert_eq!(*offset, IVec3::new(0, -1, 0));
+        assert_eq!(
+            block_state,
+            &BlockStateData {
+                block: &vanilla_blocks::FROSTED_ICE,
+                properties: &[("age", "0")],
+            }
+        );
+        assert_eq!(
+            trigger_game_event.map(|event| event.key.clone()),
+            Some(Identifier::vanilla_static("block_place"))
+        );
+
+        let predicate = predicate.expect("frost walker's replace_disk should carry a predicate");
+        assert_eq!(
+            **predicate,
+            BlockPredicate::AllOf {
+                predicates: vec![
+                    BlockPredicate::MatchingBlockTag {
+                        tag: Identifier::new_static("minecraft", "air"),
+                        offset: IVec3::new(0, 1, 0),
+                    },
+                    BlockPredicate::MatchingBlocks {
+                        blocks: BlockRefList(vec![&vanilla_blocks::WATER]),
+                        offset: IVec3::ZERO,
+                    },
+                    BlockPredicate::MatchingFluids {
+                        fluids: FluidRefList(vec![&vanilla_fluids::WATER]),
+                        offset: IVec3::ZERO,
+                    },
+                    BlockPredicate::Unobstructed {
+                        offset: IVec3::ZERO
+                    },
+                ]
+            }
+        );
+
+        // The generated block state data must resolve to frosted_ice[age=0].
+        init_vanilla_registry();
+        let state = crate::REGISTRY
+            .blocks
+            .state_id_from_block_defaulted_properties(
+                block_state.block,
+                block_state.properties.iter().copied(),
+            )
+            .expect("frosted_ice[age=0] should resolve to a registered state");
+        assert_eq!(state.get_property_str("age"), Some("0"));
     }
 }

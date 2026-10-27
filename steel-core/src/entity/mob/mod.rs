@@ -710,6 +710,18 @@ pub trait Mob: LivingEntity + Leashable {
     }
 
     fn remove_when_far_away(&self, dist_sqr: f64) -> bool {
+        self.remove_when_far_away_base(dist_sqr)
+    }
+
+    /// The `super` half of [`Mob::remove_when_far_away`], for overrides that mirror a
+    /// vanilla `super.removeWhenFarAway(...)` call.
+    ///
+    /// An override or a helper it delegates to must call this instead of
+    /// `self.remove_when_far_away(...)`/`Mob::remove_when_far_away(self, ...)`: both
+    /// are virtual and would dispatch straight back into the override, and LLVM
+    /// turns that self-recursion into an infinite loop that spins a server tick
+    /// thread forever.
+    fn remove_when_far_away_base(&self, dist_sqr: f64) -> bool {
         self.as_animal()
             .is_none_or(|animal| animal.remove_when_far_away_animal(dist_sqr))
     }

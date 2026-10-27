@@ -4,9 +4,14 @@ use std::sync::{Arc, Weak};
 use glam::DVec3;
 use simdnbt::borrow::read_compound as read_borrowed_compound;
 use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
+use steel_protocol::packet_traits::EncodedPacket;
+use steel_registry::packets::play::C_CONTAINER_CLOSE;
 use steel_registry::{
     init_vanilla_registry, vanilla_entities, vanilla_villager_professions, vanilla_villager_types,
 };
+use steel_utils::codec::VarInt;
+use steel_utils::locks::SyncMutex;
+use steel_utils::serial::ReadFrom as _;
 
 use super::*;
 
@@ -641,5 +646,127 @@ fn villager_takes_a_job_site_placed_in_the_live_world() {
             InteractionResult::Success
         ),
         "clicking an employed villager must open trading, not shake its head"
+    );
+}
+
+// --- live path: the trade menu lifecycle over the real packets --------------------------
+
+/// Decodes the container ids of every `CContainerClose` the server sent.
+fn sent_container_closes(packets: &SyncMutex<Vec<EncodedPacket>>) -> Vec<i32> {
+    packets
+        .lock()
+        .iter()
+        .filter_map(|packet| {
+            let mut cursor = Cursor::new(packet.encoded_data.as_slice());
+            let _length = VarInt::read(&mut cursor).ok()?;
+            let packet_id = VarInt::read(&mut cursor).ok()?;
+            (packet_id.0 == C_CONTAINER_CLOSE)
+                .then(|| VarInt::read(&mut cursor).ok())
+                .flatten()
+                .map(|id| id.0)
+        })
+        .collect()
+}
+
+/// Decodes the packet ids the server sent, for failure messages.
+fn sent_packet_ids(packets: &SyncMutex<Vec<EncodedPacket>>) -> Vec<i32> {
+    packets
+        .lock()
+        .iter()
+        .filter_map(|packet| {
+            let mut cursor = Cursor::new(packet.encoded_data.as_slice());
+            let _length = VarInt::read(&mut cursor).ok()?;
+            Some(VarInt::read(&mut cursor).ok()?.0)
+        })
+        .collect()
+}
+
+/// The trade menu a player opened by clicking a villager must still be open after the
+/// player and the world tick.
+///
+/// Player report: "when I go to trade with a villager, the menu opens then immediately
+/// closes". `villager_takes_a_job_site_placed_in_the_live_world` stops at `mob_interact`,
+/// which is exactly where the earlier "verified end-to-end" claim stopped: it never ticked
+/// the player — whose `tick_open_menu` closes a menu that stopped being valid — and never
+/// looked at a packet. This drives the real sequence instead: the `SInteract` packet through
+/// `Player::handle_interact`, then player and world ticks, then the recorded packets.
+#[test]
+fn trade_menu_survives_the_interaction_packet_and_ticks() {
+    use crate::entity::{add_spawned_entity, init_entities};
+    use crate::player::PlayerConnection;
+    use crate::test_support::{
+        TestConnection, TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk,
+        tick_test_world,
+    };
+    use steel_protocol::packets::game::SInteract;
+    use steel_utils::ChunkPos;
+    use steel_utils::types::InteractionHand;
+
+    init_vanilla_registry();
+    init_entities();
+
+    let fixture = fresh_test_world("villager_trade_menu_lifecycle");
+    let world = Arc::clone(&fixture.world);
+    insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
+
+    let connection = TestConnection::default();
+    let packets = connection.sent_handle();
+    let player = TestPlayerBuilder::new(Arc::clone(&world), "TradeTester", 1)
+        .connection(Arc::new(PlayerConnection::Other(Box::new(connection))))
+        .build();
+    player.set_client_loaded(true);
+
+    let villager = test_villager_with_offers(&world, 2);
+    let shared: SharedEntity = Arc::<VillagerEntity>::clone(&villager);
+    add_spawned_entity(&world, Arc::clone(&shared)).expect("the villager joins the loaded chunk");
+    player.base().set_position_local(villager.position());
+
+    // The real client packet a right-click on an entity produces.
+    player.handle_interact(SInteract {
+        entity_id: villager.id(),
+        hand: InteractionHand::MainHand,
+        location: DVec3::ZERO,
+        using_secondary_action: false,
+    });
+
+    assert!(
+        player.has_container_open(),
+        "the interaction must open the merchant menu (packets: {:?})",
+        sent_packet_ids(&packets)
+    );
+    let container_id = player
+        .trading_container_id()
+        .expect("the open menu must be the merchant menu");
+    assert!(
+        villager.is_trading(),
+        "`startTrading` records the player as the trading player"
+    );
+    let closes_right_after_open = sent_container_closes(&packets);
+    assert!(
+        closes_right_after_open.is_empty(),
+        "opening container {container_id} must not send a close (packets: {:?})",
+        sent_packet_ids(&packets)
+    );
+
+    // Tick the player and the world the way the server loop does.
+    for tick in 0..5 {
+        Arc::clone(&player).tick();
+        tick_test_world(&world, tick, true);
+    }
+
+    assert_eq!(
+        player.trading_container_id(),
+        Some(container_id),
+        "the trade menu must still be open server-side after ticking (packets: {:?})",
+        sent_packet_ids(&packets)
+    );
+    assert!(
+        villager.is_trading(),
+        "the villager must still be trading with the player"
+    );
+    assert!(
+        sent_container_closes(&packets).is_empty(),
+        "the server closed the trade menu it had just opened (packets: {:?})",
+        sent_packet_ids(&packets)
     );
 }

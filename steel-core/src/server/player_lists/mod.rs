@@ -45,6 +45,8 @@ pub(crate) struct PlayerLists {
 
 impl PlayerLists {
     /// Creates lists that never touch disk.
+    /// Test/Flint-adapter only: lists that never touch disk.
+    #[cfg(any(test, feature = "test-framework"))]
     pub(crate) fn in_memory(white_list: bool) -> Self {
         Self {
             ops: OpList::in_memory(),

@@ -1,3 +1,8 @@
+#![expect(
+    clippy::assert_is_empty,
+    reason = "`assert!(xs.is_empty())` reads better than equality against an empty array"
+)]
+
 use crate::data_components::vanilla_components::{
     BLOCK_STATE, CUSTOM_MODEL_DATA, DAMAGE, ENCHANTMENTS, INSTRUMENT, ItemEnchantments, REPAIR_COST,
 };
@@ -1297,5 +1302,165 @@ fn unresolved_condition_references_fail_closed() {
     // unresolved reference must not silently pass.
     assert!(
         !LootCondition::Reference(Identifier::vanilla_static("tool/can_silk_touch")).test(&mut ctx)
+    );
+}
+
+/// Vanilla `ShulkerBoxBlock.CONTENTS`: the dynamic drop a container block
+/// entity registers for its own slots.
+fn dynamic_contents_entry() -> LootEntry {
+    LootEntry::Dynamic {
+        name: Identifier::vanilla_static("contents"),
+        conditions: &[],
+    }
+}
+
+fn block_entity_with(items: &[ItemStack]) -> BlockEntityRef<'_> {
+    BlockEntityRef {
+        block_entity_type: None,
+        custom_name: None,
+        inventory: Some(items),
+    }
+}
+
+#[test]
+fn dynamic_contents_entry_yields_the_containers_stacks() {
+    init_test_registries();
+    let mut rng = test_rng();
+    let inventory = [
+        ItemStack::with_count(&vanilla_items::DIAMOND, 3),
+        ItemStack::empty(),
+        ItemStack::with_count(&vanilla_items::STICK, 2),
+    ];
+    let mut ctx = LootContext::new(&mut rng).with_block_entity(block_entity_with(&inventory));
+
+    let result = dynamic_contents_entry().expand_items(&mut ctx);
+
+    // Mirrors the container drop: every non-empty slot, in order, empties gone.
+    assert_eq!(
+        result,
+        [
+            ItemStack::with_count(&vanilla_items::DIAMOND, 3),
+            ItemStack::with_count(&vanilla_items::STICK, 2),
+        ]
+    );
+}
+
+#[test]
+fn dynamic_contents_entry_without_a_container_yields_nothing() {
+    init_test_registries();
+    let entry = dynamic_contents_entry();
+
+    // No block entity in context: vanilla's absent dynamic-drop map lookup.
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng);
+    assert!(entry.expand_items(&mut ctx).is_empty());
+
+    // A block entity with no inventory: same absent-drop fallback.
+    let mut ctx = LootContext::new(&mut rng).with_block_entity(BlockEntityRef {
+        block_entity_type: None,
+        custom_name: None,
+        inventory: None,
+    });
+    assert!(entry.expand_items(&mut ctx).is_empty());
+}
+
+#[test]
+fn dynamic_entry_with_an_unknown_name_yields_nothing() {
+    init_test_registries();
+    let mut rng = test_rng();
+    let inventory = [ItemStack::with_count(&vanilla_items::DIAMOND, 3)];
+    let mut ctx = LootContext::new(&mut rng).with_block_entity(block_entity_with(&inventory));
+
+    // Only the ids a block registers reach its dynamic drops (`minecraft:sherds`
+    // comes from a decorated pot's own data, which Steel's pot behaviour supplies
+    // through `get_drops` instead of the context).
+    let entry = LootEntry::Dynamic {
+        name: Identifier::vanilla_static("sherds"),
+        conditions: &[],
+    };
+    assert!(entry.expand_items(&mut ctx).is_empty());
+}
+
+/// A `LootSlotSourceResolver` over a fixed stack list, mirroring how the
+/// runtime plumbs a container snapshot into the context.
+struct TestSlotSources<'a> {
+    items: &'a [ItemStack],
+}
+
+impl crate::loot_table::LootSlotSourceResolver for TestSlotSources<'_> {
+    fn slot_source_items(
+        &self,
+        _source: &'static crate::slot_source::SlotSourceHolder,
+    ) -> Vec<ItemStack> {
+        self.items.to_vec()
+    }
+}
+
+fn slots_entry() -> LootEntry {
+    static SOURCE: crate::slot_source::SlotSourceHolder =
+        crate::slot_source::SlotSourceHolder::Inline(&crate::slot_source::SlotSource::Empty(
+            crate::slot_source::EmptySlotSource,
+        ));
+    LootEntry::Slots {
+        slot_source: &SOURCE,
+        conditions: &[],
+        functions: &[],
+    }
+}
+
+#[test]
+fn slots_entry_yields_the_slots_the_source_resolves() {
+    init_test_registries();
+    let mut rng = test_rng();
+    let items = [
+        ItemStack::with_count(&vanilla_items::DIAMOND, 3),
+        ItemStack::empty(),
+    ];
+    let resolver = TestSlotSources { items: &items };
+    let mut ctx = LootContext::new(&mut rng).with_slot_sources(&resolver);
+
+    // Vanilla `SlotLoot` drops the empty slots.
+    assert_eq!(
+        slots_entry().expand_items(&mut ctx),
+        [ItemStack::with_count(&vanilla_items::DIAMOND, 3)]
+    );
+}
+
+#[test]
+fn slots_entry_without_a_resolver_yields_nothing() {
+    init_test_registries();
+    let mut rng = test_rng();
+    let mut ctx = LootContext::new(&mut rng);
+
+    assert!(slots_entry().expand_items(&mut ctx).is_empty());
+}
+
+#[test]
+fn slots_entry_applies_entry_functions() {
+    init_test_registries();
+    let mut rng = test_rng();
+    static LIMITED_FUNCTIONS: &[ConditionalLootFunction] = &[ConditionalLootFunction {
+        function: LootFunction::LimitCount {
+            min: None,
+            max: Some(1),
+        },
+        conditions: &[],
+    }];
+    static SOURCE: crate::slot_source::SlotSourceHolder =
+        crate::slot_source::SlotSourceHolder::Inline(&crate::slot_source::SlotSource::Empty(
+            crate::slot_source::EmptySlotSource,
+        ));
+    let items = [ItemStack::with_count(&vanilla_items::DIAMOND, 3)];
+    let resolver = TestSlotSources { items: &items };
+    let mut ctx = LootContext::new(&mut rng).with_slot_sources(&resolver);
+    let entry = LootEntry::Slots {
+        slot_source: &SOURCE,
+        conditions: &[],
+        functions: LIMITED_FUNCTIONS,
+    };
+
+    assert_eq!(
+        entry.expand_items(&mut ctx),
+        [ItemStack::with_count(&vanilla_items::DIAMOND, 1)]
     );
 }

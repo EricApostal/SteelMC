@@ -223,6 +223,7 @@ mod tests {
     use super::super::create_dispatcher;
     use super::{EnchantTargetResult, enchant_main_hand};
     use crate::{
+        behavior::init_behaviors,
         command::{
             brigadier::{ArgumentType, CommandDispatcher, NodeId},
             execution::{CommandSource, SteelArgumentType, SteelCommandRuntime},
@@ -249,6 +250,7 @@ mod tests {
     #[test]
     fn enchant_graph_uses_all_entities_and_an_enchantment_resource() {
         init_vanilla_registry();
+        init_behaviors();
         let Ok(dispatcher) = create_dispatcher() else {
             panic!("built-in commands should register");
         };
@@ -283,6 +285,7 @@ mod tests {
     #[test]
     fn enchant_main_hand_applies_once_and_then_rejects_the_same_enchantment() {
         init_vanilla_registry();
+        init_behaviors();
         let target = TestLivingEntity::new(&vanilla_entities::ZOMBIE);
         target.equip(ItemStack::new(&vanilla_items::DIAMOND_SWORD));
 

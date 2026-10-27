@@ -269,6 +269,16 @@ pub(super) fn generate_block_predicate_nbt(predicate: &BlockPredicate) -> TokenS
                 NbtTag::Compound(compound)
             }}
         }
+        BlockPredicate::Unobstructed { offset } => {
+            let offset = generate_predicate_offset(offset);
+
+            quote! {{
+                let mut compound = NbtCompound::new();
+                compound.insert("type", "minecraft:unobstructed");
+                #offset
+                NbtTag::Compound(compound)
+            }}
+        }
         BlockPredicate::WouldSurvive { state, offset } => {
             let state = generate_block_state_data_nbt(state);
             let offset = generate_predicate_offset(offset);

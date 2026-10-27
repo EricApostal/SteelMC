@@ -876,11 +876,29 @@ impl VillagerEntity {
         golem::spawn_golem_if_needed(&world, self, villagers_needed_to_agree).is_some()
     }
 
-    fn request_golem_spawn(&self, villagers_needed_to_agree: usize) {
+    /// Stages a golem-spawn request for the villager's own tick to resolve.
+    ///
+    /// Vanilla calls `Villager.spawnGolemIfNeeded` straight from inside its brain tick
+    /// (its brain is a plain object). Steel's brain sits behind a non-reentrant mutex
+    /// that the tick already holds, and the consensus helper locks every participant's
+    /// brain, so a behaviour must record the request here and let
+    /// [`VillagerEntity::resolve_golem_spawn_request`] run it after the guard drops.
+    pub(crate) fn request_golem_spawn(&self, villagers_needed_to_agree: usize) {
         *self.pending_golem_spawn.lock() = Some(villagers_needed_to_agree);
     }
 
-    fn take_golem_spawn_request(&self) -> Option<usize> {
+    /// Runs a staged golem-spawn request. Must be called *outside* the brain tick.
+    fn resolve_golem_spawn_request(&self) {
+        if let Some(villagers_needed_to_agree) = self.take_golem_spawn_request() {
+            self.spawn_golem_if_needed(villagers_needed_to_agree);
+        }
+    }
+
+    /// Takes the staged golem-spawn request, if any.
+    ///
+    /// The staging protocol exists because the consensus helper locks villager brains and
+    /// therefore cannot run inside a brain tick; see [`VillagerEntity::request_golem_spawn`].
+    pub(crate) fn take_golem_spawn_request(&self) -> Option<usize> {
         self.pending_golem_spawn.lock().take()
     }
 
@@ -1389,9 +1407,7 @@ impl Mob for VillagerEntity {
         }
 
         // Resolved after the brain tick: the consensus helper locks villager brains.
-        if let Some(villagers_needed_to_agree) = self.take_golem_spawn_request() {
-            self.spawn_golem_if_needed(villagers_needed_to_agree);
-        }
+        self.resolve_golem_spawn_request();
     }
 
     fn custom_server_ai_step(&self) {

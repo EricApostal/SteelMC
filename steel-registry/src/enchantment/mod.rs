@@ -564,6 +564,7 @@ mod tests {
             | EnchantmentEntityEffect::SummonEntity { .. }
             | EnchantmentEntityEffect::SpawnParticles { .. }
             | EnchantmentEntityEffect::Attribute(_)
+            | EnchantmentEntityEffect::ReplaceDisk { .. }
             | EnchantmentEntityEffect::Unsupported { .. } => false,
         }
     }
@@ -583,6 +584,7 @@ mod tests {
             | EnchantmentEntityEffect::SummonEntity { .. }
             | EnchantmentEntityEffect::SpawnParticles { .. }
             | EnchantmentEntityEffect::Attribute(_)
+            | EnchantmentEntityEffect::ReplaceDisk { .. }
             | EnchantmentEntityEffect::Unsupported { .. } => false,
         }
     }

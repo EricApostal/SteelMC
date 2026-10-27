@@ -182,6 +182,8 @@ pub struct UserBanList {
 
 impl UserBanList {
     /// Creates a ban list that never touches disk.
+    /// Test/Flint-adapter only: lists that never touch disk.
+    #[cfg(any(test, feature = "test-framework"))]
     pub(super) fn in_memory() -> Self {
         Self {
             list: StoredUserList::in_memory(),

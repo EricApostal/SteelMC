@@ -1062,6 +1062,33 @@ pub struct LootContext<'a, R: rand::Rng> {
     /// maps. With no hooks installed those functions leave the stack untouched,
     /// matching vanilla's behaviour when the referenced source is absent.
     pub item_source: Option<&'a dyn LootItemSourceHooks>,
+    /// Resolution of a `slot_source` holder, read by the `minecraft:slots`
+    /// entry. With no resolver installed the entry yields nothing, matching
+    /// vanilla's `SlotSource.provide` against a context that has no resolveable
+    /// slot provider.
+    pub slot_sources: Option<&'a dyn LootSlotSourceResolver>,
+}
+
+/// Host hook resolving the `slot_source` a `minecraft:slots` entry reads.
+///
+/// Vanilla `SlotLoot.createItemStack` evaluates `Holder<SlotSource>.value()
+/// .provide(context)` against the live `LootContext` and streams
+/// `SlotCollection.itemCopies()`. The slot providers live in the game
+/// implementation (the `container` param, the entity targets), not in the
+/// registry data model, so the host installs the resolution here. An absent
+/// resolver behaves exactly like vanilla resolving no provider: no slots.
+pub trait LootSlotSourceResolver {
+    /// Vanilla `Holder<SlotSource>.value().provide(context)` followed by
+    /// `SlotCollection.itemCopies()`.
+    ///
+    /// The returned stacks are in vanilla slot order and still contain vanilla's
+    /// empty stacks; the entry drops those.
+    fn slot_source_items(
+        &self,
+        _source: &'static crate::slot_source::SlotSourceHolder,
+    ) -> Vec<ItemStack> {
+        Vec::new()
+    }
 }
 
 /// Host hooks for loot item functions that need live world or entity state the
@@ -1208,7 +1235,9 @@ pub struct BlockEntityRef<'a> {
     pub block_entity_type: Option<&'a Identifier>,
     /// Custom name of the block entity (for `copy_name`).
     pub custom_name: Option<&'a str>,
-    /// Inventory contents (for dynamic/slots entries).
+    /// The container's stacks, in vanilla slot order, for the `minecraft:dynamic`
+    /// `minecraft:contents` drop. Empty stacks are kept, mirroring the container
+    /// iteration the block's dynamic drop performs.
     pub inventory: Option<&'a [ItemStack]>,
 }
 
@@ -1240,6 +1269,7 @@ impl<'a, R: rand::Rng> LootContext<'a, R> {
             number_providers: None,
             location: None,
             item_source: None,
+            slot_sources: None,
         }
     }
 
@@ -1338,6 +1368,13 @@ impl<'a, R: rand::Rng> LootContext<'a, R> {
     #[must_use]
     pub const fn with_block_entity(mut self, block_entity: BlockEntityRef<'a>) -> Self {
         self.block_entity = Some(block_entity);
+        self
+    }
+
+    /// Set the `slot_source` resolver used by `minecraft:slots` entries.
+    #[must_use]
+    pub const fn with_slot_sources(mut self, slot_sources: &'a dyn LootSlotSourceResolver) -> Self {
+        self.slot_sources = Some(slot_sources);
         self
     }
 

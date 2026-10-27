@@ -11,7 +11,7 @@
 //! | `--world <name>` | Selects which `worlds.toml` domain boots as the default level, Steel's equivalent of vanilla's `level-name`. |
 //! | `--universe <dir>` | Overrides the save root (`worlds.toml` `save_path`), Steel's equivalent of vanilla's `--universe` working directory. |
 //! | `--pidFile <path>` | Writes the process id and continues, like vanilla `--pidFile`. |
-//! | `--initSettings` | Writes default configs (plus `eula.txt`) and exits, like vanilla `--initSettings`. |
+//! | `--initSettings` | Writes the default config and exits, like vanilla `--initSettings` (no `eula.txt`: Steel does not gate startup on the EULA). |
 //!
 //! Vanilla-only workflow flags that have no Steel equivalent (`--demo`,
 //! `--bonusChest`, `--forceUpgrade`, `--eraseCache`, `--recreateRegionFiles`,
@@ -146,7 +146,7 @@ fn parse_value(
 
 /// Short usage text printed for `--help` (vanilla `parser.printHelpOn`).
 fn usage() -> String {
-    "Steel Minecraft server\n\nOptions:\n  --nogui            run without a GUI window (Steel never opens one)\n  --port <n>         override server.server_port (negative falls back to config)\n  --world <name>     select the worlds.toml domain that boots as the default level\n  --universe <dir>   override the save root (worlds.toml save_path)\n  --pidFile <path>   write the process id to <path> and continue\n  --initSettings     write default configs and eula.txt, then exit\n  --help             show this message"
+    "Steel Minecraft server\n\nOptions:\n  --nogui            run without a GUI window (Steel never opens one)\n  --port <n>         override server.server_port (negative falls back to config)\n  --world <name>     select the worlds.toml domain that boots as the default level\n  --universe <dir>   override the save root (worlds.toml save_path)\n  --pidFile <path>   write the process id to <path> and continue\n  --initSettings     write the default config, then exit\n  --help             show this message"
         .to_owned()
 }
 

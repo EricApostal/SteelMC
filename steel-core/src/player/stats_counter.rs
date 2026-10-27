@@ -170,15 +170,23 @@ impl Player {
     }
 
     /// Awards a given amount of a particular stat to this player.
+    ///
+    /// Vanilla `ServerPlayer.awardStat`: the counter is incremented first, then
+    /// the same amount is pushed into every objective tracking that stat.
     pub(crate) fn award_erased_stat_with_count(&self, stat: Stat, count: i32) {
         self.stats.lock().increment(stat, count);
-        // TODO: Add score to the objectives having the criterion of this stat for the player.
+        // The scoreboard must not be touched while the stats guard is held.
+        self.drive_stat_objectives(&[(stat, count)]);
     }
 
     /// Resets the counter of a stat from this player to zero.
+    ///
+    /// Vanilla `ServerPlayer.resetStat`: the counter is set to zero, then every
+    /// objective tracking that stat is cleared.
     pub fn reset_stat(&self, stat: Stat) {
         self.stats.lock().set(stat, 0);
-        // TODO: Reset score of the objectives having the criterion of this stat for the player.
+        // The scoreboard must not be touched while the stats guard is held.
+        self.clear_stat_objectives(stat);
     }
 
     /// Resets the counter of a custom stat from this player to zero.

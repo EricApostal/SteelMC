@@ -1,12 +1,12 @@
 use super::{
-    AttributeEffectJson, ConditionalDamageImmunityEffectJson, ConditionalEntityEffectJson,
-    ConditionalValueEffectJson, CrossbowChargingSoundsJson, DamageSourcePredicateJson,
-    EnchantmentTargetJson, EntityEffectJson, EntityFlagsPredicateJson, EntityPredicateJson,
-    EntityTargetJson, EntityTypePredicateJson, EntityTypeSetJson, EntityTypeSpecificPredicateJson,
-    EntityVehiclePredicateJson, FloatProviderJson, FloatProviderTypedJson, GameType, Ident,
-    Identifier, ItemHolderSetJson, LevelBasedValueJson, LevelBasedValueTypedJson,
-    MobEffectSelectionJson, ParticlePositionSourceJson, ParticleVelocitySourceJson,
-    RequirementsJson, Span, TargetedConditionalEntityEffectJson,
+    AttributeEffectJson, BlockPredicateJson, ConditionalDamageImmunityEffectJson,
+    ConditionalEntityEffectJson, ConditionalValueEffectJson, CrossbowChargingSoundsJson,
+    DamageSourcePredicateJson, EnchantmentTargetJson, EntityEffectJson, EntityFlagsPredicateJson,
+    EntityPredicateJson, EntityTargetJson, EntityTypePredicateJson, EntityTypeSetJson,
+    EntityTypeSpecificPredicateJson, EntityVehiclePredicateJson, FloatProviderJson,
+    FloatProviderTypedJson, GameType, Ident, Identifier, ItemHolderSetJson, LevelBasedValueJson,
+    LevelBasedValueTypedJson, MobEffectSelectionJson, ParticlePositionSourceJson,
+    ParticleVelocitySourceJson, RequirementsJson, Span, TargetedConditionalEntityEffectJson,
     TargetedConditionalValueEffectJson, ToShoutySnakeCase, TokenStream, ValueEffectJson,
     damage_type_ref_token, generate_sound_event_ref, identifier_token, quote,
 };
@@ -191,12 +191,18 @@ pub(super) fn entity_flags_predicate_token(predicate: &EntityFlagsPredicateJson)
     } else {
         quote! { None }
     };
+    let is_on_ground = if let Some(value) = predicate.is_on_ground {
+        quote! { Some(#value) }
+    } else {
+        quote! { None }
+    };
     let unsupported = predicate.unsupported;
 
     quote! {
         EntityFlagsPredicate {
             is_fall_flying: #is_fall_flying,
             is_in_water: #is_in_water,
+            is_on_ground: #is_on_ground,
             unsupported: #unsupported,
         }
     }
@@ -485,9 +491,146 @@ pub(super) fn generate_entity_effect(
                 }
             }
         }
+        EntityEffectJson::ReplaceDisk {
+            radius,
+            height,
+            offset,
+            predicate,
+            block_state,
+            trigger_game_event,
+        } => {
+            let radius = generate_level_based_value_ref(prefix, radius, statics, counter);
+            let height = generate_level_based_value_ref(prefix, height, statics, counter);
+            let [x, y, z] = *offset;
+            let predicate = predicate
+                .as_ref()
+                .map(|predicate| generate_block_predicate_ref(prefix, predicate, statics, counter));
+            let predicate =
+                predicate.map_or_else(|| quote! { None }, |predicate| quote! { Some(#predicate) });
+            let block = block_ref_token(&block_state.name);
+            let properties = block_state
+                .properties
+                .iter()
+                .map(|(name, value)| quote! { (#name, #value) });
+            let trigger_game_event = if let Some(event) = trigger_game_event {
+                let event = game_event_ref_token(event);
+                quote! { Some(#event) }
+            } else {
+                quote! { None }
+            };
+            quote! {
+                EnchantmentEntityEffect::ReplaceDisk {
+                    radius: #radius,
+                    height: #height,
+                    offset: IVec3::new(#x, #y, #z),
+                    predicate: #predicate,
+                    block_state: BlockStateData {
+                        block: #block,
+                        properties: &[#(#properties),*],
+                    },
+                    trigger_game_event: #trigger_game_event,
+                }
+            }
+        }
         EntityEffectJson::Unsupported { effect_type } => {
             let effect_type = identifier_token(effect_type);
             quote! { EnchantmentEntityEffect::Unsupported { effect_type: #effect_type } }
+        }
+    }
+}
+
+pub(super) fn block_ref_token(block: &Identifier) -> TokenStream {
+    assert_eq!(
+        block.namespace.as_ref(),
+        "minecraft",
+        "vanilla enchantment block references must use the minecraft namespace: {block}"
+    );
+    let ident = Ident::new(&block.path.to_shouty_snake_case(), Span::call_site());
+    quote! { &vanilla_blocks::#ident }
+}
+
+pub(super) fn fluid_ref_token(fluid: &Identifier) -> TokenStream {
+    assert_eq!(
+        fluid.namespace.as_ref(),
+        "minecraft",
+        "vanilla enchantment fluid references must use the minecraft namespace: {fluid}"
+    );
+    let ident = Ident::new(&fluid.path.to_shouty_snake_case(), Span::call_site());
+    quote! { &vanilla_fluids::#ident }
+}
+
+pub(super) fn game_event_ref_token(event: &Identifier) -> TokenStream {
+    assert_eq!(
+        event.namespace.as_ref(),
+        "minecraft",
+        "vanilla enchantment game event references must use the minecraft namespace: {event}"
+    );
+    let ident = Ident::new(&event.path.to_shouty_snake_case(), Span::call_site());
+    quote! { &vanilla_game_events::#ident }
+}
+
+/// Emits a reusable `BlockPredicate` static behind a `LazyLock` (the
+/// `Vec`-carrying variants are not const-constructible) and returns a
+/// reference token usable in a `static` initializer context.
+pub(super) fn generate_block_predicate_ref(
+    prefix: &str,
+    predicate: &BlockPredicateJson,
+    statics: &mut TokenStream,
+    counter: &mut usize,
+) -> TokenStream {
+    let ident = Ident::new(
+        &format!("{prefix}_BLOCK_PREDICATE_{}", *counter),
+        Span::call_site(),
+    );
+    *counter += 1;
+    let predicate = generate_block_predicate(predicate);
+
+    statics.extend(quote! {
+        static #ident: LazyLock<BlockPredicate> = LazyLock::new(|| #predicate);
+    });
+
+    quote! { &#ident }
+}
+
+pub(super) fn generate_block_predicate(predicate: &BlockPredicateJson) -> TokenStream {
+    match predicate {
+        BlockPredicateJson::AllOf(predicates) => {
+            let predicates = predicates.iter().map(generate_block_predicate);
+            quote! { BlockPredicate::AllOf { predicates: vec![#(#predicates),*] } }
+        }
+        BlockPredicateJson::MatchingBlockTag { tag, offset } => {
+            let tag = identifier_token(tag);
+            let [x, y, z] = *offset;
+            quote! {
+                BlockPredicate::MatchingBlockTag {
+                    tag: #tag,
+                    offset: IVec3::new(#x, #y, #z),
+                }
+            }
+        }
+        BlockPredicateJson::MatchingBlocks { blocks, offset } => {
+            let blocks = blocks.iter().map(block_ref_token);
+            let [x, y, z] = *offset;
+            quote! {
+                BlockPredicate::MatchingBlocks {
+                    blocks: BlockRefList(vec![#(#blocks),*]),
+                    offset: IVec3::new(#x, #y, #z),
+                }
+            }
+        }
+        BlockPredicateJson::MatchingFluids { fluids, offset } => {
+            let fluids = fluids.iter().map(fluid_ref_token);
+            let [x, y, z] = *offset;
+            quote! {
+                BlockPredicate::MatchingFluids {
+                    fluids: FluidRefList(vec![#(#fluids),*]),
+                    offset: IVec3::new(#x, #y, #z),
+                }
+            }
+        }
+        BlockPredicateJson::Unobstructed { offset } => {
+            let [x, y, z] = *offset;
+            quote! { BlockPredicate::Unobstructed { offset: IVec3::new(#x, #y, #z) } }
         }
     }
 }

@@ -30,14 +30,8 @@ use tracing_subscriber::{Layer, registry::LookupSpan};
 
 /// Command-line options, mirroring vanilla `Main`'s option set.
 mod cli;
-/// Mojang EULA acceptance check, mirroring vanilla `Eula`.
-mod eula;
 /// Cross-platform shutdown signal handling.
 mod shutdown;
-
-/// Path of the EULA acceptance file, resolved against the working directory
-/// exactly like vanilla `Main#main`.
-const EULA_PATH: &str = "eula.txt";
 
 /// Path of the main configuration file, resolved against the working directory.
 const CONFIG_PATH: &str = "config/config.toml";
@@ -190,10 +184,10 @@ fn steel_main() {
         return;
     }
 
-    // Vanilla constructs its `Eula` before the `--initSettings` check, so a
-    // fresh run always leaves an `eula.txt` behind, then refuses to boot until
-    // the operator agrees.
-    let eula = eula::Eula::load(Path::new(EULA_PATH));
+    // Steel does not gate startup on the Minecraft EULA. Vanilla reads
+    // `eula.txt` and refuses to boot until the operator accepts; the operator
+    // asked for that gate to be dropped (acceptance stays their
+    // responsibility), so no `eula.txt` is written or read.
     if args.init_settings {
         print_init_settings();
         return;
@@ -224,7 +218,7 @@ fn steel_main() {
         .build()
         .unwrap();
 
-    main_runtime.block_on(main_async(Arc::clone(&chunk_runtime), steel_config, eula));
+    main_runtime.block_on(main_async(Arc::clone(&chunk_runtime), steel_config));
 
     drop(main_runtime);
     drop(chunk_runtime);
@@ -240,7 +234,6 @@ fn steel_main() {
 async fn main_async(
     chunk_runtime: Arc<Runtime>,
     steel_config: config::SteelConfig,
-    eula: eula::Eula,
 ) {
     let cancel_token = CancellationToken::new();
 
@@ -251,17 +244,6 @@ async fn main_async(
             return;
         }
     };
-    if eula.wrote_defaults() {
-        log::warn!("Failed to load {EULA_PATH}; wrote fresh defaults");
-    }
-    if !eula.has_agreed_to_eula() {
-        // Vanilla `Main#main` message, logged at INFO level.
-        log::info!(
-            "You need to agree to the EULA in order to run the server. Go to {EULA_PATH} for more info."
-        );
-        logger.stop().await;
-        return;
-    }
     shutdown::install(cancel_token.clone());
     let panic_token = cancel_token.clone();
     panic::set_hook(Box::new(move |panic_info| {
@@ -504,11 +486,7 @@ fn write_pid_file(path: &Path) -> io::Result<()> {
     reason = "user-facing CLI confirmation for --init-settings, shown by design"
 )]
 fn print_init_settings() {
-    println!(
-        "Initialized '{}' and '{}'",
-        display_path(Path::new(CONFIG_PATH)),
-        display_path(Path::new(EULA_PATH))
-    );
+    println!("Initialized '{}'", display_path(Path::new(CONFIG_PATH)));
 }
 
 /// Absolute display path for startup messages (vanilla `Path#toAbsolutePath`).

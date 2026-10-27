@@ -64,6 +64,8 @@ pub struct AllowList {
 
 impl AllowList {
     /// Creates an allowlist that never touches disk.
+    /// Test/Flint-adapter only: lists that never touch disk.
+    #[cfg(any(test, feature = "test-framework"))]
     pub(super) fn in_memory(enabled: bool) -> Self {
         Self {
             list: StoredUserList::in_memory(),

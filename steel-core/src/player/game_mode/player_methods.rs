@@ -7,6 +7,7 @@ use super::{
     player_can_change_difficulty, shapes, vanilla_attributes,
 };
 use crate::behavior::blocks::PowderSnowBlock;
+use crate::enchantment_helper;
 use steel_protocol::packets::game::SPunch;
 use steel_utils::types::InteractionHand;
 
@@ -62,12 +63,19 @@ impl Player {
             self.stop_riding();
             self.remove_entities_on_shoulder();
             // TODO: Stop item use once living item-use state is implemented.
-            // TODO: Stop location-based enchantment effects once those effects are implemented.
+            // Location-based enchantment effects are stateless in Steel (Frost
+            // Walker's ice reverts through the frosted ice block tick itself),
+            // so entering spectator only has to stop the per-tick valve, which
+            // gates on `is_spectator`.
         } else if was_spectator {
             self.send_packet(CSetCamera {
                 camera_id: self.id(),
             });
-            // TODO: Restart location-based enchantment effects once those effects are implemented.
+            // Vanilla `ServerPlayer.setGameMode` re-runs the location-based
+            // enchantment effects when leaving spectator so effects such as
+            // Frost Walker resume immediately instead of on the next move.
+            let world = self.get_world();
+            enchantment_helper::run_location_changed_effects(self, &world);
         }
 
         self.update_game_mode_invisibility();

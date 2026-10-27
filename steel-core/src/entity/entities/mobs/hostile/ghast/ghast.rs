@@ -2,8 +2,13 @@
 //!
 //! Vanilla ghasts keep the default ground navigation (`Mob.createNavigation`,
 //! inert while airborne) and steer with `Ghast.GhastMoveControl`; Steel has no
-//! flying-navigation goals, so [`GhastMoveControl`] is reproduced here as the entity's own
-//! acceleration step (documented deviation: pathfinding is straight-line flight).
+//! flying-navigation goals, so [`GhastEntity::tick_ghast_move_control`] is reproduced here as
+//! the entity's own acceleration step (documented deviation: pathfinding is straight-line flight).
+//!
+//! Vanilla `Ghast.travel` overrides `LivingEntity.travel` with
+//! `travelFlying(movement, 0.02F)`, whose air branch applies relative movement and a
+//! `0.91` drag but never `getEffectiveGravity`; [`GhastEntity::travel_flying`] reproduces
+//! that, which is what lets a ghast hover instead of sinking.
 
 use std::sync::{Arc, Weak};
 
@@ -23,7 +28,6 @@ use steel_utils::random::RandomSource;
 use steel_utils::types::Difficulty;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
-use crate::behavior::BLOCK_BEHAVIORS;
 use crate::entity::ai::control::MoveControlOperation;
 use crate::entity::ai::goal::{Goal, GoalControls, NearestAttackableTargetGoal};
 use crate::entity::damage::DamageSource;
@@ -34,8 +38,8 @@ use crate::entity::{
     LivingEntity, LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, SharedEntity,
     next_entity_id,
 };
-use crate::physics::MoveResult;
-use crate::world::{LevelReader, World};
+use crate::physics::{MoveResult, MoverType};
+use crate::world::World;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_utils::Downcast as _;
 
@@ -59,6 +63,16 @@ const FIREBALL_MUZZLE_OFFSET: f64 = 4.0;
 const MOVE_FLOAT_DURATION_BASE: i32 = 2;
 const MOVE_FLOAT_DURATION_RANGE: i32 = 5;
 const FLYING_SPEED_SCALE: f64 = 5.0 / 3.0;
+/// Vanilla `Ghast.travel` -> `LivingEntity.travelFlying(Vec3, 0.02F)`: the relative
+/// speed used in every fluid state.
+const TRAVEL_FLYING_SPEED: f32 = 0.02;
+/// Vanilla `LivingEntity.travelFlying` per-fluid drag multipliers.
+const TRAVEL_FLYING_WATER_DRAG: f64 = 0.8;
+const TRAVEL_FLYING_LAVA_DRAG: f64 = 0.5;
+/// Vanilla `LivingEntity.travelFlying` air drag. Because the flying travel path never
+/// applies `getEffectiveGravity`, this decay is what holds the ghast's altitude: a
+/// hovering ghast's vertical velocity decays to zero and it stops sinking.
+const TRAVEL_FLYING_AIR_DRAG: f64 = 0.91;
 /// Vanilla `Ghast.RandomFloatAroundGoal` bounds.
 const FLOAT_ATTEMPTS: i32 = 64;
 const FLOAT_MIN_DISTANCE_SQR: f64 = 1.0;
@@ -197,8 +211,10 @@ impl GhastEntity {
         self.set_y_body_rot(yaw);
     }
 
-    /// Vanilla `Ghast.GhastMoveControl.tick` flight acceleration.
-    fn tick_move_control(&self) {
+    /// Vanilla `Ghast.GhastMoveControl.tick` flight acceleration. Wired through
+    /// [`Mob::tick_move_control`] so it replaces the base walk `MoveControl` (vanilla
+    /// installs `GhastMoveControl` in the `Ghast` constructor instead).
+    fn tick_ghast_move_control(&self) {
         let wanted = self
             .mob_base()
             .controls()
@@ -239,8 +255,39 @@ impl GhastEntity {
         self.set_velocity(self.velocity() + direction * (flying_speed * FLYING_SPEED_SCALE));
     }
 
+    /// Vanilla `Ghast.travel` -> `LivingEntity.travelFlying(movement, 0.02F)`: relative
+    /// movement followed by per-fluid drag, with **no** gravity term.
+    ///
+    /// The `LivingEntity.travel*` air path (`travelInAir`) subtracts
+    /// `getEffectiveGravity()` every tick; vanilla ghasts never take that path, which is
+    /// what keeps a ghast hovering instead of sinking when it has no wanted position.
+    fn travel_flying(&self, entity: &SharedEntity, input: DVec3) -> Option<MoveResult> {
+        if self.is_in_water() {
+            self.move_relative(TRAVEL_FLYING_SPEED, input);
+            let result =
+                Arc::clone(entity).move_entity(MoverType::SelfMovement, self.velocity())?;
+            self.set_velocity(self.velocity() * TRAVEL_FLYING_WATER_DRAG);
+            return Some(result);
+        }
+
+        if self.is_in_lava() {
+            self.move_relative(TRAVEL_FLYING_SPEED, input);
+            let result =
+                Arc::clone(entity).move_entity(MoverType::SelfMovement, self.velocity())?;
+            self.set_velocity(self.velocity() * TRAVEL_FLYING_LAVA_DRAG);
+            return Some(result);
+        }
+
+        self.move_relative(TRAVEL_FLYING_SPEED, input);
+        let result = Arc::clone(entity).move_entity(MoverType::SelfMovement, self.velocity())?;
+        self.set_velocity(self.velocity() * TRAVEL_FLYING_AIR_DRAG);
+        Some(result)
+    }
+
     /// Vanilla `Ghast.checkGhastSpawnRules`, the `SpawnPlacements` predicate for
-    /// `EntityType.GHAST`.
+    /// `EntityType.GHAST`: non-peaceful, a single `random.nextInt(20) == 0` roll, then
+    /// the shared `Mob.checkMobSpawnRules` surface check (the trait default, reached via
+    /// `<Self as Mob>::check_mob_spawn_rules`).
     #[must_use]
     pub fn check_ghast_spawn_rules(
         entity_type: EntityTypeRef,
@@ -250,7 +297,7 @@ impl GhastEntity {
         random: &mut RandomSource,
     ) -> bool {
         level.difficulty() != Difficulty::Peaceful
-            && random.next_i32_bounded(20) == 0
+            && random.next_i32_bounded(GHAST_SPAWN_CHANCE_BOUND) == 0
             && <Self as Mob>::check_mob_spawn_rules(entity_type, level, spawn_reason, pos)
     }
 }
@@ -474,7 +521,9 @@ impl Entity for GhastEntity {
 
     fn tick(self: Arc<Self>) {
         let entity: SharedEntity = Arc::<Self>::clone(&self);
-        self.tick_move_control();
+        // Vanilla drives `GhastMoveControl` from `Mob.serverAiStep`, so the flight
+        // control runs through `Mob::tick_move_control` (see the `Mob` impl) rather
+        // than here; this only ticks the living/entity half.
         self.tick_living_entity(&entity);
     }
 
@@ -605,6 +654,13 @@ impl LivingEntity for GhastEntity {
         Mob::mob_server_ai_step(self, entity);
     }
 
+    /// Vanilla `Ghast.travel(Vec3)` -> `travelFlying(movement, 0.02F)`. Ghasts fly:
+    /// their travel path never applies gravity, so a ghast that is not steering keeps
+    /// its altitude instead of falling.
+    fn travel(&self, entity: &SharedEntity, input: DVec3) -> Option<MoveResult> {
+        self.travel_flying(entity, input)
+    }
+
     fn ai_step(&self, entity: &SharedEntity) -> Option<MoveResult> {
         Monster::monster_ai_step(self, entity)
     }
@@ -628,6 +684,12 @@ impl Mob for GhastEntity {
         PathfinderMob::tick_pathfinder_path_navigation(self);
     }
 
+    /// Vanilla `Ghast` installs `GhastMoveControl`; Steel keeps the shared `MoveControl`
+    /// on `MobBase`, so the flight acceleration replaces the base walk control here.
+    fn tick_move_control(&self) {
+        Self::tick_ghast_move_control(self);
+    }
+
     fn ambient_sound(&self) -> Option<SoundEventRef> {
         Some(&sound_events::ENTITY_GHAST_AMBIENT)
     }
@@ -639,34 +701,6 @@ impl Mob for GhastEntity {
     fn set_mob_flags(&self, flags: i8) {
         self.entity_data.lock().mob_mut().mob_flags.set(flags);
     }
-
-    /// Vanilla `Ghast.checkGhastSpawnRules`: non-peaceful, a 1-in-20 roll, then the shared rules.
-    fn check_mob_spawn_rules(
-        entity_type: EntityTypeRef,
-        level: &dyn LevelReader,
-        spawn_reason: EntitySpawnReason,
-        pos: BlockPos,
-    ) -> bool
-    where
-        Self: Sized,
-    {
-        if rand::random_range(0..GHAST_SPAWN_CHANCE_BOUND) != 0 {
-            return false;
-        }
-        // Inlined `Mob::check_mob_spawn_rules` default, which vanilla
-        // `Ghast.checkGhastSpawnRules` reaches through `checkMobSpawnRules`; Rust has no
-        // super-call, so the shared body is repeated here. The non-peaceful gate is
-        // applied by `Monster::check_monster_spawn_rules` via
-        // `is_spawn_allowed_on_difficulty`.
-        if spawn_reason.is_spawner() {
-            return true;
-        }
-        let below = pos.below();
-        let state = level.get_block_state(below);
-        BLOCK_BEHAVIORS
-            .get_behavior(state.get_block())
-            .is_valid_spawn(state, level, below, entity_type)
-    }
 }
 
 impl Monster for GhastEntity {}
@@ -676,13 +710,19 @@ impl PathfinderMob for GhastEntity {}
 #[cfg(test)]
 mod tests {
     use simdnbt::owned::NbtCompound;
-    use std::sync::Weak;
+    use std::sync::{Arc, Weak};
 
     use glam::DVec3;
     use steel_registry::{init_vanilla_registry, vanilla_entities};
+    use steel_utils::ChunkPos;
+    use steel_utils::random::RandomSource;
 
-    use super::GhastEntity;
-    use crate::entity::Entity;
+    use super::{
+        GhastEntity, TRAVEL_FLYING_AIR_DRAG, TRAVEL_FLYING_LAVA_DRAG, TRAVEL_FLYING_SPEED,
+        TRAVEL_FLYING_WATER_DRAG,
+    };
+    use crate::entity::{Entity, Mob, SharedEntity, next_entity_id};
+    use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
 
     #[test]
     fn ghast_charge_and_explosion_power_round_trip() {
@@ -699,5 +739,130 @@ mod tests {
         ghast.save_additional(&mut nbt);
         assert_eq!(nbt.byte("ExplosionPower"), Some(1));
         assert_eq!(ghast.entity_type(), &vanilla_entities::GHAST);
+    }
+
+    /// Vanilla `Ghast.travel` -> `LivingEntity.travelFlying(movement, 0.02F)` constants.
+    #[test]
+    fn ghast_flight_uses_vanilla_travel_flying_constants() {
+        assert_eq!(TRAVEL_FLYING_SPEED, 0.02);
+        assert_eq!(TRAVEL_FLYING_WATER_DRAG, 0.8);
+        assert_eq!(TRAVEL_FLYING_LAVA_DRAG, 0.5);
+        assert_eq!(TRAVEL_FLYING_AIR_DRAG, 0.91);
+    }
+
+    /// Vanilla `Ghast.checkGhastSpawnRules` rolls `random.nextInt(20) == 0` exactly once.
+    /// With a spawner spawn reason the surface check short-circuits to `true`, so this
+    /// measures the roll count in isolation: about 5% passes (1/20), not the ~0.25% a
+    /// doubled roll would produce.
+    #[test]
+    fn ghast_spawn_predicate_rolls_once_in_twenty() {
+        use crate::entity::EntitySpawnReason;
+        use steel_utils::random::legacy_random::LegacyRandom;
+
+        init_vanilla_registry();
+        let fixture = fresh_test_world("ghast_spawn_chance");
+        let world = &fixture.world;
+
+        let mut random = RandomSource::Legacy(LegacyRandom::from_seed(12_345));
+        let samples = 20_000;
+        let mut successes = 0;
+        for _ in 0..samples {
+            if GhastEntity::check_ghast_spawn_rules(
+                &vanilla_entities::GHAST,
+                world,
+                EntitySpawnReason::Spawner,
+                steel_utils::BlockPos::new(8, 61, 8),
+                &mut random,
+            ) {
+                successes += 1;
+            }
+        }
+
+        let rate = f64::from(successes) / f64::from(samples);
+        assert!(
+            (0.04..=0.06).contains(&rate),
+            "ghast spawn predicate passed {rate:.4} of the time, expected about 1/20"
+        );
+    }
+
+    /// Spawns a ghast into a chunk that ticks and drives one flight target per tick.
+    fn ticking_ghast(key: &'static str, start: DVec3) -> (Arc<crate::world::World>, Arc<GhastEntity>) {
+        init_vanilla_registry();
+        let fixture = fresh_test_world(key);
+        let world = Arc::clone(&fixture.world);
+        insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
+
+        let ghast = Arc::new(GhastEntity::new(
+            &vanilla_entities::GHAST,
+            next_entity_id(),
+            start,
+            Arc::downgrade(&world),
+        ));
+        world
+            .try_add_entity(Arc::clone(&ghast) as SharedEntity)
+            .expect("ghast should attach to the loaded chunk");
+        (world, ghast)
+    }
+
+    fn pin_flight_target(ghast: &GhastEntity, offset: DVec3) {
+        ghast
+            .mob_base()
+            .controls()
+            .lock()
+            .move_control
+            .set_wanted_position(ghast.position() + offset, 1.0);
+    }
+
+    /// A ghast with a horizontal-only flight target has no vertical input at all, so it
+    /// must hold its altitude. On the pre-fix tree the shared `travel_in_air` path applies
+    /// gravity every tick and the ghast plummets instead.
+    #[test]
+    fn ghast_hovers_without_losing_altitude() {
+        let start = DVec3::new(8.5, 100.0, 8.5);
+        let (_world, ghast) = ticking_ghast("ghast_hover_no_sink", start);
+
+        let mut min_y = f64::INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        for _ in 0..60 {
+            // 8 blocks of horizontal offset keeps `RandomFloatAroundGoal` dormant
+            // (its window is `(1, 3600)` squared) and leaves zero vertical input.
+            pin_flight_target(&ghast, DVec3::new(0.0, 0.0, 8.0));
+            Arc::clone(&ghast).tick();
+            min_y = min_y.min(ghast.position().y);
+            max_y = max_y.max(ghast.position().y);
+        }
+
+        assert!(
+            min_y >= start.y - 0.5,
+            "idle ghast sank from y={} to y={min_y} (max y={max_y})",
+            start.y
+        );
+        // It also actually flew: horizontal drift proves travel ran rather than the
+        // whole tick being skipped.
+        assert!(
+            (ghast.position().z - start.z).abs() > 0.5,
+            "ghast did not drift toward its horizontal target: position={}",
+            ghast.position()
+        );
+    }
+
+    /// With its flight target 8 blocks above, a ghast must climb. Gravity-driven travel
+    /// (the pre-fix behaviour) loses this climb to the per-tick gravity term.
+    #[test]
+    fn ghast_rises_toward_a_target_above_it() {
+        let start = DVec3::new(8.5, 100.0, 8.5);
+        let (_world, ghast) = ticking_ghast("ghast_rise_to_target", start);
+
+        for _ in 0..40 {
+            pin_flight_target(&ghast, DVec3::new(0.0, 8.0, 0.0));
+            Arc::clone(&ghast).tick();
+        }
+
+        assert!(
+            ghast.position().y > start.y + 2.0,
+            "ghast target was above it, but it ended at y={} (start y={})",
+            ghast.position().y,
+            start.y
+        );
     }
 }

@@ -14,9 +14,10 @@
 //! `LootContext.Builder(level)`.
 //!
 //! Known gaps (named, not stubbed):
-//! - `BLOCK_ENTITY` carries only the block entity type; Steel's reduced
-//!   `BlockEntityRef` has no live custom-name/inventory snapshot, and no number
-//!   provider reads it.
+//! - `BLOCK_ENTITY` carries the block entity type and, for a container block
+//!   entity, the snapshotted `container` stacks; Steel's reduced
+//!   `BlockEntityRef` has no live custom-name view, and no number provider reads
+//!   the block entity at all.
 //! - `minecraft:score`/`minecraft:storage`/`minecraft:environment_attribute`
 //!   evaluate to their fallback because `/compute` installs no
 //!   scoreboard/storage/attribute hooks (Steel has no `*Lookup` implementors
@@ -41,9 +42,10 @@ use super::super::{
 };
 use super::execute::loaded_block_position;
 use crate::{
-    block_entity::BlockEntity,
     entity::loot::loot_level_view,
     entity::{entity_loot_ref, loot_equipment},
+    loot::slot::SlotProvider,
+    loot::{LootSlotSources, LootedContainer},
     permission::PermissionLevel,
     world::LevelReader as _,
 };
@@ -270,14 +272,36 @@ fn with_params<T>(
         .and_then(|entity| loot_equipment(entity.as_ref()));
 
     let mut rng = rand::rng();
-    let mut params = LootContext::new(&mut rng).with_origin(origin.x, origin.y, origin.z);
+    // The looted block entity's container supplies the `minecraft:dynamic`
+    // `minecraft:contents` drop and the `container`/`block_entity` slot
+    // sources, snapshotted so no container lock crosses the loot evaluation.
+    let looted_block_entity = block_source
+        .as_ref()
+        .and_then(|(_, entity)| entity.as_deref());
+    let container = LootedContainer::snapshot(looted_block_entity);
+    let slot_sources = LootSlotSources::new(
+        container
+            .as_ref()
+            .map(|container| container as &dyn SlotProvider),
+        None,
+        container
+            .as_ref()
+            .map(|container| container as &dyn SlotProvider),
+    );
+    let mut params = LootContext::new(&mut rng)
+        .with_origin(origin.x, origin.y, origin.z)
+        .with_slot_sources(&slot_sources);
     if let Some(entity) = command_source.entity() {
         params = params.with_this_entity(entity_loot_ref(entity.as_ref(), equipment.as_ref()));
     }
     if let Some((pos, block_entity)) = &block_source {
         params = params.with_block_state(command_source.world().get_block_state(*pos));
         if let Some(block_entity) = block_entity {
-            params = params.with_block_entity(block_entity_ref(block_entity.as_ref()));
+            params = params.with_block_entity(BlockEntityRef {
+                block_entity_type: Some(&block_entity.get_type().key),
+                custom_name: None,
+                inventory: container.as_ref().map(LootedContainer::items),
+            });
         }
     }
     if let Some(entity) = &target_source {
@@ -288,13 +312,4 @@ fn with_params<T>(
     params = params.with_location(&level);
 
     Ok(evaluate(&mut params))
-}
-
-/// Steel's reduced `LootContextParams.BLOCK_ENTITY` view; see the module gaps.
-fn block_entity_ref(entity: &dyn BlockEntity) -> BlockEntityRef<'_> {
-    BlockEntityRef {
-        block_entity_type: Some(&entity.get_type().key),
-        custom_name: None,
-        inventory: None,
-    }
 }

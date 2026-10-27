@@ -6,13 +6,14 @@
 use std::sync::Arc;
 
 use steel_protocol::packets::game::CBlockUpdate;
+use steel_registry::attribute::AttributeRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt;
 use steel_registry::equipment::EquipmentSlot;
 use steel_registry::stat::vanilla_stat_types;
 use steel_registry::vanilla_attributes;
 use steel_registry::{
     REGISTRY, blocks::properties::Direction, item_stack::ItemStack, level_events, vanilla_blocks,
-    vanilla_game_events,
+    vanilla_game_events, vanilla_mob_effects,
 };
 use steel_utils::{
     BlockPos, BlockStateId,
@@ -30,6 +31,50 @@ use crate::world::{ConditionalBlockSetResult, World, game_event::GameEventContex
 use super::adventure_mode;
 
 impl Player {
+    /// Vanilla `Player.getDestroySpeed`.
+    ///
+    /// Applies the tool speed and multipliers in the exact vanilla order:
+    /// selected-item speed, `MINING_EFFICIENCY` (only when the tool speed is
+    /// above 1.0), dig-speed effects (Haste / Conduit Power take the maximum
+    /// amplifier), Mining Fatigue, `BLOCK_BREAK_SPEED`, the eye-in-water
+    /// `SUBMERGED_MINING_SPEED` factor, and finally the airborne `/ 5.0`.
+    pub fn get_destroy_speed(&self, block_state: BlockStateId) -> f32 {
+        // Take the held item's destroy speed in a scoped inventory borrow so
+        // the attribute and mob-effect guards below never nest inside it.
+        let mut speed = {
+            let inventory = self.inventory.lock();
+            inventory
+                .get_item_in_hand(InteractionHand::MainHand)
+                .get_destroy_speed(block_state)
+        };
+
+        if speed > 1.0 {
+            speed += attribute_value(self, vanilla_attributes::MINING_EFFICIENCY);
+        }
+
+        if has_dig_speed(self) {
+            speed *= 1.0 + (dig_speed_amplification(self) + 1) as f32 * 0.2;
+        }
+
+        if let Some(mining_fatigue) = self.mob_effect(vanilla_mob_effects::MINING_FATIGUE) {
+            speed *= 0.3f64.powf(f64::from(mining_fatigue.amplifier() + 1)) as f32;
+        }
+
+        speed *= attribute_value(self, vanilla_attributes::BLOCK_BREAK_SPEED);
+
+        // Aqua Affinity is intentionally not special-cased: vanilla
+        // `getDestroySpeed` has no such branch.
+        if self.is_eye_in_water() {
+            speed *= attribute_value(self, vanilla_attributes::SUBMERGED_MINING_SPEED);
+        }
+
+        if !self.on_ground() {
+            speed /= 5.0;
+        }
+
+        speed
+    }
+
     /// Mirrors vanilla `Player.blockActionRestricted` for block breaking.
     pub(super) fn block_action_restricted(&self, world: &World, pos: BlockPos) -> bool {
         let game_mode = self.game_mode();
@@ -53,6 +98,39 @@ impl Player {
         };
         !adventure_mode::can_break(&item, world, pos)
     }
+}
+
+/// Reads a living-attribute value, falling back to the vanilla registry
+/// default when the entity map does not carry the instance.
+///
+/// Vanilla's `getAttributeValue` assumes the attribute exists on the player
+/// (all of these are registered in `Player.createAttributes`); Steel guards
+/// the lookup so a reordered `default_attributes` list degrades to the same
+/// vanilla default instead of panicking.
+fn attribute_value(player: &Player, attribute: AttributeRef) -> f32 {
+    player
+        .attributes()
+        .lock()
+        .get_value(attribute)
+        .unwrap_or(attribute.default_value) as f32
+}
+
+/// Vanilla `MobEffectUtil.hasDigSpeed`: Haste or Conduit Power is active.
+fn has_dig_speed(player: &Player) -> bool {
+    player.has_mob_effect(vanilla_mob_effects::HASTE)
+        || player.has_mob_effect(vanilla_mob_effects::CONDUIT_POWER)
+}
+
+/// Vanilla `MobEffectUtil.getDigSpeedAmplification`: the maximum of the
+/// active Haste and Conduit Power amplifiers, defaulting to 0 each.
+fn dig_speed_amplification(player: &Player) -> i32 {
+    let haste = player
+        .mob_effect(vanilla_mob_effects::HASTE)
+        .map_or(0, |effect| effect.amplifier());
+    let conduit_power = player
+        .mob_effect(vanilla_mob_effects::CONDUIT_POWER)
+        .map_or(0, |effect| effect.amplifier());
+    haste.max(conduit_power)
 }
 
 /// Manages the block breaking state for a player.
@@ -543,12 +621,9 @@ fn get_destroy_progress(player: &Player, block_state: BlockStateId) -> f32 {
         return 1.0;
     }
 
-    // Get player's mining speed
-    let mining_speed = {
-        let inv = player.inventory.lock();
-        let main_hand = inv.get_item_in_hand(InteractionHand::MainHand);
-        main_hand.get_destroy_speed(block_state)
-    };
+    // Get player's mining speed, including tool, attributes and effects
+    // (vanilla `Player.getDestroySpeed`).
+    let speed = player.get_destroy_speed(block_state);
 
     // Check if player has the correct tool
     let has_correct_tool = {
@@ -556,13 +631,6 @@ fn get_destroy_progress(player: &Player, block_state: BlockStateId) -> f32 {
         let main_hand = inv.get_item_in_hand(InteractionHand::MainHand);
         main_hand.is_correct_tool_for_drops(block_state)
     };
-
-    // Apply speed modifiers
-    let speed = mining_speed;
-
-    // TODO: Apply efficiency enchantment
-    // TODO: Apply haste/mining fatigue effects
-    // TODO: Apply underwater/in-air penalties
 
     // Calculate destroy progress per tick
     // Vanilla formula: speed / hardness / (hasCorrectTool ? 30 : 100)
@@ -606,4 +674,193 @@ fn drop_block_loot(
     BLOCK_BEHAVIORS
         .get_behavior(state.get_block())
         .spawn_after_break(state, world, pos, tool, true);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use steel_registry::attribute::AttributeModifierOperation;
+    use steel_registry::{
+        vanilla_attributes, vanilla_blocks, vanilla_enchantments, vanilla_items,
+        vanilla_mob_effects,
+    };
+    use steel_utils::Identifier;
+
+    use super::*;
+    use crate::bootstrap::init_globals;
+    use crate::entity::EntityFluidContact;
+    use crate::entity::attribute::AttributeModifier;
+    use crate::test_support::{TestPlayerBuilder, fresh_test_world};
+
+    /// Wooden pickaxe against stone: base speed 2.0 (> 1.0, so Efficiency applies).
+    fn stone_state() -> BlockStateId {
+        vanilla_blocks::STONE.default_state()
+    }
+
+    fn mining_player(world: &Arc<World>) -> Arc<Player> {
+        let player = TestPlayerBuilder::new(Arc::clone(world), "DigSpeedTester", 1).build();
+        // Neutral mining conditions: grounded, dry eyes, no effects.
+        player.set_on_ground(true);
+        player
+            .base()
+            .set_fluid_contact(EntityFluidContact::from_parts(0.0, 0.0, false, false));
+        player
+            .inventory
+            .lock()
+            .set_selected_item(ItemStack::new(&vanilla_items::WOODEN_PICKAXE));
+        player
+    }
+
+    fn apply_mining_efficiency_bonus(player: &Player, bonus: f64) {
+        player.attributes().lock().set_modifier(
+            vanilla_attributes::MINING_EFFICIENCY,
+            AttributeModifier {
+                id: Identifier::vanilla_static("test_dig_speed"),
+                amount: bonus,
+                operation: AttributeModifierOperation::AddValue,
+            },
+            false,
+        );
+    }
+
+    #[test]
+    fn efficiency_levels_add_level_squared_plus_one() {
+        init_globals();
+        let fixture = fresh_test_world("block_breaking_dig_speed");
+        let player = mining_player(&fixture.world);
+
+        let base = ItemStack::new(&vanilla_items::WOODEN_PICKAXE).get_destroy_speed(stone_state());
+        assert!(base > 1.0);
+        assert_relative(base, player.get_destroy_speed(stone_state()));
+
+        // The game's Efficiency attribute effect must stay at level^2 + 1.
+        let effects = vanilla_enchantments::EFFICIENCY.effects.attributes;
+        let efficiency = effects
+            .iter()
+            .find(|effect| effect.attribute.key == vanilla_attributes::MINING_EFFICIENCY.key)
+            .expect("efficiency should grant mining_efficiency");
+        assert_eq!(efficiency.operation, AttributeModifierOperation::AddValue);
+        for level in 1..=5 {
+            let expected = (level * level + 1) as f32;
+            assert_eq!(
+                efficiency.amount.calculate(level),
+                expected,
+                "efficiency level {level}"
+            );
+        }
+
+        // `get_destroy_speed` must add that bonus to the tool speed.
+        for level in 1..=5 {
+            apply_mining_efficiency_bonus(&player, f64::from(level * level + 1));
+            assert_relative(
+                base + (level * level + 1) as f32,
+                player.get_destroy_speed(stone_state()),
+            );
+        }
+    }
+
+    #[test]
+    fn haste_scales_by_amplifier() {
+        init_globals();
+        let fixture = fresh_test_world("block_breaking_haste");
+        let player = mining_player(&fixture.world);
+        let base = player.get_destroy_speed(stone_state());
+
+        player.set_mob_effect(vanilla_mob_effects::HASTE, 0);
+        assert_relative(base * 1.2, player.get_destroy_speed(stone_state()));
+
+        player.set_mob_effect(vanilla_mob_effects::HASTE, 1);
+        assert_relative(base * 1.4, player.get_destroy_speed(stone_state()));
+    }
+
+    #[test]
+    fn conduit_power_takes_max_amplifier() {
+        init_globals();
+        let fixture = fresh_test_world("block_breaking_conduit");
+        let player = mining_player(&fixture.world);
+        let base = player.get_destroy_speed(stone_state());
+
+        // Conduit Power alone behaves like Haste.
+        player.set_mob_effect(vanilla_mob_effects::CONDUIT_POWER, 0);
+        assert_relative(base * 1.2, player.get_destroy_speed(stone_state()));
+
+        // The stronger of the two effects wins (max, not sum).
+        player.set_mob_effect(vanilla_mob_effects::HASTE, 2);
+        player.set_mob_effect(vanilla_mob_effects::CONDUIT_POWER, 0);
+        assert_relative(base * 1.6, player.get_destroy_speed(stone_state()));
+    }
+
+    #[test]
+    fn mining_fatigue_scales_by_power_of_three_tenths() {
+        init_globals();
+        let fixture = fresh_test_world("block_breaking_fatigue");
+        let player = mining_player(&fixture.world);
+        let base = player.get_destroy_speed(stone_state());
+
+        // Mining Fatigue I: *= 0.3.
+        player.set_mob_effect(vanilla_mob_effects::MINING_FATIGUE, 0);
+        assert_relative(base * 0.3, player.get_destroy_speed(stone_state()));
+
+        // Mining Fatigue II: *= 0.09.
+        player.set_mob_effect(vanilla_mob_effects::MINING_FATIGUE, 1);
+        assert_relative(base * 0.09, player.get_destroy_speed(stone_state()));
+    }
+
+    #[test]
+    fn submerged_scales_by_submerged_mining_speed() {
+        init_globals();
+        let fixture = fresh_test_world("block_breaking_submerged");
+        let player = mining_player(&fixture.world);
+        let base = player.get_destroy_speed(stone_state());
+
+        player
+            .base()
+            .set_fluid_contact(EntityFluidContact::from_parts(0.5, 0.0, true, false));
+        let expected = base * attribute_value(&player, vanilla_attributes::SUBMERGED_MINING_SPEED);
+        assert_relative(expected, player.get_destroy_speed(stone_state()));
+        // The vanilla default for the eye-in-water factor is 0.2.
+        assert_relative(base * 0.2, player.get_destroy_speed(stone_state()));
+    }
+
+    #[test]
+    fn airborne_divides_by_five() {
+        init_globals();
+        let fixture = fresh_test_world("block_breaking_airborne");
+        let player = mining_player(&fixture.world);
+        let base = player.get_destroy_speed(stone_state());
+
+        player.set_on_ground(false);
+        assert_relative(base / 5.0, player.get_destroy_speed(stone_state()));
+    }
+
+    #[test]
+    fn all_penalties_compose_in_vanilla_order() {
+        init_globals();
+        let fixture = fresh_test_world("block_breaking_order");
+        let player = mining_player(&fixture.world);
+        let base = player.get_destroy_speed(stone_state());
+
+        // Efficiency +2, Haste I x1.2, Fatigue II x0.09, block break x1,
+        // submerged x0.2, airborne /5 — folded in vanilla order.
+        apply_mining_efficiency_bonus(&player, 2.0);
+        player.set_mob_effect(vanilla_mob_effects::HASTE, 0);
+        player.set_mob_effect(vanilla_mob_effects::MINING_FATIGUE, 1);
+        player
+            .base()
+            .set_fluid_contact(EntityFluidContact::from_parts(0.5, 0.0, true, false));
+        player.set_on_ground(false);
+
+        let expected = (base + 2.0) * 1.2 * 0.09 * 0.2 / 5.0;
+        assert_relative(expected, player.get_destroy_speed(stone_state()));
+    }
+
+    /// Float comparison with room for the f64->f32 casts in the damage chain.
+    fn assert_relative(expected: f32, actual: f32) {
+        let tolerance = 1.0e-4 * expected.abs().max(1.0);
+        assert!(
+            (expected - actual).abs() <= tolerance,
+            "expected {expected}, got {actual}",
+        );
+    }
 }

@@ -1216,13 +1216,14 @@ impl Scoreboard {
             .map_or_else(BTreeSet::new, |scores| scores.keys().cloned().collect())
     }
 
-    /// Vanilla `ServerScoreboard.forAllObjectives`: applies `value` to every
-    /// objective using `criteria` and held by `holder`, ignoring read-only flags.
+    /// Vanilla `ServerScoreboard.forAllObjectives`: sets `value` on every objective
+    /// whose criterion is `criteria` and that is held by `holder`, ignoring
+    /// read-only flags.
     ///
     /// # Errors
     ///
     /// Returns an error for an empty holder.
-    pub fn update_stat(
+    pub fn update_objectives(
         &self,
         holder: &ScoreHolder,
         criteria: &ObjectiveCriteria,
@@ -1232,12 +1233,12 @@ impl Scoreboard {
     }
 
     /// Vanilla `ServerScoreboard.addToAllObjectives`: adds `delta` to every
-    /// objective using `criteria` and held by `holder`.
+    /// objective whose criterion is `criteria` and that is held by `holder`.
     ///
     /// # Errors
     ///
     /// Returns an error for an empty holder.
-    pub fn add_to_stat(
+    pub fn add_to_objectives(
         &self,
         holder: &ScoreHolder,
         criteria: &ObjectiveCriteria,
@@ -1258,7 +1259,7 @@ impl Scoreboard {
             .read()
             .objectives
             .iter()
-            .filter(|(_, state)| &state.criteria == criteria)
+            .filter(|(_, state)| state.criteria.same_criteria(criteria))
             .map(|(name, state)| objective_snapshot(name, state))
             .collect::<Vec<_>>();
         for objective in matches {
@@ -1822,11 +1823,11 @@ mod tests {
         let holder = ScoreHolder::new("Steve");
 
         scoreboard
-            .add_to_stat(&holder, &criteria, 3)
+            .add_to_objectives(&holder, &criteria, 3)
             .expect("stat should update");
         assert_eq!(scoreboard.score(&holder, &objective), Some(3));
         scoreboard
-            .update_stat(&holder, &criteria, 2)
+            .update_objectives(&holder, &criteria, 2)
             .expect("stat should update");
         assert_eq!(scoreboard.score(&holder, &objective), Some(2));
     }

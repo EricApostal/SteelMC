@@ -649,6 +649,7 @@ struct LivingEntityState {
     sprinting: bool,
     sleeping_pos: Option<BlockPos>,
     last_climbable_pos: Option<BlockPos>,
+    last_changed_block_pos: Option<BlockPos>,
     discard_friction: bool,
     jumping: bool,
     travel_input: LivingTravelInput,
@@ -684,6 +685,7 @@ impl LivingEntityState {
             sprinting: false,
             sleeping_pos: None,
             last_climbable_pos: None,
+            last_changed_block_pos: None,
             discard_friction: false,
             jumping: false,
             travel_input: LivingTravelInput::ZERO,
@@ -1824,6 +1826,19 @@ impl LivingEntityBase {
     #[inline]
     pub fn reset_death_state(&self) {
         self.state.lock().reset_death_state();
+    }
+
+    /// Records the block of the next `LivingEntity.baseTick` location check and
+    /// returns whether the entity actually moved into a new block (mirrors
+    /// vanilla's `lastPos` compare-and-set; a fresh entity starts with no
+    /// position, so its first step always runs the effects).
+    pub(crate) fn update_last_changed_block_pos(&self, pos: BlockPos) -> bool {
+        let mut state = self.state.lock();
+        if state.last_changed_block_pos == Some(pos) {
+            return false;
+        }
+        state.last_changed_block_pos = Some(pos);
+        true
     }
 }
 

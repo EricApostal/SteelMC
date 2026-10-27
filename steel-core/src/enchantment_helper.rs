@@ -4,25 +4,34 @@ use std::sync::Arc;
 
 use item_in_use::EnchantedItemInUse;
 
+use glam::IVec3;
+use std::any::try_as_dyn;
 use steel_registry::enchantment::EnchantmentRef;
 use steel_registry::enchantment_effect::{
-    DamageSourcePredicate, EnchantmentEffectComponent, EnchantmentEffectRequirements,
-    EnchantmentEntityEffect, EnchantmentEntityTarget, EnchantmentTarget, EntityLocationPredicate,
-    EntityPredicate, EntityTypePredicate, EntityTypeSet, EntityTypeSpecificPredicate,
-    EntityVehiclePredicate, MobEffectSelection,
+    BlockPredicateRef, DamageSourcePredicate, EnchantmentEffectComponent,
+    EnchantmentEffectRequirements, EnchantmentEntityEffect, EnchantmentEntityTarget,
+    EnchantmentTarget, EntityLocationPredicate, EntityPredicate, EntityTypePredicate,
+    EntityTypeSet, EntityTypeSpecificPredicate, EntityVehiclePredicate, LevelBasedValue,
+    MobEffectSelection,
 };
 use steel_registry::entity_type::EntityTypeRef;
+use steel_registry::feature::BlockStateData;
+use steel_registry::game_events::GameEventRef;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::{REGISTRY, RegistryExt, TaggedRegistryExt, vanilla_entities, vanilla_items};
-use steel_utils::Identifier;
-use steel_utils::random::worldgen_random::WorldgenRandom;
 
+use steel_utils::random::worldgen_random::WorldgenRandom;
+use steel_utils::{BlockPos, Identifier};
+
+use crate::block_state_provider::BlockStateProviderEvaluator;
 use crate::entity::attribute::AttributeModifier;
 use crate::entity::damage::DamageSource;
 use crate::entity::{Entity, LivingEntity, MobEffectInstance, SharedEntity};
 use crate::inventory::equipment::EquipmentSlot;
 use crate::world::World;
+use crate::world::game_event::GameEventContext;
 use steel_registry::attribute::AttributeRef;
+use steel_utils::types::UpdateFlags;
 
 /// A snapshot of the world's weather taken once per enchantment fold so that
 /// requirement evaluation never re-locks the weather mutex per term.
@@ -760,6 +769,61 @@ pub(crate) fn on_projectile_spawned(
     }
 }
 
+/// Vanilla `EnchantmentHelper.runLocationChangedEffects(ServerLevel, LivingEntity)`:
+/// whenever a living entity steps into a new block, every `minecraft:location_changed`
+/// effect of its worn equipment runs. Frost Walker is the shipped consumer.
+///
+/// Vanilla keeps the matching effects of each slot in a set so it can call
+/// `onDeactivated` on the ones that stop matching. Steel has no stateful location
+/// effect yet: the only one vanilla ships (`ReplaceDisk`) is stateless — the
+/// frosted ice it places reverts through `FrostedIceBlock`'s own scheduled ticks —
+/// so a slot that stops matching simply runs no effect. A future stateful
+/// location effect must add that per-slot set (reported gap).
+pub(crate) fn run_location_changed_effects<V: LivingEntity + ?Sized>(
+    entity: &V,
+    world: &Arc<World>,
+) {
+    let Some(entity) = try_as_dyn::<V, dyn LivingEntity>(entity) else {
+        return;
+    };
+    let weather = Some(WeatherSnapshot::from_world(world));
+    for slot in EquipmentSlot::ALL {
+        let mut enchantments = None;
+        entity.with_equipment_slot(slot, &mut |stack| {
+            if !stack.is_empty() {
+                enchantments = stack.get_enchantments().cloned();
+            }
+        });
+        let Some(enchantments) = enchantments else {
+            continue;
+        };
+
+        let mut item = EnchantedItemInUse::Equipped {
+            owner: entity,
+            slot,
+        };
+        for (key, level) in enchantments.iter() {
+            if *level == 0 {
+                continue;
+            }
+            let Some(enchantment) = REGISTRY.enchantments.by_key(key) else {
+                continue;
+            };
+            if !enchantment.matching_slot(slot) {
+                continue;
+            }
+
+            let level = *level as i32;
+            for effect in enchantment.effects.location_changed {
+                if !entity_requirements_match(effect.requirements, entity, level, weather) {
+                    continue;
+                }
+                let _ = apply_entity_effect(world, &effect.effect, level, entity, None, &mut item);
+            }
+        }
+    }
+}
+
 pub(crate) fn do_post_piercing_attack_effects(world: &World, user: &dyn LivingEntity) {
     let mut item_stack = ItemStack::empty();
     user.with_equipment_slot(EquipmentSlot::MainHand, &mut |stack| {
@@ -831,6 +895,7 @@ fn entity_effect_is_supported(effect: &EnchantmentEntityEffect) -> bool {
         EnchantmentEntityEffect::ChangeItemDamage { .. }
         | EnchantmentEntityEffect::DamageEntity { .. }
         | EnchantmentEntityEffect::Ignite { .. }
+        | EnchantmentEntityEffect::ReplaceDisk { .. }
         | EnchantmentEntityEffect::SummonEntity { .. } => true,
         EnchantmentEntityEffect::ApplyMobEffect { to_apply, .. } => {
             matches!(to_apply, MobEffectSelection::Single(_))
@@ -949,12 +1014,92 @@ fn apply_supported_entity_effect(
             ));
             false
         }
+        EnchantmentEntityEffect::ReplaceDisk {
+            radius,
+            height,
+            offset,
+            predicate,
+            block_state,
+            trigger_game_event,
+        } => {
+            apply_replace_disk(
+                level,
+                entity,
+                radius,
+                height,
+                *offset,
+                *predicate,
+                block_state,
+                *trigger_game_event,
+            );
+            false
+        }
         EnchantmentEntityEffect::ApplyMobEffect { .. }
         | EnchantmentEntityEffect::ApplyExhaustion { .. }
         | EnchantmentEntityEffect::ApplyImpulse { .. }
         | EnchantmentEntityEffect::SpawnParticles { .. }
         | EnchantmentEntityEffect::Attribute(_)
         | EnchantmentEntityEffect::Unsupported { .. } => false,
+    }
+}
+
+/// Vanilla `ReplaceDisk.apply`: replaces the blocks in a disk of `radius`
+/// around the origin (already shifted by `offset`) with the resolved
+/// `block_state`, gated on `predicate`. Frost Walker is the shipped consumer.
+///
+/// `height` extends the disk vertically from the center: only the
+/// `0..=(height - 1).min(0)` layers below are touched (vanilla
+/// `Math.min(height - 1, 0)`).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "single vanilla effect application; the arguments map one-to-one onto the six ReplaceDisk record fields"
+)]
+fn apply_replace_disk(
+    enchantment_level: i32,
+    entity: &dyn Entity,
+    radius: &'static LevelBasedValue,
+    height: &'static LevelBasedValue,
+    offset: IVec3,
+    predicate: Option<BlockPredicateRef>,
+    block_state: &BlockStateData,
+    trigger_game_event: Option<GameEventRef>,
+) {
+    let Some(level) = entity.level() else {
+        return;
+    };
+    let origin = entity.position();
+    let center =
+        BlockPos::containing(origin.x, origin.y, origin.z).offset(offset.x, offset.y, offset.z);
+    let radius = radius.calculate(enchantment_level) as i32;
+    let max_layer = (height.calculate(enchantment_level) as i32 - 1).min(0);
+    let state = BlockStateProviderEvaluator::block_state_from_data(&REGISTRY, block_state);
+
+    for dx in -radius..=radius {
+        for dy in 0..=max_layer {
+            for dz in -radius..=radius {
+                let pos = center.offset(dx, dy, dz);
+                let dx = f64::from(pos.x()) + 0.5 - origin.x;
+                let dz = f64::from(pos.z()) + 0.5 - origin.z;
+                // Vanilla `p.distToCenterSqr(origin.x, p.y + 0.5, origin.z) <
+                // Mth.square(radius)`: the y terms cancel, leaving the
+                // horizontal circle around the entity.
+                if dx.mul_add(dx, dz * dz) >= f64::from(radius * radius) {
+                    continue;
+                }
+                if predicate.is_some_and(|predicate| {
+                    !BlockStateProviderEvaluator::test_block_predicate(
+                        &level, &REGISTRY, predicate, pos,
+                    )
+                }) {
+                    continue;
+                }
+                if level.set_block(pos, state, UpdateFlags::UPDATE_ALL)
+                    && let Some(event) = trigger_game_event
+                {
+                    level.game_event(event, pos, &GameEventContext::new(Some(entity), None));
+                }
+            }
+        }
     }
 }
 
@@ -989,6 +1134,7 @@ fn post_piercing_entity_effect_is_supported(effect: &EnchantmentEntityEffect) ->
         EnchantmentEntityEffect::DamageEntity { .. }
         | EnchantmentEntityEffect::SummonEntity { .. }
         | EnchantmentEntityEffect::SpawnParticles { .. }
+        | EnchantmentEntityEffect::ReplaceDisk { .. }
         | EnchantmentEntityEffect::Attribute(_)
         | EnchantmentEntityEffect::Unsupported { .. } => false,
     }
@@ -1062,6 +1208,7 @@ fn apply_supported_post_piercing_entity_effect(
         EnchantmentEntityEffect::DamageEntity { .. }
         | EnchantmentEntityEffect::SummonEntity { .. }
         | EnchantmentEntityEffect::SpawnParticles { .. }
+        | EnchantmentEntityEffect::ReplaceDisk { .. }
         | EnchantmentEntityEffect::Attribute(_)
         | EnchantmentEntityEffect::Unsupported { .. } => false,
     }
@@ -1372,6 +1519,27 @@ fn entity_predicate_matches_entity(
         return Some(false);
     }
 
+    if predicate.flags.unsupported {
+        return None;
+    }
+    if let Some(expected) = predicate.flags.is_on_ground
+        && entity.on_ground() != expected
+    {
+        return Some(false);
+    }
+    if let Some(expected) = predicate.flags.is_fall_flying
+        && entity
+            .as_living_entity()
+            .is_none_or(|living| living.is_fall_flying() != expected)
+    {
+        return Some(false);
+    }
+    if let Some(expected) = predicate.flags.is_in_water
+        && entity.is_in_water() != expected
+    {
+        return Some(false);
+    }
+
     match predicate.vehicle {
         EntityVehiclePredicate::Any => {}
         EntityVehiclePredicate::Present => {
@@ -1489,8 +1657,8 @@ mod tests {
     use steel_registry::entity_type::EntityTypeRef;
     use steel_registry::items::ItemRef;
     use steel_registry::{
-        init_vanilla_registry, vanilla_damage_types, vanilla_enchantments, vanilla_entities,
-        vanilla_items, vanilla_mob_effects,
+        init_vanilla_registry, vanilla_blocks, vanilla_damage_types, vanilla_enchantments,
+        vanilla_entities, vanilla_items, vanilla_mob_effects,
     };
     use steel_utils::Identifier;
     use steel_utils::locks::SyncMutex;
@@ -1500,7 +1668,18 @@ mod tests {
     use crate::entity::{
         EntityBase, LivingEntity, LivingEntityBase, entities::FireworkRocketEntity,
     };
-    use crate::test_support::{enchanted_item, test_world};
+    use crate::player::Player;
+    use crate::test_support::{
+        TestPlayerBuilder, TestWorld, enchanted_item, fresh_test_world, insert_ready_full_chunk,
+        test_world,
+    };
+    use steel_registry::blocks::properties::BlockStateProperties;
+    use steel_registry::blocks::properties::IntProperty;
+    use steel_registry::blocks::{BlockRef, block_state_ext::BlockStateExt as _};
+    use steel_utils::{ChunkPos, types::UpdateFlags};
+
+    /// Frost Walker's `age` property.
+    const AGE_3: &IntProperty = &BlockStateProperties::AGE_3;
 
     struct TestLivingEntity {
         base: EntityBase,
@@ -2281,5 +2460,214 @@ mod tests {
             Weak::new(),
         );
         assert_eq!(process_mob_experience(&rocket, victim.as_ref(), 7), 7);
+    }
+
+    /// Frost Walker's vanilla disk is measured from the *entity position*, not
+    /// the block center: a player standing at `(8.0, 64.0, 8.0)` has the disk
+    /// centered on that corner, so radius `r` covers the block offsets whose
+    /// `(dx + 0.5)² + (dz + 0.5)² < r²` (vanilla
+    /// `ReplaceDisk.apply`'s `distToCenterSqr(origin.x, p.y + 0.5, origin.z)
+    /// < Mth.square(radius)`).
+    ///
+    /// The ground is passed as a `BlockRef`, never a `BlockStateId`: resolving a
+    /// default state needs the published registry, and an argument is evaluated
+    /// before this function runs `init_vanilla_registry`.
+    fn frost_walker_world(
+        key: &'static str,
+        ground: BlockRef,
+    ) -> (TestWorld, Arc<Player>, BlockPos) {
+        init_vanilla_registry();
+        init_behaviors();
+
+        let world_fixture = fresh_test_world(key);
+        let world = &world_fixture.world;
+        let center = BlockPos::new(8, 63, 8);
+        insert_ready_full_chunk(world, ChunkPos::from_block_pos(center));
+        let ground = ground.default_state();
+        for dx in -6..=6 {
+            for dz in -6..=6 {
+                let pos = center.offset(dx, 0, dz);
+                assert!(
+                    world.set_block(pos, ground, UpdateFlags::UPDATE_NONE),
+                    "set_block at {pos:?} (ground layer)"
+                );
+                // An empty section already reads as air, and rewriting a state
+                // into an all-air section reports "nothing changed" (vanilla
+                // `LevelChunk.setBlockState` returns null there), so the layer
+                // above is asserted by read instead of written.
+                assert_eq!(
+                    world.get_block_state(pos.above()),
+                    vanilla_blocks::AIR.default_state(),
+                    "the block above {pos:?} must be air for the Frost Walker predicate"
+                );
+            }
+        }
+
+        let player = TestPlayerBuilder::new(Arc::clone(world), "FrostWalker", 1).build();
+        assert!(
+            player.try_set_position(DVec3::new(8.0, 64.0, 8.0)).is_ok(),
+            "test player should stand on the water surface"
+        );
+        player.set_on_ground(true);
+
+        (world_fixture, player, center)
+    }
+
+    fn equip_frost_walker(player: &Player, level: u32) {
+        player.living_base().equipment().lock().set(
+            EquipmentSlot::Feet,
+            enchanted_item(
+                &vanilla_items::DIAMOND_BOOTS,
+                Identifier::vanilla_static("frost_walker"),
+                level,
+            ),
+        );
+    }
+
+    fn is_water(world: &Arc<World>, pos: BlockPos) -> bool {
+        world.get_block_state(pos) == vanilla_blocks::WATER.default_state()
+    }
+
+    fn frosted_ice_age(world: &Arc<World>, pos: BlockPos) -> Option<u8> {
+        let state = world.get_block_state(pos);
+        (state.get_block() == &vanilla_blocks::FROSTED_ICE).then(|| state.get_value(AGE_3))
+    }
+
+    #[test]
+    fn frost_walker_replaces_water_in_the_vanilla_disk() {
+        let (world_fixture, player, center) =
+            frost_walker_world("frost_walker_disk", &vanilla_blocks::WATER);
+        let world = &world_fixture.world;
+        equip_frost_walker(&player, 1);
+
+        // The predicate needs air above the water: a covered water block stays
+        // water even inside the disk (offset (2, 1) is inside the level I circle).
+        let covered = center.offset(2, 0, 1);
+        assert!(world.set_block(
+            covered.above(),
+            vanilla_blocks::STONE.default_state(),
+            UpdateFlags::UPDATE_NONE
+        ));
+
+        run_location_changed_effects(player.as_ref(), world);
+
+        // Radius 3 at level I: offsets -3..=2 survive the `(dx + 0.5)² +
+        // (dz + 0.5)² < 9` circle, and every replaced block is fresh ice.
+        for (dx, dz) in [(0, 0), (-3, 0), (2, 0), (0, -3), (0, 2), (-2, -2), (1, 1)] {
+            let pos = center.offset(dx, 0, dz);
+            assert_eq!(
+                frosted_ice_age(world, pos),
+                Some(0),
+                "water at offset ({dx}, {dz}) should become fresh frosted ice"
+            );
+            // Vanilla `FrostedIceBlock.onPlace` arms the 60..120 tick revert.
+            assert!(
+                world.has_scheduled_block_tick(pos, &vanilla_blocks::FROSTED_ICE),
+                "placed ice at offset ({dx}, {dz}) should have its melt tick armed"
+            );
+        }
+
+        for (dx, dz) in [(-4, 0), (3, 0), (0, -4), (0, 3), (2, 2), (3, 1)] {
+            assert!(
+                is_water(world, center.offset(dx, 0, dz)),
+                "water at offset ({dx}, {dz}) is outside the level I disk"
+            );
+        }
+
+        // The covered water block is inside the disk but keeps its water.
+        assert!(
+            is_water(world, covered),
+            "water with a block above it must not be frozen"
+        );
+    }
+
+    #[test]
+    fn frost_walker_disk_grows_with_level() {
+        let (world_fixture, player, center) =
+            frost_walker_world("frost_walker_disk_level", &vanilla_blocks::WATER);
+        let world = &world_fixture.world;
+        equip_frost_walker(&player, 2);
+
+        run_location_changed_effects(player.as_ref(), world);
+
+        // Level II radius is `linear(base 3, per_level_above_first 1)` = 4:
+        // offset -4 is inside `20.25 + 0.25 < 16`... no: (-3.5)² + 0.25 = 12.5.
+        assert_eq!(frosted_ice_age(world, center.offset(-4, 0, 0)), Some(0));
+        assert!(is_water(world, center.offset(-5, 0, 0)));
+    }
+
+    #[test]
+    fn frost_walker_does_nothing_on_land() {
+        let (world_fixture, player, center) =
+            frost_walker_world("frost_walker_land", &vanilla_blocks::STONE);
+        let world = &world_fixture.world;
+        equip_frost_walker(&player, 1);
+
+        run_location_changed_effects(player.as_ref(), world);
+
+        for (dx, dz) in [(0, 0), (-1, 0), (1, 0), (0, 1)] {
+            let pos = center.offset(dx, 0, dz);
+            assert_eq!(
+                world.get_block_state(pos),
+                vanilla_blocks::STONE.default_state(),
+                "stone at offset ({dx}, {dz}) must be untouched"
+            );
+        }
+    }
+
+    #[test]
+    fn frost_walker_requires_the_wearer_to_be_on_ground() {
+        let (world_fixture, player, center) =
+            frost_walker_world("frost_walker_airborne", &vanilla_blocks::WATER);
+        let world = &world_fixture.world;
+        equip_frost_walker(&player, 1);
+        player.set_on_ground(false);
+
+        run_location_changed_effects(player.as_ref(), world);
+
+        assert!(
+            is_water(world, center),
+            "an airborne wearer must not freeze any water"
+        );
+    }
+
+    #[test]
+    fn frost_walker_requires_the_boots_to_be_worn_in_the_feet_slot() {
+        let (world_fixture, player, center) =
+            frost_walker_world("frost_walker_slot", &vanilla_blocks::WATER);
+        let world = &world_fixture.world;
+        player.living_base().equipment().lock().set(
+            EquipmentSlot::Head,
+            enchanted_item(
+                &vanilla_items::DIAMOND_HELMET,
+                Identifier::vanilla_static("frost_walker"),
+                1,
+            ),
+        );
+
+        run_location_changed_effects(player.as_ref(), world);
+
+        assert!(is_water(world, center));
+    }
+
+    #[test]
+    fn location_changed_valve_fires_only_after_moving_into_a_new_block() {
+        let (_world_fixture, player, center) =
+            frost_walker_world("frost_walker_valve", &vanilla_blocks::WATER);
+
+        assert!(
+            player.living_base().update_last_changed_block_pos(center),
+            "the first step always runs the effects (vanilla `lastPos` starts null)"
+        );
+        assert!(
+            !player.living_base().update_last_changed_block_pos(center),
+            "standing in the same block must not re-run the effects"
+        );
+        assert!(
+            player
+                .living_base()
+                .update_last_changed_block_pos(center.offset(1, 0, 0)),
+            "stepping into a new block re-arms the effects"
+        );
     }
 }

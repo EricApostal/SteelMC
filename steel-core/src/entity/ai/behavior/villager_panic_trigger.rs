@@ -4,6 +4,10 @@ use crate::entity::ai::behavior::villager::villager;
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::module_type as mem;
 
+/// Vanilla `VillagerPanicTrigger`: the 3 agreeing villagers `spawnGolemIfNeeded` is
+/// called with from the panic tick.
+const PANIC_GOLEM_VOTES: usize = 3;
+
 /// Vanilla `VillagerPanicTrigger`.
 pub struct VillagerPanicTrigger {
     state: BehaviorState,
@@ -71,7 +75,65 @@ impl Behavior for VillagerPanicTrigger {
         }
 
         if let Some(villager) = villager(ctx.level, ctx.body) {
-            villager.spawn_golem_if_needed(3);
+            // Vanilla `Villager.spawnGolemIfNeeded(level, gameTime, 3)` runs inline here,
+            // but this behaviour executes inside the brain tick, which already holds the
+            // villager's brain lock; the consensus helper locks the brains of every
+            // participating villager, so calling it here self-deadlocks. Stage the
+            // request instead — the villager's tick resolves it after the guard drops.
+            villager.request_golem_spawn(PANIC_GOLEM_VOTES);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Weak};
+
+    use glam::DVec3;
+    use steel_registry::{init_vanilla_registry, vanilla_entities};
+
+    use super::*;
+    use crate::entity::ai::behavior::villager::as_villager;
+    use crate::entity::ai::brain::memory::MemoryStore;
+    use crate::entity::entities::mobs::npc::villager::VillagerEntity;
+    use crate::entity::{Mob, SharedEntity};
+    use crate::test_support::fresh_test_world;
+    use crate::world::World;
+
+    /// Regression: this behaviour runs *inside* the brain tick, which already holds the
+    /// villager's brain lock, and the golem consensus locks the brain of every
+    /// participating villager. Calling it from `tick` therefore self-deadlocked the tick
+    /// thread the moment a villager panicked (e.g. a player hits one).
+    ///
+    /// The guard below is held exactly as the brain tick holds it while a behaviour runs:
+    /// before the fix this test hung, now the behaviour only stages the request.
+    #[test]
+    fn panic_tick_stages_the_golem_request_while_the_brain_lock_is_held() {
+        init_vanilla_registry();
+        let fixture = fresh_test_world("villager_panic_golem_request");
+        let world = Arc::clone(&fixture.world);
+        let villager: SharedEntity = Arc::new(VillagerEntity::new(
+            &vanilla_entities::VILLAGER,
+            1,
+            DVec3::new(4.0, 64.0, 4.0),
+            Weak::<World>::new(),
+        ));
+        let villager_ref = as_villager(&villager).expect("the body is a villager");
+
+        let mut behavior = VillagerPanicTrigger::new();
+        let mut memories = MemoryStore::new();
+
+        let brain = Mob::brain(villager_ref).expect("villagers have a brain");
+        let guard = brain.lock();
+
+        let mut ctx = BehaviorContext::new(&mut memories, &world, &villager, 100);
+        behavior.tick(&mut ctx);
+
+        drop(guard);
+        assert_eq!(
+            villager_ref.take_golem_spawn_request(),
+            Some(PANIC_GOLEM_VOTES),
+            "the panic tick stages the vanilla 3-vote golem request for the villager tick"
+        );
     }
 }

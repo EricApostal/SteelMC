@@ -32,4 +32,6 @@ pub(crate) use entity::EntitySlots;
 pub(crate) use item_provider::{ArrayItemProvider, CycledItemProvider, ItemProvider};
 pub(crate) use provider::{ContainerSlots, SlotProvider};
 pub(crate) use selector::{AnySelector, NonEmptySelector, TrackingSelector};
-pub(crate) use source::{SlotSourceContext, provide_slot_range, provide_slot_source};
+pub(crate) use source::{
+    SlotSourceContext, provide_slot_range, provide_slot_source, provide_slot_source_holder,
+};

@@ -411,7 +411,9 @@ pub trait Raider: Mob {
         if self.raider_base().state().raid_id.is_some() {
             return false;
         }
-        self.remove_when_far_away(dist_sqr)
+        // Vanilla's `super.removeWhenFarAway(...)`: the plain `Mob` default, not the
+        // override that delegated here (that would recurse forever).
+        self.remove_when_far_away_base(dist_sqr)
     }
 }
 

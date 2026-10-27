@@ -851,6 +851,7 @@ fn slots_from_provider<'a>(
     let context = SlotSourceContext {
         container: Some(provider),
         this_entity: source_entity,
+        block_entity: None,
     };
     match source {
         SlotSourceArg::Literal(range) => provide_slot_range(range, &context),

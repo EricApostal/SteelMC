@@ -6,7 +6,7 @@ use glam::IVec3;
 use steel_registry::{
     Registry, blocks::block_state_ext::BlockStateExt as _, feature::BlockPredicate,
 };
-use steel_utils::BlockPos;
+use steel_utils::{BlockPos, WorldAabb};
 
 impl BlockStateProviderEvaluator {
     pub(crate) fn test_block_predicate(
@@ -59,6 +59,27 @@ impl BlockStateProviderEvaluator {
             BlockPredicate::InsideWorldBounds { offset } => {
                 let position = Self::offset(origin, offset);
                 !level.is_outside_build_height(position.y())
+            }
+            BlockPredicate::Unobstructed { offset } => {
+                // Vanilla `UnobstructedPredicate.test`: the full block box is
+                // free of colliding entities (vanilla also checks colliding
+                // *blocks*, but every candidate here already matches a
+                // `MatchingBlocks`/`MatchingFluids` state predicate, so block
+                // collisions cannot add information).
+                let position = Self::offset(origin, offset);
+                let aabb = WorldAabb::new(
+                    f64::from(position.x()),
+                    f64::from(position.y()),
+                    f64::from(position.z()),
+                    f64::from(position.x() + 1),
+                    f64::from(position.y() + 1),
+                    f64::from(position.z() + 1),
+                );
+                !level.entities_in_aabb(&aabb).iter().any(|entity| {
+                    !entity.is_removed()
+                        && entity.blocks_building()
+                        && entity.bounding_box().intersects(aabb)
+                })
             }
             BlockPredicate::HeightRange {
                 min_inclusive,

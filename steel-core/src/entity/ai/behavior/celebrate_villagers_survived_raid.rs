@@ -49,13 +49,15 @@ impl Behavior for CelebrateVillagersSurvivedRaid {
         self.current_raid.is_some_and(|raid| !raid.is_stopped())
     }
 
-    fn stop(&mut self, ctx: &mut BehaviorContext<'_>) {
+    fn stop(&mut self, _ctx: &mut BehaviorContext<'_>) {
         self.current_raid = None;
-        if let Some(mob) = ctx.body.as_mob()
-            && let Some(brain) = mob.brain()
-        {
-            brain.lock().update_activity_from_schedule(ctx.level);
-        }
+        // Vanilla `CelebrateVillagersSurvivedRaid.stop` ends with
+        // `villager.getBrain().updateActivityFromSchedule(dayTime, gameTime)`. Behaviours
+        // run inside the brain tick, which already holds this villager's brain lock, so
+        // locking it here deadlocks the tick thread (non-reentrant mutex). The central
+        // refresh in `villager::brain::apply_activity_transitions` performs the same
+        // throttled `SCHEDULE_UPDATE_DELAY` reschedule later in this very tick, so the
+        // remaining state change is clearing `current_raid`.
     }
 
     fn tick(&mut self, ctx: &mut BehaviorContext<'_>) {

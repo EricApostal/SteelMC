@@ -12,6 +12,8 @@ use steel_utils::types::Difficulty;
 use steel_utils::{BlockPos, ChunkPos, translations};
 use text_components::TextComponent;
 
+use crate::bootstrap::init_globals;
+use crate::entity::mob::Mob;
 use crate::entity::spawn::create_entity_instance;
 use crate::entity::{Player, SharedEntity};
 use crate::test_support::{
@@ -612,4 +614,42 @@ fn adding_a_damaged_raider_refreshes_the_boss_bar_progress() {
         "expected 10/30 after the join, got {}",
         raid.raid_event().progress()
     );
+}
+
+/// Regression: `Raider::raider_remove_when_far_away` used to call the *virtual*
+/// `remove_when_far_away`, which every raider override delegates back into — an
+/// infinite self-recursion that LLVM turns into a loop, freezing the tick thread
+/// the moment a raider despawn-checks with a player online.
+///
+/// Vanilla `Raider.removeWhenFarAway` is `!hasActiveRaid() && super.removeWhenFarAway(...)`,
+/// i.e. the plain `Mob` default; each call here must simply return.
+#[test]
+fn raider_despawn_checks_terminate_for_every_raider_type() {
+    init_globals();
+    let (fixture, _player) = boss_bar_fixture("raid_despawn_terminates");
+    let world = Arc::clone(&fixture.world);
+
+    for entity_type in [
+        &vanilla_entities::PILLAGER,
+        &vanilla_entities::VINDICATOR,
+        &vanilla_entities::EVOKER,
+        &vanilla_entities::ILLUSIONER,
+        &vanilla_entities::WITCH,
+        &vanilla_entities::RAVAGER,
+    ] {
+        let raider = create_entity_instance(&world, entity_type, DVec3::ZERO)
+            .expect("raider can be created in the test world");
+        let mob = raider.as_mob().expect("raiders are mobs");
+
+        // Far enough that the despawn check reaches the removable branch.
+        let far = f64::MAX;
+        assert!(
+            Mob::remove_when_far_away(mob, far),
+            "an unraided {} despawning far away is removable",
+            entity_type.key.path
+        );
+
+        // And the full despawn entry point the tick loop uses must return too.
+        Mob::check_mob_despawn(mob);
+    }
 }

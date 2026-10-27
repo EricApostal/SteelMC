@@ -33,9 +33,9 @@ use crate::command::{
     PendingCommandExecutionQueue, client_permission_event, command_suggestions_packet,
     command_tree_packet, create_registered_dispatcher,
 };
-use crate::config::{
-    ResolvedDomainConfig, ResolvedWorldConfig, RuntimeConfig, WorldsConfig, validate_login_security,
-};
+#[cfg(any(test, feature = "test-framework"))]
+use crate::config::ResolvedDomainConfig;
+use crate::config::{ResolvedWorldConfig, RuntimeConfig, WorldsConfig, validate_login_security};
 use crate::datapack::init as datapack_init;
 use crate::entity::damage::DamageHistory;
 use crate::entity::entities::mobs::npc::wandering_trader::WanderingTraderSpawner;

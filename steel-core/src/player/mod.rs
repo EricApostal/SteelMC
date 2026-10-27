@@ -23,6 +23,7 @@ pub mod player_data_storage;
 pub mod player_inventory;
 mod profile;
 pub mod recipe_book;
+mod scoreboard_objectives;
 mod session;
 mod shoulder;
 mod sleep;
@@ -56,6 +57,7 @@ pub(crate) use profile::{GAME_PROFILE_CACHE_LIMIT, KnownPlayerNameLookup, lookup
 pub use profile::{
     GameProfile, KnownPlayer, KnownPlayers, ProfileLookupError, is_valid_player_name, offline_uuid,
 };
+use scoreboard_objectives::RecordedCriteriaValues;
 pub use session::PlayerSession;
 pub(crate) use session::PlayerSessionId;
 use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
@@ -334,6 +336,10 @@ pub struct Player {
 
     /// The counter keeping track of this player's statistics.
     stats: SyncMutex<StatsCounter>,
+
+    /// Vanilla `ServerPlayer.lastRecorded*`: the last health/food/air/armor/
+    /// experience/level values written into the derived scoreboard criteria.
+    recorded_criteria: SyncMutex<RecordedCriteriaValues>,
 
     /// Debug-value subscription ids this player asked to receive, vanilla
     /// `ServerPlayer.requestedDebugSubscriptions`. Empty until the client subscribes.
@@ -725,6 +731,7 @@ impl Player {
             ender_pearls: SyncMutex::new(Vec::new()),
             fishing: SyncMutex::new(None),
             stats: SyncMutex::new(StatsCounter::new()),
+            recorded_criteria: SyncMutex::new(RecordedCriteriaValues::new()),
             debug_subscriptions: SyncMutex::new(Vec::new()),
             last_action_time: SyncMutex::new(Instant::now()),
             advancements: SyncMutex::new(PlayerAdvancement::default()), // TODO save the advancement
@@ -862,35 +869,39 @@ impl Player {
     fn tick_stats(&self) {
         // These stats are expressed in ticks.
         // We batch the stats so that the mutex for stats is only
-        // locked once.
-        let mut stats = self.stats.lock();
-        stats.increment(
-            vanilla_stat_types::CUSTOM.get(&vanilla_custom_stats::PLAY_TIME),
-            1,
-        );
-        stats.increment(
-            vanilla_stat_types::CUSTOM.get(&vanilla_custom_stats::TOTAL_WORLD_TIME),
-            1,
-        );
+        // locked once, then drive their criteria objectives after the
+        // guard is released (the deadlock rule forbids touching the
+        // scoreboard while holding player state).
+        use steel_registry::stat::custom::CustomStatRef;
 
-        if Entity::is_alive(self) {
-            stats.increment(
-                vanilla_stat_types::CUSTOM.get(&vanilla_custom_stats::TIME_SINCE_DEATH),
-                1,
-            );
-        }
-        if self.is_discrete() {
-            stats.increment(
-                vanilla_stat_types::CUSTOM.get(&vanilla_custom_stats::SNEAK_TIME),
-                1,
-            );
-        }
-        if !self.is_sleeping() {
-            stats.increment(
-                vanilla_stat_types::CUSTOM.get(&vanilla_custom_stats::TIME_SINCE_REST),
-                1,
-            );
-        }
+        let awarded = {
+            let mut stats = self.stats.lock();
+            let mut awarded = Vec::new();
+            let mut award = |stat: CustomStatRef| {
+                let stat = vanilla_stat_types::CUSTOM.get(stat);
+                stats.increment(stat, 1);
+                awarded.push(stat);
+            };
+            award(&vanilla_custom_stats::PLAY_TIME);
+            award(&vanilla_custom_stats::TOTAL_WORLD_TIME);
+
+            if Entity::is_alive(self) {
+                award(&vanilla_custom_stats::TIME_SINCE_DEATH);
+            }
+            if self.is_discrete() {
+                award(&vanilla_custom_stats::SNEAK_TIME);
+            }
+            if !self.is_sleeping() {
+                award(&vanilla_custom_stats::TIME_SINCE_REST);
+            }
+            awarded
+        };
+        self.drive_stat_objectives(
+            &awarded
+                .into_iter()
+                .map(|stat| (stat, 1))
+                .collect::<Vec<_>>(),
+        );
     }
 
     /// Immediately flushes dirty player entity data to tracking players and self.
@@ -1148,7 +1159,10 @@ impl Player {
             }
         }
 
-        // TODO: Increment DEATH_COUNT objective criterion
+        // Vanilla `ServerPlayer.die` pushes `DEATH_COUNT` right after the loot drop,
+        // ahead of the kill-credit bookkeeping.
+        self.award_death_objectives();
+
         if let Some(killer) = get_kill_credit(self, world.as_ref()) {
             self.award_stat(&vanilla_stat_types::ENTITY_KILLED_BY, killer.entity_type());
             killer.award_kill_score(self, source);
@@ -2037,13 +2051,18 @@ impl Entity for Player {
                     killing_blow,
                 );
             }
-            // TODO: Increment the score of some objectives of this player.
-            self.award_custom_stat(if victim.as_player().is_some() {
-                &vanilla_custom_stats::PLAYER_KILLS
+            // Vanilla `ServerPlayer.awardKillScore` order: `KILL_COUNT_ALL`, then the
+            // player-kill stat and `KILL_COUNT_PLAYERS` (or `MOB_KILLS`), then the
+            // `teamkill.*` and `killedByTeam.*` criteria.
+            self.award_total_kill_objectives();
+            if victim.as_player().is_some() {
+                self.award_custom_stat(&vanilla_custom_stats::PLAYER_KILLS);
+                self.award_player_kill_objectives();
             } else {
-                &vanilla_custom_stats::MOB_KILLS
-            });
-            // TODO: Handle team kill
+                self.award_custom_stat(&vanilla_custom_stats::MOB_KILLS);
+            }
+            self.award_team_kill_objectives(victim);
+            self.award_killed_by_team_objectives(victim);
             // Vanilla `ServerPlayer.awardKillScore` raises `PLAYER_KILLED_ENTITY`
             // with the killed entity and the killing blow, after the kill stats.
             raise_player_killed_entity(self, victim, killing_blow);
@@ -2263,6 +2282,10 @@ impl LivingEntity for Player {
         self.flush_inventory_resync();
         self.broadcast_inventory_changes();
         self.update_pose();
+
+        // Vanilla `ServerPlayer.tick` refreshes the derived criteria objectives from
+        // the player right before the health packet is synced.
+        self.tick_objective_criteria();
 
         {
             let health = self.get_health();

@@ -510,6 +510,11 @@ pub enum BlockPredicate {
         #[serde(default = "default_offset")]
         offset: Offset,
     },
+    #[serde(rename = "minecraft:unobstructed")]
+    Unobstructed {
+        #[serde(default = "default_offset")]
+        offset: Offset,
+    },
     #[serde(rename = "minecraft:height_range")]
     HeightRange {
         min_inclusive: VerticalAnchor,

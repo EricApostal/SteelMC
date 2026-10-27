@@ -41,6 +41,8 @@ use crate::entity::{
     Entity, InsideBlockEffectCollector, damage::DamageSource, entity_loot_ref, loot_equipment,
 };
 use crate::fluid::is_water_fluid;
+use crate::loot::slot::SlotProvider;
+use crate::loot::{LootSlotSources, LootedContainer};
 use crate::physics::collide;
 use crate::player::Player;
 use crate::world::explosion::{ExplosionInfo, default_on_explosion_hit};
@@ -70,14 +72,34 @@ pub(crate) fn default_can_be_replaced(
 pub(crate) fn drop_from_block_interact_loot_table(
     key: LootTableRef,
     interacted_block_state: BlockStateId,
-    _interacted_block_entity: Option<SharedBlockEntity>,
+    interacted_block_entity: Option<SharedBlockEntity>,
     tool: Option<&ItemStack>,
     interacting_entity: Option<&dyn Entity>,
     rng: &mut ThreadRng,
 ) -> Vec<ItemStack> {
-    let mut ctx = LootContext::new(rng).with_block_state(interacted_block_state);
+    // Vanilla threads the interacted block entity through the loot parameters
+    // (vanilla `LootContextParams.BLOCK_ENTITY`), so its container supplies the
+    // `minecraft:dynamic` `minecraft:contents` drop and the `container` slot
+    // sources — snapshotted, without holding a container lock.
+    let container = LootedContainer::snapshot(interacted_block_entity.as_deref());
+    let slot_sources = LootSlotSources::new(
+        container
+            .as_ref()
+            .map(|container| container as &dyn SlotProvider),
+        None,
+        container
+            .as_ref()
+            .map(|container| container as &dyn SlotProvider),
+    );
+    let mut ctx = LootContext::new(rng)
+        .with_block_state(interacted_block_state)
+        .with_slot_sources(&slot_sources);
 
-    // TODO: Add the block entity to the context when it can be done.
+    if let (Some(block_entity), Some(container)) =
+        (interacted_block_entity.as_deref(), container.as_ref())
+    {
+        ctx = ctx.with_block_entity(container.block_entity_ref(block_entity));
+    }
 
     let interacting_equipment = interacting_entity.and_then(loot_equipment);
     if let Some(interacting_entity) = interacting_entity {

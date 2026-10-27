@@ -128,7 +128,10 @@ impl Default for RuntimeConfig {
             use_favicon: true,
             favicon: "config/favicon.png".to_owned(),
             enforce_secure_chat: false,
-            white_list: true,
+            // Vanilla `server.properties` ships `white-list=false` (and PaperMC
+            // keeps that default), so the allowlist must not gate logins until
+            // an operator opts in.
+            white_list: false,
             enforce_whitelist: false,
             op_permission_level: PermissionLevel::Owners,
             function_permission_level: PermissionLevel::Gamemasters,

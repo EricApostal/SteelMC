@@ -259,6 +259,14 @@ enum EntityEffectJson {
         min_amplifier: LevelBasedValueJson,
         max_amplifier: LevelBasedValueJson,
     },
+    ReplaceDisk {
+        radius: LevelBasedValueJson,
+        height: LevelBasedValueJson,
+        offset: [i32; 3],
+        predicate: Option<BlockPredicateJson>,
+        block_state: BlockStateShorthandJson,
+        trigger_game_event: Option<Identifier>,
+    },
     Unsupported {
         effect_type: Identifier,
     },
@@ -447,6 +455,7 @@ enum EntityVehiclePredicateJson {
 struct EntityFlagsPredicateJson {
     is_fall_flying: Option<bool>,
     is_in_water: Option<bool>,
+    is_on_ground: Option<bool>,
     unsupported: bool,
 }
 
@@ -455,9 +464,41 @@ impl EntityFlagsPredicateJson {
         Self {
             is_fall_flying: None,
             is_in_water: None,
+            is_on_ground: None,
             unsupported: false,
         }
     }
+}
+
+/// Vanilla `net.minecraft.world.level.levelgen.blockpredicates.BlockPredicate`,
+/// restricted to the types vanilla enchantment data uses.
+#[derive(Debug)]
+enum BlockPredicateJson {
+    AllOf(Vec<BlockPredicateJson>),
+    MatchingBlockTag {
+        tag: Identifier,
+        offset: [i32; 3],
+    },
+    MatchingBlocks {
+        blocks: Vec<Identifier>,
+        offset: [i32; 3],
+    },
+    MatchingFluids {
+        fluids: Vec<Identifier>,
+        offset: [i32; 3],
+    },
+    Unobstructed {
+        offset: [i32; 3],
+    },
+}
+
+/// Vanilla inline `{"id": ..., "properties": {...}}` block state used by
+/// `ReplaceDisk.block_state` (registry holder references are not used by
+/// vanilla enchantment data and are rejected at parse time).
+#[derive(Debug)]
+struct BlockStateShorthandJson {
+    name: Identifier,
+    properties: Vec<(String, String)>,
 }
 
 #[derive(Debug)]
@@ -592,7 +633,8 @@ pub(crate) fn build() -> TokenStream {
     let mut stream = TokenStream::new();
 
     stream.extend(quote! {
-        use glam::DVec3;
+        use std::sync::LazyLock;
+        use glam::{DVec3, IVec3};
         use crate::attribute::AttributeModifierOperation;
         use crate::enchantment_effect::{
             ConditionalDamageImmunityEffect, ConditionalEnchantmentEffect,
@@ -606,9 +648,13 @@ pub(crate) fn build() -> TokenStream {
             ParticlePositionSourceType, ParticleVelocitySource, PlayerPredicate,
             TargetedConditionalEnchantmentEffect,
         };
+        use crate::feature::{BlockPredicate, BlockRefList, BlockStateData, FluidRefList};
         use steel_utils::value_providers::FloatProvider;
         use crate::enchantment::{Enchantment, EnchantmentCost, EnchantmentRegistry};
-        use crate::{vanilla_entities, vanilla_particle_types};
+        use crate::{
+            vanilla_blocks, vanilla_entities, vanilla_fluids, vanilla_game_events,
+            vanilla_particle_types,
+        };
         use crate::equipment::EquipmentSlotGroup;
         use crate::vanilla_attributes;
         use crate::vanilla_mob_effects;

@@ -11,6 +11,9 @@ use super::{
 use crate::entity::loot::loot_level_view;
 use crate::entity::loot_equipment;
 use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
+use crate::loot::slot::SlotProvider;
+use crate::loot::slot::entity::EntitySlots;
+use crate::loot::{LootSlotSources, LootedContainer};
 use steel_registry::sound_event::SoundEventHolder;
 use steel_registry::vanilla_particle_types::{BUBBLE, SPLASH};
 
@@ -501,14 +504,15 @@ impl World {
         };
 
         let mut rng = rand::rng();
+        let origin = (
+            f64::from(context.pos().x()),
+            f64::from(context.pos().y()),
+            f64::from(context.pos().z()),
+        );
         let mut ctx = LootContext::new(&mut rng)
             .with_luck(context.luck())
             .with_block_state(state)
-            .with_origin(
-                f64::from(context.pos().x()),
-                f64::from(context.pos().y()),
-                f64::from(context.pos().z()),
-            );
+            .with_origin(origin.0, origin.1, origin.2);
         if let Some(tool) = context.tool() {
             ctx = ctx.with_tool(tool);
         }
@@ -519,16 +523,30 @@ impl World {
         if let Some(radius) = context.explosion_radius() {
             ctx = ctx.with_explosion(radius);
         }
+        // Vanilla `BaseContainerBlockEntity.getLootContext` installs the block
+        // entity's own container as `LootContextParams.CONTAINER` (and as the
+        // block entity the `minecraft:contents` dynamic drop reads); Steel
+        // snapshots it so no container lock is held while the table evaluates.
+        let container = LootedContainer::snapshot(context.block_entity());
+        let entity_slots = context.entity().map(EntitySlots::new);
+        let slot_sources = LootSlotSources::new(
+            container
+                .as_ref()
+                .map(|container| container as &dyn SlotProvider),
+            entity_slots
+                .as_ref()
+                .map(|slots| slots as &dyn SlotProvider),
+            container
+                .as_ref()
+                .map(|container| container as &dyn SlotProvider),
+        );
+        ctx = ctx.with_slot_sources(&slot_sources);
+        if let (Some(block_entity), Some(container)) = (context.block_entity(), &container) {
+            ctx = ctx.with_block_entity(container.block_entity_ref(block_entity));
+        }
         // Vanilla loot params always carry the level, which
         // `minecraft:location_check` resolves its predicate against.
-        let level = loot_level_view(
-            context.world(),
-            (
-                f64::from(context.pos().x()),
-                f64::from(context.pos().y()),
-                f64::from(context.pos().z()),
-            ),
-        );
+        let level = loot_level_view(context.world(), origin);
         ctx = ctx.with_location(&level);
 
         loot_table.get_random_items(&mut ctx)

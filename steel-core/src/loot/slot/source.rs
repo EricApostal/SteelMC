@@ -33,6 +33,8 @@ pub(crate) struct SlotSourceContext<'a> {
     pub(crate) container: Option<&'a dyn SlotProvider>,
     /// Vanilla `LootContextParams.THIS_ENTITY`, when it provides slots.
     pub(crate) this_entity: Option<&'a dyn SlotProvider>,
+    /// Vanilla `LootContextParams.BLOCK_ENTITY`, when the caller can address it.
+    pub(crate) block_entity: Option<&'a dyn SlotProvider>,
 }
 
 impl<'a> SlotSourceContext<'a> {
@@ -42,16 +44,16 @@ impl<'a> SlotSourceContext<'a> {
         match arg {
             SlotSourceContextArg::Container => self.container,
             SlotSourceContextArg::This => self.this_entity,
-            // The remaining entity/block-entity targets read params that
-            // Steel's `LootContext` keeps as registry-side views without live
-            // slots; vanilla yields no slots for a target that is not a
+            SlotSourceContextArg::BlockEntity => self.block_entity,
+            // The remaining entity targets read params that Steel's
+            // `LootContext` keeps as registry-side views without live slots;
+            // vanilla yields no slots for a target that is not a
             // `SlotProvider`, which is the same fallback.
             SlotSourceContextArg::Attacker
             | SlotSourceContextArg::DirectAttacker
             | SlotSourceContextArg::AttackingPlayer
             | SlotSourceContextArg::TargetEntity
-            | SlotSourceContextArg::InteractingEntity
-            | SlotSourceContextArg::BlockEntity => None,
+            | SlotSourceContextArg::InteractingEntity => None,
         }
     }
 
@@ -88,18 +90,18 @@ pub(crate) fn provide_slot_source<'a>(
             group
                 .terms
                 .iter()
-                .map(|term| provide_holder(term, context))
+                .map(|term| provide_slot_source_holder(term, context))
                 .collect(),
         ),
         SlotSource::Filtered(filtered) => {
             let predicate: &'static ItemPredicate = &filtered.item_filter;
             filter(
-                provide_holder(&filtered.slot_source, context),
+                provide_slot_source_holder(&filtered.slot_source, context),
                 Box::new(move |stack: &ItemStack| predicate.test(stack)),
             )
         }
         SlotSource::Limit(limited) => limit(
-            provide_holder(&limited.slot_source, context),
+            provide_slot_source_holder(&limited.slot_source, context),
             usize::try_from(limited.limit).unwrap_or(0),
         ),
         SlotSource::SlotRange(range_source) => match name_to_range(range_source.slots) {
@@ -109,7 +111,7 @@ pub(crate) fn provide_slot_source<'a>(
             None => Box::new(EmptySlots),
         },
         SlotSource::Contents(contents) => flat_map(
-            provide_holder(&contents.slot_source, context),
+            provide_slot_source_holder(&contents.slot_source, context),
             contents.component,
         ),
         SlotSource::Empty(_) => Box::new(EmptySlots),
@@ -117,7 +119,7 @@ pub(crate) fn provide_slot_source<'a>(
 }
 
 /// Vanilla `Holder<SlotSource>.value().provide(context)` for a term.
-fn provide_holder<'a>(
+pub(crate) fn provide_slot_source_holder<'a>(
     holder: &'static SlotSourceHolder,
     context: &SlotSourceContext<'a>,
 ) -> Box<dyn SlotCollection + 'a> {
@@ -188,6 +190,7 @@ mod tests {
         let context = SlotSourceContext {
             container: Some(&slots),
             this_entity: None,
+            block_entity: None,
         };
         let range = name_to_range("container.*").expect("container.* range");
         let collection = provide_slot_range(range, &context);
@@ -212,6 +215,7 @@ mod tests {
         let context = SlotSourceContext {
             container: Some(&slots),
             this_entity: None,
+            block_entity: None,
         };
         let collection = provide_slot_range(name_to_range("container.*").expect("range"), &context);
         let mut provider = ArrayItemProvider::new(vec![stack(5)]);
