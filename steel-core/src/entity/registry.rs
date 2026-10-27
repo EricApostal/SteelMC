@@ -102,6 +102,11 @@ impl EntityRegistry {
 
         let nbt: BorrowedNbtCompoundView<'_, '_> = nbt.into();
         entity.load_additional(nbt);
+        // Mirror the save side: the living layer is a separate `addAdditionalSaveData`
+        // link and is not covered by the concrete entity's `load_additional`.
+        if let Some(living) = entity.as_living_entity() {
+            living.load_living(nbt);
+        }
         entity.set_old_position_to_current();
         entity.base().set_old_rotation_to_current();
         entity.sync_base_entity_data();

@@ -349,7 +349,9 @@ impl DragonHoldingPatternPhase {
 
         if self.current_path.as_ref().is_none_or(DragonPath::is_done) {
             let current_node_index = dragon.find_closest_node();
-            let mut target_node_index = current_node_index;
+            // Vanilla does this arithmetic on `int`: `targetNodeIndex` can go
+            // negative and is normalized before use.
+            let mut target_node_index = current_node_index as i32;
             if dragon.random_i32_bounded(8) == 0 {
                 self.clockwise = !self.clockwise;
                 target_node_index += 6;
@@ -363,13 +365,17 @@ impl DragonHoldingPatternPhase {
 
             if dragon.dragon_fight_present() && dragon.alive_crystals() >= 0 {
                 target_node_index %= 12;
+                if target_node_index < 0 {
+                    target_node_index += 12;
+                }
             } else {
                 target_node_index -= 12;
                 target_node_index &= 7;
                 target_node_index += 12;
             }
 
-            self.current_path = dragon.find_path(current_node_index, target_node_index, None);
+            self.current_path =
+                dragon.find_path(current_node_index, target_node_index as usize, None);
             if let Some(path) = self.current_path.as_mut() {
                 path.advance();
             }
@@ -477,7 +483,8 @@ impl DragonStrafePlayerPhase {
     fn find_new_target(&mut self, dragon: &EnderDragonEntity) {
         if self.current_path.as_ref().is_none_or(DragonPath::is_done) {
             let current_node_index = dragon.find_closest_node();
-            let mut target_node_index = current_node_index;
+            // Vanilla does this arithmetic on `int` (see the holding pattern).
+            let mut target_node_index = current_node_index as i32;
             if dragon.random_i32_bounded(8) == 0 {
                 self.holding_pattern_clockwise = !self.holding_pattern_clockwise;
                 target_node_index += 6;
@@ -491,13 +498,17 @@ impl DragonStrafePlayerPhase {
 
             if dragon.dragon_fight_present() && dragon.alive_crystals() > 0 {
                 target_node_index %= 12;
+                if target_node_index < 0 {
+                    target_node_index += 12;
+                }
             } else {
                 target_node_index -= 12;
                 target_node_index &= 7;
                 target_node_index += 12;
             }
 
-            self.current_path = dragon.find_path(current_node_index, target_node_index, None);
+            self.current_path =
+                dragon.find_path(current_node_index, target_node_index as usize, None);
             if let Some(path) = self.current_path.as_mut() {
                 path.advance();
             }

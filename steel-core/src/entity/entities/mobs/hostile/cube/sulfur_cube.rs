@@ -1910,7 +1910,7 @@ impl LivingEntity for SulfurCubeEntity {
     }
 
     /// Vanilla `SulfurCube.knockback` entry for the damage path.
-    fn apply_damage_knockback(&self, source: &DamageSource) {
+    fn apply_damage_knockback(&self, source: &DamageSource, blocked: bool) {
         if source.is(&DamageTypeTag::NO_KNOCKBACK) {
             return;
         }
@@ -1918,14 +1918,18 @@ impl LivingEntity for SulfurCubeEntity {
         let damage = self.state.lock().last_damage;
         let (xd, zd) = self.damage_knockback_direction(source);
         if self.sulfur_knockback(DAMAGE_KNOCKBACK_POWER, xd, zd, source, damage, false) {
-            self.indicate_damage(xd, zd);
+            if !blocked {
+                self.indicate_damage(xd, zd);
+            }
             return;
         }
 
         // Shared `LivingEntity.apply_damage_knockback` body, inlined because a UFCS
         // call would dispatch back into this override.
         self.knockback(DAMAGE_KNOCKBACK_POWER, xd, zd);
-        self.indicate_damage(xd, zd);
+        if !blocked {
+            self.indicate_damage(xd, zd);
+        }
     }
 
     /// Captures the damage amount vanilla `SulfurCube.knockback` scales by.

@@ -401,7 +401,12 @@ impl Player {
             return false;
         }
 
-        let attacking_item = {
+        let auto_spin_attack = self.is_auto_spin_attack();
+        // Vanilla `Player.getWeaponItem()` returns the spin-attack stack while
+        // the riptide spin attack is active, otherwise the main-hand item.
+        let attacking_item = if auto_spin_attack {
+            self.auto_spin_attack_item()
+        } else {
             let inventory = self.inventory.lock();
             let stack = inventory.get_item_in_hand(InteractionHand::MainHand);
             stack.copy_with_count(stack.count())
@@ -413,6 +418,12 @@ impl Player {
                 attributes.required_value(vanilla_attributes::ATTACK_SPEED),
                 attributes.required_value(vanilla_attributes::ATTACK_KNOCKBACK),
             )
+        };
+        // Vanilla: `isAutoSpinAttack() ? autoSpinAttackDmg : getAttributeValue(ATTACK_DAMAGE)`.
+        let attack_damage = if auto_spin_attack {
+            self.auto_spin_attack_damage()
+        } else {
+            attack_damage
         };
         let attack_strength_delay = Self::attack_strength_delay_from_speed(attack_speed);
         let attack_strength_scale =

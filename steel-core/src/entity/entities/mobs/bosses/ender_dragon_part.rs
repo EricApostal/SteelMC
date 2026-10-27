@@ -17,9 +17,7 @@ use steel_utils::locks::SyncMutex;
 use steel_utils::{Downcast as _, DowncastType, DowncastTypeKey};
 
 use crate::entity::damage::DamageSource;
-use crate::entity::{
-    Entity, EntityBase, EntityPose, EntitySyncedData, SharedEntity, next_entity_id,
-};
+use crate::entity::{Entity, EntityBase, EntityPose, EntitySyncedData, SharedEntity};
 use crate::world::World;
 
 use super::ender_dragon::EnderDragonEntity;
@@ -46,6 +44,21 @@ pub enum EnderDragonPartKind {
 }
 
 impl EnderDragonPartKind {
+    /// Vanilla `subEntities` index; the part's id is `dragon id + 1 + index`.
+    #[must_use]
+    pub const fn index(self) -> i32 {
+        match self {
+            Self::Head => 0,
+            Self::Neck => 1,
+            Self::Body => 2,
+            Self::Tail1 => 3,
+            Self::Tail2 => 4,
+            Self::Tail3 => 5,
+            Self::Wing1 => 6,
+            Self::Wing2 => 7,
+        }
+    }
+
     /// Vanilla `EnderDragonPart.name`.
     #[must_use]
     pub const fn name(self) -> &'static str {
@@ -96,11 +109,16 @@ impl EnderDragonPartEntity {
     /// Vanilla `EnderDragonPart(EnderDragon parentMob, String name, float w, float h)`;
     /// the parent is bound through [`Self::bind_parent`] once the dragon has a
     /// shared handle because Rust cannot self-reference during construction.
+    ///
+    /// `id` is the vanilla part id: the client creates its own hitboxes as
+    /// `dragonId + 1 + index` in `EnderDragon.recreateFromPacket`, and the ids a
+    /// hit packet carries are resolved through the level's dragon-part registry,
+    /// so the two sides must agree.
     #[must_use]
-    pub fn new(kind: EnderDragonPartKind, world: Weak<World>) -> Self {
+    pub fn new(kind: EnderDragonPartKind, id: i32, world: Weak<World>) -> Self {
         let entity_type: EntityTypeRef = &vanilla_entities::ENDER_DRAGON;
         Self {
-            base: EntityBase::new(next_entity_id(), DVec3::ZERO, kind.dimensions(), world),
+            base: EntityBase::new(id, DVec3::ZERO, kind.dimensions(), world),
             entity_type,
             kind,
             parent: SyncMutex::new(Weak::<EnderDragonEntity>::new()),
@@ -206,7 +224,7 @@ mod tests {
     #[test]
     fn unbound_part_is_not_pickable_by_parent() {
         steel_registry::init_vanilla_registry();
-        let part = EnderDragonPartEntity::new(EnderDragonPartKind::Head, Weak::new());
+        let part = EnderDragonPartEntity::new(EnderDragonPartKind::Head, 7, Weak::new());
         assert!(part.parent().is_none());
         assert!(part.is_pickable());
     }

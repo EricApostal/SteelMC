@@ -1,10 +1,9 @@
-//! Vanilla cat AI pieces that are inner classes of `Cat` (and `TamableAnimal`).
+//! Vanilla cat AI pieces that are inner classes of `Cat`.
 //!
-//! `Cat.CatTemptGoal`, `Cat.CatAvoidEntityGoal`, `Cat.CatRelaxOnOwnerGoal` and
-//! `TamableAnimal.TamableAnimalPanicGoal` are private vanilla inner classes, so they live
-//! here rather than in `entity/ai/goal`. `CatLieOnBlockGoal`, `CatSitOnBlockGoal`,
-//! `OcelotAttackGoal` and `LeapAtTargetGoal` are shared goals and are used from
-//! `entity/ai/goal` instead.
+//! `Cat.CatTemptGoal`, `Cat.CatAvoidEntityGoal` and `Cat.CatRelaxOnOwnerGoal` are private
+//! vanilla inner classes, so they live here rather than in `entity/ai/goal`. `CatLieOnBlockGoal`,
+//! `CatSitOnBlockGoal`, `OcelotAttackGoal`, `LeapAtTargetGoal` and the `TamableAnimal` piece
+//! `TamableAnimalPanicGoal` are shared goals and are used from `entity/ai/goal` instead.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,9 +16,7 @@ use steel_registry::vanilla_item_tags::ItemTag;
 use steel_registry::{REGISTRY, TaggedRegistryExt as _};
 use steel_utils::{BlockPos, Downcast as _};
 
-use crate::entity::ai::goal::{
-    AvoidEntityGoal, Goal, GoalControls, PanicGoal, Tameable, TemptGoal,
-};
+use crate::entity::ai::goal::{AvoidEntityGoal, Goal, GoalControls, Tameable, TemptGoal};
 use crate::entity::{LivingEntity, PathfinderMob, SharedEntity};
 use crate::world::World;
 
@@ -36,64 +33,6 @@ const GIFT_MIN_SLEEP_TICKS: i32 = 100;
 /// Vanilla `CatRelaxOnOwnerGoal.tick`: look speed and pitch clamp at the owner.
 const OWNER_LOOK_SPEED: f32 = 45.0;
 const OWNER_LOOK_ANGLE: f32 = 45.0;
-
-/// Vanilla `TamableAnimal.TamableAnimalPanicGoal`: panics, and teleports home when far.
-pub(super) struct TamableAnimalPanicGoal {
-    inner: PanicGoal,
-}
-
-impl TamableAnimalPanicGoal {
-    pub(super) const fn new(speed_modifier: f64) -> Self {
-        Self {
-            inner: PanicGoal::new(speed_modifier),
-        }
-    }
-}
-
-impl Goal for TamableAnimalPanicGoal {
-    fn controls(&self) -> GoalControls {
-        self.inner.controls()
-    }
-
-    fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
-        self.inner.can_use(mob)
-    }
-
-    fn can_continue_to_use(&mut self, mob: &dyn PathfinderMob) -> bool {
-        self.inner.can_continue_to_use(mob)
-    }
-
-    fn is_interruptable(&self) -> bool {
-        self.inner.is_interruptable()
-    }
-
-    fn is_panic_goal(&self) -> bool {
-        self.inner.is_panic_goal()
-    }
-
-    fn start(&mut self, mob: &dyn PathfinderMob) {
-        self.inner.start(mob);
-    }
-
-    fn stop(&mut self, mob: &dyn PathfinderMob) {
-        self.inner.stop(mob);
-    }
-
-    fn requires_update_every_tick(&self) -> bool {
-        self.inner.requires_update_every_tick()
-    }
-
-    fn tick(&mut self, mob: &dyn PathfinderMob, entity: &SharedEntity) {
-        if let Some(tameable) = mob.as_tameable()
-            && !tameable.unable_to_move_to_owner()
-            && tameable.should_try_teleport_to_owner()
-        {
-            tameable.try_to_teleport_to_owner();
-        }
-
-        self.inner.tick(mob, entity);
-    }
-}
 
 /// Vanilla `Cat.CatTemptGoal`: like `TemptGoal`, but tamed cats ignore food.
 ///

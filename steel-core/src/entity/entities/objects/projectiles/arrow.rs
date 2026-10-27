@@ -231,6 +231,10 @@ impl Projectile for ArrowEntity {
         &self.projectile_base
     }
 
+    fn pierce_level(&self) -> i8 {
+        self.get_pierce_level()
+    }
+
     fn on_hit_entity(self: Arc<Self>, entity: &SharedEntity, location: DVec3) {
         self.abstract_arrow_on_hit_entity(entity, location);
     }

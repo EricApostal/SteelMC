@@ -2,6 +2,7 @@
 //! attack target.
 
 use steel_registry::entity_data::EntityPose;
+use steel_registry::sound_events;
 
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::module_type as mem;
@@ -90,9 +91,11 @@ impl Behavior for Roar {
             return;
         }
 
-        // Vanilla plays `SoundEvents.WARDEN_ROAR` here; the AI layer has no
-        // server audio path.
+        // Vanilla `Roar.tick` refreshes the sound cooldown, then plays
+        // `SoundEvents.WARDEN_ROAR` at volume 3.
         ctx.set_memory_with_expiry(&mem::ROAR_SOUND_COOLDOWN, (), i64::from(ROAR_DURATION - 25));
+        ctx.body
+            .play_sound(&sound_events::ENTITY_WARDEN_ROAR, 3.0, 1.0);
     }
 
     fn stop(&mut self, ctx: &mut BehaviorContext<'_>) {

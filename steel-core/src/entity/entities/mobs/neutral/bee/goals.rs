@@ -53,7 +53,7 @@ use crate::block_entity::SharedBlockEntity;
 use crate::block_entity::entities::BeehiveBlockEntity;
 use crate::entity::ai::goal::random_pos::{HALF_PI, air_and_water_random_pos, hover_random_pos};
 use crate::entity::ai::goal::{
-    Goal, GoalControls, HurtByTargetGoal, MeleeAttackGoal, NearestAttackableTargetGoal,
+    AngryAtPlayerTargetGoal, Goal, GoalControls, HurtByTargetGoal, MeleeAttackGoal,
 };
 use crate::entity::ai::path::Path;
 use crate::entity::entities::BeeEntity;
@@ -1437,24 +1437,19 @@ impl Goal for BeeHurtByOtherGoal {
 
 /// Vanilla `Bee$BeeBecomeAngryTargetGoal`: targets a player while the bee is angry and un-stung.
 pub struct BeeBecomeAngryTargetGoal {
-    inner: NearestAttackableTargetGoal,
+    inner: AngryAtPlayerTargetGoal,
 }
 
 impl BeeBecomeAngryTargetGoal {
     /// Vanilla `new Bee$BeeBecomeAngryTargetGoal(bee)`:
-    /// `NearestAttackableTargetGoal(bee, Player.class, 10, true, false, bee::beeCanTarget)`.
+    /// `NearestAttackableTargetGoal(bee, Player.class, 10, true, false, bee::isAngryAt)`, gated on
+    /// [`Self::bee_can_target`] in `canUse`/`canContinueToUse`.
     #[must_use]
     pub fn new() -> Self {
-        // Vanilla's selector is `Bee$BeeBecomeAngryTargetGoal::beeCanTarget`, which ignores the
-        // candidate; `can_use`/`can_continue_to_use` gate on it, so a constant selector by
-        // candidate is equivalent.
+        // Vanilla's selector is `NeutralMob.isAngryAt`, so the bee only ever picks the player it
+        // is angry at (any player under the universal-anger rule).
         Self {
-            inner: NearestAttackableTargetGoal::new_for_players_with_interval(
-                10,
-                true,
-                false,
-                |_, _| true,
-            ),
+            inner: AngryAtPlayerTargetGoal::new(),
         }
     }
 

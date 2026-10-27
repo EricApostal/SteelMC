@@ -38,8 +38,10 @@ use crate::entity::{
     EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase, PathfinderMob, SharedEntity,
 };
 
-use crate::physics::MoveResult;
+use crate::physics::{MoveResult, MoverType};
 use crate::world::{LevelReader, World};
+
+use super::glow_squid::GlowSquidEntity;
 
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
 /// Vanilla `Squid.getDefaultGravity`.
@@ -52,8 +54,8 @@ const SQUID_FLEE_MIN_DISTANCE: f64 = 5.0;
 const SQUID_FLEE_RANGE_SQR: f64 = 100.0;
 /// Vanilla `Squid.SquidRandomMovementGoal` idle cutoff.
 const SQUID_IDLE_NO_ACTION_TIME: i32 = 100;
-/// Vanilla `Squid.aiStep` drag in air.
-const SQUID_AIR_DRAG: f64 = 0.9;
+/// Vanilla `Squid.aiStep` velocity decay while the tentacle cycle coasts in water.
+const SQUID_WATER_DECAY: f64 = 0.9;
 /// Vanilla `Squid.aiStep` rotation decay in air.
 const SQUID_AIR_ROTATE_DECAY: f32 = 0.99;
 /// Vanilla `Squid.aiStep` water rotation growth.
@@ -64,6 +66,165 @@ pub(super) const SQUID_BABY_HEIGHT: f32 = 0.5;
 pub(super) const SQUID_BABY_EYE_HEIGHT: f32 = 0.37;
 /// Vanilla `Squid.spawnInk` particle count.
 const INK_PARTICLE_COUNT: i32 = 30;
+
+/// Vanilla `Squid`'s body state, shared by `Squid` and `GlowSquid`.
+///
+/// Vanilla stores these on `Squid` and `GlowSquid extends Squid`, so both run the same
+/// tentacle cycle and jet movement; Steel keeps them in one struct that both entities own.
+pub(super) struct SquidBody {
+    /// Vanilla `Squid.movementVector`, written by both squid goals.
+    movement_vector: SyncMutex<DVec3>,
+    /// Vanilla `Squid.tentacleMovement`.
+    tentacle_movement: SyncMutex<f32>,
+    /// Vanilla `Squid.tentacleSpeed`.
+    tentacle_speed: SyncMutex<f32>,
+    /// Vanilla `Squid.tentacleAngle`.
+    tentacle_angle: SyncMutex<f32>,
+    /// Vanilla `Squid.rotateSpeed`.
+    rotate_speed: SyncMutex<f32>,
+    /// Vanilla `Squid.xBodyRot` (server-side pitch state).
+    x_body_rot: SyncMutex<f32>,
+    /// Vanilla `Squid.zBodyRot` (server-side roll state).
+    z_body_rot: SyncMutex<f32>,
+}
+
+impl SquidBody {
+    /// Vanilla `Squid` constructor field initialization, including
+    /// `tentacleSpeed = 1 / (random.nextFloat() + 1) * 0.2`.
+    pub(super) fn new() -> Self {
+        Self {
+            movement_vector: SyncMutex::new(DVec3::ZERO),
+            tentacle_movement: SyncMutex::new(0.0),
+            tentacle_speed: SyncMutex::new(1.0 / (rand::random::<f32>() + 1.0) * 0.2),
+            tentacle_angle: SyncMutex::new(0.0),
+            rotate_speed: SyncMutex::new(0.0),
+            x_body_rot: SyncMutex::new(0.0),
+            z_body_rot: SyncMutex::new(0.0),
+        }
+    }
+
+    /// Vanilla `Squid.movementVector`.
+    pub(super) fn movement_vector(&self) -> DVec3 {
+        *self.movement_vector.lock()
+    }
+
+    /// Sets vanilla `Squid.movementVector`.
+    pub(super) fn set_movement_vector(&self, movement: DVec3) {
+        *self.movement_vector.lock() = movement;
+    }
+
+    /// Vanilla `Squid.hasMovementVector` (`lengthSqr() > 1.0E-5F`).
+    pub(super) fn has_movement_vector(&self) -> bool {
+        self.movement_vector().length_squared() > 1.0e-5
+    }
+
+    /// Vanilla `Squid.xBodyRot`.
+    pub(super) fn x_body_rot(&self) -> f32 {
+        *self.x_body_rot.lock()
+    }
+
+    /// Vanilla `Squid.zBodyRot`.
+    pub(super) fn z_body_rot(&self) -> f32 {
+        *self.z_body_rot.lock()
+    }
+}
+
+/// Returns the shared body state of a squid-like entity, downcasting the concrete entity.
+///
+/// Vanilla hands both squid goals a `Squid`; Steel's goals only receive
+/// `&dyn PathfinderMob`, so the state is resolved from the concrete `Squid`/`GlowSquid`.
+pub(super) fn squid_body_of(entity: &dyn Entity) -> Option<&SquidBody> {
+    let entity = entity.as_entity_event_source();
+    if let Some(squid) = entity.downcast_ref::<SquidEntity>() {
+        return Some(squid.body());
+    }
+    entity
+        .downcast_ref::<GlowSquidEntity>()
+        .map(GlowSquidEntity::body)
+}
+
+/// Vanilla `Squid.travel`: move along the raw velocity, with none of
+/// `LivingEntity.travel`'s drag, gravity or input-driven movement. Both are applied by
+/// [`tick_squid_body`] instead, which is what keeps the jet-and-glide cycle in step with
+/// vanilla.
+pub(super) fn travel(entity: &SharedEntity, velocity: DVec3) -> Option<MoveResult> {
+    Arc::clone(entity).move_entity(MoverType::SelfMovement, velocity)
+}
+
+/// Vanilla `Squid.aiStep` body: tentacle cycle, next-tick velocity and body rotation.
+///
+/// Runs after this tick's `LivingEntity.aiStep`, so the squid moves with the velocity
+/// produced by the previous body tick, exactly like vanilla.
+pub(super) fn tick_squid_body(entity: &dyn LivingEntity, body: &SquidBody) {
+    // Tentacle cycle.
+    let should_broadcast = {
+        let mut tentacle_movement = body.tentacle_movement.lock();
+        *tentacle_movement += *body.tentacle_speed.lock();
+        if *tentacle_movement > TAU {
+            *tentacle_movement -= TAU;
+            if rand::random_range(0..10) == 0 {
+                *body.tentacle_speed.lock() = 1.0 / (rand::random::<f32>() + 1.0) * 0.2;
+            }
+            true
+        } else {
+            false
+        }
+    };
+    if should_broadcast {
+        entity.broadcast_entity_event(EntityStatus::SquidAnimSynch);
+    }
+
+    if entity.is_in_water() {
+        let tentacle_movement = *body.tentacle_movement.lock();
+        if tentacle_movement < PI {
+            let tentacle_scale = tentacle_movement / PI;
+            *body.tentacle_angle.lock() = (tentacle_scale * tentacle_scale * PI).sin() * PI * 0.25;
+            if tentacle_scale > 0.75 {
+                entity.set_velocity(body.movement_vector());
+                *body.rotate_speed.lock() = 1.0;
+            } else {
+                *body.rotate_speed.lock() *= SQUID_WATER_ROTATE_GROWTH;
+            }
+        } else {
+            *body.tentacle_angle.lock() = 0.0;
+            let velocity = entity.velocity();
+            entity.set_velocity(velocity * SQUID_WATER_DECAY);
+            *body.rotate_speed.lock() *= SQUID_AIR_ROTATE_DECAY;
+        }
+
+        // Vanilla keeps the body rotation aligned with the movement vector.
+        let velocity = entity.velocity();
+        let horizontal = velocity.x.hypot(velocity.z);
+        let target_yaw = -((velocity.x as f32).atan2(velocity.z as f32)) * (180.0 / PI);
+        let body_rot = entity.y_body_rot();
+        let new_body_rot = body_rot + (target_yaw - body_rot) * 0.1;
+        entity.living_base().set_y_body_rot(new_body_rot);
+        let (_, pitch) = entity.rotation();
+        entity.set_rotation((new_body_rot, pitch));
+
+        let rotate_speed = *body.rotate_speed.lock();
+        *body.z_body_rot.lock() += PI * rotate_speed * 1.5;
+
+        let target_pitch = -((horizontal as f32).atan2(velocity.y as f32)) * (180.0 / PI);
+        let x_body_rot = *body.x_body_rot.lock();
+        *body.x_body_rot.lock() = x_body_rot + (target_pitch - x_body_rot) * 0.1;
+    } else {
+        *body.tentacle_angle.lock() = body.tentacle_movement.lock().sin().abs() * PI * 0.25;
+
+        let velocity = entity.velocity();
+        let mut yd = velocity.y;
+        if let Some(levitation) = entity.mob_effect(vanilla_mob_effects::LEVITATION) {
+            yd = 0.05 * f64::from(levitation.amplifier() + 1);
+        } else {
+            yd -= SQUID_GRAVITY;
+        }
+        entity.set_velocity(DVec3::new(0.0, yd * entity.get_air_drag(), 0.0));
+
+        let x_body_rot = *body.x_body_rot.lock();
+        *body.x_body_rot.lock() = x_body_rot + (-90.0 - x_body_rot) * 0.02;
+    }
+}
+
 /// Vanilla `Squid`.
 #[entity_behavior(class = "Squid")]
 pub struct SquidEntity {
@@ -73,17 +234,7 @@ pub struct SquidEntity {
     mob_base: MobBase,
     ageable_base: AgeableMobBase,
     entity_data: SyncMutex<SquidEntityData>,
-    /// Vanilla `Squid.movementVector`, written by both squid goals.
-    movement_vector: SyncMutex<DVec3>,
-    /// Vanilla `Squid.tentacleMovement`/`tentacleSpeed`/`tentacleAngle`.
-    tentacle_movement: SyncMutex<f32>,
-    tentacle_speed: SyncMutex<f32>,
-    tentacle_angle: SyncMutex<f32>,
-    /// Vanilla `Squid.rotateSpeed`.
-    rotate_speed: SyncMutex<f32>,
-    /// Vanilla `Squid.xBodyRot`/`zBodyRot` (server-side orientation state).
-    x_body_rot: SyncMutex<f32>,
-    z_body_rot: SyncMutex<f32>,
+    body: SquidBody,
 }
 
 // SAFETY: This key is owned by Steel and uniquely identifies `SquidEntity`.
@@ -122,9 +273,6 @@ impl SquidEntity {
         let mut entity_data = SquidEntityData::new();
         living_base.initialize_synced_data(&mut entity_data);
 
-        // Vanilla `Squid` constructor: `tentacleSpeed = 1 / (random.nextFloat() + 1) * 0.2`.
-        let tentacle_speed = 1.0 / (rand::random::<f32>() + 1.0) * 0.2;
-
         {
             // Vanilla `Squid.registerGoals`.
             let mut goal_selector = mob_base.goal_selector().lock();
@@ -139,13 +287,7 @@ impl SquidEntity {
             mob_base,
             ageable_base,
             entity_data: SyncMutex::new(entity_data),
-            movement_vector: SyncMutex::new(DVec3::ZERO),
-            tentacle_movement: SyncMutex::new(0.0),
-            tentacle_speed: SyncMutex::new(tentacle_speed),
-            tentacle_angle: SyncMutex::new(0.0),
-            rotate_speed: SyncMutex::new(0.0),
-            x_body_rot: SyncMutex::new(0.0),
-            z_body_rot: SyncMutex::new(0.0),
+            body: SquidBody::new(),
         }
     }
 
@@ -166,33 +308,39 @@ impl SquidEntity {
         self.entity_data.set_base_invisible_flag(display.invisible);
     }
 
+    /// Vanilla `Squid`'s body state (tentacle cycle, jet velocity, body rotation).
+    #[must_use]
+    pub(super) const fn body(&self) -> &SquidBody {
+        &self.body
+    }
+
     /// Vanilla `Squid.movementVector`.
     #[must_use]
     pub fn movement_vector(&self) -> DVec3 {
-        *self.movement_vector.lock()
+        self.body.movement_vector()
     }
 
     /// Sets vanilla `Squid.movementVector`.
     pub fn set_movement_vector(&self, movement: DVec3) {
-        *self.movement_vector.lock() = movement;
+        self.body.set_movement_vector(movement);
     }
 
     /// Vanilla `Squid.hasMovementVector` (`lengthSqr() > 1.0E-5F`).
     #[must_use]
     pub fn has_movement_vector(&self) -> bool {
-        self.movement_vector().length_squared() > 1.0e-5
+        self.body.has_movement_vector()
     }
 
     /// Vanilla `Squid.xBodyRot` (server-side pitch state).
     #[must_use]
     pub fn x_body_rot(&self) -> f32 {
-        *self.x_body_rot.lock()
+        self.body.x_body_rot()
     }
 
     /// Vanilla `Squid.zBodyRot` (server-side roll state).
     #[must_use]
     pub fn z_body_rot(&self) -> f32 {
-        *self.z_body_rot.lock()
+        self.body.z_body_rot()
     }
 
     /// Vanilla `Squid.getSquirtSound`.
@@ -232,84 +380,6 @@ impl SquidEntity {
         }
     }
 
-    /// Vanilla `Squid.aiStep` server-side body: tentacle cycle, buoyancy and rotation state.
-    fn ai_step_squid(self: &Arc<Self>) {
-        let in_water = self.is_in_water();
-
-        // Tentacle cycle.
-        let (movement_wrapped, should_broadcast) = {
-            let mut tentacle_movement = self.tentacle_movement.lock();
-            let mut tentacle_speed = self.tentacle_speed.lock();
-            *tentacle_movement += *tentacle_speed;
-            if *tentacle_movement > TAU {
-                *tentacle_movement -= TAU;
-                let reroll = rand::random_range(0..10) == 0;
-                if reroll {
-                    *tentacle_speed = 1.0 / (rand::random::<f32>() + 1.0) * 0.2;
-                }
-                (true, true)
-            } else {
-                (false, false)
-            }
-        };
-        if should_broadcast {
-            self.broadcast_entity_event(EntityStatus::SquidAnimSynch);
-        }
-        let _ = movement_wrapped;
-
-        if in_water {
-            let tentacle_movement = *self.tentacle_movement.lock();
-            if tentacle_movement < PI {
-                let tentacle_scale = tentacle_movement / PI;
-                *self.tentacle_angle.lock() =
-                    (tentacle_scale * tentacle_scale * PI).sin() * PI * 0.25;
-                if tentacle_scale > 0.75 {
-                    let movement = self.movement_vector();
-                    self.set_velocity(movement);
-                    *self.rotate_speed.lock() = 1.0;
-                } else {
-                    *self.rotate_speed.lock() *= SQUID_WATER_ROTATE_GROWTH;
-                }
-            } else {
-                *self.tentacle_angle.lock() = 0.0;
-                let velocity = self.velocity();
-                self.set_velocity(velocity * SQUID_AIR_DRAG);
-                *self.rotate_speed.lock() *= SQUID_AIR_ROTATE_DECAY;
-            }
-
-            // Vanilla keeps the body rotation aligned with the movement vector.
-            let velocity = self.velocity();
-            let horizontal = velocity.x.hypot(velocity.z);
-            let target_yaw = -((velocity.x as f32).atan2(velocity.z as f32)) * (180.0 / PI);
-            let body_rot = self.y_body_rot();
-            let new_body_rot = body_rot + (target_yaw - body_rot) * 0.1;
-            self.set_y_body_rot(new_body_rot);
-            let (_, pitch) = self.rotation();
-            self.set_rotation((new_body_rot, pitch));
-
-            let rotate_speed = *self.rotate_speed.lock();
-            *self.z_body_rot.lock() += PI * rotate_speed * 1.5;
-
-            let target_pitch = -((horizontal as f32).atan2(velocity.y as f32)) * (180.0 / PI);
-            let x_body_rot = *self.x_body_rot.lock();
-            *self.x_body_rot.lock() = x_body_rot + (target_pitch - x_body_rot) * 0.1;
-        } else {
-            *self.tentacle_angle.lock() = self.tentacle_movement.lock().sin().abs() * PI * 0.25;
-
-            let velocity = self.velocity();
-            let mut yd = velocity.y;
-            if let Some(levitation) = self.mob_effect(vanilla_mob_effects::LEVITATION) {
-                yd = 0.05 * f64::from(levitation.amplifier() + 1);
-            } else {
-                yd -= SQUID_GRAVITY;
-            }
-            self.set_velocity(DVec3::new(0.0, yd * SQUID_AIR_DRAG, 0.0));
-
-            let x_body_rot = *self.x_body_rot.lock();
-            *self.x_body_rot.lock() = x_body_rot + (-90.0 - x_body_rot) * 0.02;
-        }
-    }
-
     /// Vanilla `AgeableWaterCreature.checkSurfaceAgeableWaterCreatureSpawnRules`, the
     /// `SpawnPlacements` predicate for `EntityType.SQUID`.
     ///
@@ -343,8 +413,10 @@ impl SquidRandomMovementGoal {
         Self
     }
 
-    fn squid(mob: &dyn PathfinderMob) -> Option<&SquidEntity> {
-        mob.as_entity_event_source().downcast_ref::<SquidEntity>()
+    /// Vanilla's goal holds a `Squid`; the shared body resolves the state for both the
+    /// squid and the glow squid.
+    fn body(mob: &dyn PathfinderMob) -> Option<&SquidBody> {
+        squid_body_of(mob.as_entity_event_source())
     }
 }
 
@@ -358,22 +430,22 @@ impl Goal for SquidRandomMovementGoal {
     }
 
     fn tick(&mut self, mob: &dyn PathfinderMob, _entity: &SharedEntity) {
-        let Some(squid) = Self::squid(mob) else {
+        let Some(body) = Self::body(mob) else {
             return;
         };
 
-        if squid.no_action_time() > SQUID_IDLE_NO_ACTION_TIME {
-            squid.set_movement_vector(DVec3::ZERO);
+        if mob.no_action_time() > SQUID_IDLE_NO_ACTION_TIME {
+            body.set_movement_vector(DVec3::ZERO);
             return;
         }
 
         // Vanilla `reducedTickDelay(50)`.
         if rand::random_range(0..(50 + 1) / 2) == 0
-            || !squid.is_in_water()
-            || !squid.has_movement_vector()
+            || !mob.is_in_water()
+            || !body.has_movement_vector()
         {
             let angle = rand::random::<f32>() * TAU;
-            squid.set_movement_vector(DVec3::new(
+            body.set_movement_vector(DVec3::new(
                 f64::from(angle.cos()) * 0.2,
                 -0.1 + f64::from(rand::random::<f32>()) * 0.2,
                 f64::from(angle.sin()) * 0.2,
@@ -392,8 +464,10 @@ impl SquidFleeGoal {
         Self { flee_ticks: 0 }
     }
 
-    fn squid(mob: &dyn PathfinderMob) -> Option<&SquidEntity> {
-        mob.as_entity_event_source().downcast_ref::<SquidEntity>()
+    /// Vanilla's goal holds a `Squid`; the shared body resolves the state for both the
+    /// squid and the glow squid.
+    fn body(mob: &dyn PathfinderMob) -> Option<&SquidBody> {
+        squid_body_of(mob.as_entity_event_source())
     }
 }
 
@@ -403,12 +477,12 @@ impl Goal for SquidFleeGoal {
     }
 
     fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
-        let Some(squid) = Self::squid(mob) else {
+        if Self::body(mob).is_none() {
             return false;
-        };
-        squid.is_in_water()
-            && squid.last_hurt_by_mob().is_some_and(|attacker| {
-                squid.position().distance_squared(attacker.position()) < SQUID_FLEE_RANGE_SQR
+        }
+        mob.is_in_water()
+            && mob.last_hurt_by_mob().is_some_and(|attacker| {
+                mob.position().distance_squared(attacker.position()) < SQUID_FLEE_RANGE_SQR
             })
     }
 
@@ -421,23 +495,23 @@ impl Goal for SquidFleeGoal {
     }
 
     fn tick(&mut self, mob: &dyn PathfinderMob, _entity: &SharedEntity) {
-        let Some(squid) = Self::squid(mob) else {
+        let Some(body) = Self::body(mob) else {
             return;
         };
         self.flee_ticks += 1;
 
-        let Some(attacker) = squid.last_hurt_by_mob() else {
+        let Some(attacker) = mob.last_hurt_by_mob() else {
             return;
         };
-        let Some(world) = squid.level() else {
+        let Some(world) = mob.level() else {
             return;
         };
 
-        let mut flee_to = squid.position() - attacker.position();
+        let mut flee_to = mob.position() - attacker.position();
         let probe = BlockPos::new(
-            steel_math::fast_floor(squid.position().x + flee_to.x),
-            steel_math::fast_floor(squid.position().y + flee_to.y),
-            steel_math::fast_floor(squid.position().z + flee_to.z),
+            steel_math::fast_floor(mob.position().x + flee_to.x),
+            steel_math::fast_floor(mob.position().y + flee_to.y),
+            steel_math::fast_floor(mob.position().z + flee_to.z),
         );
         let state = world.get_block_state(probe);
         let fluid = state.get_fluid_state();
@@ -456,13 +530,13 @@ impl Goal for SquidFleeGoal {
             if state.is_air() {
                 flee_to = DVec3::new(flee_to.x, 0.0, flee_to.z);
             }
-            squid.set_movement_vector(flee_to / 20.0);
+            body.set_movement_vector(flee_to / 20.0);
         }
 
         if self.flee_ticks % 10 == 5 {
             world.send_particles(
                 ParticleData::simple(&vanilla_particle_types::BUBBLE),
-                squid.position(),
+                mob.position(),
                 1,
                 DVec3::ZERO,
                 0.0,
@@ -486,7 +560,6 @@ impl Entity for SquidEntity {
 
     fn tick(self: Arc<Self>) {
         let entity: SharedEntity = Arc::<Self>::clone(&self);
-        Arc::clone(&self).ai_step_squid();
         self.tick_living_entity(&entity);
     }
 
@@ -594,7 +667,20 @@ impl LivingEntity for SquidEntity {
     }
 
     fn ai_step(&self, entity: &SharedEntity) -> Option<MoveResult> {
-        self.mob_ai_step(entity)
+        // Vanilla `Squid.aiStep`: `super.aiStep()` (which travels with the velocity from
+        // the previous tick) runs first, then the squid body updates the tentacle cycle,
+        // the next tick's velocity and the body rotation.
+        let result = self.mob_ai_step(entity);
+        tick_squid_body(self, &self.body);
+        result
+    }
+
+    /// Vanilla `Squid.travel`: the squid moves along its raw velocity, with none of
+    /// `LivingEntity.travel`'s drag, gravity or input-driven movement. Both of those are
+    /// applied by [`Self::ai_step_squid`] instead, which is what keeps the jet-and-glide
+    /// cycle in step with vanilla.
+    fn travel(&self, entity: &SharedEntity, _input: DVec3) -> Option<MoveResult> {
+        travel(entity, self.velocity())
     }
 }
 

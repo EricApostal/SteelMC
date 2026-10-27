@@ -23,11 +23,13 @@ use steel_registry::stat::custom::CustomStatRef;
 use steel_registry::vanilla_game_rules::{ELYTRA_MOVEMENT_CHECK, PLAYER_MOVEMENT_CHECK};
 use steel_registry::{vanilla_custom_stats, vanilla_entities, vanilla_mob_effects};
 use steel_utils::types::GameType;
-use steel_utils::{TICKS_PER_SECOND, translations};
+use steel_utils::{Downcast as _, TICKS_PER_SECOND, translations};
 
 use crate::entity::entities::mobs::passive::equine::open_vehicle_inventory;
+use crate::entity::entities::{NautilusEntity, ZombieNautilusEntity};
 use crate::entity::{
     AcceptedClientMovement, AcceptedClientMovementOutcome, Entity, EntityMoveError, LivingEntity,
+    SharedEntity,
 };
 use crate::physics::{
     MOVEMENT_ERROR_THRESHOLD, MovementCollisionValidation, MoverType, WorldCollisionProvider,
@@ -98,6 +100,7 @@ struct PlayerFloatingValidation {
     may_fly: bool,
     has_levitation: bool,
     is_fall_flying: bool,
+    is_auto_spin_attack: bool,
 }
 
 impl PlayerFloatingValidation {
@@ -109,6 +112,7 @@ impl PlayerFloatingValidation {
             && !self.may_fly
             && !self.has_levitation
             && !self.is_fall_flying
+            && !self.is_auto_spin_attack
     }
 }
 
@@ -473,12 +477,16 @@ impl Player {
         }
 
         // Vanilla `ServerGamePacketListenerImpl.handlePlayerPositionChange` drops the
-        // pending impulse context once the client is supported again. Steel has no
-        // auto-spin-attack state, so that vanilla term is always false here.
-        // TODO: Add the auto-spin-attack term once the riptide spin attack exists.
+        // pending impulse context once the client is supported again; an active
+        // auto-spin-attack also drops it.
         let landed_in_liquid =
             self.velocity().y < f64::from(1.0E-5_f32) && (self.is_in_water() || self.is_in_lava());
-        if is_on_ground || landed_in_liquid || self.on_climbable() || is_spectator || is_fall_flying
+        if is_on_ground
+            || landed_in_liquid
+            || self.on_climbable()
+            || is_spectator
+            || is_fall_flying
+            || self.is_auto_spin_attack()
         {
             self.try_reset_current_impulse_context();
         }
@@ -712,7 +720,6 @@ impl Player {
         is_spectator: bool,
         is_fall_flying: bool,
     ) {
-        // TODO: Add auto-spin exemption when riptide/spin attack state exists.
         let can_violate_floating = PlayerFloatingValidation {
             y_dist,
             player_stands_on_something,
@@ -721,6 +728,7 @@ impl Player {
             may_fly: self.abilities.lock().may_fly,
             has_levitation: self.has_mob_effect(vanilla_mob_effects::LEVITATION),
             is_fall_flying,
+            is_auto_spin_attack: self.is_auto_spin_attack(),
         }
         .can_violate();
 
@@ -1021,12 +1029,59 @@ impl Player {
                     open_vehicle_inventory(vehicle.as_ref(), self);
                 }
             }
-            PlayerCommandAction::StartRidingJump | PlayerCommandAction::StopRidingJump => {
-                // TODO: Implement once the controlled-vehicle jump hook exists.
+            PlayerCommandAction::StartRidingJump => {
+                self.handle_riding_jump_start(packet.data);
+            }
+            PlayerCommandAction::StopRidingJump => {
+                self.handle_riding_jump_stop();
             }
         }
 
         // Dirty shared flags are synced once per tick by sync_entity_data().
+    }
+
+    /// The vehicle this player actively controls, as vanilla
+    /// `Entity.getControlledVehicle`: only when the vehicle names this player as
+    /// its controlling passenger.
+    fn controlled_vehicle(&self) -> Option<SharedEntity> {
+        let vehicle = self.vehicle()?;
+        let controller = vehicle.controlling_passenger()?;
+        (controller.id() == self.id()).then_some(vehicle)
+    }
+
+    /// Vanilla `ServerGamePacketListenerImpl.handlePlayerCommand` `START_RIDING_JUMP`:
+    /// start a charged jump on the controlled vehicle when it can jump and the
+    /// charge is positive.
+    ///
+    /// Steel has no `PlayerRideableJumping` trait on `Entity`, so the known
+    /// rideable-jump mounts are matched here, mirroring `open_vehicle_inventory`.
+    fn handle_riding_jump_start(&self, jump_amount: i32) {
+        let Some(vehicle) = self.controlled_vehicle() else {
+            return;
+        };
+        if let Some(nautilus) = vehicle.downcast_ref::<NautilusEntity>() {
+            if nautilus.can_jump() && jump_amount > 0 {
+                nautilus.handle_start_jump();
+            }
+        } else if let Some(nautilus) = vehicle.downcast_ref::<ZombieNautilusEntity>()
+            && nautilus.can_jump()
+            && jump_amount > 0
+        {
+            nautilus.handle_start_jump();
+        }
+    }
+
+    /// Vanilla `ServerGamePacketListenerImpl.handlePlayerCommand` `STOP_RIDING_JUMP`:
+    /// release the controlled vehicle's jump.
+    fn handle_riding_jump_stop(&self) {
+        let Some(vehicle) = self.controlled_vehicle() else {
+            return;
+        };
+        if vehicle.downcast_ref::<NautilusEntity>().is_some() {
+            NautilusEntity::handle_stop_jump();
+        } else if vehicle.downcast_ref::<ZombieNautilusEntity>().is_some() {
+            ZombieNautilusEntity::handle_stop_jump();
+        }
     }
 
     /// Checks new player non-riding movement provided to award stats for it,
@@ -1224,6 +1279,7 @@ mod tests {
             may_fly: false,
             has_levitation: false,
             is_fall_flying: false,
+            is_auto_spin_attack: false,
         };
 
         assert!(validation.can_violate());
@@ -1237,6 +1293,13 @@ mod tests {
         assert!(
             !PlayerFloatingValidation {
                 has_levitation: true,
+                ..validation
+            }
+            .can_violate()
+        );
+        assert!(
+            !PlayerFloatingValidation {
+                is_auto_spin_attack: true,
                 ..validation
             }
             .can_violate()

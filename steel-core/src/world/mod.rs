@@ -898,6 +898,15 @@ impl LevelReader for World {
         self.dimension_type.ambient_light
     }
 
+    fn height_at(&self, heightmap_type: HeightmapType, x: i32, z: i32) -> i32 {
+        let mapped_type = match heightmap_type {
+            HeightmapType::WorldSurfaceWg => HeightmapType::WorldSurface,
+            HeightmapType::OceanFloorWg => HeightmapType::OceanFloor,
+            other => other,
+        };
+        World::height_at(self, mapped_type, x, z).unwrap_or_else(|| self.min_y())
+    }
+
     fn min_y(&self) -> i32 {
         self.get_min_y()
     }

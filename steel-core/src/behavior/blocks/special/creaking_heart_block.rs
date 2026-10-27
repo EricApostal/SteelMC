@@ -4,16 +4,16 @@
 //! and it re-evaluates that on every neighbour shape update (scheduled one tick later). Ticking is
 //! selected only while the state is not `uprooted`, exactly like vanilla's `getTicker`.
 //!
-//! Deviation: Steel has no environment-attribute/timeline foundation, so
 //! `EnvironmentAttributes.CREAKING_ACTIVE` (vanilla `gameplay/creaking_active`, driven by the
-//! overworld night timeline) cannot be read; a heart with valid logs becomes `dormant`, the
-//! attribute's default value. Owner: world/environment-attribute lane.
+//! overworld night timeline) is sampled from the dimension's timelines via
+//! [`crate::behavior::blocks::vegetation::bool_attribute`], the crate's public environment-attribute
+//! bridge. Deviation: a public environment-attribute getter on `World`
+//! (`world::environment`, owner: world/environment lane) is still missing; the bridge re-samples the
+//! same `minecraft:gameplay/creaking_active` track the vanilla attribute system reads.
 //! Deviation: vanilla `CreakingHeartBlock.animateTick` plays the client-local
 //! `CREAKING_HEART_IDLE` sound when surrounded by logs; Steel has no client block-animation hook.
-//! Deviation: the linked `Creaking` lifecycle (`CreakingHeartBlockEntity.removeProtector`,
-//! proximity hurt sounds and the comparator's distance signal) lives in the block entity, which
-//! currently only persists the link; the block-level `playerWillDestroy`/`onExplosionHit` hooks
-//! therefore award experience without tearing the protector down.
+//! The linked `Creaking` lifecycle (`CreakingHeartBlockEntity.removeProtector`, the comparator's
+//! distance signal and the hurt sounds) is wired through the block entity.
 
 use std::ops::RangeInclusive;
 use std::sync::{Arc, Weak};
@@ -31,7 +31,9 @@ use steel_registry::vanilla_block_tags::BlockTag;
 use steel_utils::types::{GameType, UpdateFlags};
 use steel_utils::{BlockPos, BlockStateId, Downcast as _, axis::Axis};
 
+use crate::behavior::blocks::vegetation::bool_attribute;
 use crate::behavior::{BlockBehavior, BlockEntityCreation, BlockPlaceContext};
+use crate::block_entity::entities::CreakingHeartBlockEntity;
 use crate::block_entity::{BLOCK_ENTITIES, BlockEntityTicker};
 use crate::player::Player;
 use crate::world::explosion::{ExplosionInfo, default_on_explosion_hit};
@@ -40,6 +42,9 @@ use crate::world::{LevelReader, ScheduledTickAccess, World};
 const AXIS: &EnumProperty<Axis> = &BlockStateProperties::AXIS;
 const STATE: &EnumProperty<CreakingHeartState> = &BlockStateProperties::CREAKING_HEART_STATE;
 const NATURAL: &BoolProperty = &BlockStateProperties::NATURAL;
+
+/// Vanilla `EnvironmentAttributes.CREAKING_ACTIVE` key (`gameplay/creaking_active`).
+pub const CREAKING_ACTIVE_ATTRIBUTE: &str = "minecraft:gameplay/creaking_active";
 
 /// Vanilla `CreakingHeartBlock` experience range when a natural heart is broken.
 const NATURAL_EXPERIENCE_RANGE: RangeInclusive<i32> = 20..=24;
@@ -74,18 +79,30 @@ impl CreakingHeartBlock {
         })
     }
 
+    /// Vanilla `EnvironmentAttributes.CREAKING_ACTIVE` sampled at `pos`.
+    ///
+    /// The attribute is timeline-driven (`minecraft:gameplay/creaking_active`, an `or`-combined
+    /// boolean track on the overworld day timeline) and defaults to `false`, exactly like vanilla's
+    /// `EnvironmentAttributeSystem.getValue(CREAKING_ACTIVE, pos)`.
+    #[must_use]
+    pub fn creaking_active(world: &World, _pos: BlockPos) -> bool {
+        bool_attribute(world, CREAKING_ACTIVE_ATTRIBUTE, false)
+    }
+
     /// Vanilla `CreakingHeartBlock.updateState`: an `uprooted` heart with valid logs becomes
     /// `awake` when the environment says the creaking is active, otherwise `dormant`.
-    ///
-    /// Deviation: `CREAKING_ACTIVE` is unavailable (see the module docs), so the vanilla
-    /// `false` branch (`dormant`) is always taken.
-    fn update_state(state: BlockStateId, world: &dyn LevelReader, pos: BlockPos) -> BlockStateId {
+    fn update_state(state: BlockStateId, world: &World, pos: BlockPos) -> BlockStateId {
         if state.get_value(STATE) != CreakingHeartState::Uprooted
             || !Self::has_required_logs(state, world, pos)
         {
             return state;
         }
-        state.set_value(STATE, CreakingHeartState::Dormant)
+        let heart_state = if Self::creaking_active(world, pos) {
+            CreakingHeartState::Awake
+        } else {
+            CreakingHeartState::Dormant
+        };
+        state.set_value(STATE, heart_state)
     }
 
     /// Vanilla `CreakingHeartBlock.tryAwardExperience`: natural hearts broken by a player who
@@ -178,8 +195,13 @@ impl BlockBehavior for CreakingHeartBlock {
         pos: BlockPos,
         player: &Player,
     ) -> BlockStateId {
-        // Vanilla first asks the block entity to remove its protector; that lifecycle is not
-        // implemented yet (see the module docs), so only the experience award remains.
+        // Vanilla `CreakingHeartBlock.playerWillDestroy` first asks the block entity to remove its
+        // protector (with a player-attack damage source), then awards experience.
+        if let Some(block_entity) = world.get_block_entity(pos)
+            && let Some(heart) = block_entity.downcast_ref::<CreakingHeartBlockEntity>()
+        {
+            heart.remove_protector(world);
+        }
         Self::try_award_experience(player, state, world, pos);
         state
     }
@@ -228,13 +250,86 @@ impl BlockBehavior for CreakingHeartBlock {
         pos: BlockPos,
         _direction: Direction,
     ) -> i32 {
-        // Vanilla reads `CreakingHeartBlockEntity.getAnalogOutputSignal`, which is the scaled
-        // distance to the linked creaking (15 down to 1) or 0 when no protector is linked.
-        // Steel's block entity never links one yet (see the module docs), so 0 is exact here.
+        // Vanilla `CreakingHeartBlock.getAnalogOutputSignal`: the block entity's cached signal, the
+        // scaled distance to the linked creaking (15 down to 1) or 0 when no protector is linked.
         if state.get_value(STATE) == CreakingHeartState::Uprooted {
             return 0;
         }
-        let _ = (world, pos);
-        0
+        world.get_block_entity(pos).map_or(0, |block_entity| {
+            block_entity
+                .downcast_ref::<CreakingHeartBlockEntity>()
+                .map_or(0, CreakingHeartBlockEntity::analog_output_signal)
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_world_clocks};
+    use steel_utils::ChunkPos;
+
+    use crate::behavior::init_behaviors;
+    use crate::block_entity::init_block_entities;
+    use crate::test_support::{TestWorld, fresh_test_world, insert_ready_full_chunk};
+
+    use super::*;
+
+    const HEART_POS: BlockPos = BlockPos::new(4, 64, 4);
+
+    fn uprooted_heart_state() -> BlockStateId {
+        vanilla_blocks::CREAKING_HEART
+            .default_state()
+            .set_value(AXIS, Axis::Y)
+            .set_value(STATE, CreakingHeartState::Uprooted)
+    }
+
+    /// Places a heart flanked by matching-axis pale-oak logs in a real world.
+    fn heart_world() -> (TestWorld, Arc<World>) {
+        init_vanilla_registry();
+        init_behaviors();
+        init_block_entities();
+        let world_fixture = fresh_test_world("creaking_heart_attribute");
+        let world = Arc::clone(&world_fixture.world);
+        insert_ready_full_chunk(&world, ChunkPos::from_block_pos(HEART_POS));
+        let log = vanilla_blocks::PALE_OAK_LOG.default_state();
+        assert!(world.set_block(HEART_POS.above(), log, UpdateFlags::UPDATE_ALL));
+        assert!(world.set_block(HEART_POS.below(), log, UpdateFlags::UPDATE_ALL));
+        (world_fixture, world)
+    }
+
+    /// Vanilla `CreakingHeartBlock.updateState` reads `EnvironmentAttributes.CREAKING_ACTIVE`: an
+    /// uprooted heart with valid logs becomes `awake` while the daytime timeline says the creaking
+    /// is active and `dormant` otherwise. Before the fix the `awake` branch was unreachable.
+    #[test]
+    fn update_state_follows_the_creaking_active_attribute() {
+        let (_fixture, world) = heart_world();
+        let behavior = CreakingHeartBlock::new(&vanilla_blocks::CREAKING_HEART);
+        let state = uprooted_heart_state();
+
+        // Overworld day timeline keyframe 12600 enables `minecraft:gameplay/creaking_active`.
+        assert!(world.set_block(HEART_POS, state, UpdateFlags::UPDATE_ALL));
+        assert_eq!(
+            world.set_clock_total_ticks(&vanilla_world_clocks::OVERWORLD, 18_000),
+            Some(())
+        );
+        behavior.tick(state, &world, HEART_POS);
+        assert_eq!(
+            world.get_block_state(HEART_POS).get_value(STATE),
+            CreakingHeartState::Awake,
+            "the heart must awake while the creaking is active"
+        );
+
+        // Daytime disables the attribute (the next keyframe flips it off at 23401).
+        assert!(world.set_block(HEART_POS, state, UpdateFlags::UPDATE_ALL));
+        assert_eq!(
+            world.set_clock_total_ticks(&vanilla_world_clocks::OVERWORLD, 1_000),
+            Some(())
+        );
+        behavior.tick(state, &world, HEART_POS);
+        assert_eq!(
+            world.get_block_state(HEART_POS).get_value(STATE),
+            CreakingHeartState::Dormant,
+            "the heart must stay dormant while the creaking is inactive"
+        );
     }
 }

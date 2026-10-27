@@ -27,15 +27,15 @@ use steel_protocol::packets::game::{
     SUseItem, SUseItemOn,
 };
 
-use crate::command::{handle_client_request, sender::CommandSender};
+use crate::command::handle_client_request;
 use steel_protocol::utils::{ConnectionProtocol, PacketError, RawPacket};
 use steel_registry::packets::play;
 use steel_utils::locks::{AsyncMutex, SyncMutex};
 use steel_utils::translations;
+use text_components::TextComponent;
 use text_components::content::Resolvable;
 use text_components::custom::CustomData;
 use text_components::resolving::TextResolutor;
-use text_components::{Modifier, TextComponent, format::Color};
 use tokio::io::{AsyncRead, AsyncWrite, BufReader, BufWriter};
 use tokio::select;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, error::TryRecvError};
@@ -213,6 +213,7 @@ impl ScheduledPlayPacket {
             | ScheduledPlayPacketKind::ClientTickEnd
             | ScheduledPlayPacketKind::PlayerLoaded
             | ScheduledPlayPacketKind::ChatCommand(_)
+            | ScheduledPlayPacketKind::ChatCommandSigned(_)
             | ScheduledPlayPacketKind::CommandSuggestion(_)
             | ScheduledPlayPacketKind::ContainerClose(_)
             | ScheduledPlayPacketKind::SetCreativeModeSlot(_)
@@ -297,7 +298,6 @@ impl ScheduledPlayPacket {
             | ScheduledPlayPacketKind::PlaceRecipe(_)
             | ScheduledPlayPacketKind::RecipeBookChangeSettings(_)
             | ScheduledPlayPacketKind::RecipeBookSeenRecipe(_)
-            | ScheduledPlayPacketKind::ChatCommandSigned(_)
             // Re-entering configuration is a terminal connection-state transition.
             | ScheduledPlayPacketKind::ConfigurationAcknowledged => {
                 ScheduledPacketExecution::Exclusive
@@ -357,16 +357,7 @@ impl ScheduledPlayPacket {
                 }
             }
             ScheduledPlayPacketKind::ChatCommand(packet) => {
-                player.reset_last_action_time();
-                if server
-                    .submit_command(CommandSender::Player(Arc::clone(&player)), packet.command)
-                    .is_err()
-                {
-                    player.send_message(
-                        &TextComponent::const_plain("Command queue is full").color(Color::Red),
-                    );
-                }
-                player.detect_command_rate_spam();
+                player.handle_chat_command(packet.command);
             }
             ScheduledPlayPacketKind::CommandSuggestion(packet) => {
                 if server
@@ -497,11 +488,8 @@ impl ScheduledPlayPacket {
             ScheduledPlayPacketKind::RecipeBookSeenRecipe(packet) => {
                 player.handle_recipe_book_seen_recipe(&packet);
             }
-            ScheduledPlayPacketKind::ChatCommandSigned(_packet) => {
-                player.handle_awaiting_foundation(
-                    "ServerboundChatCommandSignedPacket",
-                    "signed-command verification (`SChatCommandSigned` now registered with `#[packet_id(Play = S_CHAT_COMMAND_SIGNED)]`; needs signature verification + dispatch like `handle_chat_command`)",
-                );
+            ScheduledPlayPacketKind::ChatCommandSigned(packet) => {
+                player.handle_signed_chat_command(&packet);
             }
         }
     }
@@ -885,6 +873,26 @@ impl JavaConnection {
         }
 
         Self::decode_play_packet(packet).map(Some)
+    }
+
+    /// Runs one raw play packet through the real routing path: the domain-switch gate, the
+    /// packet id table, and decode, followed by the scheduled handler the inter-tick packet
+    /// phase would run.
+    ///
+    /// Exposed so tests can drive gameplay handlers without a live connection or a running
+    /// packet-processor worker.
+    #[cfg(test)]
+    pub(crate) fn handle_play_packet_for_test(
+        packet: RawPacket,
+        player: &Arc<Player>,
+        server: &Arc<Server>,
+    ) {
+        let Ok(Some(DecodedPlayPacket::Scheduled(scheduled))) =
+            Self::decode_domain_gated_packet(packet, player)
+        else {
+            panic!("test packet should route to a scheduled play handler");
+        };
+        scheduled.handle(Arc::clone(player), server);
     }
 
     #[expect(
@@ -1307,7 +1315,9 @@ mod tests {
     use steel_protocol::packets::common::{
         ChatVisibility, HumanoidArm, ParticleStatus, ResourcePackAction,
     };
-    use steel_protocol::packets::game::{ClickType, ClientCommandAction, HashedStack};
+    use steel_protocol::packets::game::{
+        ClickType, ClientCommandAction, HashedStack, LastSeenMessagesUpdate,
+    };
     use steel_registry::{blocks::properties::Direction, item_stack::ItemStack};
     use steel_utils::{BlockPos, codec::VarInt, types::SignTextSlot};
     use tokio::{
@@ -1778,6 +1788,22 @@ mod tests {
             execution(ScheduledPlayPacketKind::ChatCommand(SChatCommand {
                 command: "help".to_owned(),
             })),
+            ScheduledPacketExecution::PlayerLocal
+        );
+        assert_eq!(
+            execution(ScheduledPlayPacketKind::ChatCommandSigned(
+                SChatCommandSigned {
+                    command: "help".to_owned(),
+                    timestamp: 0,
+                    salt: 0,
+                    argument_signatures: Vec::new(),
+                    last_seen: LastSeenMessagesUpdate {
+                        offset: VarInt(0),
+                        acknowledged: [0; 3],
+                        checksum: 0,
+                    },
+                }
+            )),
             ScheduledPacketExecution::PlayerLocal
         );
         assert_eq!(

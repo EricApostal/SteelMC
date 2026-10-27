@@ -6,6 +6,7 @@ use std::sync::Arc;
 use glam::DVec3;
 use steel_registry::particle_type::ParticleData;
 use steel_registry::{sound_events, vanilla_damage_types, vanilla_particle_types};
+use steel_utils::entity_events::EntityStatus;
 
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::module_type as mem;
@@ -90,8 +91,8 @@ impl SonicBoom {
         }
 
         // Vanilla `target.getEyePosition().subtract(source)`, where `source`
-        // is the body's position plus its `WARDEN_CHEST` attachment offset.
-        let source = super::eye_position(ctx.body) + super::warden_chest_attachment(ctx);
+        // is the body's *feet* position plus its `WARDEN_CHEST` attachment offset.
+        let source = super::sonic_boom_origin(ctx);
         let delta = super::eye_position(&target) - source;
         // Vanilla `Vec3.normalize()` yields `Vec3.ZERO` for a degenerate delta.
         let direction = delta.normalize_or_zero();
@@ -150,7 +151,9 @@ impl Behavior for SonicBoom {
     fn start(&mut self, ctx: &mut BehaviorContext<'_>) {
         ctx.set_memory_with_expiry(&mem::ATTACK_COOLING_DOWN, true, i64::from(DURATION));
         ctx.set_memory_with_expiry(&mem::SONIC_BOOM_SOUND_DELAY, (), TICKS_BEFORE_PLAYING_SOUND);
-        // Vanilla plays `SoundEvents.WARDEN_SONIC_CHARGE` here.
+        // Vanilla `ServerLevel.broadcastEntityEvent(body, (byte) 62)`
+        // (`EntityStatus.SonicCharge`), then `SoundEvents.WARDEN_SONIC_CHARGE`.
+        ctx.body.broadcast_entity_event(EntityStatus::SonicCharge);
         ctx.body
             .play_sound(&sound_events::ENTITY_WARDEN_SONIC_CHARGE, 3.0, 1.0);
     }

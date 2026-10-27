@@ -702,8 +702,26 @@ fn monster_spawn_obstruction_checks_entities_and_excludes_spectators_and_shared_
 
     EntityBase::restore_passenger_relationship(&player_entity, &mob_entity);
     assert!(mob.check_spawn_obstruction(world));
+
+    // Vanilla `LivingEntity.stopRiding` dismounts through `dismountVehicle`: for a live,
+    // non-portal vehicle it places the passenger at `getDismountLocationForPassenger`,
+    // which is directly above the vehicle (`Entity.getDismountLocationForPassenger`).
+    // The mob therefore leaves the player's box, so the spawn box is unobstructed again —
+    // for that geometric reason, not because the shared-vehicle exclusion still applies.
+    // The exclusion itself is what the assertion above covers (a plain overlapping player
+    // blocks, so it would fail if a same-vehicle passenger were not excluded).
     mob.stop_riding();
-    assert!(!mob.check_spawn_obstruction(world));
+    assert!(
+        !mob.is_passenger_of_same_vehicle(player.as_ref()),
+        "stopping the ride must clear the shared root vehicle"
+    );
+    assert!(
+        mob.position().y >= player.bounding_box().max_y() - 1.0e-6,
+        "vanilla dismounts the passenger above the vehicle (mob y {} vs vehicle top {})",
+        mob.position().y,
+        player.bounding_box().max_y()
+    );
+    assert!(mob.check_spawn_obstruction(world));
 
     player.set_removed(RemovalReason::Discarded);
     assert!(mob.check_spawn_obstruction(world));

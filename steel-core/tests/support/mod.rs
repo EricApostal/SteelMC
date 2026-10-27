@@ -5,6 +5,8 @@ use std::cell::{Cell, RefCell};
 use std::ops::Deref;
 use std::slice;
 use std::sync::{Arc, OnceLock, Weak};
+use std::thread;
+use std::time::Duration;
 
 use glam::DVec3;
 use steel_registry::blocks::{BlockRef, block_state_ext::BlockStateExt};
@@ -193,6 +195,108 @@ pub(crate) fn insert_full_chunk(
         .activate_block_entities(slice::from_ref(&holder));
     world.chunk_map.rebuild_ticking_chunk_snapshot();
     holder
+}
+
+/// Half-width, in chunks, of the square `Full` neighborhood a chunk needs before the
+/// server lets it tick entities (`FullNeighborhoodIndex::ENTITY_TICKING_FULL_COUNT`
+/// is 25, i.e. a 5x5 square; block ticking needs the 3x3 of 9).
+#[expect(
+    dead_code,
+    reason = "documents the 5x5 neighbourhood contract that `insert_entity_ticking_chunks` callers restate"
+)]
+pub(crate) const ENTITY_TICKING_NEIGHBORHOOD_RADIUS: i32 = 2;
+
+/// Loads a `(2 * radius + 1)` square of `Full` chunks around `center` and promotes
+/// every one of them to entity ticking, so the entity manager really steps the
+/// entities inside that square.
+///
+/// The manager only ticks an entity when its chunk's holder reports
+/// [`EntityVisibility::Ticking`](crate::entity::manager::EntityVisibility), which
+/// `ChunkHolder::entity_visibility` derives from three separate conditions:
+///
+/// * the holder is `Full` and its *load* level is a full one,
+/// * its *simulation* level is `<= ChunkTicketLevel::ENTITY_TICKING_CHUNK`,
+/// * its ticking readiness is `TickingReadiness::EntityTicking`, which `ChunkMap`
+///   re-derives from the [`FullNeighborhoodIndex`]: all 25 chunks of the 5x5 square
+///   must be `Full` (`ENTITY_TICKING_FULL_COUNT`), 9 for block ticking.
+///
+/// [`insert_ready_full_chunk`] answers the first condition for one chunk and stops at
+/// `BlockTicking` readiness, so a test that only calls it — or that sets the ticket
+/// level and readiness by hand — never gets its entities ticked. The trap is the third
+/// condition: any ticket-source change (a player joining, say) puts the chunk into the
+/// next scheduling pass's load changes, and that pass recomputes the target readiness
+/// from the neighborhood and demotes the chunk to `Unready` when the 5x5 is not
+/// loaded. That is why a player join revokes a manual `EntityTicking` transition and
+/// the mob never enters the manager's tick list.
+///
+/// This helper loads the neighborhood the derivation needs, so the result is the same
+/// with and without a player:
+///
+/// * without a player no ticket source exists, nothing marks the chunks dirty, and the
+///   manual promotion below is final — pass as wide a `radius` as the test's mobs
+///   travel (a mob can only be stepped, and can only move, inside the loaded region:
+///   `EntityManager::validate_move` rejects a destination chunk it does not know);
+/// * with a player, call [`settle_entity_ticking_chunk`] after the join to run the
+///   derivation immediately: the freshly loaded neighborhood keeps the chunk at
+///   `EntityTicking` instead of demoting it. The player's own tickets then bound the
+///   ticking region to its simulation distance (a 5x5 at the test world's
+///   `simulation_distance` of 2), and its derivation needs that 5x5's own 5x5 `Full`,
+///   which is why the player fixtures pass at least
+///   [`ENTITY_TICKING_NEIGHBORHOOD_RADIUS`] plain radius.
+///
+/// Returns the center's holder.
+pub(crate) fn insert_entity_ticking_chunks(
+    world: &Arc<World>,
+    center: ChunkPos,
+    radius: i32,
+) -> Arc<ChunkHolder> {
+    let mut center_holder = None;
+    for offset_x in -radius..=radius {
+        for offset_z in -radius..=radius {
+            let pos = ChunkPos::new(center.0.x + offset_x, center.0.y + offset_z);
+            let holder = insert_ready_full_chunk(world, pos);
+            promote_chunk_to_entity_ticking(world, pos, &holder);
+            if offset_x == 0 && offset_z == 0 {
+                center_holder = Some(holder);
+            }
+        }
+    }
+    world.chunk_map.rebuild_ticking_chunk_snapshot();
+    center_holder.expect("the center chunk is part of its own neighborhood")
+}
+
+/// Runs the chunk source phase until `center` is entity ticking again.
+///
+/// `World::tick_game` (and with it `ChunkMap`'s source phase) re-derives every chunk's
+/// load level, simulation level and ticking readiness from its ticket sources. Joining a
+/// player queues that player's loading and simulation tickets, so the very next pass
+/// recomputes `center` from its neighborhood — including demoting a readiness transition
+/// the test made by hand. Running the pass here settles the fixture before the test adds
+/// entities or asserts on them, instead of leaving the outcome to whichever tick happens
+/// to run first.
+pub(crate) fn settle_entity_ticking_chunk(world: &Arc<World>, center: ChunkPos) {
+    let _runtime_guard = world.chunk_map.chunk_runtime.enter();
+    for _ in 0..1_000 {
+        world.chunk_map.advance_scheduling();
+        if world.chunk_map.is_entity_ticking_full_chunk_loaded(center) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    panic!("chunk {center:?} never reached entity ticking readiness");
+}
+
+/// Sets `pos`'s simulation level and ticking readiness so its holder reports a ticking
+/// visibility, and tells the entity manager about the change. Tickable-chunk snapshot
+/// rebuilding is left to the caller, which knows when the whole region is in place.
+fn promote_chunk_to_entity_ticking(world: &Arc<World>, pos: ChunkPos, holder: &Arc<ChunkHolder>) {
+    holder.set_simulation_level(Some(ChunkTicketLevel::ENTITY_TICKING_CHUNK));
+    assert_eq!(
+        holder.transition_ticking_readiness(TickingReadiness::EntityTicking),
+        Some(TickingReadiness::BlockTicking),
+        "the fixture chunk must start at block ticking readiness"
+    );
+    world.update_entity_chunk_visibility(pos, holder.entity_visibility());
 }
 
 pub(crate) fn cross_world_damage_test_world() -> &'static Arc<World> {

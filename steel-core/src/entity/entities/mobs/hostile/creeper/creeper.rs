@@ -302,7 +302,11 @@ impl CreeperEntity {
         {
             return false;
         }
-        Mob::set_target(self, target)
+        // Vanilla `Creeper.setTarget` calls `super.setTarget`, whose body is
+        // `mob_base().set_target(..)` with `is_valid_target`, so call that directly — a
+        // `Mob::set_target(self, ..)` UFCS call re-enters this entity's override.
+        self.mob_base()
+            .set_target(target, |target| Mob::is_valid_target(self, target))
     }
 }
 

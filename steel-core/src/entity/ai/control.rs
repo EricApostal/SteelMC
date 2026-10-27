@@ -374,11 +374,15 @@ pub struct FlyingMoveControlOutput {
     pub y_rot: f32,
     /// Vanilla `mob.setXRot`.
     pub x_rot: f32,
-    /// Vanilla `mob.setSpeed`.
+    /// Vanilla `mob.setSpeed`; vanilla's `Mob.setSpeed` also writes `zza`.
     pub speed: f32,
     /// Vanilla `mob.setYya`.
     pub yya: f32,
     /// Vanilla `mob.setZza`.
+    ///
+    /// Equal to [`Self::speed`] on the `MOVE_TO` path (vanilla writes it through
+    /// `Mob.setSpeed`) and `0.0` while idling, so a caller that maps this onto the
+    /// forward travel input keeps the mob translating instead of spinning in place.
     pub zza: f32,
     /// Vanilla `mob.setNoGravity`.
     pub no_gravity: bool,
@@ -443,6 +447,10 @@ impl FlyingMoveControl {
         };
         let speed = (input.speed_modifier * attribute_speed) as f32;
         output.speed = speed;
+        // Vanilla reaches this through `mob.setSpeed(speed)`, and `Mob.setSpeed`
+        // writes `setZza(speed)` as well as the cached speed: the MOVE_TO branch
+        // must therefore leave the forward input at `speed`, not at zero.
+        output.zza = speed;
 
         let horizontal = (delta.x * delta.x + delta.z * delta.z).sqrt();
         if delta.y.abs() > 1.0e-5 || horizontal.abs() > 1.0e-5 {
@@ -453,6 +461,55 @@ impl FlyingMoveControl {
 
         output
     }
+}
+
+/// Vanilla `FlyingMoveControl.tick` against a live mob.
+///
+/// See [`tick_smooth_swimming_move_control`] for why this lives here: vanilla
+/// installs a `FlyingMoveControl` in the mob constructor and ticks it through
+/// `MoveControl.tick`, while Steel's `Mob` trait lets a mob override
+/// `tick_move_control`, which calls this with its own control instance.
+pub(crate) fn tick_flying_move_control<M: Mob + ?Sized>(mob: &M, control: FlyingMoveControl) {
+    let move_control = {
+        let mut controls = mob.mob_base().controls().lock();
+        let move_control = controls.move_control;
+        if matches!(move_control.operation(), MoveControlOperation::MoveTo) {
+            controls.move_control.set_wait();
+        }
+        move_control
+    };
+
+    let (y_rot, x_rot) = mob.rotation();
+    let (movement_speed, flying_speed) = {
+        let attributes = mob.attributes().lock();
+        (
+            attributes.required_value(vanilla_attributes::MOVEMENT_SPEED),
+            attributes.required_value(vanilla_attributes::FLYING_SPEED),
+        )
+    };
+    let output = control.tick(FlyingMoveControlInput {
+        operation: move_control.operation(),
+        wanted_position: move_control.wanted_position(),
+        position: mob.position(),
+        y_rot,
+        x_rot,
+        on_ground: mob.on_ground(),
+        speed_modifier: move_control.speed_modifier(),
+        movement_speed,
+        flying_speed,
+    });
+
+    mob.set_rotation((output.y_rot, output.x_rot));
+    // `Mob.setSpeed` is what vanilla calls here, so the forward input follows it;
+    // the `setWantedPosition`-driven `MOVE_TO` step keeps it at the flying speed.
+    mob.set_mob_speed(output.speed);
+    mob.set_no_gravity(output.no_gravity);
+    let input = mob.travel_input();
+    mob.set_travel_input(LivingTravelInput::new(
+        input.sideways(),
+        output.yya,
+        output.zza,
+    ));
 }
 
 /// Vanilla `SmoothSwimmingMoveControl` input.
@@ -797,7 +854,12 @@ pub(crate) fn tick_smooth_swimming_move_control<M: Mob + ?Sized>(
 
 #[cfg(test)]
 mod tests {
-    use super::{BodyRotationControl, BodyRotationInput};
+    use glam::DVec3;
+
+    use super::{
+        BodyRotationControl, BodyRotationInput, FlyingMoveControl, FlyingMoveControlInput,
+        MoveControlOperation,
+    };
 
     fn assert_f32_close(left: f32, right: f32) {
         assert!(
@@ -865,5 +927,318 @@ mod tests {
         assert_f32_close(update.y_head_rot(), 90.0);
         assert_eq!(control.head_stable_time(), 0);
         assert_f32_close(control.last_stable_y_head_rot(), 0.0);
+    }
+
+    #[test]
+    fn flying_move_to_keeps_the_forward_input_at_the_flying_speed() {
+        let output = FlyingMoveControl::new(10, false).tick(FlyingMoveControlInput {
+            operation: MoveControlOperation::MoveTo,
+            wanted_position: DVec3::new(10.0, 74.0, 0.5),
+            position: DVec3::new(0.5, 70.0, 0.5),
+            y_rot: 0.0,
+            x_rot: 0.0,
+            on_ground: false,
+            speed_modifier: 1.0,
+            movement_speed: 0.1,
+            flying_speed: 0.4,
+        });
+
+        // Vanilla reaches `setZza(speed)` through `Mob.setSpeed`; without it a caller
+        // that maps `zza` onto the forward travel input leaves the mob spinning in place.
+        assert_f32_close(output.speed, 0.4);
+        assert_f32_close(output.zza, output.speed);
+        assert_f32_close(output.yya, output.speed);
+    }
+
+    #[test]
+    fn flying_move_wait_zeroes_the_forward_input() {
+        let output = FlyingMoveControl::new(10, false).tick(FlyingMoveControlInput {
+            operation: MoveControlOperation::Wait,
+            wanted_position: DVec3::new(10.0, 74.0, 0.5),
+            position: DVec3::new(0.5, 70.0, 0.5),
+            y_rot: 0.0,
+            x_rot: 0.0,
+            on_ground: false,
+            speed_modifier: 1.0,
+            movement_speed: 0.1,
+            flying_speed: 0.4,
+        });
+
+        assert_f32_close(output.zza, 0.0);
+        assert_f32_close(output.yya, 0.0);
+        assert!(
+            !output.no_gravity,
+            "a non-hovering flyer drops out of hover"
+        );
+    }
+
+    /// The real flying path: a waypoint drives the navigation, which drives
+    /// [`tick_flying_move_control`], which drives `LivingEntity::travel` and the
+    /// world's `move()` inside an entity-ticking chunk.
+    mod live_flight {
+        use std::sync::Arc;
+
+        use glam::DVec3;
+        use steel_registry::vanilla_game_rules::{SPAWN_MOBS, SPAWN_MONSTERS};
+        use steel_registry::{init_vanilla_registry, vanilla_entities};
+        use steel_utils::ChunkPos;
+
+        use crate::behavior::init_behaviors;
+        use crate::entity::entities::mobs::{AllayEntity, BeeEntity, ParrotEntity};
+        use crate::entity::{
+            Entity, LivingEntity, PathfinderMob, SharedEntity, add_spawned_entity, init_entities,
+        };
+        use crate::player::ResetReason;
+        use crate::test_support::{
+            TestPlayerBuilder, TestWorld, fresh_test_world, insert_entity_ticking_chunks,
+            settle_entity_ticking_chunk,
+        };
+        use crate::world::World;
+
+        /// Upper bound on the world ticks a test may burn waiting for entity ticks.
+        const MAX_WORLD_TICKS: u64 = 4_000;
+
+        /// Radius, in chunks, of the entity-ticking region a player holds in a test
+        /// world: the player's loading/simulation tickets cover a square of
+        /// `world.simulation_distance` (2), and the readiness derivation needs that
+        /// square's own 5x5 `Full` neighborhood, hence a 9x9 region.
+        const PLAYER_TICKING_RADIUS: i32 = 4;
+
+        /// A fresh test world whose origin chunk is entity-ticking, held open by a
+        /// watcher player exactly like a running server does.
+        fn ticking_world(key: &'static str) -> TestWorld {
+            init_vanilla_registry();
+            init_entities();
+            init_behaviors();
+
+            let fixture = fresh_test_world(key);
+            let world = &fixture.world;
+            let center = ChunkPos::new(0, 0);
+            // The player's join queues its tickets, and the next chunk source pass
+            // re-derives every chunk's readiness from its neighborhood; loading the
+            // 9x9 `Full` region first is what keeps the origin chunk entity-ticking
+            // through that pass instead of demoting it and starving the mob.
+            insert_entity_ticking_chunks(world, center, PLAYER_TICKING_RADIUS);
+
+            // A player keeps the chunk entity-ticking so `tick_game` steps the mob.
+            let watcher = TestPlayerBuilder::new(Arc::clone(world), "FlyingWatcher", 1).build();
+            watcher.set_client_loaded(true);
+            watcher.snap_to(DVec3::new(8.5, 70.0, 8.5), 0.0, 0.0);
+            assert!(
+                world.add_player(Arc::clone(&watcher), ResetReason::InitialJoin),
+                "the watcher must hold the chunk active"
+            );
+            settle_entity_ticking_chunk(world, center);
+
+            // Vanilla's natural-spawn pass is unrelated to flying movement and depends
+            // on the process-wide RNG.
+            world.set_game_rule(&SPAWN_MOBS, false);
+            world.set_game_rule(&SPAWN_MONSTERS, false);
+            fixture
+        }
+
+        /// Steps the world until the mob has been ticked `entity_ticks` more times.
+        ///
+        /// Entity ticking only starts once the watcher player's chunk tickets have
+        /// propagated to the chunk holder (a few dozen world ticks in), and one world
+        /// tick steps an entity at most once, so the test budget is counted in the
+        /// mob's own tick counter instead of raw world ticks.
+        fn tick_entity_ticks(
+            world: &Arc<World>,
+            tick: &mut u64,
+            mob: &dyn Entity,
+            entity_ticks: i32,
+            mut observe: impl FnMut(),
+        ) {
+            let target = mob.tick_count() + entity_ticks;
+            while mob.tick_count() < target && *tick < MAX_WORLD_TICKS {
+                world.game_time.advance();
+                world.tick_game(*tick, true);
+                observe();
+                *tick += 1;
+            }
+        }
+
+        /// Waits for the entity-ticking chunk to actually start stepping the mob.
+        fn tick_until_first_entity_tick(world: &Arc<World>, tick: &mut u64, mob: &dyn Entity) {
+            tick_entity_ticks(world, tick, mob, 1, || {});
+            assert!(
+                mob.tick_count() > 0,
+                "the entity-ticking chunk must step the mob"
+            );
+        }
+
+        /// Tracks how far the mob got from where it started.
+        #[derive(Debug, Clone, Copy)]
+        struct Progress {
+            start: DVec3,
+            max_horizontal: f64,
+            max_y_gain: f64,
+        }
+
+        impl Progress {
+            fn observe(&mut self, position: DVec3) {
+                self.max_horizontal = self
+                    .max_horizontal
+                    .max((position.x - self.start.x).hypot(position.z - self.start.z));
+                self.max_y_gain = self.max_y_gain.max(position.y - self.start.y);
+            }
+        }
+
+        fn progress_from(start: DVec3) -> Progress {
+            Progress {
+                start,
+                max_horizontal: 0.0,
+                max_y_gain: 0.0,
+            }
+        }
+
+        /// A flying mob with a raised waypoint must move along both axes: the shipped
+        /// bug left the forward travel input at zero, so the mob only yawed/pitched and
+        /// sank along its own pitch.
+        #[test]
+        #[expect(
+            clippy::clone_on_ref_ptr,
+            reason = "the plain clone unsizes to `Arc<dyn Entity>`; `Arc::clone` cannot take the already-coerced reference in one expression"
+        )]
+        fn a_parrot_with_a_waypoint_flies_there() {
+            let fixture = ticking_world("flying_parrot_waypoint");
+            let world = &fixture.world;
+
+            let parrot = Arc::new(ParrotEntity::new(
+                &vanilla_entities::PARROT,
+                2,
+                DVec3::new(0.5, 70.0, 0.5),
+                Arc::downgrade(world),
+            ));
+            // The parrot's wander goals would overwrite the waypoint under test.
+            PathfinderMob::remove_all_goals(parrot.as_ref(), |_| true);
+
+            let shared: SharedEntity = parrot.clone();
+            add_spawned_entity(world, shared).expect("the parrot joins the loaded chunk");
+
+            assert!(
+                parrot.move_to_pos(DVec3::new(10.5, 74.0, 2.5), 1.0),
+                "the flying navigation must accept a waypoint path"
+            );
+
+            let mut tick = 0_u64;
+            tick_until_first_entity_tick(world, &mut tick, parrot.as_ref());
+
+            let mut progress = progress_from(parrot.position());
+            tick_entity_ticks(world, &mut tick, parrot.as_ref(), 120, || {
+                progress.observe(parrot.position());
+            });
+
+            assert!(
+                progress.max_horizontal > 3.0,
+                "the parrot must fly toward the waypoint instead of turning in place ({progress:?})"
+            );
+            assert!(
+                progress.max_y_gain > 2.0,
+                "the parrot must climb to the raised waypoint ({progress:?})"
+            );
+        }
+
+        /// A bee must fly too; it also has to hold the altitude the flying control's
+        /// `hoversInPlace` flag gives it instead of dropping out of the air.
+        #[test]
+        #[expect(
+            clippy::clone_on_ref_ptr,
+            reason = "the plain clone unsizes to `Arc<dyn Entity>`; `Arc::clone` cannot take the already-coerced reference in one expression"
+        )]
+        fn a_bee_with_a_waypoint_flies_there_and_hovers() {
+            let fixture = ticking_world("flying_bee_waypoint");
+            let world = &fixture.world;
+
+            let bee = Arc::new(BeeEntity::new(
+                &vanilla_entities::BEE,
+                2,
+                DVec3::new(0.5, 70.0, 0.5),
+                Arc::downgrade(world),
+            ));
+            PathfinderMob::remove_all_goals(bee.as_ref(), |_| true);
+
+            let shared: SharedEntity = bee.clone();
+            add_spawned_entity(world, shared).expect("the bee joins the loaded chunk");
+
+            assert!(
+                bee.move_to_pos(DVec3::new(10.5, 74.0, 2.5), 1.0),
+                "the flying navigation must accept a waypoint path"
+            );
+
+            let mut tick = 0_u64;
+            tick_until_first_entity_tick(world, &mut tick, bee.as_ref());
+
+            let mut progress = progress_from(bee.position());
+            tick_entity_ticks(world, &mut tick, bee.as_ref(), 200, || {
+                progress.observe(bee.position());
+            });
+
+            assert!(
+                progress.max_horizontal > 3.0,
+                "the bee must fly toward the waypoint instead of hopping on the ground ({progress:?})"
+            );
+            assert!(
+                progress.max_y_gain > 2.0,
+                "the bee must climb to the raised waypoint ({progress:?})"
+            );
+            assert!(
+                bee.position().y - progress.start.y > 2.0,
+                "the bee must hover at the altitude it flew to, not sink ({progress:?})"
+            );
+        }
+
+        /// An allay's `travel` is `travelFlying`, which never subtracts gravity; that is
+        /// what keeps an allay hovering instead of dropping out of the air.
+        ///
+        /// An idle allay's own walk targets are random strolls, which legitimately fly
+        /// it up and down, so the gravity-free part is asserted on one real travel step
+        /// with no movement input rather than on wherever the stroll took the allay.
+        #[test]
+        #[expect(
+            clippy::clone_on_ref_ptr,
+            reason = "the plain clone unsizes to `Arc<dyn Entity>`; `Arc::clone` cannot take the already-coerced reference in one expression"
+        )]
+        fn an_allay_hover_step_does_not_apply_gravity() {
+            let fixture = ticking_world("flying_allay_hover");
+            let world = &fixture.world;
+
+            let allay = Arc::new(AllayEntity::new(
+                &vanilla_entities::ALLAY,
+                2,
+                DVec3::new(0.5, 100.0, 0.5),
+                Arc::downgrade(world),
+            ));
+            let shared: SharedEntity = allay.clone();
+            add_spawned_entity(world, Arc::clone(&shared))
+                .expect("the allay joins the loaded chunk");
+
+            // The allay has to sit in an entity-ticking chunk, so that the step below
+            // runs against its live world.
+            let mut tick = 0_u64;
+            tick_until_first_entity_tick(world, &mut tick, allay.as_ref());
+
+            let start = allay.position();
+            let velocity_y = allay.velocity().y;
+            // Vanilla `LivingEntity.aiStep` runs this every tick with the allay's
+            // movement input, which is zero while it has nowhere to fly.
+            assert!(
+                allay.travel(&shared, DVec3::ZERO).is_some(),
+                "the allay's travel must move it inside the world"
+            );
+
+            assert!(
+                allay.velocity().y >= velocity_y - 1.0e-9,
+                "an allay must hover: travel must not add gravity (velocity.y {velocity_y} -> {})",
+                allay.velocity().y
+            );
+            assert!(
+                allay.position().y >= start.y - 1.0e-9,
+                "an allay must hover instead of sinking ({} -> {})",
+                start.y,
+                allay.position().y
+            );
+        }
     }
 }

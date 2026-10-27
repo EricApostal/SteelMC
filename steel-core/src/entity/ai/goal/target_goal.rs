@@ -20,6 +20,7 @@ pub(super) struct TargetGoalBase {
     unseen_ticks: i32,
     target_mob: Option<SharedEntity>,
     unseen_memory_ticks: i32,
+    follow_distance_scale: f64,
 }
 
 impl TargetGoalBase {
@@ -33,7 +34,22 @@ impl TargetGoalBase {
             unseen_ticks: 0,
             target_mob: None,
             unseen_memory_ticks: DEFAULT_UNSEEN_MEMORY_TICKS,
+            follow_distance_scale: 1.0,
         }
+    }
+
+    /// Vanilla `TargetGoal.getFollowDistance` is virtual and scaled by some subclasses (e.g.
+    /// `PolarBear.PolarBearAttackPlayersGoal` halves it), so every distance test in the goal
+    /// multiplies the mob's follow range by this factor.
+    #[must_use]
+    pub(super) const fn with_follow_distance_scale(mut self, scale: f64) -> Self {
+        self.follow_distance_scale = scale;
+        self
+    }
+
+    #[must_use]
+    pub(super) const fn follow_distance_scale(&self) -> f64 {
+        self.follow_distance_scale
     }
 
     pub(super) const fn set_unseen_memory_ticks(&mut self, unseen_memory_ticks: i32) {
@@ -56,7 +72,7 @@ impl TargetGoalBase {
             return false;
         }
 
-        let follow_distance = follow_distance(mob);
+        let follow_distance = follow_distance(mob) * self.follow_distance_scale;
         if mob.position().distance_squared(target.position()) > follow_distance * follow_distance {
             return false;
         }

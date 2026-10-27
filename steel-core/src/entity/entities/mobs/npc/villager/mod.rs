@@ -6,7 +6,7 @@
 //! `AbstractVillager` subclass hierarchy to share them with yet; the wandering trader
 //! carries its own copy of the shared `AbstractVillager` pieces.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
@@ -92,6 +92,8 @@ pub const EXCESS_FOOD_THRESHOLD: i32 = 24;
 pub const SPEED_MODIFIER: f32 = 0.5;
 /// Villagers a summoning consensus needs before [`VillagerEntity::gossip`] spawns a golem.
 const VILLAGERS_NEEDED_FOR_GOSSIP_GOLEM: usize = 5;
+/// Sentinel for [`VillagerEntity`]'s staged `LAST_WOKEN` write; game time is never negative.
+const NO_PENDING_WAKE: i64 = i64::MIN;
 /// Vanilla `AbstractVillager` baby dimensions before entity scaling.
 const BABY_WIDTH: f32 = 0.49;
 const BABY_HEIGHT: f32 = 0.98;
@@ -124,6 +126,13 @@ pub struct VillagerEntity {
     brain_refresh_requested: AtomicBool,
     /// Pending `Villager.spawnGolemIfNeeded` request, resolved after the brain tick.
     pending_golem_spawn: SyncMutex<Option<usize>>,
+    /// Pending `Villager.stopSleeping`'s `MemoryModuleType.LAST_WOKEN` write, applied at the
+    /// top of the next brain tick.
+    ///
+    /// Vanilla writes the memory from `Villager.stopSleeping` itself, but that method is also
+    /// reached from inside a brain tick (`SleepInBed.stop`, which runs with the brain locked),
+    /// so writing through [`VillagerEntity::brain`] there would self-deadlock.
+    pending_last_woken: AtomicI64,
 }
 
 // SAFETY: This key is owned by Steel and uniquely identifies `VillagerEntity`.
@@ -182,6 +191,7 @@ impl VillagerEntity {
             last_traded_player: SyncMutex::new(None),
             brain_refresh_requested: AtomicBool::new(false),
             pending_golem_spawn: SyncMutex::new(None),
+            pending_last_woken: AtomicI64::new(NO_PENDING_WAKE),
         };
 
         // Vanilla `AbstractVillager`/`Villager` constructor state.
@@ -240,6 +250,20 @@ impl VillagerEntity {
 
     fn take_brain_refresh_request(&self) -> bool {
         self.brain_refresh_requested.swap(false, Ordering::AcqRel)
+    }
+
+    /// Stages `Villager.stopSleeping`'s `MemoryModuleType.LAST_WOKEN` write for the next
+    /// brain tick; see [`VillagerEntity::pending_last_woken`].
+    fn stage_last_woken(&self, game_time: i64) {
+        self.pending_last_woken.store(game_time, Ordering::Release);
+    }
+
+    /// Takes the staged `LAST_WOKEN` wake time, if any.
+    fn take_last_woken(&self) -> Option<i64> {
+        let staged = self
+            .pending_last_woken
+            .swap(NO_PENDING_WAKE, Ordering::AcqRel);
+        (staged != NO_PENDING_WAKE).then_some(staged)
     }
 
     /// Vanilla `Villager.createDefaultVillagerData`.
@@ -582,7 +606,24 @@ impl VillagerEntity {
         let Some(entity) = world.entity_manager().get_by_id(self.id()) else {
             return;
         };
-        self.set_trading_player(Some(Arc::clone(&entity)));
+
+        // Vanilla `startTrading` records the *player* (`setTradingPlayer(player)`).
+        // Everything downstream expects a player: `AbstractVillager.stillValid`
+        // compares it against the trading player (and `ServerPlayer.doTick` closes
+        // the menu of a container that stopped being valid), `updateSpecialPrices`
+        // and `AbstractVillager.notifyTrade` downcast it to a `Player`, and the
+        // villager brain looks at/follows it. `&Player` cannot be upgraded to its
+        // own `Arc`, so resolve it through the world's player index, the same way
+        // the wandering trader and the entity callbacks do.
+        let Some(trading_player) = world.players.get_by_entity_id(player.id()) else {
+            log::debug!(
+                "Villager {} cannot trade with player {}: not in the world player index",
+                self.id(),
+                player.gameprofile.name()
+            );
+            return;
+        };
+        self.set_trading_player(Some(trading_player));
 
         player.open_trading_screen(
             Arc::new(VillagerMerchantHandle::new(
@@ -1259,6 +1300,23 @@ impl LivingEntity for VillagerEntity {
         Some(&sound_events::ENTITY_VILLAGER_DEATH)
     }
 
+    /// Vanilla `Villager.stopSleeping`: `super.stopSleeping()` plus
+    /// `brain.setMemory(MemoryModuleType.LAST_WOKEN, level.getGameTime())`.
+    ///
+    /// That memory is the only thing keeping a woken villager out of its bed, because
+    /// `SleepInBed.checkExtraStartConditions` refuses to start while
+    /// `0 < gameTime - LAST_WOKEN < COOLDOWN_AFTER_BEING_WOKEN` (100). Without it every way
+    /// a villager gets woken — right-clicking its bed
+    /// (`AbstractBedBlock.kickVillagerOutOfBed`), damaging it (`LivingEntity.hurtServer`), a
+    /// bell, or `SleepInBed` stopping — leaves a villager that walks straight back into the
+    /// bed on the next brain tick.
+    fn stop_sleeping(&self) {
+        self.default_stop_sleeping();
+        if let Some(world) = self.level() {
+            self.stage_last_woken(world.game_time());
+        }
+    }
+
     /// Vanilla `Villager.setLastHurtByMob`: hurting a villager costs the attacker reputation.
     fn set_last_hurt_by_mob(&self, target: Option<&SharedEntity>) {
         let Some(hurt_by) = target else {
@@ -1400,6 +1458,12 @@ impl Mob for VillagerEntity {
 
         {
             let mut brain = self.brain.lock();
+            // Vanilla `Villager.stopSleeping` writes `LAST_WOKEN` itself; the write is staged
+            // because that method is also reached with this lock already held, and the wake
+            // cooldown has to be visible to the behavior pass below.
+            if let Some(woken_at) = self.take_last_woken() {
+                brain.set_memory(&mem::LAST_WOKEN, Some(woken_at));
+            }
             brain::tick(&mut brain, &world, entity);
             if self.take_brain_refresh_request() {
                 brain::refresh_brain(&mut brain, self);

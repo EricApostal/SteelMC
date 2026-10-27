@@ -535,6 +535,23 @@ pub trait BlockEntity: ErasedType + Send + Sync {
         None
     }
 
+    /// Rolls a pending `LootTable` into this entity's container.
+    ///
+    /// Mirrors vanilla `RandomizableContainer.unpackLootTable`, the hook every
+    /// container read runs so structure-generated loot appears the first time a
+    /// container is read. The default is a no-op: block entities that are not
+    /// randomizable containers have nothing to roll.
+    ///
+    /// `player` is the opener for the menu paths (vanilla's
+    /// `ChestBlock`/`BaseContainerBlockEntity` menu providers pass the opening
+    /// player, which fires `GENERATE_LOOT` and applies the player's luck);
+    /// reads no player drives pass `None`.
+    #[expect(
+        unused_variables,
+        reason = "default trait impl; parameters used by overrides"
+    )]
+    fn unpack_loot_table(&self, player: Option<&Player>) {}
+
     /// Returns this entity's fixed game-event listener, if it provides one.
     ///
     /// Mirrors Vanilla `GameEventListener.Provider.getListener`. The owning block behavior keeps

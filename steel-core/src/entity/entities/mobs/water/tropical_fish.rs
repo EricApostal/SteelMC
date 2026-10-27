@@ -196,7 +196,7 @@ impl TropicalFishEntity {
     fn new_with_base(base: EntityBase, entity_type: EntityTypeRef) -> Self {
         let living_base = LivingEntityBase::new(entity_type);
         let mob_base = MobBase::new();
-        abstract_fish::initialize_water_pathfinding_malus(&mob_base);
+        abstract_fish::initialize_water_animal_pathfinding(&mob_base);
         let mut entity_data = TropicalFishEntityData::new();
         living_base.initialize_synced_data(&mut entity_data);
         entity_data.id_type_variant.set(DEFAULT_VARIANT.packed_id());
@@ -584,6 +584,11 @@ impl Mob for TropicalFishEntity {
 
     fn tick_path_navigation(&self) {
         PathfinderMob::tick_pathfinder_path_navigation(self);
+    }
+
+    /// Vanilla `AbstractFish`'s constructor installs `FishMoveControl`.
+    fn tick_move_control(&self) {
+        abstract_fish::tick_fish_move_control(self);
     }
 
     /// Vanilla `AbstractSchoolingFish.getMaxSpawnClusterSize` = `getMaxSchoolSize`.

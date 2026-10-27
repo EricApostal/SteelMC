@@ -426,6 +426,18 @@ pub trait Mob: LivingEntity + Leashable {
     /// Returns whether this mob may attack the target; excludes ghasts, which
     /// mobs never target directly.
     fn can_attack(&self, target: &dyn LivingEntity) -> bool {
+        self.can_attack_base(target)
+    }
+
+    /// The `super` half of [`Mob::can_attack`], for overrides that mirror a vanilla
+    /// `super.canAttack(...)` call.
+    ///
+    /// An override must call this instead of `Mob::can_attack(self, ...)` or
+    /// `self.can_attack(...)`: both are virtual and dispatch straight back into the
+    /// override, and in release LLVM collapses the self-recursion into an infinite
+    /// loop, so the calling thread spins (or overflows its stack in debug) instead of
+    /// ever returning a verdict.
+    fn can_attack_base(&self, target: &dyn LivingEntity) -> bool {
         target.entity_type() != &vanilla_entities::GHAST && LivingEntity::can_attack(self, target)
     }
 

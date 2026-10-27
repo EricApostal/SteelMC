@@ -42,6 +42,7 @@ use crate::inventory::equipment::EquipmentSlot;
 use crate::portal::PortalKind;
 use crate::test_support::{
     cross_world_damage_test_world, fresh_test_world, insert_ready_full_chunk, test_world,
+    tick_test_world,
 };
 use crate::world::game_event::GameEventContext;
 use crate::world::game_event::{GameEventListener, SharedGameEventListener};
@@ -56,7 +57,7 @@ use super::{
     LivingTravelInput, MobEffectInstance, RemovalReason, SPEED_MODIFIER_POWDER_SNOW_ID,
     SharedEntity, block_state_suffocates_eye_box, closest_open_space_direction,
     fall_damage_reset_clip_target, fall_flying_collision_damage, fall_flying_free_fall_interval,
-    get_input_vector, indirect_passengers, passenger_transition_position,
+    get_input_vector, indirect_passengers, init_entities, passenger_transition_position,
     passenger_transition_rotation, remove_after_changing_dimensions,
     should_apply_entity_cramming_damage, should_apply_resolved_movement, start_riding_entities,
     transfer_leashables_to_holder, trapdoor_usable_as_ladder_state,
@@ -1175,6 +1176,110 @@ fn closest_direction_with_blocked_neighbors(
             .iter()
             .any(|direction| direction.relative(origin) == neighbor_pos)
     })
+}
+
+/// Proves the shared entity-ticking fixture: an entity the fixture's chunk holds is
+/// stepped by `World::tick_game`, and the same entity in a chunk loaded by
+/// `insert_ready_full_chunk` alone is not.
+///
+/// The negative half is the point — it is the fixture bug this helper replaces (an
+/// entity of a merely block-ticking chunk never enters the manager's tick list), and
+/// it keeps the positive half from passing vacuously.
+#[test]
+fn entity_ticking_chunk_fixture_ticks_entities_with_and_without_a_player() {
+    use crate::player::ResetReason;
+    use crate::test_support::{
+        TestEntity, TestPlayerBuilder, insert_entity_ticking_chunks, settle_entity_ticking_chunk,
+    };
+
+    init_vanilla_registry();
+    init_entities();
+    init_behaviors();
+
+    // Playerless: nothing re-derives the chunk's readiness, so the fixture's own
+    // promotion is final.
+    let playerless = fresh_test_world("entity_ticking_chunk_playerless");
+    let world = &playerless.world;
+    let ticking = ChunkPos::new(0, 0);
+    insert_entity_ticking_chunks(world, ticking, 2);
+    // Far enough out that its 5x5 neighborhood never becomes entity-ticking-ready,
+    // and block ticking only is exactly what `insert_ready_full_chunk` gives.
+    let bare = ChunkPos::new(4, 4);
+    insert_ready_full_chunk(world, bare);
+
+    let stepped = TestEntity::shared(
+        1,
+        DVec3::new(8.0, 64.0, 8.0),
+        Arc::downgrade(world),
+        &vanilla_entities::ITEM,
+    );
+    let ignored = TestEntity::shared(
+        2,
+        DVec3::new(8.0 + 64.0, 64.0, 8.0 + 64.0),
+        Arc::downgrade(world),
+        &vanilla_entities::ITEM,
+    );
+    assert_eq!(
+        ChunkPos::from_entity_pos(ignored.position()),
+        bare,
+        "the control entity must sit in the block-ticking-only chunk"
+    );
+    world
+        .try_add_entity(Arc::clone(&stepped))
+        .expect("the stepping entity joins the fixture chunk");
+    world
+        .try_add_entity(Arc::clone(&ignored))
+        .expect("the control entity joins the bare chunk");
+
+    assert!(world.chunk_map.is_entity_ticking_full_chunk_loaded(ticking));
+    assert!(!world.chunk_map.is_entity_ticking_full_chunk_loaded(bare));
+
+    tick_test_world(world, 1, true);
+
+    assert_eq!(
+        stepped.tick_count(),
+        1,
+        "an entity of the fixture chunk must be ticked by the world"
+    );
+    assert_eq!(
+        ignored.tick_count(),
+        0,
+        "a block-ticking-only chunk must not tick its entities"
+    );
+
+    // With a player: the join queues the player's loading/simulation tickets, which
+    // make the next chunk source pass re-derive the origin chunk from its
+    // neighborhood. The fixture loaded that 5x5, so the derivation keeps the chunk
+    // entity-ticking instead of demoting it to unready.
+    let watched = fresh_test_world("entity_ticking_chunk_player");
+    let world = &watched.world;
+    insert_entity_ticking_chunks(world, ticking, 4);
+    let player = TestPlayerBuilder::new(Arc::clone(world), "TickWatcher", 1).build();
+    player.set_client_loaded(true);
+    player.snap_to(DVec3::new(8.5, 64.0, 8.5), 0.0, 0.0);
+    assert!(
+        world.add_player(Arc::clone(&player), ResetReason::InitialJoin),
+        "the watching player must join the world"
+    );
+    settle_entity_ticking_chunk(world, ticking);
+    assert!(world.chunk_map.is_entity_ticking_full_chunk_loaded(ticking));
+
+    let stepped = TestEntity::shared(
+        2,
+        DVec3::new(8.0, 64.0, 8.0),
+        Arc::downgrade(world),
+        &vanilla_entities::ITEM,
+    );
+    world
+        .try_add_entity(Arc::clone(&stepped))
+        .expect("the stepping entity joins the fixture chunk");
+    tick_test_world(world, 1, true);
+
+    assert_eq!(
+        stepped.tick_count(),
+        1,
+        "an entity of the fixture chunk must keep being ticked while a player is present"
+    );
 }
 
 mod damage;

@@ -1,6 +1,7 @@
 //! Vanilla `Digging`: dig into the ground and despawn.
 
 use steel_registry::entity_data::EntityPose;
+use steel_registry::sound_events;
 
 use crate::entity::RemovalReason;
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
@@ -56,12 +57,15 @@ impl Behavior for Digging {
 
     fn start(&mut self, ctx: &mut BehaviorContext<'_>) {
         if ctx.body.on_ground() {
-            // Vanilla plays `SoundEvents.WARDEN_DIG` here; the AI layer has no
-            // server audio path.
+            // Vanilla `Digging.start`: `setPose(DIGGING)` then `WARDEN_DIG` at volume 5.
             ctx.body.set_pose(EntityPose::Digging);
+            ctx.body
+                .play_sound(&sound_events::ENTITY_WARDEN_DIG, 5.0, 1.0);
         } else {
-            // Vanilla plays `SoundEvents.WARDEN_AGITATED` and digests into an
+            // Vanilla plays `WARDEN_AGITATED` at volume 5 and digests into an
             // immediate stop, which discards the body.
+            ctx.body
+                .play_sound(&sound_events::ENTITY_WARDEN_AGITATED, 5.0, 1.0);
             self.stop(ctx);
         }
     }

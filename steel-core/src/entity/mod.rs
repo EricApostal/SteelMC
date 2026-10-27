@@ -509,6 +509,20 @@ pub fn next_entity_id() -> i32 {
     id
 }
 
+/// Reserves `id` so [`next_entity_id`] never hands it out again.
+///
+/// Vanilla's entity constructor pulls every id from the level's counter, so an
+/// entity that allocates ids for entities it owns — the ender dragon's eight
+/// hitboxes, whose ids the client derives as `dragon id + 1 + index` — leaves
+/// the counter past them for free. Steel assigns those ids explicitly, so it
+/// must reserve them.
+pub fn reserve_entity_id(id: i32) {
+    let mut counter = ENTITY_COUNTER.lock();
+    if *counter <= id {
+        *counter = id.wrapping_add(1);
+    }
+}
+
 fn apply_block_effect_segment(
     entity: &dyn Entity,
     world: &Arc<World>,
@@ -824,6 +838,7 @@ pub use callback::{
 };
 pub use conversion::{AfterConversion, ConversionParams, ConversionType};
 pub(crate) use entity::apply_entity_look_at;
+pub(crate) use entity::collision_horizontal_escape_vector;
 pub(crate) use entity::position_rider_default;
 pub use entity::{
     AcceptedClientMovement, AcceptedClientMovementOutcome, Entity, EntityEventSource,

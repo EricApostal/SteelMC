@@ -98,6 +98,17 @@ impl MobEffectInstance {
         self
     }
 
+    /// Sets the hidden (downgraded) effect this instance carries.
+    ///
+    /// Mirrors the `hidden_effect` member of vanilla's `MobEffectInstance.Details`
+    /// codec, which preserves the previous, weaker instance when a stronger one
+    /// is reapplied.
+    #[must_use]
+    pub fn with_hidden_effect(mut self, hidden_effect: Option<Box<Self>>) -> Self {
+        self.hidden_effect = hidden_effect;
+        self
+    }
+
     /// Sets whether this effect should show its inventory icon.
     #[must_use]
     pub const fn with_show_icon(mut self, show_icon: bool) -> Self {
@@ -1820,6 +1831,13 @@ impl LivingEntityBase {
     #[must_use]
     pub fn death_time(&self) -> i32 {
         self.state.lock().death_time
+    }
+
+    /// Sets ticks elapsed since this entity started dying.
+    ///
+    /// Mirrors vanilla `LivingEntity.readAdditionalSaveData` restoring `DeathTime`.
+    pub fn set_death_time(&self, death_time: i32) {
+        self.state.lock().death_time = death_time;
     }
 
     /// Resets all death-related state back to alive defaults.

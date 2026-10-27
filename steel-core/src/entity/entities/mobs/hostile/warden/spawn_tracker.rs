@@ -15,7 +15,7 @@ use steel_utils::types::Difficulty;
 
 use super::warden::WardenEntity;
 use crate::entity::spawn::create_entity_instance;
-use crate::entity::{Entity, SharedEntity};
+use crate::entity::{Entity, EntitySpawnReason, SharedEntity};
 use crate::player::Player;
 use crate::world::World;
 use steel_utils::Downcast as _;
@@ -240,6 +240,13 @@ impl WardenSpawnTracker {
         );
         let warden = create_entity_instance(world, &vanilla_entities::WARDEN, spawn).ok()?;
         warden.snap_to(spawn, rand::random::<f32>() * 360.0, 0.0);
+        // Vanilla `SpawnUtil.trySpawnMob` → `EntityType.create` → `Mob.finalizeSpawn` with the
+        // `TRIGGERED` reason, before the entity joins the level. `Warden.finalizeSpawn` sets the
+        // `EMERGING` pose, remembers `IS_EMERGING` for `WardenAi.EMERGE_DURATION` and plays the
+        // agitated emerge sound, so the emerge activity can run.
+        if let Some(mob) = warden.as_mob() {
+            mob.finalize_spawn(world, EntitySpawnReason::Triggered, None);
+        }
         if world.try_add_entity(Arc::clone(&warden)).is_ok() {
             Some(warden)
         } else {

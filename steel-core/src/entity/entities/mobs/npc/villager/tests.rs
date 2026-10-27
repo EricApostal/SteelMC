@@ -5,7 +5,7 @@ use glam::DVec3;
 use simdnbt::borrow::read_compound as read_borrowed_compound;
 use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_protocol::packet_traits::EncodedPacket;
-use steel_registry::packets::play::C_CONTAINER_CLOSE;
+use steel_registry::packets::play::{C_CONTAINER_CLOSE, C_OPEN_SCREEN};
 use steel_registry::{
     init_vanilla_registry, vanilla_entities, vanilla_villager_professions, vanilla_villager_types,
 };
@@ -388,6 +388,7 @@ fn gossip_decays_every_24000_ticks() {
 /// per offer, Hero of the Village stacks on top, and an open trade screen is refreshed.
 #[test]
 fn update_special_prices_applies_reputation_and_hero_discounts() {
+    use crate::player::ResetReason;
     use crate::test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk};
     use steel_utils::ChunkPos;
 
@@ -402,6 +403,13 @@ fn update_special_prices_applies_reputation_and_hero_discounts() {
         .expect("the villager joins the loaded chunk");
 
     let player = TestPlayerBuilder::new(Arc::clone(world), "PriceTester", 2).build();
+    // `Villager.startTrading` records the trading player through the world's player
+    // index (vanilla records the `Player` object itself), so the trader must be a
+    // joined player — exactly as a real client is before it can click a villager.
+    assert!(
+        world.add_player(Arc::clone(&player), ResetReason::InitialJoin),
+        "the test player must join the world"
+    );
     let traded_with = player.uuid();
     villager.gossips.lock().add(
         traded_with,
@@ -552,10 +560,20 @@ fn villager_takes_a_job_site_placed_in_the_live_world() {
     use steel_utils::{BlockPos, ChunkPos};
 
     use crate::behavior::init_behaviors;
-    use crate::entity::{EntitySpawnReason, SharedEntity, add_spawned_entity, init_entities};
+    use crate::entity::{
+        Entity, EntitySpawnReason, SharedEntity, add_spawned_entity, init_entities,
+    };
     use crate::player::ResetReason;
-    use crate::test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk};
+    use crate::test_support::{
+        TestPlayerBuilder, fresh_test_world, insert_entity_ticking_chunks,
+        settle_entity_ticking_chunk,
+    };
     use steel_registry::vanilla_game_rules::{SPAWN_MOBS, SPAWN_MONSTERS};
+
+    // Radius, in chunks, of the region a player holds entity-ticking: the player's
+    // tickets cover a `simulation_distance` (2) square, whose readiness derivation
+    // needs that square's own 5x5 `Full`, hence a 9x9 region.
+    const PLAYER_TICKING_RADIUS: i32 = 4;
 
     init_vanilla_registry();
     init_entities();
@@ -564,14 +582,20 @@ fn villager_takes_a_job_site_placed_in_the_live_world() {
     let fixture = fresh_test_world("villager_live_job_site");
     let world = &fixture.world;
     let center = ChunkPos::new(0, 0);
-    insert_ready_full_chunk(world, center);
+    // Load the neighborhood before the join: the join queues the player's tickets and
+    // the next chunk source pass re-derives every chunk's readiness from it, which
+    // demotes the origin chunk (and starves the villager) when the 5x5 is missing.
+    insert_entity_ticking_chunks(world, center, PLAYER_TICKING_RADIUS);
 
     // A player keeps the chunk entity-ticking so `tick_game` actually steps the villager.
     let player = TestPlayerBuilder::new(Arc::clone(world), "JobSiteWatcher", 1).build();
+    player.set_client_loaded(true);
+    player.snap_to(DVec3::new(0.5, 64.0, 0.5), 0.0, 0.0);
     assert!(
         world.add_player(Arc::clone(&player), ResetReason::InitialJoin),
         "the test player must hold the chunk active"
     );
+    settle_entity_ticking_chunk(world, center);
 
     let villager: SharedEntity = Arc::new(VillagerEntity::new(
         &vanilla_entities::VILLAGER,
@@ -630,6 +654,10 @@ fn villager_takes_a_job_site_placed_in_the_live_world() {
         entity.profession().key,
         vanilla_villager_professions::FARMER.key,
         "the villager should have claimed the composter and become a farmer (ticked {ticks})"
+    );
+    assert!(
+        Entity::tick_count(entity) > 0,
+        "the villager must be stepped by the world's entity ticks for its brain to run"
     );
     // Vanilla `AbstractVillager.getOffers` builds the offer list on first access; a villager
     // that became employed in-world must therefore have trades available.
@@ -691,9 +719,14 @@ fn sent_packet_ids(packets: &SyncMutex<Vec<EncodedPacket>>) -> Vec<i32> {
 /// looked at a packet. This drives the real sequence instead: the `SInteract` packet through
 /// `Player::handle_interact`, then player and world ticks, then the recorded packets.
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one sequential packet-to-tick scenario documents the whole trade-menu lifecycle"
+)]
 fn trade_menu_survives_the_interaction_packet_and_ticks() {
+    use crate::behavior::init_behaviors;
     use crate::entity::{add_spawned_entity, init_entities};
-    use crate::player::PlayerConnection;
+    use crate::player::{PlayerConnection, ResetReason};
     use crate::test_support::{
         TestConnection, TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk,
         tick_test_world,
@@ -704,6 +737,7 @@ fn trade_menu_survives_the_interaction_packet_and_ticks() {
 
     init_vanilla_registry();
     init_entities();
+    init_behaviors();
 
     let fixture = fresh_test_world("villager_trade_menu_lifecycle");
     let world = Arc::clone(&fixture.world);
@@ -719,7 +753,15 @@ fn trade_menu_survives_the_interaction_packet_and_ticks() {
     let villager = test_villager_with_offers(&world, 2);
     let shared: SharedEntity = Arc::<VillagerEntity>::clone(&villager);
     add_spawned_entity(&world, Arc::clone(&shared)).expect("the villager joins the loaded chunk");
+    // Stand the player at the villager's side and then join the world, in that order:
+    // the position is written before the player enters the world's entity indexes, and
+    // `startTrading` resolves the trading player through the world's player index
+    // (vanilla holds the `Player` object itself).
     player.base().set_position_local(villager.position());
+    assert!(
+        world.add_player(Arc::clone(&player), ResetReason::InitialJoin),
+        "the test player must join the world"
+    );
 
     // The real client packet a right-click on an entity produces.
     player.handle_interact(SInteract {
@@ -740,6 +782,19 @@ fn trade_menu_survives_the_interaction_packet_and_ticks() {
     assert!(
         villager.is_trading(),
         "`startTrading` records the player as the trading player"
+    );
+    // Vanilla `AbstractVillager.setTradingPlayer(player)` stores the *player*;
+    // `stillValid`, `updateSpecialPrices` and `notifyTrade` all read it back as one.
+    // Storing anything else (this villager, say) makes `stillValid` false, and the
+    // next `ServerPlayer.doTick` then closes the trade menu it just opened.
+    assert_eq!(
+        villager.trading_player().map(|trading| trading.uuid()),
+        Some(player.uuid()),
+        "the merchant must record this player as its trading player, not another entity"
+    );
+    assert!(
+        villager.still_valid_for_trade(&player),
+        "a trade screen that was just opened must still be valid (vanilla `AbstractVillager.stillValid`)"
     );
     let closes_right_after_open = sent_container_closes(&packets);
     assert!(
@@ -763,6 +818,48 @@ fn trade_menu_survives_the_interaction_packet_and_ticks() {
     assert!(
         villager.is_trading(),
         "the villager must still be trading with the player"
+    );
+    // Vanilla closes a container from `ServerPlayer.tick`/`doTick` the moment
+    // `containerMenu.stillValid(player)` goes false, and the only packet that closes the
+    // client's screen is `ClientboundContainerClosePacket` (its handler calls
+    // `LocalPlayer.clientSideCloseContainer`, whatever container id it carries). So an
+    // empty close list plus an open menu is exactly "the screen stays up"; a stale
+    // player-inventory re-sync cannot close a screen on its own, it only follows a close.
+    assert!(
+        sent_container_closes(&packets).is_empty(),
+        "the server closed the trade menu it had just opened (packets: {:?})",
+        sent_packet_ids(&packets)
+    );
+
+    // Clicking the villager a second time while the screen is open must neither re-open
+    // it (vanilla `Villager.mobInteract` guards on `isTrading()` and hands the click to
+    // `AbstractVillager.mobInteract`) nor close it.
+    player.handle_interact(SInteract {
+        entity_id: villager.id(),
+        hand: InteractionHand::MainHand,
+        location: DVec3::ZERO,
+        using_secondary_action: false,
+    });
+    for tick in 5..8 {
+        Arc::clone(&player).tick();
+        tick_test_world(&world, tick, true);
+    }
+
+    let opens = sent_packet_ids(&packets)
+        .into_iter()
+        .filter(|packet_id| *packet_id == C_OPEN_SCREEN)
+        .count();
+    assert_eq!(
+        opens,
+        1,
+        "the trade screen must be opened exactly once (packets: {:?})",
+        sent_packet_ids(&packets)
+    );
+    assert_eq!(
+        player.trading_container_id(),
+        Some(container_id),
+        "a second click must keep the same trade menu open (packets: {:?})",
+        sent_packet_ids(&packets)
     );
     assert!(
         sent_container_closes(&packets).is_empty(),

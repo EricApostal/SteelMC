@@ -2,6 +2,7 @@
 //! body smelled.
 
 use steel_registry::entity_data::EntityPose;
+use steel_registry::sound_events;
 
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::module_type as mem;
@@ -10,10 +11,9 @@ use crate::entity::ai::brain::memory::{MemoryModuleTypeRef, MemoryStatus};
 /// Vanilla `Sniffing`: hold the `SNIFFING` pose for the full duration while
 /// `IS_SNIFFING` is remembered.
 ///
-/// Vanilla's `stop` also raises anger at the remembered attackable and plays
-/// `SoundEvents.WARDEN_SNIFF` on start; the anger management and the server
-/// audio path have no Steel counterpart, so only the pose and the disturbance
-/// registration survive.
+/// Vanilla's `stop` also raises anger at the remembered attackable; the anger
+/// management has no Steel counterpart, so only the pose and the disturbance
+/// registration survive the stop, while `start` plays `SoundEvents.WARDEN_SNIFF`.
 pub struct Sniffing {
     state: BehaviorState,
 }
@@ -74,9 +74,10 @@ impl Behavior for Sniffing {
         true
     }
 
-    fn start(&mut self, _ctx: &mut BehaviorContext<'_>) {
-        // Vanilla plays `SoundEvents.WARDEN_SNIFF` here; the AI layer has no
-        // server audio path, so sniffing only changes the pose via TryToSniff.
+    fn start(&mut self, ctx: &mut BehaviorContext<'_>) {
+        // Vanilla `Sniffing.start` plays `SoundEvents.WARDEN_SNIFF` at volume 5.
+        ctx.body
+            .play_sound(&sound_events::ENTITY_WARDEN_SNIFF, 5.0, 1.0);
     }
 
     fn stop(&mut self, ctx: &mut BehaviorContext<'_>) {

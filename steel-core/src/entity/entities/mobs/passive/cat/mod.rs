@@ -43,7 +43,7 @@ use crate::entity::ai::control::MoveControlOperation;
 use crate::entity::ai::goal::{
     BreedGoal, CatLieOnBlockGoal, CatSitOnBlockGoal, Feline, FloatGoal, FollowOwnerGoal,
     LeapAtTargetGoal, LookAtPlayerGoal, NonTameRandomTargetGoal, OcelotAttackGoal,
-    SitWhenOrderedToGoal, Tameable, WaterAvoidingRandomStrollGoal,
+    SitWhenOrderedToGoal, TamableAnimalPanicGoal, Tameable, WaterAvoidingRandomStrollGoal,
 };
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::mobs::passive::SheepEntity;
@@ -59,7 +59,7 @@ use crate::player::advancement::triggers::raise_tame_animal;
 use crate::world::World;
 use crate::world::spawn::difficulty::moon_brightness;
 
-use goals::{CatAvoidEntityGoal, CatRelaxOnOwnerGoal, CatTemptGoal, TamableAnimalPanicGoal};
+use goals::{CatAvoidEntityGoal, CatRelaxOnOwnerGoal, CatTemptGoal};
 
 mod goals;
 

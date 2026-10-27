@@ -73,6 +73,24 @@ impl DamageReduction {
         self.factor
     }
 
+    /// Vanilla `DamageReduction.resolve`: the damage blocked by this rule for a
+    /// hit from `angle` radians off the defender's view direction.
+    #[must_use]
+    pub fn resolve(&self, damage_type: &'static DamageType, dealt_damage: f32, angle: f64) -> f32 {
+        let max_angle = f64::from((std::f32::consts::PI / 180.0) * self.horizontal_blocking_angle);
+        if angle > max_angle {
+            return 0.0;
+        }
+        if self
+            .damage_types
+            .as_ref()
+            .is_some_and(|types| !types.contains(damage_type))
+        {
+            return 0.0;
+        }
+        (self.base + self.factor * dealt_damage).clamp(0.0, dealt_damage)
+    }
+
     fn to_nbt_compound(&self) -> NbtCompound {
         let mut compound = NbtCompound::new();
         if !float_equals(
@@ -221,6 +239,17 @@ impl ItemDamageFunction {
         self.factor
     }
 
+    /// Vanilla `ItemDamageFunction.apply`: the durability this function deals to
+    /// the blocking item for `dealt_damage` blocked.
+    #[must_use]
+    pub fn apply(self, dealt_damage: f32) -> i32 {
+        if dealt_damage < self.threshold {
+            0
+        } else {
+            (self.base + self.factor * dealt_damage).floor() as i32
+        }
+    }
+
     fn to_nbt_compound(self) -> NbtCompound {
         let mut compound = NbtCompound::new();
         compound.insert("threshold", self.threshold);
@@ -338,9 +367,41 @@ impl BlocksAttacks {
         self.block_delay_seconds
     }
 
+    /// Vanilla `BlocksAttacks.blockDelayTicks`.
+    #[must_use]
+    pub fn block_delay_ticks(&self) -> i32 {
+        (self.block_delay_seconds * 20.0).round() as i32
+    }
+
     #[must_use]
     pub const fn disable_cooldown_scale(&self) -> f32 {
         self.disable_cooldown_scale
+    }
+
+    /// Vanilla `BlocksAttacks.disableBlockingForTicks`.
+    #[must_use]
+    pub fn disable_blocking_for_ticks(&self, base_seconds: f32) -> i32 {
+        let seconds = base_seconds * self.disable_cooldown_scale;
+        if seconds > 0.0 {
+            (seconds * 20.0).round() as i32
+        } else {
+            0
+        }
+    }
+
+    /// Vanilla `BlocksAttacks.resolveBlockedDamage`.
+    #[must_use]
+    pub fn resolve_blocked_damage(
+        &self,
+        damage_type: &'static DamageType,
+        dealt_damage: f32,
+        angle: f64,
+    ) -> f32 {
+        let mut blocked_damage = 0.0;
+        for reduction in &self.damage_reductions {
+            blocked_damage += reduction.resolve(damage_type, dealt_damage, angle);
+        }
+        blocked_damage.clamp(0.0, dealt_damage)
     }
 
     #[must_use]

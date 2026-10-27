@@ -19,7 +19,7 @@ use crate::chunk_saver::PersistentEntity;
 use crate::entity::{
     DEFAULT_MAX_AIR_SUPPLY, Entity, EntitySyncedData, LivingEntity, SharedEntity,
     damage::DamageSource,
-    entities::{EndermiteEntity, ItemEntity},
+    entities::{EndermiteEntity, ItemEntity, RavagerEntity},
     next_entity_id,
 };
 use crate::inventory::{
@@ -52,7 +52,7 @@ use steel_registry::{
     RegistryHolderSet, entity_data::EntityData, init_vanilla_registry, item_stack::ItemStack,
     vanilla_attributes, vanilla_blocks, vanilla_custom_stats, vanilla_damage_types,
     vanilla_enchantments, vanilla_entities, vanilla_game_rules, vanilla_items, vanilla_menu_types,
-    vanilla_world_clocks,
+    vanilla_mob_effects, vanilla_world_clocks,
 };
 use steel_utils::codec::VarInt;
 use steel_utils::locks::{IntoShared as _, SyncMutex};
@@ -1390,6 +1390,50 @@ fn persistent_player_data_restores_equipment_inventory_slots() {
 }
 
 #[test]
+fn persistent_player_data_restores_active_effects_and_attributes() {
+    init_vanilla_registry();
+    let player = test_player(Arc::clone(test_world()));
+    player
+        .attributes()
+        .lock()
+        .set_base_value(vanilla_attributes::MOVEMENT_SPEED, 0.42);
+    player.set_health(7.0);
+    player.set_mob_effect(vanilla_mob_effects::SPEED, 1);
+
+    let persistent = PersistentPlayerData::from_player(&player);
+
+    // Simulate the disconnect/relog boundary: the in-memory death-respawn copy
+    // would otherwise hide the loss, so wipe the live state first.
+    player
+        .living_base
+        .remove_mob_effect(vanilla_mob_effects::SPEED);
+    player
+        .attributes()
+        .lock()
+        .set_base_value(vanilla_attributes::MOVEMENT_SPEED, 0.1);
+    player.set_health(20.0);
+
+    persistent.apply_to_player_without_location(&player);
+
+    assert_eq!(player.get_health().to_bits(), 7.0_f32.to_bits());
+    assert_eq!(
+        player
+            .living_base
+            .mob_effect(vanilla_mob_effects::SPEED)
+            .map(|effect| effect.amplifier()),
+        Some(1)
+    );
+    assert_eq!(
+        player
+            .attributes()
+            .lock()
+            .get_base_value(vanilla_attributes::MOVEMENT_SPEED)
+            .map(f64::to_bits),
+        Some(0.42_f64.to_bits())
+    );
+}
+
+#[test]
 fn effect_visibility_refresh_preserves_spectator_invisibility() {
     init_vanilla_registry();
     let player = test_player(Arc::clone(test_world()));
@@ -1831,5 +1875,186 @@ fn sword_does_not_destroy_blocks_in_creative() {
         world.get_block_state(pos),
         dirt,
         "swords should not destroy blocks when player is in creative mode."
+    );
+}
+
+#[test]
+fn probe_dawn_wake() {
+    init_vanilla_registry();
+    init_behaviors();
+    let world_fixture = fresh_test_world("probe_dawn_wake");
+    let world = &world_fixture.world;
+    insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+    world.set_clock_total_ticks(&vanilla_world_clocks::OVERWORLD, NIGHT_TIME);
+    let bed_pos = BlockPos::new(8, 65, 8);
+    assert!(world.set_block(
+        bed_pos,
+        vanilla_blocks::WHITE_BED.default_state(),
+        UpdateFlags::UPDATE_ALL,
+    ));
+    let player = test_player(Arc::clone(world));
+    player.base.set_position_local(DVec3::new(8.5, 65.0, 8.5));
+    assert!(
+        player
+            .start_sleep_in_bed(
+                bed_pos,
+                &world.dimension_type.bed_rule,
+                &vanilla_custom_stats::SLEEP_IN_BED
+            )
+            .is_ok()
+    );
+    assert!(player.is_sleeping());
+    world.set_clock_total_ticks(&vanilla_world_clocks::OVERWORLD, 6_000);
+    Arc::clone(&player).tick();
+    assert!(!player.is_sleeping(), "player should wake at day");
+}
+
+/// Raises a shield in the player's off hand and advances the active use past the
+/// shield's 0.25s block delay (5 ticks) through the real per-tick use path.
+fn raise_shield(player: &Arc<Player>) {
+    player.inventory.lock().set(
+        EquipmentSlot::OffHand,
+        ItemStack::new(&vanilla_items::SHIELD),
+    );
+    player.start_using_item(InteractionHand::OffHand);
+    let entity: SharedEntity = Arc::<Player>::clone(player);
+    for _ in 0..6 {
+        player.tick_active_item_use(&entity);
+    }
+    assert!(LivingEntity::is_blocking(player.as_ref()));
+}
+
+/// A frontal melee hit is fully absorbed by a raised shield, while a hit from
+/// behind still deals damage through the real `hurt` path.
+#[test]
+fn raised_shield_blocks_frontal_melee_but_not_rear_hits() {
+    init_vanilla_registry();
+    init_behaviors();
+    let world_fixture = fresh_test_world("shield_frontal_block");
+    let world = &world_fixture.world;
+    insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+
+    let shielded = test_player(Arc::clone(world));
+    shielded.set_y_head_rot(0.0);
+    raise_shield(&shielded);
+
+    let origin = shielded.position();
+    let frontal = DamageSource::environment(&vanilla_damage_types::MOB_ATTACK)
+        .with_source_position(origin + DVec3::new(0.0, 0.0, 3.0));
+    assert!(
+        !shielded.hurt(world, &frontal, 4.0),
+        "a fully blocked hit must report no damage"
+    );
+    assert_eq!(shielded.get_health().to_bits(), 20.0_f32.to_bits());
+
+    let rear = test_player(Arc::clone(world));
+    rear.set_y_head_rot(0.0);
+    raise_shield(&rear);
+
+    let rear_origin = rear.position();
+    let from_behind = DamageSource::environment(&vanilla_damage_types::MOB_ATTACK)
+        .with_source_position(rear_origin + DVec3::new(0.0, 0.0, -3.0));
+    assert!(rear.hurt(world, &from_behind, 4.0));
+    assert_eq!(rear.get_health().to_bits(), 16.0_f32.to_bits());
+}
+
+/// Blocking an attack damages the shield by the component's item-damage function.
+#[test]
+fn blocking_an_attack_damages_the_shield() {
+    init_vanilla_registry();
+    init_behaviors();
+    let world_fixture = fresh_test_world("shield_item_damage");
+    let world = &world_fixture.world;
+    insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+
+    let player = test_player(Arc::clone(world));
+    player.set_y_head_rot(0.0);
+    raise_shield(&player);
+
+    let frontal = DamageSource::environment(&vanilla_damage_types::MOB_ATTACK)
+        .with_source_position(player.position() + DVec3::new(0.0, 0.0, 3.0));
+    assert!(!player.hurt(world, &frontal, 4.0));
+
+    let inventory = player.inventory.lock();
+    let shield = inventory.get_ref(EquipmentSlot::OffHand);
+    assert!(shield.is(&vanilla_items::SHIELD));
+    // Vanilla shield `item_damage` = floor(1 + 1 * damageBlocked) for damage >= 3.
+    assert_eq!(shield.get_damage_value(), 5);
+}
+
+/// An axe hit disables the shield for `5s * 20` ticks through the real
+/// block-then-disable path.
+#[test]
+fn axe_hit_disables_the_shield_for_the_vanilla_window() {
+    init_vanilla_registry();
+    init_behaviors();
+    let world_fixture = fresh_test_world("shield_axe_disable");
+    let world = &world_fixture.world;
+    insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+
+    let player = test_player(Arc::clone(world));
+    player.set_y_head_rot(0.0);
+    raise_shield(&player);
+
+    let front = player.position() + DVec3::new(0.0, 0.0, 3.0);
+    let attacker = test_player(Arc::clone(world));
+    attacker.inventory.lock().set(
+        EquipmentSlot::MainHand,
+        ItemStack::new(&vanilla_items::IRON_AXE),
+    );
+    let attacker_entity: SharedEntity = Arc::<Player>::clone(&attacker);
+    let source = DamageSource::direct(&vanilla_damage_types::MOB_ATTACK, attacker_entity)
+        .with_source_position(front);
+
+    assert!(!player.hurt(world, &source, 4.0));
+
+    let shield = ItemStack::new(&vanilla_items::SHIELD);
+    assert!(!player.is_using_item(), "the axe must stop the shield use");
+    assert!(player.is_item_on_cooldown(&shield));
+
+    for _ in 0..99 {
+        player.tick_item_cooldowns();
+    }
+    assert!(
+        player.is_item_on_cooldown(&shield),
+        "the shield stays disabled for the full 100-tick window"
+    );
+    player.tick_item_cooldowns();
+    assert!(!player.is_item_on_cooldown(&shield));
+}
+
+/// A ravager whose hit is blocked by a shield either stuns itself or knocks the
+/// defender back hard, through the real `hurt` path.
+#[test]
+fn ravager_blocked_by_item_stuns_or_knocks_the_defender_back() {
+    init_vanilla_registry();
+    init_behaviors();
+    let world_fixture = fresh_test_world("ravager_blocked_by_item");
+    let world = &world_fixture.world;
+    insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+
+    let player = test_player(Arc::clone(world));
+    player.set_y_head_rot(0.0);
+    raise_shield(&player);
+
+    let origin = player.position();
+    let ravager_position = origin + DVec3::new(0.0, 0.0, 2.0);
+    let ravager = Arc::new(RavagerEntity::new(
+        &vanilla_entities::RAVAGER,
+        9_001,
+        ravager_position,
+        Arc::downgrade(world),
+    ));
+    let attacker: SharedEntity = Arc::<RavagerEntity>::clone(&ravager);
+    let source = DamageSource::direct(&vanilla_damage_types::MOB_ATTACK, attacker)
+        .with_source_position(ravager_position);
+
+    assert!(!player.hurt(world, &source, 6.0));
+
+    let stunned = ravager.stunned_tick() > 0;
+    let knocked_back = player.velocity().length_squared() > 0.0;
+    assert!(
+        stunned || knocked_back,
+        "a blocked ravager hit must stun the ravager or knock the defender back"
     );
 }

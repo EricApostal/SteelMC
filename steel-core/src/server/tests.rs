@@ -234,6 +234,7 @@ async fn test_server_with_worlds(
 mod connection_lifecycle;
 mod datapack_reload;
 mod player_limit;
+mod signed_chat_command;
 
 #[test]
 #[expect(

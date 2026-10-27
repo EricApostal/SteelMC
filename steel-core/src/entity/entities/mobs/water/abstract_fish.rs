@@ -21,7 +21,9 @@
 //!   first tick and each tropical fish rolls its own variant instead of sharing the
 //!   group variant (`AbstractSchoolingFish.SchoolSpawnGroupData` and
 //!   `TropicalFish.TropicalFishGroupData` are therefore not modeled).
-//! - `AbstractFish.FishMoveControl` is not ported; Steel's shared move control is used.
+//! - `AbstractFish.FishMoveControl` is ported as [`tick_fish_move_control`], because
+//!   vanilla installs it in the `AbstractFish` constructor while Steel's shared
+//!   `Mob::tick_move_control` mirrors the base `MoveControl`.
 //! - `Bucketable.bucketMobPickup`'s `FILLED_BUCKET` advancement trigger and
 //!   `Leashable.dropLeash` are not part of Steel's shared bucket path (see
 //!   [`try_bucket_pickup`]).
@@ -32,6 +34,7 @@ use std::sync::Arc;
 use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
+use steel_math::{DEGREE_90, RAD_TO_DEG};
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::data_components::components::CustomData;
 use steel_registry::data_components::vanilla_components::{BUCKET_ENTITY_DATA, CUSTOM_NAME};
@@ -39,17 +42,21 @@ use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::fluid::FluidStateExt as _;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
-use steel_registry::{sound_events, vanilla_blocks, vanilla_damage_types, vanilla_items};
+use steel_registry::{
+    sound_events, vanilla_attributes, vanilla_blocks, vanilla_damage_types, vanilla_items,
+};
 use steel_utils::locks::SyncMutex;
 use steel_utils::random::RandomSource;
 use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, Downcast as _};
 
 use crate::behavior::advancement_hooks::raise_filled_bucket;
+use crate::entity::ai::control::{MoveControlOperation, rotate_towards};
 use crate::entity::ai::goal::{
     AvoidEntityGoal, FollowFlockLeaderGoal, Goal, GoalControls, PanicGoal, RandomSwimmingGoal,
     SchoolingFish,
 };
+use crate::entity::ai::navigation::NavigationKind;
 use crate::entity::ai::path::PathType;
 use crate::entity::damage::DamageSource;
 use crate::entity::{
@@ -83,6 +90,14 @@ const WATER_TRAVEL_SPEED: f32 = 0.01;
 /// Vanilla `AbstractFish.travelInWater` drag and sink impulse.
 const WATER_TRAVEL_DRAG: f64 = 0.9;
 const WATER_SINK_IMPULSE: f64 = -0.005;
+/// Vanilla `AbstractFish.FishMoveControl.tick` buoyancy while the eye is in water.
+const FISH_BUOYANCY_IMPULSE: f64 = 0.005;
+/// Vanilla `AbstractFish.FishMoveControl.tick` speed smoothing (`Mth.lerp(0.125F, ...)`).
+const FISH_SPEED_LERP: f32 = 0.125;
+/// Vanilla `AbstractFish.FishMoveControl.tick` vertical drive scale.
+const FISH_VERTICAL_DRIVE_SCALE: f64 = 0.1;
+/// Vanilla `AbstractFish.FishMoveControl.tick` maximum yaw turn per tick.
+const FISH_MAX_TURN: f32 = 90.0;
 /// Vanilla `Bucketable.bucketMobPickup` plays the pickup sound at volume/pitch 1.
 const BUCKET_SOUND_VOLUME: f32 = 1.0;
 const BUCKET_SOUND_PITCH: f32 = 1.0;
@@ -167,12 +182,82 @@ pub(crate) fn base_experience_reward() -> i32 {
     1 + rand::random_range(0..3)
 }
 
-/// Vanilla `WaterAnimal` constructor: `setPathfindingMalus(WATER, 0.0F)`.
-pub(crate) fn initialize_water_pathfinding_malus(mob_base: &MobBase) {
+/// Vanilla `WaterAnimal` constructor (`setPathfindingMalus(WATER, 0.0F)`) plus
+/// `AbstractFish.createNavigation` (`WaterBoundPathNavigation` with the vanilla
+/// `SwimNodeEvaluator`, which is what lets a fish path through open water instead of
+/// snapping its waypoints to the ground).
+pub(crate) fn initialize_water_animal_pathfinding(mob_base: &MobBase) {
     mob_base
         .pathfinding_malus()
         .lock()
         .set(PathType::Water, 0.0);
+    // Vanilla `WaterBoundPathNavigation.createPathFinder` sets
+    // `allowBreaching = mob.is(EntityTypes.DOLPHIN)`; a fish never breaches.
+    mob_base
+        .navigation()
+        .lock()
+        .set_kind(NavigationKind::WaterBound);
+}
+
+/// Vanilla `AbstractFish.FishMoveControl.tick`: buoyancy while the eye is in water, then
+/// either swim toward `wanted_position` or stop.
+///
+/// Vanilla installs this control in the `AbstractFish` constructor; Steel's `Mob` trait
+/// lets a mob override `tick_move_control`, which calls this. Unlike `MoveControl.MoveTo`,
+/// it never sets the operation back to `WAIT`: the fish keeps its thrust until the
+/// navigation finishes.
+pub(crate) fn tick_fish_move_control<M: Mob + ?Sized>(mob: &M) {
+    if mob.is_eye_in_water() {
+        mob.set_velocity(mob.velocity() + DVec3::new(0.0, FISH_BUOYANCY_IMPULSE, 0.0));
+    }
+
+    let (operation, wanted_position, speed_modifier) = {
+        let controls = mob.mob_base().controls().lock();
+        let move_control = controls.move_control;
+        (
+            move_control.operation(),
+            move_control.wanted_position(),
+            move_control.speed_modifier(),
+        )
+    };
+
+    if operation != MoveControlOperation::MoveTo || mob.mob_base().navigation().lock().is_done() {
+        mob.set_mob_speed(0.0);
+        return;
+    }
+
+    let movement_speed = mob
+        .attributes()
+        .lock()
+        .required_value(vanilla_attributes::MOVEMENT_SPEED);
+    let target_speed = (speed_modifier * movement_speed) as f32;
+    let speed = mob.get_speed() + (target_speed - mob.get_speed()) * FISH_SPEED_LERP;
+    mob.set_mob_speed(speed);
+
+    let position = mob.position();
+    let xd = wanted_position.x - position.x;
+    let yd = wanted_position.y - position.y;
+    let zd = wanted_position.z - position.z;
+
+    if yd != 0.0 {
+        let distance = (xd * xd + yd * yd + zd * zd).sqrt();
+        mob.set_velocity(
+            mob.velocity()
+                + DVec3::new(
+                    0.0,
+                    f64::from(mob.get_speed()) * yd / distance * FISH_VERTICAL_DRIVE_SCALE,
+                    0.0,
+                ),
+        );
+    }
+
+    if xd != 0.0 || zd != 0.0 {
+        let target_yaw = zd.atan2(xd) as f32 * RAD_TO_DEG - DEGREE_90;
+        let (yaw, pitch) = mob.rotation();
+        let yaw = rotate_towards(yaw, target_yaw, FISH_MAX_TURN);
+        mob.set_rotation((yaw, pitch));
+        mob.living_base().set_y_body_rot(yaw);
+    }
 }
 
 /// Vanilla `AbstractFish.registerGoals`: panic, avoid players, random swim.

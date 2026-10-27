@@ -96,13 +96,24 @@ impl NearestAttackableTargetGoal {
         self
     }
 
+    /// Vanilla `PolarBear.PolarBearAttackPlayersGoal` overrides the (virtual)
+    /// `TargetGoal.getFollowDistance` with `super.getFollowDistance() * 0.5`; this is that
+    /// multiplier for the goal's search and chase distances.
+    #[must_use]
+    pub(crate) fn with_follow_distance_scale(mut self, follow_distance_scale: f64) -> Self {
+        self.target_goal = self
+            .target_goal
+            .with_follow_distance_scale(follow_distance_scale);
+        self
+    }
+
     fn find_target(&mut self, mob: &dyn PathfinderMob) {
         let Some(world) = mob.level() else {
             self.target = None;
             return;
         };
 
-        let follow = follow_distance(mob);
+        let follow = follow_distance(mob) * self.target_goal.follow_distance_scale();
         let position = mob.position();
         let origin = DVec3::new(position.x, mob.get_eye_y(), position.z);
         let target_conditions = self.target_conditions.clone().range(follow);
@@ -139,7 +150,10 @@ impl NearestAttackableTargetGoal {
         let Some(world) = mob.level() else {
             return false;
         };
-        let conditions = self.target_conditions.clone().range(follow_distance(mob));
+        let conditions = self
+            .target_conditions
+            .clone()
+            .range(follow_distance(mob) * self.target_goal.follow_distance_scale());
         conditions.test(world.as_ref(), Some(mob), target)
     }
 }

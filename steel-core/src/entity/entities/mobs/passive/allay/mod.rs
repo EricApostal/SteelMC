@@ -37,6 +37,7 @@ use uuid::Uuid;
 use crate::behavior::InteractionResult;
 use crate::entity::ai::brain::Brain;
 use crate::entity::ai::brain::memory::module_type as mem;
+use crate::entity::ai::control::{FlyingMoveControl, tick_flying_move_control};
 use crate::entity::ai::navigation::NavigationKind;
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::objects::items::ItemEntity;
@@ -46,7 +47,7 @@ use crate::entity::{
     LivingEntityBase, Mob, MobBase, PathfinderMob, RemovalReason, SharedEntity, next_entity_id,
 };
 use crate::inventory::container::Container as _;
-use crate::physics::MoveResult;
+use crate::physics::{MoveResult, MoverType};
 use crate::player::Player;
 use crate::player::player_inventory::Prediction;
 use crate::world::World;
@@ -60,6 +61,18 @@ const DUPLICATION_COOLDOWN_TICKS: i64 = 6000;
 
 /// Vanilla `Allay.createNavigation` installs a 48-block required path length.
 const ALLAY_REQUIRED_PATH_LENGTH: f32 = 48.0;
+
+/// Vanilla `FlyingMoveControl(this, 20, true)`, installed in the `Allay` constructor
+/// (`Allay.java` `this.moveControl = new FlyingMoveControl(this, 20, true)`).
+const FLYING_MOVE_CONTROL: FlyingMoveControl = FlyingMoveControl::new(20, true);
+/// Vanilla `LivingEntity.travelFlying` relative speed for the fluid branches
+/// (`Allay.travel` -> `travelFlying(input, getSpeed())` -> `0.02, 0.02, getSpeed()`).
+const FLYING_WATER_SPEED: f32 = 0.02;
+const FLYING_LAVA_SPEED: f32 = 0.02;
+/// Vanilla `LivingEntity.travelFlying` per-fluid drag values.
+const FLYING_WATER_DRAG: f64 = 0.8;
+const FLYING_LAVA_DRAG: f64 = 0.5;
+const FLYING_AIR_DRAG: f64 = 0.91;
 
 /// Vanilla `Allay.MAX_NOTEBLOCK_DISTANCE`.
 const MAX_NOTEBLOCK_DISTANCE: f64 = 1024.0;
@@ -355,6 +368,35 @@ impl AllayEntity {
         self.entity_data
             .set_base_glowing_flag(self.has_glowing_tag() || display.glowing);
     }
+
+    /// Vanilla `Allay.travel` -> `LivingEntity.travelFlying(input, getSpeed())`.
+    ///
+    /// `travelFlying` never subtracts gravity, which is what makes an allay hover,
+    /// and the air branch uses the cached movement speed that
+    /// [`tick_flying_move_control`] wrote (the fluid branches use the constant
+    /// `0.02` relative speed) — the same shape as `HappyGhast.travel`.
+    fn travel_flying(&self, entity: &SharedEntity, input: DVec3) -> Option<MoveResult> {
+        if self.is_in_water() {
+            self.move_relative(FLYING_WATER_SPEED, input);
+            let result =
+                Arc::clone(entity).move_entity(MoverType::SelfMovement, self.velocity())?;
+            self.set_velocity(self.velocity() * FLYING_WATER_DRAG);
+            return Some(result);
+        }
+
+        if self.is_in_lava() {
+            self.move_relative(FLYING_LAVA_SPEED, input);
+            let result =
+                Arc::clone(entity).move_entity(MoverType::SelfMovement, self.velocity())?;
+            self.set_velocity(self.velocity() * FLYING_LAVA_DRAG);
+            return Some(result);
+        }
+
+        self.move_relative(self.get_speed(), input);
+        let result = Arc::clone(entity).move_entity(MoverType::SelfMovement, self.velocity())?;
+        self.set_velocity(self.velocity() * FLYING_AIR_DRAG);
+        Some(result)
+    }
 }
 
 impl Entity for AllayEntity {
@@ -466,6 +508,11 @@ impl LivingEntity for AllayEntity {
         Mob::mob_server_ai_step(self, entity);
     }
 
+    /// Vanilla `Allay.travel(Vec3 input)`: `travelFlying(input, getSpeed())`.
+    fn travel(&self, entity: &SharedEntity, input: DVec3) -> Option<MoveResult> {
+        self.travel_flying(entity, input)
+    }
+
     fn ai_step(&self, entity: &SharedEntity) -> Option<MoveResult> {
         let result = Mob::mob_ai_step(self, entity);
 
@@ -547,6 +594,15 @@ impl Mob for AllayEntity {
 
     fn tick_path_navigation(&self) {
         PathfinderMob::tick_pathfinder_path_navigation(self);
+    }
+
+    /// Vanilla `FlyingMoveControl(this, 20, true)` (installed in the `Allay` constructor).
+    ///
+    /// The allay's `FlyingPathNavigation` hands the move control full 3-D
+    /// waypoints; the ground control could never reach them, and the flying control
+    /// is also what keeps the allay hovering (`hoversInPlace`).
+    fn tick_move_control(&self) {
+        tick_flying_move_control(self, FLYING_MOVE_CONTROL);
     }
 
     /// Vanilla `Allay.getAmbientSound`: distinguishes carrying an item.

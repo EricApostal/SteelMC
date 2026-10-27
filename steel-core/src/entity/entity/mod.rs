@@ -9,6 +9,7 @@ use crate::entity::ai::goal::{
     AbstractHorse, CaravanLlama, CreeperLike, Feline, RangedAttackMob, SchoolingFish,
     ShoulderRiding, Tameable,
 };
+use crate::entity::dismount_helper::dismount_vehicle;
 use crate::entity::entities::objects::HurtingProjectile;
 use crate::entity::leash::Leashable;
 use crate::entity::npc::Npc;
@@ -18,6 +19,7 @@ use crate::entity::raid::Raider;
 use crate::inventory::lock::ContainerRef;
 use crate::player::advancement::triggers::raise_entity_killed_player;
 use steel_math::DEGREE_90;
+use steel_math::{DEG_TO_RAD, trig};
 
 /// Vanilla `Entity.refreshDimensions` small-entity limit: only entities at most
 /// this wide and tall (in blocks) get their position fudged after growing.
@@ -593,7 +595,44 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
 
     /// Stops riding the current vehicle, if any.
     fn stop_riding(&self) {
+        let vehicle = self.vehicle();
         self.base().stop_riding();
+
+        // Vanilla `LivingEntity.stopRiding` places the dismounting passenger once the ride
+        // relationship is gone; plain `Entity.stopRiding` only detaches it.
+        if self.is_living_entity()
+            && let Some(vehicle) = vehicle
+            && self
+                .vehicle()
+                .is_none_or(|current| current.id() != vehicle.id())
+        {
+            dismount_vehicle(self.as_entity_event_source(), vehicle.as_ref());
+        }
+    }
+
+    /// Vanilla `Entity.getDismountLocationForPassenger`: directly above this entity.
+    fn get_dismount_location_for_passenger(&self, _passenger: &dyn Entity) -> DVec3 {
+        DVec3::new(
+            self.position().x,
+            self.bounding_box().max_y(),
+            self.position().z,
+        )
+    }
+
+    /// Vanilla `LivingEntity.getDismountPoses`: the poses a dismounting passenger may take.
+    fn dismount_poses(&self) -> &'static [EntityPose] {
+        &[EntityPose::Standing]
+    }
+
+    /// Vanilla `Entity.dismountTo`.
+    fn dismount_to(&self, position: DVec3) {
+        if let Err(error) = self.teleport_to(position) {
+            log::warn!(
+                "failed to place dismounting entity {} at {position}: {error}",
+                self.id()
+            );
+        }
+        self.reset_fall_distance();
     }
 
     /// Starts riding `entity_to_ride` if vanilla boarding rules allow it.
@@ -4026,6 +4065,22 @@ pub(crate) fn position_rider_default<E: Entity + ?Sized>(entity: &E, passenger: 
             entity.id()
         );
     }
+}
+
+/// Vanilla `Entity.getCollisionHorizontalEscapeVector`: the sideways offset a passenger
+/// is pushed out by so it clears a vehicle of `vehicle_width` at `y_rot`.
+#[must_use]
+pub(crate) fn collision_horizontal_escape_vector(
+    vehicle_width: f64,
+    passenger_width: f64,
+    y_rot: f32,
+) -> DVec3 {
+    let distance = (vehicle_width + passenger_width + 1.0e-5) / 2.0;
+    let radians = f64::from(y_rot * DEG_TO_RAD);
+    let sin = -f64::from(trig::sin(radians));
+    let cos = f64::from(trig::cos(radians));
+    let scale = sin.abs().max(cos.abs());
+    DVec3::new(sin * distance / scale, 0.0, cos * distance / scale)
 }
 
 pub(crate) fn apply_entity_look_at(entity: &dyn Entity, from_anchor: EntityAnchor, target: DVec3) {

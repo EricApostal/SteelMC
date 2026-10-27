@@ -23,10 +23,14 @@
 //!
 //! Divergences from vanilla, all deliberate:
 //!
-//! - Steel is server-authoritative only, so `AbstractBoat.tick`'s client branch
-//!   (`controlBoat()` plus `ServerboundPaddleBoatPacket`) is inverted: the server runs
-//!   `controlBoat()` itself from the input flags, which the protocol lane fills through
-//!   the public `set_input`/`set_paddle_state` methods.
+//! - Vanilla steers the hull only on the client: `AbstractBoat.tick` calls
+//!   `controlBoat()` inside its `level.isClientSide` branch and then streams the
+//!   resulting oar flags in `ServerboundPaddleBoatPacket`. Steel keeps that split, so
+//!   the server never runs `controlBoat()` and never derives the oar flags. The
+//!   controlled client drives the hull through `ServerboundMoveVehiclePacket`, and the
+//!   protocol lane applies `ServerboundPaddleBoatPacket` to the synced
+//!   `DATA_ID_PADDLE_LEFT`/`RIGHT` fields, which are the only source the server-side
+//!   animation (`tick_paddles`) and paddle sounds read.
 //! - Vanilla `AbstractBoat.push` gates pushing on the pushed entity's bounding box.
 //!   Steel's `Entity::push_entity` default cannot be reached from an override, so that
 //!   gate is applied where the boat itself pushes entities, in its tick scan.
@@ -38,10 +42,13 @@
 //! - Only vanilla's server bubble-column branch is modeled (`tickBubbleColumn`); the
 //!   client-only wobble-angle interpolation has no server analogue.
 //!
+//! - Vanilla stops its dismount search at `Entity.getDismountLocationForPassenger`, which
+//!   parks a passenger whose escape column is blocked on top of the hull. Steel steps into
+//!   the first neighbouring block column `DismountHelper.findSafeDismountLocation` accepts
+//!   before using that hull-top fallback.
+//!
 //! Framework gaps this file cannot close (owned elsewhere):
 //!
-//! - No `getDismountLocationForPassenger` hook on `Entity`; boats fall back to the
-//!   generic dismount helper.
 //! - No per-entity removal hook: `EntityLevelCallback::on_remove` runs after
 //!   `AbstractBoat.remove` would have dropped a leash and after
 //!   `AbstractChestBoat.remove` would have dropped the chest contents, so the
@@ -60,7 +67,7 @@
 //!   `EntitySelector.pushableBy` cannot be evaluated; the spectator and pushable filters
 //!   are applied.
 
-use std::f32::consts::{FRAC_PI_4, PI, TAU};
+use std::f32::consts::{FRAC_PI_4, PI, SQRT_2 as SQRT_OF_TWO, TAU};
 use std::f64::consts as f64_consts;
 use std::sync::{Arc, Weak};
 
@@ -97,12 +104,13 @@ use crate::behavior::InteractionResult;
 use crate::block_entity::entities::{shuffle, shuffle_and_split_items};
 use crate::entity::ai::control::rotate_if_necessary;
 use crate::entity::damage::DamageSource;
+use crate::entity::dismount_helper;
 use crate::entity::leash::{LeashData, Leashable};
 use crate::entity::{
     Entity, EntityBase, EntityBaseLoad, EntityEventSource, EntityMovementEmission,
-    EntitySyncedData, LivingEntity as _, RemovalReason, SharedEntity, WeakEntity, entity_loot_ref,
-    living_loot_equipment, position_rider_default,
-    reset_forward_direction_of_relative_portal_position,
+    EntitySyncedData, LivingEntity as _, RemovalReason, SharedEntity, WeakEntity,
+    collision_horizontal_escape_vector, entity_loot_ref, living_loot_equipment,
+    position_rider_default, reset_forward_direction_of_relative_portal_position,
 };
 use crate::fluid::{get_fluid_state, get_height};
 use crate::inventory::container::{Container, SimpleContainer};
@@ -166,10 +174,6 @@ struct BoatState {
     paddle_positions: [f32; 2],
     out_of_control_ticks: f32,
     delta_rotation: f32,
-    input_left: bool,
-    input_right: bool,
-    input_up: bool,
-    input_down: bool,
     water_level: f64,
     land_friction: f32,
     status: BoatStatus,
@@ -185,10 +189,6 @@ impl BoatState {
             paddle_positions: [0.0; 2],
             out_of_control_ticks: 0.0,
             delta_rotation: 0.0,
-            input_left: false,
-            input_right: false,
-            input_up: false,
-            input_down: false,
             water_level: 0.0,
             land_friction: 0.0,
             status: BoatStatus::InAir,
@@ -464,10 +464,12 @@ trait AbstractBoat: Entity + Leashable {
         }
 
         self.float_boat();
-        if self.is_vehicle() {
-            self.control_boat();
-        }
 
+        // Vanilla `AbstractBoat.tick` runs `controlBoat()` only inside its client branch
+        // and then streams the resulting oar flags in `ServerboundPaddleBoatPacket`; the
+        // server never derives them. Recomputing them here would overwrite the client's
+        // prediction right after the packet lane confirmed it, which made a rowing
+        // client flicker between the rowing and idle oar poses.
         let velocity = self.velocity();
         let _ = Arc::clone(&self).move_entity(MoverType::SelfMovement, velocity);
 
@@ -477,68 +479,6 @@ trait AbstractBoat: Entity + Leashable {
         self.tick_bubble_column();
         self.tick_paddles();
         self.push_and_board_nearby_entities();
-    }
-
-    /// Vanilla `AbstractBoat.controlBoat`.
-    ///
-    /// Vanilla runs this on the client and streams paddle flags to the server. Steel is
-    /// server-authoritative, so the server applies the same input here; the protocol lane
-    /// fills the input flags from the paddle packet.
-    fn control_boat(&self) {
-        if !self.is_vehicle() {
-            return;
-        }
-
-        let (input_left, input_right, input_up, input_down) = {
-            let state = self.boat_state().lock();
-            (
-                state.input_left,
-                state.input_right,
-                state.input_up,
-                state.input_down,
-            )
-        };
-        let mut acceleration = 0.0_f32;
-        let (yaw, pitch) = self.rotation();
-
-        {
-            let mut state = self.boat_state().lock();
-            if input_left {
-                state.delta_rotation -= 1.0;
-            }
-            if input_right {
-                state.delta_rotation += 1.0;
-            }
-            if input_right != input_left && !input_up && !input_down {
-                acceleration += 0.005;
-            }
-        }
-
-        let delta_rotation = self.boat_state().lock().delta_rotation;
-        self.set_rotation((yaw + delta_rotation, pitch));
-
-        if input_up {
-            acceleration += 0.04;
-        }
-        if input_down {
-            acceleration -= 0.005;
-        }
-
-        let yaw = f64::from(self.rotation().0) * f64_consts::PI / 180.0;
-        let velocity = self.velocity();
-        self.set_velocity(
-            velocity
-                + DVec3::new(
-                    -yaw.sin() * f64::from(acceleration),
-                    0.0,
-                    yaw.cos() * f64::from(acceleration),
-                ),
-        );
-
-        self.set_paddle_state(
-            input_right && !input_left || input_up,
-            input_left && !input_right || input_up,
-        );
     }
 
     /// Vanilla `AbstractBoat.getStatus`.
@@ -1202,6 +1142,92 @@ trait AbstractBoat: Entity + Leashable {
         }
     }
 
+    /// Vanilla `AbstractBoat.getDismountLocationForPassenger`: step out sideways into the
+    /// first column beside the hull whose floor is solid and whose space fits the passenger.
+    ///
+    /// Falls back to vanilla `Entity.getDismountLocationForPassenger` (the hull's own
+    /// top center) when every candidate is blocked.
+    fn get_dismount_location_for_passenger(&self, passenger: &dyn Entity) -> DVec3 {
+        let fallback = DVec3::new(
+            self.position().x,
+            self.bounding_box().max_y(),
+            self.position().z,
+        );
+        let Some(world) = self.level() else {
+            return fallback;
+        };
+
+        let escape = collision_horizontal_escape_vector(
+            f64::from(self.dimensions_for_pose(self.pose()).width * SQRT_OF_TWO),
+            f64::from(passenger.dimensions_for_pose(passenger.pose()).width),
+            passenger.rotation().0,
+        );
+        let x = self.position().x + escape.x;
+        let z = self.position().z + escape.z;
+        let pos = BlockPos::containing(x, self.bounding_box().max_y(), z);
+        let below = pos.below();
+        if world.get_block_state(below).get_fluid_state().is_water() {
+            return fallback;
+        }
+
+        let mut candidates = Vec::with_capacity(2);
+        let floor_height = dismount_helper::get_block_floor_height(&world, pos);
+        if dismount_helper::is_block_floor_valid(floor_height) {
+            candidates.push(DVec3::new(x, f64::from(pos.y()) + floor_height, z));
+        }
+        let below_floor_height = dismount_helper::get_block_floor_height(&world, below);
+        if dismount_helper::is_block_floor_valid(below_floor_height) {
+            candidates.push(DVec3::new(x, f64::from(below.y()) + below_floor_height, z));
+        }
+
+        for pose in passenger.dismount_poses() {
+            for candidate in &candidates {
+                if dismount_helper::can_dismount_to_pose(&world, *candidate, passenger, *pose) {
+                    passenger.set_pose(*pose);
+                    return *candidate;
+                }
+            }
+        }
+
+        // Vanilla ends at `Entity.getDismountLocationForPassenger`, which parks a passenger
+        // whose escape column is blocked on top of the hull. Step out into the first
+        // neighbouring column `DismountHelper.findSafeDismountLocation` accepts instead, so
+        // a cramped passenger still lands on solid floor beside the boat; the hull top stays
+        // the last resort.
+        let step_out = if escape.x.abs() >= escape.z.abs() {
+            if escape.x >= 0.0 {
+                steel_utils::Direction::East
+            } else {
+                steel_utils::Direction::West
+            }
+        } else if escape.z >= 0.0 {
+            steel_utils::Direction::South
+        } else {
+            steel_utils::Direction::North
+        };
+        let boat_pos = self.block_position();
+        for pose in passenger.dismount_poses() {
+            for (offset_x, offset_z) in dismount_helper::offsets_for_direction(step_out) {
+                let column = BlockPos::new(
+                    boat_pos.x() + offset_x,
+                    boat_pos.y(),
+                    boat_pos.z() + offset_z,
+                );
+                let Some(location) =
+                    dismount_helper::find_safe_dismount_location(&world, passenger, column, false)
+                else {
+                    continue;
+                };
+                if dismount_helper::can_dismount_to_pose(&world, location, passenger, *pose) {
+                    passenger.set_pose(*pose);
+                    return location;
+                }
+            }
+        }
+
+        fallback
+    }
+
     /// Returns the synced paddle flag for `side` (0 = left, 1 = right).
     ///
     /// Mirrors vanilla `getPaddleState`, which also requires a controlling passenger.
@@ -1312,6 +1338,11 @@ macro_rules! impl_boat_entity {
                 self.boat_position_rider(passenger);
             }
 
+            /// Vanilla `AbstractBoat.getDismountLocationForPassenger`.
+            fn get_dismount_location_for_passenger(&self, passenger: &dyn Entity) -> DVec3 {
+                AbstractBoat::get_dismount_location_for_passenger(self, passenger)
+            }
+
             fn dimension_changing_delay(&self) -> i32 {
                 10
             }
@@ -1415,17 +1446,6 @@ macro_rules! impl_boat_public_api {
             pub fn set_initial_pos(&self, position: DVec3) {
                 let _ = self.try_set_position(position);
                 self.set_old_position(position);
-            }
-
-            /// Applies paddle input, vanilla `setInput`.
-            ///
-            /// The protocol lane feeds this from `ServerboundPaddleBoatPacket`.
-            pub fn set_input(&self, left: bool, right: bool, up: bool, down: bool) {
-                let mut state = self.boat.lock();
-                state.input_left = left;
-                state.input_right = right;
-                state.input_up = up;
-                state.input_down = down;
             }
 
             /// Returns this boat's current float status.
@@ -1939,6 +1959,7 @@ impl_chest_boat!(ChestRaftEntity);
 
 #[cfg(test)]
 mod tests {
+    use std::f32::consts::SQRT_2;
     use std::io::Cursor;
     use std::sync::{Arc, Weak};
 
@@ -1952,19 +1973,25 @@ mod tests {
     use steel_registry::vanilla_menu_types;
     use steel_utils::{ChunkPos, Identifier};
 
-    use crate::behavior::InteractionResult;
+    use crate::behavior::{BlockCollisionContext, InteractionResult, init_behaviors};
     use crate::entity::entities::{ArmorStandEntity, PigEntity};
     use crate::entity::{Entity, EntityBase, LivingEntity, SharedEntity, next_entity_id};
     use crate::inventory::lock::ContainerRef;
+    use crate::physics::{CollisionWorld as _, WorldCollisionProvider};
+    use crate::player::Player;
     use crate::player::player_inventory::PlayerInventory;
     use crate::test_support::{
-        TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk, test_world,
+        TestPlayerBuilder, TestWorld, fresh_test_world, insert_ready_full_chunk, test_world,
     };
     use crate::world::World;
+    use steel_protocol::packets::game::SPaddleBoat;
+    use steel_registry::vanilla_blocks;
+    use steel_utils::BlockPos;
+    use steel_utils::types::UpdateFlags;
 
     use super::{
-        AbstractBoat as _, BoatEntity, BoatStatus, CHEST_BOAT_SLOTS, ChestBoatEntity,
-        ChestBoatMenuKind, ChestBoatStorage, ChestRaftEntity, MAX_PASSENGER_HEAD_YAW, RaftEntity,
+        AbstractBoat, BoatEntity, BoatStatus, CHEST_BOAT_SLOTS, ChestBoatEntity, ChestBoatMenuKind,
+        ChestBoatStorage, ChestRaftEntity, MAX_PASSENGER_HEAD_YAW, PADDLE_SPEED, RaftEntity,
         build_chest_menu,
     };
 
@@ -1998,6 +2025,224 @@ mod tests {
         assert!(*data.id_paddle_left.get());
         assert!(!*data.id_paddle_right.get());
         assert_eq!(*data.id_bubble_time.get(), 0);
+    }
+
+    /// World with a stone floor at `y = 63`, an oak boat floating at `(8.5, 64.0, 8.5)` and a
+    /// player seated in it as the controlling passenger, mounted the way a client mounts.
+    fn riding_player_in_floored_world(
+        key: &'static str,
+    ) -> (TestWorld, Arc<BoatEntity>, Arc<Player>) {
+        init_vanilla_registry();
+        init_behaviors();
+        let fixture = fresh_test_world(key);
+        let world = &fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+        let stone = vanilla_blocks::STONE.default_state();
+        for x in 6..=10 {
+            for z in 6..=11 {
+                assert!(world.set_block(BlockPos::new(x, 63, z), stone, UpdateFlags::UPDATE_NONE));
+            }
+        }
+
+        let boat = Arc::new(BoatEntity::new(
+            &vanilla_entities::OAK_BOAT,
+            next_entity_id(),
+            DVec3::new(8.5, 64.0, 8.5),
+            Arc::downgrade(world),
+        ));
+        let boat_shared: SharedEntity = Arc::<BoatEntity>::clone(&boat);
+        world
+            .try_add_entity(Arc::clone(&boat_shared))
+            .expect("boat should attach to the loaded chunk");
+
+        let player =
+            TestPlayerBuilder::new(Arc::clone(world), "BoatDismounter", next_entity_id()).build();
+        player
+            .try_set_position(DVec3::new(8.5, 64.0, 8.5))
+            .expect("the boat seat should be free");
+        player.set_rotation((0.0, 0.0));
+        let player_shared: SharedEntity = Arc::<Player>::clone(&player);
+        EntityBase::restore_passenger_relationship(&boat_shared, &player_shared);
+
+        (fixture, boat, player)
+    }
+
+    #[test]
+    fn paddle_packet_state_survives_the_boat_tick() {
+        init_vanilla_registry();
+        let fixture = fresh_test_world("boat_paddle_packet");
+        let world = &fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+
+        let boat = Arc::new(BoatEntity::new(
+            &vanilla_entities::OAK_BOAT,
+            next_entity_id(),
+            DVec3::new(8.5, 64.0, 8.5),
+            Arc::downgrade(world),
+        ));
+        let boat_shared: SharedEntity = Arc::<BoatEntity>::clone(&boat);
+        world
+            .try_add_entity(Arc::clone(&boat_shared))
+            .expect("boat should attach to the loaded chunk");
+
+        let player =
+            TestPlayerBuilder::new(Arc::clone(world), "BoatRower", next_entity_id()).build();
+        let player_shared: SharedEntity = Arc::<Player>::clone(&player);
+        EntityBase::restore_passenger_relationship(&boat_shared, &player_shared);
+
+        // A controlling client streams its oar flags every tick: `AbstractBoat.tick` builds
+        // `ServerboundPaddleBoatPacket` and the server applies them to the synced fields.
+        player.handle_paddle_boat(SPaddleBoat {
+            left: true,
+            right: false,
+        });
+
+        {
+            let data = boat.entity_data.lock();
+            assert!(*data.id_paddle_left.get());
+            assert!(!*data.id_paddle_right.get());
+            // The per-field dirty flag is what turns the change into a data broadcast.
+            assert!(data.id_paddle_left.is_dirty());
+        }
+
+        // The next tick must not derive the oars from inputs the server never receives.
+        AbstractBoat::boat_tick(Arc::clone(&boat));
+
+        {
+            let data = boat.entity_data.lock();
+            assert!(
+                *data.id_paddle_left.get(),
+                "a tick must not revert the paddle state the client predicted"
+            );
+            assert!(!*data.id_paddle_right.get());
+        }
+
+        // The server-side animation follows the synced flags: the left oar advanced once.
+        assert_eq!(boat.boat.lock().paddle_positions[0], PADDLE_SPEED);
+        assert_eq!(boat.boat.lock().paddle_positions[1], 0.0);
+    }
+
+    #[test]
+    fn dismounting_steps_the_player_out_of_the_hull_and_clears_sneak() {
+        let (fixture, boat, player) = riding_player_in_floored_world("boat_dismount_step_out");
+        let world = &fixture.world;
+
+        // Vanilla dismounts on the sneak key: `Player.rideTick` -> `wantsToStopRiding`.
+        player.set_crouching(true);
+        assert!(player.is_passenger());
+        Arc::clone(&player).ride_tick();
+
+        assert!(!player.is_passenger(), "the ride relationship must be gone");
+        assert!(
+            !player.is_crouching(),
+            "dismounting must clear the sneak flag"
+        );
+
+        // Vanilla `Entity.getCollisionHorizontalEscapeVector` at yaw 0 steps straight out
+        // along +Z by half the hull's diagonal width plus half the passenger's width.
+        let escape = (f64::from(boat.dimensions_for_pose(boat.pose()).width * SQRT_2)
+            + f64::from(player.dimensions_for_pose(player.pose()).width)
+            + 1.0e-5)
+            / 2.0;
+        let landed = player.position();
+        assert_ne!(
+            landed,
+            boat.position(),
+            "the player must not stay where the hull is"
+        );
+        assert!(
+            (landed.x - 8.5).abs() < 1.0e-9,
+            "unexpected dismount x: {landed}"
+        );
+        assert!(
+            (landed.z - (8.5 + escape)).abs() < 1.0e-9,
+            "unexpected dismount z: {landed}"
+        );
+        assert_eq!(landed.y, 64.0, "the player must land on the stone floor");
+
+        let provider = WorldCollisionProvider::new(world);
+        assert!(!provider.has_block_collision_with_context(
+            &player.bounding_box(),
+            BlockCollisionContext::empty()
+        ));
+    }
+
+    #[test]
+    fn dismounting_in_a_cramped_spot_steps_into_the_first_free_column() {
+        let (fixture, boat, player) = riding_player_in_floored_world("boat_dismount_cramped");
+        let world = &fixture.world;
+
+        // Block the column the escape vector points at, so the hull-side search finds no floor
+        // there and the player has to step into a neighbouring column instead.
+        assert!(world.set_block(
+            BlockPos::new(8, 64, 9),
+            vanilla_blocks::STONE.default_state(),
+            UpdateFlags::UPDATE_NONE
+        ));
+
+        player.set_crouching(true);
+        Arc::clone(&player).ride_tick();
+
+        // `DismountHelper.findSafeDismountLocation`'s block-centred answer for the first
+        // column of `offsetsForDirection(south)` (west of the hull).
+        let landed = player.position();
+        assert_eq!(landed, DVec3::new(7.5, 64.0, 8.5));
+        assert_ne!(landed, boat.position());
+        assert!(!player.is_crouching());
+
+        let provider = WorldCollisionProvider::new(world);
+        assert!(!provider.has_block_collision_with_context(
+            &player.bounding_box(),
+            BlockCollisionContext::empty()
+        ));
+    }
+
+    #[test]
+    fn a_mob_passenger_steps_out_of_the_hull_through_the_shared_dismount() {
+        init_vanilla_registry();
+        init_behaviors();
+        let fixture = fresh_test_world("boat_mob_dismount");
+        let world = &fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+        let stone = vanilla_blocks::STONE.default_state();
+        for x in 6..=10 {
+            for z in 6..=11 {
+                assert!(world.set_block(BlockPos::new(x, 63, z), stone, UpdateFlags::UPDATE_NONE));
+            }
+        }
+
+        let boat = Arc::new(BoatEntity::new(
+            &vanilla_entities::OAK_BOAT,
+            next_entity_id(),
+            DVec3::new(8.5, 64.0, 8.5),
+            Arc::downgrade(world),
+        ));
+        let boat_shared: SharedEntity = Arc::<BoatEntity>::clone(&boat);
+        world
+            .try_add_entity(Arc::clone(&boat_shared))
+            .expect("boat should attach to the loaded chunk");
+
+        let pig = Arc::new(PigEntity::new(
+            &vanilla_entities::PIG,
+            next_entity_id(),
+            DVec3::new(8.5, 64.0, 8.5),
+            Arc::downgrade(world),
+        ));
+        let pig_shared: SharedEntity = Arc::<PigEntity>::clone(&pig);
+        EntityBase::restore_passenger_relationship(&boat_shared, &pig_shared);
+
+        // Vanilla `LivingEntity.stopRiding` places any living passenger, so the shared
+        // `Entity::stop_riding` default must step a mob out of the hull too.
+        pig.stop_riding();
+
+        assert!(!pig.is_passenger());
+        assert_eq!(pig.position().y, 64.0);
+        assert!(
+            pig.position().z > 8.5,
+            "the pig must step out of the hull: {}",
+            pig.position()
+        );
+        assert_ne!(pig.position(), boat.position());
     }
 
     #[test]

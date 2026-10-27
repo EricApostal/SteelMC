@@ -74,6 +74,7 @@ fn packaged_config_matches_the_runtime_config_defaults() {
         enforce_whitelist,
         op_permission_level,
         function_permission_level,
+        spawn_protection_radius,
         chat_spam_threshold_seconds,
         command_spam_threshold_seconds,
         compression,
@@ -108,6 +109,7 @@ fn packaged_config_matches_the_runtime_config_defaults() {
         function_permission_level,
         defaults.function_permission_level
     );
+    assert_eq!(spawn_protection_radius, defaults.spawn_protection_radius);
     assert_eq!(
         chat_spam_threshold_seconds,
         defaults.chat_spam_threshold_seconds

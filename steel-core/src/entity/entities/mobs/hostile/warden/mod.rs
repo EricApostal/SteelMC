@@ -16,6 +16,9 @@ mod spawn_tracker;
 )]
 mod warden;
 
+#[cfg(test)]
+mod tests;
+
 pub use anger::AngerLevel;
 pub use spawn_tracker::{MAX_WARNING_LEVEL, WardenSpawnTracker};
 pub use warden::WardenEntity;

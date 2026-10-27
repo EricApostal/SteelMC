@@ -418,6 +418,16 @@ impl Server {
         }
     }
 
+    /// Runs the queued command requests once, exactly like one game tick's command phase.
+    ///
+    /// Tests drive commands submitted by connection handlers without starting the server
+    /// loop; this is the same drain (including owner revalidation) the loop performs.
+    #[cfg(test)]
+    pub(crate) fn run_queued_commands_for_test(self: &Arc<Self>) {
+        let mut pending = PendingCommandExecutionQueue::<CommandSource>::new();
+        self.tick_command_requests(&mut pending);
+    }
+
     fn execute_command_request(
         self: &Arc<Self>,
         pending: &mut PendingCommandExecutionQueue<CommandSource>,

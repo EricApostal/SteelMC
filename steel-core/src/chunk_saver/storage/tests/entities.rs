@@ -1,8 +1,11 @@
 use super::*;
+use crate::entity::LivingEntity;
+use crate::entity::entities::mobs::passive::PigEntity;
 use crate::entity::{
     ENTITIES, ENTITY_LOAD_MAX_HORIZONTAL_POSITION, ENTITY_LOAD_MAX_VERTICAL_POSITION,
 };
 use steel_registry::RegistryEntry as _;
+use steel_registry::{vanilla_attributes, vanilla_mob_effects};
 
 fn test_persistent_end_crystal(pos: DVec3) -> PersistentEntity {
     PersistentEntity {
@@ -584,4 +587,57 @@ fn spawner_block_entities_preserve_nbt_through_proto_save_load() {
             .map(ToString::to_string),
         Some("minecraft:zombie".to_owned())
     );
+}
+
+/// Vanilla `LivingEntity.addAdditionalSaveData` runs in the same serialization
+/// chain as a mob's own `addAdditionalSaveData`, so a chunk save must carry the
+/// living layer too. Regression: the saver only called `save_additional`, so a
+/// wounded/effected/attribute-modified mob silently reverted on chunk unload.
+#[test]
+fn living_state_survives_chunk_entity_round_trip() {
+    init_globals();
+
+    let pos = ChunkPos::new(0, 0);
+    let chunk = Chunk::new(single_empty_section(), pos, 0, 16, Weak::new());
+    let pig = PigEntity::new(
+        &vanilla_entities::PIG,
+        next_entity_id(),
+        DVec3::new(5.5, 6.0, 7.5),
+        Weak::new(),
+    );
+    pig.attributes()
+        .lock()
+        .set_base_value(vanilla_attributes::MAX_HEALTH, 30.0);
+    pig.set_health(7.0);
+    pig.set_mob_effect(vanilla_mob_effects::SPEED, 1);
+
+    let entity: SharedEntity = Arc::new(pig);
+    let Some(prepared) = ChunkStorage::prepare_chunk_save(
+        &chunk,
+        ChunkStatus::Features,
+        slice::from_ref(&entity),
+        true,
+    ) else {
+        panic!("forced runtime entity save should prepare a chunk save");
+    };
+    let persistent = prepared
+        .persistent
+        .entities
+        .first()
+        .expect("the pig should be persisted");
+
+    let loaded = ChunkStorage::persistent_to_entity_at_level(persistent, pos, &Weak::new())
+        .expect("the persisted pig should load");
+    let living = loaded
+        .as_living_entity()
+        .expect("the loaded entity should be living");
+
+    assert_eq!(living.get_health().to_bits(), 7.0_f32.to_bits());
+    assert_eq!(living.get_max_health().to_bits(), 30.0_f32.to_bits());
+
+    let speed = living
+        .living_base()
+        .mob_effect(vanilla_mob_effects::SPEED)
+        .expect("the active effect should survive the round trip");
+    assert_eq!(speed.amplifier(), 1);
 }

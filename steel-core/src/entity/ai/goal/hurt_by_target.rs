@@ -248,4 +248,127 @@ mod tests {
         assert_eq!(hunter_target.uuid(), attacker.uuid());
         assert_eq!(ally_target.uuid(), attacker.uuid());
     }
+
+    /// Real-path hit retaliation: join a player so the chunk is entity-ticking, spawn hostile
+    /// mobs next to it, damage them through the real damage path (`hurt` with a `player_attack`
+    /// source) and tick the world. Vanilla `LivingEntity.hurtServer` records the attacker as
+    /// `lastHurtByMob`; the mob's target selector then runs `HurtByTargetGoal`, which applies
+    /// that attacker as the mob's target, and `TargetGoal.canContinueToUse` keeps it.
+    ///
+    /// Regression guard: before the `CreeperEntity::set_target_refusing_goat` fix this test
+    /// aborted the test binary with a stack overflow, because that helper delegated through
+    /// `Mob::set_target(self, ..)`, re-entering the creeper's own `set_target` override — the
+    /// creeper's retaliation therefore crashed the server instead of acquiring the attacker.
+    #[test]
+    fn hit_mob_retaliates_against_the_player_that_hit_it() {
+        use steel_registry::{vanilla_damage_types, vanilla_game_rules, vanilla_world_clocks};
+
+        use crate::entity::damage::DamageSource;
+        use crate::entity::entities::{CreeperEntity, ZombieEntity};
+        use crate::entity::{Mob, SharedEntity, add_spawned_entity, init_entities};
+        use crate::player::{Player, ResetReason};
+        use crate::test_support::TestPlayerBuilder;
+        use crate::world::World;
+
+        init_vanilla_registry();
+        init_entities();
+        init_behaviors();
+        let fixture = fresh_test_world("hurt_by_target_retaliation");
+        let world = &fixture.world;
+        // A joined player only makes a neighbourhood of chunks entity-ticking, and a mob only
+        // runs its AI (and therefore its target selector) while it ticks.
+        for chunk_x in -2..=2 {
+            for chunk_z in -2..=2 {
+                insert_ready_full_chunk(world, ChunkPos::new(chunk_x, chunk_z));
+            }
+        }
+        world.set_game_rule(&vanilla_game_rules::SPAWN_MOBS, false);
+        world.set_game_rule(&vanilla_game_rules::SPAWN_MONSTERS, false);
+        // Night: zombies are in `BURN_IN_DAYLIGHT`, and a daytime burn roll would spend the
+        // hurt cooldown on its own 1.0 `on_fire` hit before this test's 1.0 hit lands.
+        world.set_clock_total_ticks(&vanilla_world_clocks::OVERWORLD, 18_000);
+        assert!(
+            !world.monsters_burn(),
+            "night must disable daylight burning"
+        );
+
+        let player = TestPlayerBuilder::new(Arc::clone(world), "Attacker", 1).build();
+        player.base().set_position_local(DVec3::new(0.5, 64.0, 0.5));
+        assert!(world.add_player(Arc::clone(&player), ResetReason::InitialJoin));
+        let player_uuid = player.uuid();
+
+        let zombie = Arc::new(ZombieEntity::new(
+            &vanilla_entities::ZOMBIE,
+            2,
+            DVec3::new(2.5, 64.0, 0.5),
+            Arc::downgrade(world),
+        ));
+        let creeper = Arc::new(CreeperEntity::new(
+            &vanilla_entities::CREEPER,
+            3,
+            DVec3::new(4.0, 64.0, 0.5),
+            Arc::downgrade(world),
+        ));
+        let mobs: [(&str, SharedEntity); 2] = [
+            (
+                "zombie",
+                Arc::<ZombieEntity>::clone(&zombie) as SharedEntity,
+            ),
+            (
+                "creeper",
+                Arc::<CreeperEntity>::clone(&creeper) as SharedEntity,
+            ),
+        ];
+        for (name, mob) in &mobs {
+            add_spawned_entity(world, Arc::clone(mob)).expect("test mob should join the world");
+            assert!(mob.as_mob().is_some(), "{name} should be a mob");
+        }
+
+        let mut ticks = 0_u64;
+        let tick = |world: &Arc<World>, ticks: &mut u64| {
+            world.game_time.advance();
+            world.tick_game(*ticks, true);
+            *ticks += 1;
+        };
+        // The mobs must tick before the hit: vanilla `HurtByTargetGoal.canUse` compares the
+        // victim's `getLastHurtByMobTimestamp` (the victim's own `tickCount` at the hit) against
+        // the goal's stored timestamp, which starts at 0.
+        for _ in 0..4 {
+            tick(world, &mut ticks);
+        }
+
+        let player_entity: SharedEntity = Arc::<Player>::clone(&player) as SharedEntity;
+        let source = DamageSource::direct(
+            &vanilla_damage_types::PLAYER_ATTACK,
+            Arc::clone(&player_entity),
+        );
+        for (name, mob) in &mobs {
+            assert!(
+                mob.tick_count() > 0,
+                "{name} must be ticking inside the player's chunks"
+            );
+            assert!(
+                mob.hurt(world, &source, 1.0),
+                "the test hit must damage the {name}"
+            );
+            assert!(
+                mob.as_living_entity()
+                    .is_some_and(|living| living.last_hurt_by_mob().is_some()),
+                "vanilla `LivingEntity.hurtServer` must record the attacker as last-hurt-by"
+            );
+        }
+
+        for _ in 0..8 {
+            tick(world, &mut ticks);
+        }
+
+        for (name, mob) in &mobs {
+            let target = mob.as_mob().and_then(Mob::target);
+            assert_eq!(
+                target.map(|target| target.uuid()),
+                Some(player_uuid),
+                "{name} must retaliate against the player that hit it"
+            );
+        }
+    }
 }

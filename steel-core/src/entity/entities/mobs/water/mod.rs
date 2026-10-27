@@ -12,6 +12,9 @@ pub mod pufferfish;
 pub mod salmon;
 pub mod tropical_fish;
 
+#[cfg(test)]
+mod tests;
+
 pub use cod::CodEntity;
 pub use pufferfish::PufferfishEntity;
 pub use salmon::SalmonEntity;

@@ -55,6 +55,27 @@ impl ItemCooldowns {
         );
         Some((group, duration))
     }
+
+    /// Vanilla `ItemCooldowns.addCooldown(ItemStack, int)`: starts an explicit
+    /// cooldown for the stack's cooldown group (`BlocksAttacks.disable` uses it
+    /// to disable a shield for the axe window).
+    pub(super) fn add_cooldown(
+        &mut self,
+        stack: &ItemStack,
+        ticks: i32,
+    ) -> Option<(Identifier, i32)> {
+        if ticks <= 0 {
+            return None;
+        }
+        let group = cooldown_group(stack);
+        self.cooldowns.insert(
+            group.clone(),
+            CooldownInstance {
+                end_time: self.tick_count + ticks,
+            },
+        );
+        Some((group, ticks))
+    }
 }
 
 fn cooldown_group(stack: &ItemStack) -> Identifier {
@@ -73,6 +94,18 @@ impl Player {
     /// Starts the stack's vanilla `use_cooldown`, if it has one.
     pub fn apply_item_use_cooldown(&self, stack: &ItemStack) {
         let cooldown = self.item_cooldowns.lock().add_from_stack(stack);
+        if let Some((cooldown_group, duration)) = cooldown {
+            self.send_packet(CCooldown {
+                cooldown_group,
+                duration,
+            });
+        }
+    }
+
+    /// Vanilla `ItemCooldowns.addCooldown`: starts an explicit cooldown of
+    /// `ticks` for the stack's cooldown group and informs the client.
+    pub fn add_item_cooldown(&self, stack: &ItemStack, ticks: i32) {
+        let cooldown = self.item_cooldowns.lock().add_cooldown(stack, ticks);
         if let Some((cooldown_group, duration)) = cooldown {
             self.send_packet(CCooldown {
                 cooldown_group,

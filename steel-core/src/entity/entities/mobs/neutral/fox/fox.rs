@@ -4,7 +4,7 @@ use std::sync::{Arc, Weak};
 
 use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
-use simdnbt::owned::NbtCompound;
+use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
@@ -15,7 +15,7 @@ use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entity_data::FoxEntityData;
 use steel_registry::{sound_events, vanilla_attributes, vanilla_entities, vanilla_item_tags};
 use steel_utils::locks::SyncMutex;
-use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
+use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey, UuidExt as _};
 
 use crate::entity::ai::goal::{
     AvoidEntityGoal, BreedGoal, ClimbOnTopOfPowderSnowGoal, FloatGoal, FollowParentGoal,
@@ -308,6 +308,23 @@ impl FoxEntity {
         *entity_data.trusted_id_0.get() == Some(uuid)
             || *entity_data.trusted_id_1.get() == Some(uuid)
     }
+
+    /// Vanilla `Fox.clearTrusted`: empties both synchronized trusted-id slots.
+    pub fn clear_trusted(&self) {
+        let mut entity_data = self.entity_data.lock();
+        entity_data.trusted_id_0.set(None);
+        entity_data.trusted_id_1.set(None);
+    }
+
+    /// Vanilla `Fox.addTrustedEntity`: fills the first free trusted-id slot.
+    pub fn add_trusted(&self, uuid: uuid::Uuid) {
+        let mut entity_data = self.entity_data.lock();
+        if entity_data.trusted_id_0.get().is_none() {
+            entity_data.trusted_id_0.set(Some(uuid));
+        } else if entity_data.trusted_id_1.get().is_none() {
+            entity_data.trusted_id_1.set(Some(uuid));
+        }
+    }
 }
 
 impl Entity for FoxEntity {
@@ -372,27 +389,47 @@ impl Entity for FoxEntity {
         self.save_mob(nbt);
         self.save_ageable_mob(nbt);
         self.save_animal(nbt);
-        nbt.insert("Type", self.variant().name());
+        // Vanilla `Fox.addAdditionalSaveData`. `Trusted` is `TRUSTED_LIST_CODEC`,
+        // a list of UUIDs, which NBT serializes as a list of int arrays.
         nbt.insert("Trusted", {
             let mut list = Vec::new();
             let entity_data = self.entity_data.lock();
-            if let Some(uuid) = entity_data.trusted_id_0.get() {
-                list.push(uuid.to_string());
+            if let Some(uuid) = *entity_data.trusted_id_0.get() {
+                list.push(uuid.to_int_array().to_vec());
             }
-            if let Some(uuid) = entity_data.trusted_id_1.get() {
-                list.push(uuid.to_string());
+            if let Some(uuid) = *entity_data.trusted_id_1.get() {
+                list.push(uuid.to_int_array().to_vec());
             }
-            list
+            NbtList::IntArray(list)
         });
+        nbt.insert("Sleeping", NbtTag::Byte(i8::from(self.is_sleeping())));
+        nbt.insert("Type", self.variant().name());
+        nbt.insert("Sitting", NbtTag::Byte(i8::from(self.is_sitting())));
+        nbt.insert("Crouching", NbtTag::Byte(i8::from(self.is_crouching())));
     }
 
     fn load_additional(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
         self.load_mob(nbt);
         self.load_ageable_mob(nbt);
         self.load_animal(nbt);
+        // Vanilla `Fox.readAdditionalSaveData`: replace the trusted list, then the
+        // sleeping/type/sitting/crouching flags.
+        self.clear_trusted();
+        if let Some(list) = nbt.list("Trusted")
+            && let Some(trusted) = list.int_arrays()
+        {
+            for raw in trusted {
+                if let Some(uuid) = uuid::Uuid::from_int_array(&raw.to_vec()) {
+                    self.add_trusted(uuid);
+                }
+            }
+        }
+        self.set_sleeping(nbt.byte("Sleeping").is_some_and(|value| value != 0));
         if let Some(variant) = nbt.string("Type") {
             self.set_variant(FoxVariant::by_name(variant.to_str().as_ref()));
         }
+        self.set_sitting(nbt.byte("Sitting").is_some_and(|value| value != 0));
+        self.set_crouching(nbt.byte("Crouching").is_some_and(|value| value != 0));
     }
 }
 
@@ -541,11 +578,15 @@ impl PathfinderMob for FoxEntity {}
 
 #[cfg(test)]
 mod tests {
-    use simdnbt::owned::NbtCompound;
+    use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
+    use simdnbt::borrow::read_compound;
+    use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
+    use std::io::Cursor;
     use std::sync::Weak;
 
     use glam::DVec3;
     use steel_registry::{init_vanilla_registry, vanilla_entities};
+    use uuid::Uuid;
 
     use super::{FoxEntity, FoxVariant};
     use crate::entity::Entity;
@@ -569,5 +610,42 @@ mod tests {
         fox.save_additional(&mut nbt);
         assert!(nbt.string("Type").is_some());
         assert_eq!(fox.entity_type(), &vanilla_entities::FOX);
+    }
+
+    /// Vanilla `Fox.addAdditionalSaveData`/`readAdditionalSaveData` round-trip
+    /// the trusted list plus the sleeping/sitting/crouching flags. Regression:
+    /// Steel wrote `Trusted` as UUID strings and never read it back.
+    #[test]
+    fn fox_trusted_and_flags_round_trip() {
+        init_vanilla_registry();
+        let fox = FoxEntity::new(&vanilla_entities::FOX, 1, DVec3::ZERO, Weak::new());
+        let owner = Uuid::from_u128(0x1234_5678_9abc_def0_1234_5678_9abc_def0);
+        fox.add_trusted(owner);
+        fox.set_variant(FoxVariant::Snow);
+        fox.set_sleeping(true);
+        fox.set_sitting(true);
+        fox.set_crouching(true);
+
+        let mut nbt = NbtCompound::new();
+        fox.save_additional(&mut nbt);
+        assert!(
+            matches!(nbt.get("Trusted"), Some(NbtTag::List(NbtList::IntArray(_)))),
+            "vanilla writes `Trusted` as a list of UUID int arrays"
+        );
+
+        let mut bytes = Vec::new();
+        nbt.write(&mut bytes);
+        let borrowed = read_compound(&mut Cursor::new(bytes.as_slice()))
+            .expect("saved fox NBT should reparse");
+        let view: BorrowedNbtCompoundView<'_, '_> = (&borrowed).into();
+
+        let loaded = FoxEntity::new(&vanilla_entities::FOX, 2, DVec3::ZERO, Weak::new());
+        loaded.load_additional(view);
+
+        assert!(loaded.trusts(owner));
+        assert_eq!(loaded.variant(), FoxVariant::Snow);
+        assert!(loaded.is_sleeping());
+        assert!(loaded.is_sitting());
+        assert!(loaded.is_crouching());
     }
 }

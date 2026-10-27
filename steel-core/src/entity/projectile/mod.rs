@@ -199,6 +199,14 @@ pub trait Projectile: Entity + ProjectileEventSource {
     /// Returns shared projectile runtime state.
     fn projectile_base(&self) -> &ProjectileBase;
 
+    /// Vanilla `AbstractArrow.getPierceLevel`; 0 for projectiles that are not arrows.
+    ///
+    /// Used by `LivingEntity.applyItemBlocking` to let piercing arrows bypass a
+    /// raised shield.
+    fn pierce_level(&self) -> i8 {
+        0
+    }
+
     /// Returns the horizontal hurt-knockback vector used for this projectile.
     fn calculate_horizontal_hurt_knockback_direction(
         &self,

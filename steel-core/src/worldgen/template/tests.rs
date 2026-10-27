@@ -1,9 +1,28 @@
+use std::collections::BTreeMap;
 use std::slice;
+use std::sync::Arc;
+
+use rand::SeedableRng as _;
+use rand::rngs::StdRng;
 
 use super::*;
+use steel_registry::REGISTRY;
 use steel_registry::blocks::properties::{DoorHingeSide, SlabType};
 use steel_registry::init_vanilla_registry;
+use steel_registry::item_stack::ItemStack;
+use steel_registry::loot_table::LootContext;
+use steel_registry::vanilla_custom_stats;
 use steel_registry::vanilla_entities;
+use steel_utils::ChunkPos;
+
+use crate::behavior::blocks::open_menu;
+use crate::behavior::{BLOCK_BEHAVIORS, init_behaviors};
+use crate::block_entity::init_block_entities;
+use crate::inventory::lock::ContainerLockGuard;
+use crate::test_support::{
+    TestPlayerBuilder, TestWorld, fresh_test_world, insert_ready_full_chunk,
+};
+use crate::world::{LevelReader as _, World};
 
 fn test_registry() -> Registry {
     init_vanilla_registry();
@@ -592,4 +611,387 @@ fn data_markers_read_igloo_chest_structure_block() {
         .collect::<Vec<_>>();
 
     assert_eq!(markers, ["chest"]);
+}
+
+// ---------------------------------------------------------------------------
+// Structure chest loot
+// ---------------------------------------------------------------------------
+
+/// The placement random every chest test places its template with, so the
+/// reseeded `LootTableSeed` is reproducible.
+const CHEST_PLACEMENT_SEED: u64 = 0x5EED_1007;
+
+/// Test world with the block entity registries installed and ready full chunks
+/// for a template at `pos`.
+fn chest_test_world(key: &'static str, pos: BlockPos, size: IVec3) -> TestWorld {
+    init_vanilla_registry();
+    init_behaviors();
+    init_block_entities();
+    let fixture = fresh_test_world(key);
+    for chunk_x in (pos.x() >> 4)..=((pos.x() + size.x - 1) >> 4) {
+        for chunk_z in (pos.z() >> 4)..=((pos.z() + size.z - 1) >> 4) {
+            insert_ready_full_chunk(&fixture.world, ChunkPos::new(chunk_x, chunk_z));
+        }
+    }
+    fixture
+}
+
+/// Vanilla `StructurePlaceSettings` for placing a template into a live world
+/// with the same flags and processor random the structure piece placer uses.
+fn placement_settings(pos: BlockPos, size: IVec3) -> StructurePlaceSettings<'static> {
+    StructurePlaceSettings {
+        mirror: StructureMirror::None,
+        rotation: Rotation::None,
+        rotation_pivot: BlockPos::ZERO,
+        // Vanilla's `placeTemplate` clip is infinite; a box around the template
+        // bounds every write for the tests without changing a single position.
+        bounding_box: BoundingBox::new(
+            IVec3::new(pos.x() - 16, pos.y() - 64, pos.z() - 16),
+            IVec3::new(
+                pos.x() + size.x + 15,
+                pos.y() + size.y + 64,
+                pos.z() + size.z + 15,
+            ),
+        ),
+        processors: &[],
+        block_ignore: StructureBlockIgnore::None,
+        late_block_ignore: StructureBlockIgnore::None,
+        replace_jigsaws: false,
+        projection: None,
+        processor_random: StructureProcessorRandom::Positional,
+        liquid_settings: LiquidSettingsData::IgnoreWaterlogging,
+    }
+}
+
+/// Places `template` into `world` the way a structure piece does.
+fn place_test_template(
+    world: &Arc<World>,
+    registry: &Registry,
+    template: &StructureTemplate,
+    pos: BlockPos,
+) {
+    let settings = placement_settings(pos, template.unrotated_size());
+    let mut level = LiveLevel::new(world);
+    let mut random = WorldgenRandom::from_seed(CHEST_PLACEMENT_SEED);
+    assert!(
+        template.place_in_world(
+            &mut level,
+            registry,
+            pos,
+            pos,
+            &settings,
+            &mut random,
+            UpdateFlags::UPDATE_CLIENTS,
+        ),
+        "test template should place at least one block"
+    );
+}
+
+/// The block entity NBT a chest keeps: the pending loot table as vanilla's
+/// `trySaveLootTable` writes it, or its items once the table was unpacked.
+fn saved_chest_nbt(world: &Arc<World>, pos: BlockPos) -> NbtCompound {
+    world
+        .get_block_entity(pos)
+        .expect("placed chest should have a block entity")
+        .save_custom_only()
+}
+
+/// Vanilla `RandomizableContainer.getLootTable`/`getLootTableSeed` as they
+/// survive a save: the pending table of an unopened structure chest.
+fn pending_loot_table(world: &Arc<World>, pos: BlockPos) -> Option<(Identifier, i64)> {
+    let nbt = saved_chest_nbt(world, pos);
+    let table = nbt.string("LootTable")?;
+    let table = Identifier::from_str(&table.to_string()).expect("saved loot table key");
+    Some((table, nbt.long("LootTableSeed").unwrap_or(0)))
+}
+
+/// The stacks a chest currently holds, snapshotted without keeping the lock.
+fn chest_items(world: &Arc<World>, pos: BlockPos) -> Vec<ItemStack> {
+    let container = world
+        .get_block_entity(pos)
+        .and_then(|entity| entity.container_ref())
+        .expect("chest should expose its container");
+    let guard = ContainerLockGuard::lock_all(&[&container]);
+    guard
+        .get(container.container_id())
+        .expect("locked chest container")
+        .items()
+        .to_vec()
+}
+
+/// Total count per item, so a stack split across slots compares equal.
+fn item_totals(items: &[ItemStack]) -> BTreeMap<Identifier, i32> {
+    let mut totals: BTreeMap<Identifier, i32> = BTreeMap::new();
+    for stack in items {
+        if stack.is_empty() {
+            continue;
+        }
+        *totals.entry(stack.item().key.clone()).or_default() += stack.count();
+    }
+    totals
+}
+
+/// Empties a chest, the way a player taking the loot out does.
+fn take_all_items(world: &Arc<World>, pos: BlockPos) {
+    let container = world
+        .get_block_entity(pos)
+        .and_then(|entity| entity.container_ref())
+        .expect("chest should expose its container");
+    let mut guard = ContainerLockGuard::lock_all(&[&container]);
+    let container = guard
+        .get_mut(container.container_id())
+        .expect("locked chest container");
+    for slot in 0..container.get_container_size() {
+        container.set_item(slot, ItemStack::empty());
+    }
+}
+
+/// The items vanilla `LootTable.fill` must end up placing for `table` with
+/// `seed`: the table evaluated on its own, without the container path.
+fn expected_loot(table: &Identifier, seed: i64, pos: BlockPos) -> BTreeMap<Identifier, i32> {
+    let table = REGISTRY
+        .loot_tables
+        .by_key(table)
+        .expect("village loot table should be registered");
+    let origin = (
+        f64::from(pos.x()) + 0.5,
+        f64::from(pos.y()) + 0.5,
+        f64::from(pos.z()) + 0.5,
+    );
+    // Vanilla `LootTable.fill` rolls the items before it shuffles them, so the
+    // generated stacks are the same as a bare `getRandomItems` with that seed.
+    let mut rng = StdRng::seed_from_u64(seed as u64);
+    let mut context = LootContext::new(&mut rng).with_origin(origin.0, origin.1, origin.2);
+    item_totals(&table.get_random_items(&mut context))
+}
+
+/// The chest block of a one-block template carrying `loot_table`.
+fn loot_chest_template(registry: &Registry, loot_table: &str) -> StructureTemplate {
+    let mut nbt = NbtCompound::new();
+    nbt.insert("id", "minecraft:chest");
+    nbt.insert("LootTable", loot_table);
+    // Overwritten by placement's reseed, exactly like a vanilla template seed.
+    nbt.insert("LootTableSeed", 1234_i64);
+    StructureTemplate {
+        size: IVec3::new(1, 1, 1),
+        palettes: vec![StructureTemplatePalette {
+            blocks: vec![StructureBlockInfo {
+                pos: BlockPos::ZERO,
+                state: registry.blocks.get_default_state_id(&vanilla_blocks::CHEST),
+                nbt: Some(nbt),
+            }],
+        }],
+        entities: Vec::new(),
+    }
+}
+
+/// A chest placed from a template with a `LootTable` must generate exactly that
+/// table's loot the first time it is opened, and never again.
+#[test]
+fn structure_chest_rolls_its_loot_table_on_first_open_only() {
+    let registry = test_registry();
+    let pos = BlockPos::new(4, 64, 4);
+    let fixture = chest_test_world("chest_loot_first_open", pos, IVec3::new(1, 1, 1));
+    let world = &fixture.world;
+    let player = TestPlayerBuilder::new(Arc::clone(world), "ChestLooter", 1).build();
+    let template = loot_chest_template(&registry, "minecraft:chests/village/village_weaponsmith");
+
+    place_test_template(world, &registry, &template, pos);
+
+    let (table, seed) =
+        pending_loot_table(world, pos).expect("the template's loot table must survive placement");
+    assert_eq!(
+        table,
+        Identifier::vanilla_static("chests/village/village_weaponsmith")
+    );
+    assert_ne!(
+        seed, 0,
+        "vanilla `StructureTemplate.placeInWorld` reseeds a randomizable container"
+    );
+    assert!(
+        chest_items(world, pos).iter().all(ItemStack::is_empty),
+        "an unopened structure chest holds no items"
+    );
+
+    // First open: vanilla's chest menu provider unpacks the pending table with
+    // the opening player before the menu is built.
+    let state = world.get_block_state(pos);
+    open_menu(
+        state,
+        world,
+        pos,
+        &player,
+        &vanilla_custom_stats::OPEN_CHEST,
+    );
+
+    let opened = item_totals(&chest_items(world, pos));
+    assert!(
+        !opened.is_empty(),
+        "a village chest must hold loot after its first open"
+    );
+    assert_eq!(
+        opened,
+        expected_loot(&table, seed, pos),
+        "the chest must hold exactly the loot table's items for its seed"
+    );
+
+    // Taking the loot and opening again must not reroll the table.
+    take_all_items(world, pos);
+    open_menu(
+        state,
+        world,
+        pos,
+        &player,
+        &vanilla_custom_stats::OPEN_CHEST,
+    );
+    assert!(
+        chest_items(world, pos).iter().all(ItemStack::is_empty),
+        "an unpacked loot table must not roll a second time"
+    );
+    assert!(
+        saved_chest_nbt(world, pos).string("LootTable").is_none(),
+        "an unpacked chest saves its items instead of the table"
+    );
+}
+
+/// The same template placed with the same placement random must land the same
+/// `LootTableSeed`, and that seed alone must drive the loot: the loot a village
+/// chest yields is fixed by its structure placement.
+#[test]
+fn structure_chest_loot_is_deterministic_per_placement_seed() {
+    let registry = test_registry();
+    let first_pos = BlockPos::new(4, 64, 4);
+    let second_pos = BlockPos::new(36, 64, 4);
+    let fixture = chest_test_world("chest_loot_deterministic", first_pos, IVec3::new(32, 1, 1));
+    let world = &fixture.world;
+    let player = TestPlayerBuilder::new(Arc::clone(world), "SameSeedLooter", 1).build();
+    let template = loot_chest_template(&registry, "minecraft:chests/village/village_plains_house");
+
+    place_test_template(world, &registry, &template, first_pos);
+    place_test_template(world, &registry, &template, second_pos);
+
+    let (table, first_seed) = pending_loot_table(world, first_pos).expect("first chest loot table");
+    let (_, second_seed) =
+        pending_loot_table(world, second_pos).expect("second chest keeps a pending loot table");
+    assert_eq!(
+        first_seed, second_seed,
+        "the placement random must be the only seed source"
+    );
+
+    for chest in [first_pos, second_pos] {
+        let state = world.get_block_state(chest);
+        open_menu(
+            state,
+            world,
+            chest,
+            &player,
+            &vanilla_custom_stats::OPEN_CHEST,
+        );
+    }
+
+    let expected = expected_loot(&table, first_seed, first_pos);
+    assert!(!expected.is_empty(), "the village table should yield loot");
+    assert_eq!(
+        item_totals(&chest_items(world, first_pos)),
+        expected,
+        "the seeded table evaluated on its own must match the chest's loot"
+    );
+    assert_eq!(
+        item_totals(&chest_items(world, second_pos)),
+        expected,
+        "two chests of the same seed must yield the same loot"
+    );
+}
+
+/// A comparator read is a container read: vanilla's
+/// `AbstractContainerMenu.getRedstoneSignalFromContainer` walks the slots
+/// through `RandomizableContainerBlockEntity.getItem`, which unpacks a pending
+/// table (with no player) before the signal is known.
+#[test]
+fn structure_chest_comparator_read_rolls_its_loot_table() {
+    let registry = test_registry();
+    let pos = BlockPos::new(4, 64, 4);
+    let fixture = chest_test_world("chest_loot_comparator", pos, IVec3::new(1, 1, 1));
+    let world = &fixture.world;
+    let template = loot_chest_template(&registry, "minecraft:chests/village/village_plains_house");
+
+    place_test_template(world, &registry, &template, pos);
+    assert!(
+        pending_loot_table(world, pos).is_some(),
+        "the placed chest starts with a pending loot table"
+    );
+
+    let state = world.get_block_state(pos);
+    let signal = BLOCK_BEHAVIORS
+        .get_behavior(&vanilla_blocks::CHEST)
+        .get_analog_output_signal(state, world.as_ref(), pos, Direction::North);
+
+    assert!(
+        signal > 0,
+        "a chest rolled by the comparator read must report a signal"
+    );
+    assert!(
+        !item_totals(&chest_items(world, pos)).is_empty(),
+        "the comparator read must have generated the chest's loot"
+    );
+}
+
+/// A real village house template placed into a world must leave a chest that
+/// yields loot when a player opens it: the reported empty-village symptom.
+#[test]
+fn structure_chest_village_house_template_leaves_loot() {
+    let registry = test_registry();
+    let template = StructureTemplate::load_vanilla(
+        &registry,
+        &Identifier::vanilla_static("village/plains/houses/plains_small_house_7"),
+    )
+    .expect("the plains small house should be bundled");
+    let size = template.unrotated_size();
+    let pos = BlockPos::new(4, 64, 4);
+    let fixture = chest_test_world("village_house_chest", pos, size);
+    let world = &fixture.world;
+    let player = TestPlayerBuilder::new(Arc::clone(world), "VillageLooter", 1).build();
+
+    place_test_template(world, &registry, &template, pos);
+
+    let chests: Vec<BlockPos> = (0..size.x)
+        .flat_map(|x| (0..size.y).flat_map(move |y| (0..size.z).map(move |z| (x, y, z))))
+        .map(|(x, y, z)| pos.offset(x, y, z))
+        .filter(|&pos| {
+            world.get_block_state(pos).get_block() == &vanilla_blocks::CHEST
+                && world.get_block_entity(pos).is_some()
+        })
+        .collect();
+    assert!(
+        !chests.is_empty(),
+        "the village house template must place at least one chest"
+    );
+
+    let loot_chests: Vec<BlockPos> = chests
+        .iter()
+        .copied()
+        .filter(|&pos| pending_loot_table(world, pos).is_some())
+        .collect();
+    assert!(
+        !loot_chests.is_empty(),
+        "the village house chest must carry its structure template loot table"
+    );
+
+    for chest in loot_chests {
+        let (_, seed) = pending_loot_table(world, chest).expect("checked pending table");
+        assert_ne!(seed, 0, "placed village chests are reseeded");
+        let state = world.get_block_state(chest);
+        open_menu(
+            state,
+            world,
+            chest,
+            &player,
+            &vanilla_custom_stats::OPEN_CHEST,
+        );
+        let loot = item_totals(&chest_items(world, chest));
+        assert!(
+            !loot.is_empty(),
+            "the village chest at {chest:?} must yield loot on open"
+        );
+    }
 }

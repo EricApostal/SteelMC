@@ -11,12 +11,13 @@ mod signature_cache;
 pub use message_validator::LastSeenMessagesValidator;
 pub use signature_cache::{LastSeen, MessageCache};
 
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use steel_crypto::{SignatureValidator, public_key_from_bytes};
 use steel_protocol::packets::game::{
     CPlayerChat, CPlayerInfoUpdate, CSystemChat, ChatTypeBound, FilterType, SChat, SChatAck,
-    SChatSessionUpdate,
+    SChatCommandSigned, SChatSessionUpdate,
 };
 use steel_registry::{RegistryEntry, vanilla_chat_types};
 use steel_utils::translations;
@@ -25,6 +26,7 @@ use text_components::TextComponent;
 use text_components::format::Color;
 use text_components::interactivity::{ClickEvent, HoverEvent};
 
+use crate::command::sender::CommandSender;
 use crate::entity::Entity;
 use crate::player::Player;
 use crate::player::spam_throttler::TickThrottler;
@@ -161,6 +163,90 @@ impl Player {
         let val = chat.messages_received;
         chat.messages_received += 1;
         val
+    }
+
+    /// Queues a command string for the next game tick's command phase.
+    ///
+    /// Vanilla `MinecraftServer.execute` runs the parsed command on the server thread;
+    /// Steel hands it to the command request queue the server tick drains. Both command
+    /// packets share this submission so the signed and unsigned paths dispatch alike.
+    fn dispatch_chat_command(self: &Arc<Self>, command: String) {
+        let server = self.server();
+        if server
+            .submit_command(CommandSender::Player(Arc::clone(self)), command)
+            .is_err()
+        {
+            self.send_message(
+                &TextComponent::const_plain("Command queue is full").color(Color::Red),
+            );
+        }
+    }
+
+    /// Handles an unsigned chat command.
+    ///
+    /// Mirrors vanilla `ServerGamePacketListenerImpl.handleChatCommand` /
+    /// `performUnsignedChatCommand`: the idle timer resets and the command runs.
+    ///
+    /// Vanilla additionally refuses a command with signable arguments while the server
+    /// enforces secure profiles. Steel's dispatcher exposes no signable-argument metadata,
+    /// so that check has no honest port yet; see [`Self::handle_signed_chat_command`].
+    pub fn handle_chat_command(self: &Arc<Self>, command: String) {
+        self.reset_last_action_time();
+        self.dispatch_chat_command(command);
+        self.detect_command_rate_spam();
+    }
+
+    /// Handles a signed chat command.
+    ///
+    /// Mirrors vanilla `ServerGamePacketListenerImpl.handleSignedChatCommand`: the client's
+    /// last-seen update is applied to the acknowledgement validator (disconnecting with
+    /// `multiplayer.disconnect.chat_validation_failed` when it cannot be applied), then the
+    /// idle timer resets and the command dispatches exactly like [`Self::handle_chat_command`].
+    ///
+    /// Vanilla then rebuilds a `SignedMessageBody` for every signable argument out of the
+    /// parsed command and verifies its signature through the player's chat session key,
+    /// refusing commands that fail with `chat.disabled.invalid_command_signature`. Steel
+    /// cannot reconstruct those bodies: the dispatcher has no `SignableCommand` view (the
+    /// per-argument names, values, and which argument types are signed), and
+    /// [`ChatState::message_chain`] only advances for whole chat messages. No argument
+    /// signature is checked here. Instead the unverifiable command is refused while the
+    /// server enforces secure chat (vanilla's rejection message, no dispatch), and accepted
+    /// when it does not, matching vanilla's unsigned decoder for a session-less player.
+    pub fn handle_signed_chat_command(self: &Arc<Self>, packet: &SChatCommandSigned) {
+        let last_seen_applied = self.chat().lock().message_validator.apply_update(
+            packet.last_seen.acknowledged,
+            packet.last_seen.offset.0,
+            packet.last_seen.checksum,
+        );
+        if let Err(error) = last_seen_applied {
+            log::warn!(
+                "Player {} sent command message acknowledgements that cannot be applied: {error}",
+                self.gameprofile.name()
+            );
+            self.disconnect(translations::MULTIPLAYER_DISCONNECT_CHAT_VALIDATION_FAILED.msg());
+            return;
+        }
+
+        // Vanilla `tryHandleChat` resets the idle timer before running the command.
+        self.reset_last_action_time();
+
+        if self.server().enforces_secure_chat() {
+            log::warn!(
+                "Refusing command from {}: secure chat is enforced, but Steel cannot verify \
+                 signed command argument signatures",
+                self.gameprofile.name()
+            );
+            self.send_message(
+                &translations::CHAT_DISABLED_INVALID_COMMAND_SIGNATURE
+                    .msg()
+                    .color(Color::Red),
+            );
+            self.detect_command_rate_spam();
+            return;
+        }
+
+        self.dispatch_chat_command(packet.command.clone());
+        self.detect_command_rate_spam();
     }
 
     fn verify_chat_signature(

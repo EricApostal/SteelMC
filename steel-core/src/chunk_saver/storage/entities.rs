@@ -160,6 +160,12 @@ impl ChunkStorage {
 
         let mut nbt = NbtCompound::new();
         entity.save_additional(&mut nbt);
+        // Vanilla `LivingEntity.addAdditionalSaveData` runs in the same chain as
+        // the concrete entity's `addAdditionalSaveData`, so the living layer
+        // (`Health`, effects, attributes, ...) must be written here too.
+        if let Some(living) = entity.as_living_entity() {
+            living.save_living(&mut nbt);
+        }
         let mut nbt_bytes = Vec::new();
         nbt.write(&mut nbt_bytes);
 

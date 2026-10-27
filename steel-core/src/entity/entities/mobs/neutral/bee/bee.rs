@@ -42,6 +42,7 @@ use super::goals::{
 use crate::behavior::InteractionResult;
 use crate::block_entity::SharedBlockEntity;
 use crate::block_entity::entities::BeehiveBlockEntity;
+use crate::entity::ai::control::{FlyingMoveControl, tick_flying_move_control};
 use crate::entity::ai::goal::random_pos::{TENTH_PI, air_random_pos_towards};
 use crate::entity::ai::goal::{
     BreedGoal, FloatGoal, FollowParentGoal, ResetUniversalAngerTargetGoal, TemptGoal,
@@ -63,6 +64,10 @@ const XP_REWARD: i32 = 3;
 
 /// Vanilla `Bee.createNavigation` installs a 48-block required path length.
 const BEE_REQUIRED_PATH_LENGTH: f32 = 48.0;
+
+/// Vanilla `FlyingMoveControl(this, 20, true)`, installed in the `Bee` constructor
+/// (`Bee.java` `this.moveControl = new FlyingMoveControl<>(this, 20, true)`).
+const FLYING_MOVE_CONTROL: FlyingMoveControl = FlyingMoveControl::new(20, true);
 
 /// Vanilla `Bee.PERSISTENT_ANGER_TIME` (`rangeOfSeconds(20, 39)`).
 const PERSISTENT_ANGER_TIME_MIN: i64 = 20 * 20;
@@ -753,6 +758,17 @@ impl Mob for BeeEntity {
         PathfinderMob::tick_pathfinder_path_navigation(self);
     }
 
+    /// Vanilla `FlyingMoveControl(this, 20, true)` (installed in the `Bee` constructor).
+    ///
+    /// The flying control is what makes a bee fly: it writes the flying-speed
+    /// forward input every path step and keeps `noGravity` set (`hoversInPlace`),
+    /// so the bee hovers instead of falling. Its
+    /// [`NavigationKind::Fly`] waypoints are full 3-D targets that the ground control
+    /// could never reach.
+    fn tick_move_control(&self) {
+        tick_flying_move_control(self, FLYING_MOVE_CONTROL);
+    }
+
     /// Vanilla `Bee.getAmbientSound`: the loop sound is the bee's ambient cue.
     fn ambient_sound(&self) -> Option<SoundEventRef> {
         Some(if self.is_angry() {
@@ -924,13 +940,86 @@ impl PathfinderMob for BeeEntity {}
 #[cfg(test)]
 mod tests {
     use simdnbt::owned::NbtCompound;
-    use std::sync::Weak;
+    use std::sync::{Arc, Weak};
 
     use glam::DVec3;
-    use steel_registry::{init_vanilla_registry, vanilla_entities};
+    use steel_registry::{
+        init_vanilla_registry, vanilla_blocks, vanilla_entities, vanilla_game_rules,
+    };
+    use steel_utils::types::UpdateFlags;
+    use steel_utils::{BlockPos, ChunkPos};
 
     use super::BeeEntity;
-    use crate::entity::Entity;
+    use crate::behavior::init_behaviors;
+    use crate::entity::neutral_mob::NeutralMob;
+    use crate::entity::{
+        Entity, EntityReference, Mob, SharedEntity, add_spawned_entity, init_entities,
+    };
+    use crate::player::{Player, ResetReason};
+    use crate::test_support::{
+        TestPlayerBuilder, TestWorld, fresh_test_world, insert_ready_full_chunk,
+    };
+    use crate::world::World;
+
+    /// A flat stone floor with loaded chunks and no natural spawning; the bees under test are the
+    /// only mobs in the world.
+    fn bee_test_world(name: &'static str) -> TestWorld {
+        init_vanilla_registry();
+        init_entities();
+        init_behaviors();
+
+        let fixture = fresh_test_world(name);
+        let world = &fixture.world;
+        for chunk_x in -2..=2 {
+            for chunk_z in -2..=2 {
+                insert_ready_full_chunk(world, ChunkPos::new(chunk_x, chunk_z));
+            }
+        }
+
+        let stone = vanilla_blocks::STONE.default_state();
+        for x in -32..=47 {
+            for z in -32..=47 {
+                assert!(world.set_block(BlockPos::new(x, 63, z), stone, UpdateFlags::UPDATE_ALL));
+            }
+        }
+
+        world.set_game_rule(&vanilla_game_rules::SPAWN_MOBS, false);
+        world.set_game_rule(&vanilla_game_rules::SPAWN_MONSTERS, false);
+        fixture
+    }
+
+    fn tick(world: &Arc<World>, ticks: &mut u64) {
+        world.game_time.advance();
+        world.tick_game(*ticks, true);
+        *ticks += 1;
+    }
+
+    fn join_test_player(
+        world: &Arc<World>,
+        name: &'static str,
+        id: i32,
+        position: DVec3,
+    ) -> Arc<Player> {
+        let player = TestPlayerBuilder::new(Arc::clone(world), name, id).build();
+        player.base().set_position_local(position);
+        assert!(
+            world.add_player(Arc::clone(&player), ResetReason::InitialJoin),
+            "the test player must hold the chunk active"
+        );
+        player
+    }
+
+    fn spawn_bee(world: &Arc<World>, id: i32, position: DVec3) -> Arc<BeeEntity> {
+        let bee = Arc::new(BeeEntity::new(
+            &vanilla_entities::BEE,
+            id,
+            position,
+            Arc::downgrade(world),
+        ));
+        let entity: SharedEntity = Arc::<BeeEntity>::clone(&bee);
+        add_spawned_entity(world, entity).expect("the bee should join the world");
+        bee
+    }
 
     #[test]
     fn bee_flags_and_nectar_timers_round_trip() {
@@ -949,5 +1038,41 @@ mod tests {
         assert_eq!(nbt.byte("HasNectar"), Some(1));
         assert_eq!(nbt.byte("HasStung"), Some(1));
         assert_eq!(bee.entity_type(), &vanilla_entities::BEE);
+    }
+
+    /// Vanilla `Bee$BeeBecomeAngryTargetGoal` passes `NeutralMob.isAngryAt` as the
+    /// `NearestAttackableTargetGoal` selector, so an angry bee chases the player it is angry at
+    /// even when another player stands closer.
+    #[test]
+    fn an_angry_bee_chases_the_player_it_is_angry_at() {
+        let fixture = bee_test_world("bee_anger_targeting");
+        let world = &fixture.world;
+        let bystander = join_test_player(world, "Bystander", 1, DVec3::new(1.5, 64.0, 0.5));
+        let offender = join_test_player(world, "Offender", 2, DVec3::new(6.5, 64.0, 0.5));
+        let bee = spawn_bee(world, 3, DVec3::new(0.5, 64.0, 0.5));
+
+        // The angry-at player has to be the far one, otherwise a nearest-player search would also
+        // find it and prove nothing.
+        assert!(
+            bee.position().distance(bystander.position())
+                < bee.position().distance(offender.position())
+        );
+        bee.set_persistent_anger_target(Some(EntityReference::from_uuid(offender.uuid())));
+        bee.set_persistent_anger_end_time(world.game_time() + 400);
+        assert!(NeutralMob::is_angry(&*bee));
+
+        let mut ticks = 0;
+        for _ in 0..100 {
+            tick(world, &mut ticks);
+            if bee.target().is_some() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            bee.target().map(|target| target.id()),
+            Some(offender.id()),
+            "the angry bee must chase the player it is angry at, not the closer bystander"
+        );
     }
 }

@@ -157,7 +157,8 @@ mod tests {
     use steel_registry::blocks::properties::{BedPart, BlockStateProperties};
     use steel_registry::packets::play::C_BLOCK_UPDATE;
     use steel_registry::{
-        REGISTRY, init_vanilla_registry, vanilla_blocks, vanilla_entities, vanilla_world_clocks,
+        REGISTRY, init_vanilla_registry, vanilla_blocks, vanilla_entities, vanilla_game_rules,
+        vanilla_world_clocks,
     };
     use steel_utils::codec::VarInt;
     use steel_utils::locks::SyncMutex;
@@ -176,7 +177,7 @@ mod tests {
     use crate::player::{Player, PlayerConnection, ResetReason};
     use crate::test_support::{
         TestConnection, TestPlayerBuilder, advance_test_game_time_to, fresh_test_world,
-        insert_ready_full_chunk,
+        insert_entity_ticking_chunks, settle_entity_ticking_chunk,
     };
     use crate::world::World;
 
@@ -207,11 +208,17 @@ mod tests {
         let stone = REGISTRY.blocks.get_default_state_id(&vanilla_blocks::STONE);
         for x in -4..=4 {
             for z in -4..=10 {
-                world.set_block(BlockPos::new(x, foot_pos.y() - 1, z), stone, UpdateFlags::UPDATE_ALL);
+                world.set_block(
+                    BlockPos::new(x, foot_pos.y() - 1, z),
+                    stone,
+                    UpdateFlags::UPDATE_ALL,
+                );
             }
         }
 
-        let bed = REGISTRY.blocks.get_default_state_id(&vanilla_blocks::RED_BED);
+        let bed = REGISTRY
+            .blocks
+            .get_default_state_id(&vanilla_blocks::RED_BED);
         let facing = Direction::North;
         let head_pos = facing.relative(foot_pos);
         world.set_block(
@@ -240,17 +247,27 @@ mod tests {
     /// `brain.setMemory(MemoryModuleType.LAST_WOKEN, level.getGameTime())`, and
     /// `SleepInBed.checkExtraStartConditions` refuses to start again while
     /// `0 < gameTime - LAST_WOKEN < COOLDOWN_AFTER_BEING_WOKEN` (100). Without that memory
-    /// the villager stops sleeping and then re-enters the bed two brain ticks later, which
-    /// is exactly what the player saw.
+    /// the villager stops sleeping and then re-enters the bed a handful of brain ticks
+    /// later, which is exactly what the player saw.
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one sequential end-to-end scenario: join, bed claim, sleep, kick and re-sleep"
+    )]
     fn woken_villager_keeps_the_vanilla_wake_cooldown() {
+        const PLAYER_TICKING_RADIUS: i32 = 4;
         init_vanilla_registry();
         init_entities();
         init_behaviors();
 
         let fixture = fresh_test_world("villager_woken_from_bed");
         let world = Arc::clone(&fixture.world);
-        insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
+        let center = ChunkPos::new(0, 0);
+        // Radius, in chunks, of the region a player holds entity-ticking: its tickets
+        // cover a `simulation_distance` (2) square, whose readiness derivation needs
+        // that square's own 5x5 `Full`, hence a 9x9 region. Loading it before the join
+        // keeps the origin chunk entity-ticking through the join's chunk source pass.
+        insert_entity_ticking_chunks(&world, center, PLAYER_TICKING_RADIUS);
 
         // A player keeps the chunk entity-ticking so `tick_game` steps the villager, and is
         // the one who later right-clicks the bed.
@@ -260,11 +277,15 @@ mod tests {
             .connection(Arc::new(PlayerConnection::Other(Box::new(connection))))
             .build();
         player.set_client_loaded(true);
-        player.base().set_position_local(DVec3::new(2.5, 64.0, 8.5));
+        // Within block interaction range of the bed the villager claims below, and inside
+        // the loaded chunk. Set before the join: a managed entity only moves through the
+        // world's entity manager.
+        player.base().set_position_local(DVec3::new(2.5, 64.0, 6.5));
         assert!(
             world.add_player(Arc::clone(&player), ResetReason::InitialJoin),
             "the test player must hold the chunk active"
         );
+        settle_entity_ticking_chunk(&world, center);
 
         let foot_pos = BlockPos::new(2, 64, 3);
         let head_pos = place_floor_and_bed(&world, foot_pos);
@@ -289,8 +310,8 @@ mod tests {
         advance_test_game_time_to(&world, 13_000);
         world.set_clock_total_ticks(&vanilla_world_clocks::OVERWORLD, 13_000);
 
-        world.set_game_rule(&steel_registry::vanilla_game_rules::SPAWN_MOBS, false);
-        world.set_game_rule(&steel_registry::vanilla_game_rules::SPAWN_MONSTERS, false);
+        world.set_game_rule(&vanilla_game_rules::SPAWN_MOBS, false);
+        world.set_game_rule(&vanilla_game_rules::SPAWN_MONSTERS, false);
 
         let mut ticks = 0_u64;
         while !LivingEntity::is_sleeping(entity) && ticks < 6_000 {
@@ -307,6 +328,10 @@ mod tests {
             "the schedule must be in REST for this test to mean anything"
         );
         assert!(
+            entity.tick_count() > 0,
+            "the villager must be stepped by the world's entity ticks for its brain to run"
+        );
+        assert!(
             LivingEntity::is_sleeping(entity),
             "the villager must claim the bed and sleep in it (ticked {ticks})"
         );
@@ -317,7 +342,6 @@ mod tests {
         );
 
         // The real wake a player performs: right-click the occupied bed.
-        player.base().set_position_local(DVec3::new(2.5, 64.0, 6.5));
         player.handle_use_item_on(SUseItemOn {
             hand: InteractionHand::MainHand,
             block_hit: BlockHitResult {
@@ -346,6 +370,21 @@ mod tests {
         );
 
         let woken_at = world.game_time();
+        assert!(
+            Mob::brain(entity)
+                .expect("a villager has a brain")
+                .lock()
+                .get_memory(&mem::HOME)
+                .is_some(),
+            "waking a villager must not release its bed POI: vanilla keeps `HOME`"
+        );
+
+        // Vanilla writes `LAST_WOKEN` inside `stopSleeping`; Steel stages it for the next
+        // brain tick (that method is also reached with the brain lock held), and applies it
+        // before the behavior pass that reads it — so no observer can tell the difference.
+        world.game_time.advance();
+        world.tick_game(ticks, true);
+        ticks += 1;
         assert_eq!(
             Mob::brain(entity)
                 .expect("a villager has a brain")
@@ -354,16 +393,20 @@ mod tests {
             Some(woken_at),
             "vanilla `Villager.stopSleeping` records LAST_WOKEN, which is the whole wake cooldown"
         );
+        assert!(
+            !LivingEntity::is_sleeping(entity),
+            "the first tick after the kick must not put the villager back into bed"
+        );
 
-        // `SleepInBed` stops the tick after the wake and may start again on the tick after
-        // that; for `COOLDOWN_AFTER_BEING_WOKEN` ticks it must not.
-        for _ in 0..COOLDOWN_AFTER_BEING_WOKEN {
+        // `SleepInBed` stops after the wake and may start again on the next tick; for the
+        // whole window vanilla blocks (`0 < gameTime - LAST_WOKEN < 100`) it must not.
+        for since_kick in 2..COOLDOWN_AFTER_BEING_WOKEN {
             world.game_time.advance();
             world.tick_game(ticks, true);
             ticks += 1;
             assert!(
                 !LivingEntity::is_sleeping(entity),
-                "the woken villager went straight back to bed (ticked {ticks} since the kick)"
+                "the woken villager went straight back to bed {since_kick} ticks after the kick"
             );
         }
 

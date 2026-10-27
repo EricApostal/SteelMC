@@ -723,6 +723,7 @@ mod tests {
     };
     use crate::entity::{Entity, Mob, SharedEntity, next_entity_id};
     use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
+    use crate::world::World;
 
     #[test]
     fn ghast_charge_and_explosion_power_round_trip() {
@@ -786,7 +787,7 @@ mod tests {
     }
 
     /// Spawns a ghast into a chunk that ticks and drives one flight target per tick.
-    fn ticking_ghast(key: &'static str, start: DVec3) -> (Arc<crate::world::World>, Arc<GhastEntity>) {
+    fn ticking_ghast(key: &'static str, start: DVec3) -> (Arc<World>, Arc<GhastEntity>) {
         init_vanilla_registry();
         let fixture = fresh_test_world(key);
         let world = Arc::clone(&fixture.world);

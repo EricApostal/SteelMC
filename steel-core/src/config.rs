@@ -35,6 +35,9 @@ pub const DEFAULT_SPAM_THRESHOLD_SECONDS: i32 = 10;
 /// Default cap on queued neighbor-update tasks in one chained run.
 pub const DEFAULT_MAX_CHAINED_NEIGHBOR_UPDATES: i32 = 1_000_000;
 
+/// Vanilla `spawn-protection` default radius, in blocks.
+pub const DEFAULT_SPAWN_PROTECTION_RADIUS: i32 = 16;
+
 /// Validates the login settings that establish a player's authenticated identity.
 ///
 /// # Errors
@@ -93,6 +96,9 @@ pub struct RuntimeConfig {
     pub op_permission_level: PermissionLevel,
     /// Vanilla `function-permission-level`: the level command functions run with.
     pub function_permission_level: PermissionLevel,
+    /// Vanilla `spawn-protection`: the square radius, in blocks, around the world
+    /// spawn where non-operators may not edit blocks. `0` disables protection.
+    pub spawn_protection_radius: i32,
     /// Vanilla chat spam threshold window in seconds
     pub chat_spam_threshold_seconds: i32,
     /// Vanilla command spam threshold window in seconds
@@ -135,6 +141,7 @@ impl Default for RuntimeConfig {
             enforce_whitelist: false,
             op_permission_level: PermissionLevel::Owners,
             function_permission_level: PermissionLevel::Gamemasters,
+            spawn_protection_radius: DEFAULT_SPAWN_PROTECTION_RADIUS,
             chat_spam_threshold_seconds: DEFAULT_SPAM_THRESHOLD_SECONDS,
             command_spam_threshold_seconds: DEFAULT_SPAM_THRESHOLD_SECONDS,
             compression: Some(CompressionInfo::default()),

@@ -1,7 +1,7 @@
 use glam::DVec3;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::vanilla_damage_type_tags;
-use steel_utils::BlockPos;
+use steel_utils::{BlockPos, Identifier};
 
 use super::random_pos::default_random_pos;
 use super::selector::{Goal, GoalControls};
@@ -15,15 +15,28 @@ pub struct PanicGoal {
     wanted_position: Option<DVec3>,
     speed_modifier: f64,
     is_running: bool,
+    panic_causes: Identifier,
 }
 
 impl PanicGoal {
     #[must_use]
     pub(crate) const fn new(speed_modifier: f64) -> Self {
+        Self::for_causes(
+            speed_modifier,
+            vanilla_damage_type_tags::DamageTypeTag::PANIC_CAUSES,
+        )
+    }
+
+    /// Vanilla `PanicGoal(PathfinderMob, double, TagKey<DamageType>)`, used by
+    /// `TamableAnimal.TamableAnimalPanicGoal` to narrow the causes to
+    /// `PANIC_ENVIRONMENTAL_CAUSES` so damage from attackers does not make a pet flee.
+    #[must_use]
+    pub(crate) const fn for_causes(speed_modifier: f64, panic_causes: Identifier) -> Self {
         Self {
             wanted_position: None,
             speed_modifier,
             is_running: false,
+            panic_causes,
         }
     }
 
@@ -32,9 +45,9 @@ impl PanicGoal {
         self.is_running
     }
 
-    fn should_panic(mob: &dyn PathfinderMob) -> bool {
+    fn should_panic(&self, mob: &dyn PathfinderMob) -> bool {
         mob.last_damage_source()
-            .is_some_and(|source| source.is(&vanilla_damage_type_tags::DamageTypeTag::PANIC_CAUSES))
+            .is_some_and(|source| source.is(&self.panic_causes))
     }
 
     fn find_random_position(&mut self, mob: &dyn PathfinderMob) -> bool {
@@ -57,7 +70,7 @@ impl Goal for PanicGoal {
     }
 
     fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
-        if !Self::should_panic(mob) {
+        if !self.should_panic(mob) {
             return false;
         }
 
@@ -136,6 +149,7 @@ mod tests {
     #[test]
     fn panic_goal_uses_vanilla_panic_damage_tag() {
         init_vanilla_registry();
+        let goal = PanicGoal::new(1.25);
         let pig = PigEntity::new(
             &vanilla_entities::PIG,
             1,
@@ -143,20 +157,44 @@ mod tests {
             Arc::downgrade(test_world()),
         );
 
-        assert!(!PanicGoal::should_panic(&pig));
+        assert!(!goal.should_panic(&pig));
 
         assert!(pig.hurt_server(
             test_world(),
             &DamageSource::environment(&vanilla_damage_types::GENERIC),
             1.0
         ));
-        assert!(!PanicGoal::should_panic(&pig));
+        assert!(!goal.should_panic(&pig));
 
         assert!(pig.hurt_server(
             test_world(),
             &DamageSource::environment(&vanilla_damage_types::PLAYER_ATTACK),
             2.0
         ));
-        assert!(PanicGoal::should_panic(&pig));
+        assert!(goal.should_panic(&pig));
+    }
+
+    #[test]
+    fn panic_goal_environmental_causes_ignore_attacker_damage() {
+        init_vanilla_registry();
+        let goal = PanicGoal::for_causes(
+            1.5,
+            vanilla_damage_type_tags::DamageTypeTag::PANIC_ENVIRONMENTAL_CAUSES,
+        );
+        let pig = PigEntity::new(
+            &vanilla_entities::PIG,
+            1,
+            DVec3::ZERO,
+            Arc::downgrade(test_world()),
+        );
+
+        assert!(!goal.should_panic(&pig));
+
+        assert!(pig.hurt_server(
+            test_world(),
+            &DamageSource::environment(&vanilla_damage_types::PLAYER_ATTACK),
+            2.0
+        ));
+        assert!(!goal.should_panic(&pig));
     }
 }

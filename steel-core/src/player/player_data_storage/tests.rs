@@ -45,6 +45,7 @@ fn sample_player_file(data_version: i32) -> PlayerDataFile {
         was_in_powder_snow: false,
         has_visual_fire: false,
         health: 20.0,
+        living_nbt: Vec::new(),
         game_mode: 2,
         prev_game_mode: Some(0),
         abilities: AbilitiesFile {
@@ -460,6 +461,25 @@ fn player_file_roundtrip_preserves_domain_world_data() {
     assert_eq!(decoded.enchantment_seed, 12345);
     assert_eq!(decoded.score, 9);
     assert!(decoded.seen_credits);
+}
+
+#[test]
+fn player_file_roundtrip_preserves_living_state_payload() {
+    let mut file = sample_player_file(PLAYER_DATA_VERSION);
+    // A non-empty payload stands in for the encoded `LivingEntity` save data
+    // (health, attributes, active effects); the point is that the file format
+    // carries it verbatim instead of dropping it.
+    file.living_nbt = vec![0x0A, 0x00, 0x00, 0x00];
+
+    let encoded = encode_player_file(&file).expect("player file should encode");
+    let decoded =
+        decode_player_file(&encoded, "test player file").expect("player file should decode");
+    assert_eq!(decoded.living_nbt, vec![0x0A, 0x00, 0x00, 0x00]);
+
+    let persistent = decoded
+        .into_persistent()
+        .expect("player file should convert");
+    assert_eq!(persistent.living_nbt, vec![0x0A, 0x00, 0x00, 0x00]);
 }
 
 #[test]

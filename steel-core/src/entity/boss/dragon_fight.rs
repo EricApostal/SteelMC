@@ -519,10 +519,19 @@ impl EnderDragonFight {
 
     /// Vanilla `EnderDragonFight.createNewDragon`.
     fn create_new_dragon(&mut self, world: &Arc<World>) -> Option<SharedEntity> {
+        use crate::entity::entities::mobs::bosses::{EnderDragonEntity, EnderDragonPhase};
+
         let spawn = self.pool_center();
         let dragon = create_entity_instance(world, &vanilla_entities::ENDER_DRAGON, spawn).ok()?;
         // Vanilla `dragon.setDragonFight(this)` + `dragon.setFightOrigin(origin)`.
         Self::bind_dragon(&dragon, self.origin);
+        // Vanilla `dragon.getPhaseManager().setPhase(HOLDING_PATTERN)`. A dragon
+        // left on the constructor's `HOVERING` phase would fly at `HOVERING`'s
+        // own position forever — orbiting at the spawn y (128), out of reach and
+        // never perching on the exit portal, which is exactly the reported bug.
+        if let Some(dragon) = dragon.downcast_ref::<EnderDragonEntity>() {
+            dragon.set_phase(EnderDragonPhase::HoldingPattern);
+        }
         dragon.snap_to(spawn, rand::random::<f32>() * 360.0, 0.0);
         if world.try_add_entity(Arc::clone(&dragon)).is_ok() {
             self.dragon_uuid = Some(dragon.uuid());
@@ -1359,6 +1368,461 @@ mod tests {
         assert!(
             connection.sent() >= 2,
             "the progress update reached the viewer"
+        );
+    }
+
+    // --- live path: the fight's dragon flying in a ticked world ------------------------------
+
+    use steel_protocol::packets::game::SAttack;
+    use steel_registry::item_stack::ItemStack;
+    use steel_registry::vanilla_damage_types;
+    use steel_registry::vanilla_game_rules::{SPAWN_MOBS, SPAWN_MONSTERS};
+    use steel_registry::vanilla_items;
+    use steel_utils::types::InteractionHand;
+
+    use crate::entity::damage::DamageSource;
+    use crate::entity::entities::mobs::bosses::{
+        EnderDragonEntity, EnderDragonPartKind, EnderDragonPhase,
+    };
+    use crate::entity::{LivingEntity as _, init_entities, next_entity_id};
+    use crate::player::{Player, ResetReason};
+    use crate::test_support::{
+        TestPlayerBuilder, insert_entity_ticking_chunks, settle_entity_ticking_chunk,
+    };
+
+    /// Vanilla `EnderDragon.findClosestNode` node radii: twelve nodes at 60, eight
+    /// at 40 and four at 20.
+    const HOLDING_RING_RADII: [f64; 3] = [20.0, 40.0, 60.0];
+    /// Vanilla floor of a node's y: `Math.max(73, heightmap + adjustment)`.
+    const HOLDING_RING_MIN_Y: f64 = 73.0;
+    /// Vanilla's flight history is 64 samples long, and the parts read up to
+    /// `get(16)`; a spawned dragon needs that many ticks before its hitboxes sit
+    /// at their real offsets.
+    const PART_SETTLE_TICKS: u64 = 40;
+
+    /// Radius, in chunks, of the entity-ticking region a player keeps alive in a
+    /// player fixture: the player's own loading and simulation tickets cover a square
+    /// of `world.simulation_distance` (2 in test worlds), and the readiness derivation
+    /// needs that square's own 5x5 `Full`, hence a 9x9 region.
+    const PLAYER_TICKING_RADIUS: i32 = 4;
+    /// Radius, in chunks, of the entity-ticking region the playerless flight fixtures
+    /// load: the holding ring's outermost nodes sit 60 blocks out, and a mob can only
+    /// be stepped (and can only move, per `EntityManager::validate_move`) inside the
+    /// loaded region, so the arena has to cover the ring with margin.
+    const ARENA_TICKING_RADIUS: i32 = 5;
+
+    /// A live End arena: a region of `ticking_radius` chunks around the origin loaded
+    /// entity-ticking, the island block the fountain stands on, the exit portal and
+    /// the fight's own dragon spawned through `EnderDragonFight::create_new_dragon`.
+    ///
+    /// Loading the region entity-ticking is what makes `World::tick_game` actually
+    /// step the dragon: the manager only ticks the entities of a chunk whose holder
+    /// reports a ticking visibility, and that needs the whole 5x5 `Full` neighborhood
+    /// (`insert_entity_ticking_chunks`). Vanilla natural spawning is off so nothing
+    /// else fills the chunks while the dragon flies.
+    fn live_end_arena(key: &'static str, ticking_radius: i32) -> (TestWorld, SharedEntity) {
+        init_vanilla_registry();
+        init_behaviors();
+        init_entities();
+        let fixture =
+            fresh_test_world_with_dimension_type("steel", key, &vanilla_dimension_types::THE_END);
+        let world = &fixture.world;
+        world.set_game_rule(&SPAWN_MOBS, false);
+        world.set_game_rule(&SPAWN_MONSTERS, false);
+
+        insert_entity_ticking_chunks(world, ChunkPos::new(0, 0), ticking_radius);
+
+        // The island block the fountain stands on, plus a walkable bedrock
+        // platform: a falling player would drop out of reach of everything.
+        assert!(world.set_block(
+            BlockPos::new(0, ISLAND_SURFACE_Y, 0),
+            vanilla_blocks::END_STONE.default_state(),
+            UpdateFlags::UPDATE_ALL,
+        ));
+        let bedrock = PODIUM_STATES.bedrock;
+        for x in 0..=15 {
+            for z in 0..=15 {
+                assert!(world.set_block(
+                    BlockPos::new(x, ISLAND_SURFACE_Y - 1, z),
+                    bedrock,
+                    UpdateFlags::UPDATE_ALL,
+                ));
+            }
+        }
+
+        let dragon = {
+            let fight = world
+                .dragon_fight()
+                .expect("the End fixture's world owns a dragon fight");
+            let mut fight = fight.lock();
+            fight.spawn_exit_portal(world, false);
+            fight
+                .create_new_dragon(world)
+                .expect("the fight spawns a dragon")
+        };
+        (fixture, dragon)
+    }
+
+    /// The arena plus a player standing on the podium platform, as the attack path
+    /// needs. The player stands at `ISLAND_SURFACE_Y - 1 + 1` on bedrock so gravity
+    /// does not walk it away, and clear of the dragon's head and neck boxes, which
+    /// deal contact damage (`EnderDragon.hurt(ServerLevel, List<Entity>)`).
+    fn live_end_fight(key: &'static str) -> (TestWorld, Arc<Player>, SharedEntity) {
+        let (fixture, dragon) = live_end_arena(key, PLAYER_TICKING_RADIUS);
+        let world = &fixture.world;
+
+        let player =
+            TestPlayerBuilder::new(Arc::clone(world), "DragonWatcher", next_entity_id()).build();
+        player.set_client_loaded(true);
+        player.snap_to(DVec3::new(0.5, f64::from(ISLAND_SURFACE_Y), 12.5), 0.0, 0.0);
+        assert!(
+            world.add_player(Arc::clone(&player), ResetReason::InitialJoin),
+            "the test player must hold the origin chunk active"
+        );
+        // The join queued the player's loading/simulation tickets; run the chunk
+        // source phase now so the arena's readiness is derived from its neighborhood
+        // and the dragon stays in the manager's tick list.
+        settle_entity_ticking_chunk(world, ChunkPos::new(0, 0));
+        (fixture, player, dragon)
+    }
+
+    /// The arena with no player: no ticket source exists, so the whole loaded region
+    /// keeps ticking and the dragon can fly the ring.
+    fn playerless_live_end_fight(key: &'static str) -> (TestWorld, SharedEntity) {
+        live_end_arena(key, ARENA_TICKING_RADIUS)
+    }
+
+    fn dragon_of(entity: &SharedEntity) -> &EnderDragonEntity {
+        entity
+            .downcast_ref::<EnderDragonEntity>()
+            .expect("the fight's dragon is an ender dragon")
+    }
+
+    /// Stands `player` two and a half blocks past the dragon's head hitbox, along the
+    /// body-to-head axis.
+    ///
+    /// Past the head is the only place that is both within the vanilla reach
+    /// (`ATTACK_RANGE_BUFFER` gives 3 + 3 blocks from the eye) and clear of the head and
+    /// neck boxes, which deal contact damage (`EnderDragon.hurt(ServerLevel, List<Entity>)`)
+    /// and would kill the survival-mode test player before it ever swings.
+    fn stand_in_reach_of_head(
+        world: &Arc<World>,
+        player: &Arc<Player>,
+        dragon: &EnderDragonEntity,
+    ) {
+        let head = world
+            .get_accessible_entity_by_id(dragon.part_id(EnderDragonPartKind::Head))
+            .expect("the head hitbox must resolve in the level");
+        let body = dragon.position();
+        let head_position = head.position();
+        let away = DVec3::new(head_position.x - body.x, 0.0, head_position.z - body.z);
+        let away = if away.length_squared() < 1.0e-6 {
+            DVec3::Z
+        } else {
+            away.normalize()
+        };
+        player.snap_to(
+            DVec3::new(
+                head_position.x + away.x * 2.5,
+                f64::from(ISLAND_SURFACE_Y),
+                head_position.z + away.z * 2.5,
+            ),
+            0.0,
+            0.0,
+        );
+    }
+
+    /// Vanilla `EnderDragonFight.createNewDragon` puts the fresh dragon straight
+    /// into `HOLDING_PATTERN`. A dragon left on the constructor's `HOVERING` phase
+    /// chases its own spawn position instead — orbiting at y = 128, far above the
+    /// ring, out of reach and never approaching the exit portal, which is what the
+    /// player reported ("loops really far up", "I can't hit it", never perching).
+    ///
+    /// The first holding-pattern target is also where the jar's node constants
+    /// become observable: the ring radii 60/40/20 and `max(73, heightmap + 5..15)`.
+    #[test]
+    fn fresh_dragon_flies_the_vanilla_holding_ring() {
+        let (fixture, dragon) = playerless_live_end_fight("end_holding_pattern");
+        let world = &fixture.world;
+        let dragon_entity = dragon_of(&dragon);
+
+        assert_eq!(
+            dragon_entity.phase(),
+            EnderDragonPhase::HoldingPattern,
+            "vanilla createNewDragon sets HOLDING_PATTERN"
+        );
+        assert_eq!(
+            dragon.position().y,
+            128.0,
+            "vanilla spawns the dragon at y=128"
+        );
+
+        // The holding pattern picks a node on its first tick (`findClosestNode`, a path
+        // and `navigateToNextPathNode`), and it cannot leave the phase until a path
+        // finished. A node's x/z is exact, so the target shows the jar's ring radius.
+        let mut ticks = 1;
+        let target = loop {
+            world.game_time.advance();
+            world.tick_game(ticks, true);
+            ticks += 1;
+            if let Some(target) = dragon_entity.phases().fly_target() {
+                break target;
+            }
+            assert!(
+                ticks < 40,
+                "the holding pattern must pick a flight target on its first ticks"
+            );
+        };
+        assert!(
+            (HOLDING_RING_MIN_Y..=HOLDING_RING_MIN_Y + 20.0).contains(&target.y),
+            "holding-pattern altitude must be a node y (>= 73) plus up to 20 of jitter, got {}",
+            target.y
+        );
+        let radius = (target.x * target.x + target.z * target.z).sqrt();
+        assert!(
+            HOLDING_RING_RADII
+                .iter()
+                .any(|ring| (radius - ring).abs() < 1.0),
+            "holding-pattern target must sit on a 20/40/60 block ring, got radius {radius}"
+        );
+
+        // The dragon then descends into that ring instead of orbiting at spawn height.
+        for tick in ticks..=400 {
+            world.game_time.advance();
+            world.tick_game(tick, true);
+        }
+        assert!(
+            dragon.position().y < 124.0,
+            "the dragon must leave y=128 for the ring, got y={}",
+            dragon.position().y
+        );
+        assert_ne!(
+            dragon_entity.phase(),
+            EnderDragonPhase::Hovering,
+            "a fight-spawned dragon must never fall back to the hovering phase"
+        );
+    }
+
+    /// End-to-end: the fight's dragon lands on the exit-portal pillar — vanilla's
+    /// perch — and starts sitting there.
+    ///
+    /// Vanilla reaches `LANDING_APPROACH` from the holding pattern at random; the
+    /// transition is forced here so the flight to the perch itself is exercised,
+    /// which is the part the player lost ("the perch point is either so far off I
+    /// can't find it, or it just doesn't spawn in").
+    #[test]
+    fn dragon_perches_on_the_exit_portal_pillar() {
+        let (fixture, dragon) = playerless_live_end_fight("end_perch");
+        let world = &fixture.world;
+        let dragon_entity = dragon_of(&dragon);
+
+        // The fountain is in place, so the perch is the block above the pillar.
+        let perch = BlockPos::new(
+            0,
+            LevelReader::height_at(world, HeightmapType::MotionBlockingNoLeaves, 0, 0),
+            0,
+        );
+        assert_eq!(perch.y(), ISLAND_SURFACE_Y + 4);
+        assert_eq!(
+            world.get_block_state(perch.below()),
+            PODIUM_STATES.bedrock,
+            "the dragon perches on the four block bedrock pillar of the exit portal"
+        );
+
+        dragon_entity.set_phase(EnderDragonPhase::LandingApproach);
+        let mut ticks = 2;
+        while dragon_entity.phase() != EnderDragonPhase::SittingScanning && ticks < 6_000 {
+            world.game_time.advance();
+            world.tick_game(ticks, true);
+            ticks += 1;
+        }
+
+        assert_eq!(
+            dragon_entity.phase(),
+            EnderDragonPhase::SittingScanning,
+            "the dragon must land (landing sets SITTING_SCANNING on arrival) after {ticks} ticks"
+        );
+        let position = dragon.position();
+        assert!(
+            (position.x - 0.5).abs() < 2.0 && (position.z - 0.5).abs() < 2.0,
+            "the dragon must land on the podium column, got {position:?}"
+        );
+        assert!(
+            (position.y - f64::from(perch.y())).abs() < 3.0,
+            "the dragon must land at the perch height ({}), got {}",
+            perch.y(),
+            position.y
+        );
+    }
+
+    /// A player's attack reaches the dragon through the hitbox the vanilla client
+    /// actually sends.
+    ///
+    /// `EnderDragon.isPickable` is `false` in vanilla, so the client can only ever
+    /// target one of the eight `EnderDragonPart` hitboxes, whose ids it derives as
+    /// `dragon id + 1 + index`. Those ids have to resolve on the server, or every
+    /// melee hit — and every interaction — is dropped, which is the player's
+    /// "I can't hit it".
+    #[test]
+    fn player_attack_on_a_hitbox_damages_the_dragon() {
+        let (fixture, player, dragon) = live_end_fight("end_dragon_attack");
+        let world = &fixture.world;
+        let dragon_entity = dragon_of(&dragon);
+
+        // Hover in place at a reachable height, facing +z so its head sits over the
+        // walkable platform where the player can stand.
+        dragon_entity.set_phase(EnderDragonPhase::Hovering);
+        dragon.snap_to(
+            DVec3::new(0.5, f64::from(ISLAND_SURFACE_Y), 0.5),
+            180.0,
+            0.0,
+        );
+        player.snap_to(DVec3::new(0.5, f64::from(ISLAND_SURFACE_Y), 11.0), 0.0, 0.0);
+        // A weapon with real damage, so a head hit and a quartered hit differ by
+        // more than rounding.
+        player.inventory.lock().set_item_in_hand(
+            InteractionHand::MainHand,
+            ItemStack::new(&vanilla_items::DIAMOND_SWORD),
+        );
+        for tick in 0..PART_SETTLE_TICKS {
+            world.game_time.advance();
+            world.tick_game(tick, true);
+        }
+
+        let wing = dragon_entity.part_id(EnderDragonPartKind::Wing1);
+        assert_eq!(
+            wing,
+            dragon.id() + 1 + EnderDragonPartKind::Wing1.index(),
+            "hitbox ids must be the ids the client derives"
+        );
+        assert_eq!(
+            world
+                .get_accessible_entity_by_id(wing)
+                .map(|part| part.id()),
+            Some(wing),
+            "a hitbox id must resolve in the level"
+        );
+
+        // Vanilla's attack meter has to recharge between hits, or `handle_attack`
+        // refuses the swing (`cannot_attack_with_item`). Each swing also re-stands the
+        // player next to the dragon's *current* head hitbox: a hovering dragon keeps
+        // circling its hover point (vanilla's `yRotA` steering), so the head never
+        // stays where the spawn heading put it — exactly as a real client has to aim
+        // at where the hitbox is now.
+        let mut tick = PART_SETTLE_TICKS;
+        let mut charged_attack = |target: i32| {
+            for _ in 0..20 {
+                world.game_time.advance();
+                world.tick_game(tick, true);
+                tick += 1;
+            }
+            stand_in_reach_of_head(world, &player, dragon_entity);
+            let before = dragon_entity.get_health();
+            player.handle_attack(SAttack { entity_id: target });
+            before - dragon_entity.get_health()
+        };
+
+        let head_damage = charged_attack(dragon_entity.part_id(EnderDragonPartKind::Head));
+        assert!(
+            head_damage > 0.0,
+            "a player attack on a hitbox must damage the dragon"
+        );
+
+        // Vanilla `LivingEntity.hurt`: the dragon's hurt cooldown is 20 ticks, and a hit
+        // inside its first 10 is reduced to `damage - lastHurt` (and one that is not
+        // larger is rejected outright). Each hit below is observed outside that window.
+        let settle_hurt_cooldown = |tick: &mut u64| {
+            for _ in 0..25 {
+                world.game_time.advance();
+                world.tick_game(*tick, true);
+                *tick += 1;
+            }
+        };
+        settle_hurt_cooldown(&mut tick);
+
+        // Vanilla `EnderDragon.hurt` scaling: only the head and neck take the full
+        // hit, every other hitbox is `damage / 4 + min(damage, 1)`.
+        let scaling = DamageSource::environment(&vanilla_damage_types::PLAYER_ATTACK)
+            .with_causing_entity(Arc::clone(&player) as SharedEntity);
+        let before = dragon_entity.get_health();
+        assert!(dragon_entity.hurt_dragon(EnderDragonPartKind::Head, world, &scaling, 8.0));
+        let full = before - dragon_entity.get_health();
+        settle_hurt_cooldown(&mut tick);
+        let before = dragon_entity.get_health();
+        assert!(dragon_entity.hurt_dragon(EnderDragonPartKind::Body, world, &scaling, 8.0));
+        let quartered = before - dragon_entity.get_health();
+        assert_eq!(full, 8.0, "head hits take the full damage");
+        assert_eq!(
+            quartered, 3.0,
+            "body hits are damage / 4 + min(damage, 1) = 8 / 4 + 1"
+        );
+    }
+
+    /// `/kill` on the dragon, driven exactly as the command drives it
+    /// (`Entity.kill(level)`), removes the dragon and completes the fight: the
+    /// exit portal opens and the dragon egg drops.
+    #[test]
+    fn kill_on_the_dragon_removes_it_and_completes_the_fight() {
+        let (fixture, _player, dragon) = live_end_fight("end_dragon_kill");
+        let world = &fixture.world;
+
+        dragon.kill(world);
+
+        assert!(dragon.is_removed(), "the killed dragon is removed");
+        let fight = world.dragon_fight().expect("the world owns a fight");
+        let fight = fight.lock();
+        assert!(fight.dragon_killed(), "the fight records the killed dragon");
+        assert!(
+            fight.previously_killed(),
+            "the world has now had a dragon killed"
+        );
+        // A first kill opens the exit portal and drops the egg on the pillar top.
+        assert_eq!(
+            world.get_block_state(BlockPos::new(0, ISLAND_SURFACE_Y + 4, 0)),
+            PODIUM_STATES.dragon_egg
+        );
+    }
+
+    /// A lethal player hit starts the death phase: vanilla's `handleKillingBlow`
+    /// pins the health at 1 and switches to `DYING`, the death animation counts up
+    /// for 200 ticks, and the fight is completed at the end of it.
+    #[test]
+    fn lethal_player_damage_starts_the_death_phase() {
+        let (fixture, player, dragon) = live_end_fight("end_dragon_death");
+        let world = &fixture.world;
+        let dragon_entity = dragon_of(&dragon);
+
+        let source = DamageSource::environment(&vanilla_damage_types::PLAYER_ATTACK)
+            .with_causing_entity(Arc::clone(&player) as SharedEntity);
+        assert!(dragon.hurt(world, &source, 1_000.0), "the hit is accepted");
+
+        assert_eq!(
+            dragon_entity.phase(),
+            EnderDragonPhase::Dying,
+            "handleKillingBlow starts the death phase"
+        );
+        assert_eq!(
+            dragon_entity.get_health(),
+            1.0,
+            "vanilla pins the dying dragon's health at 1"
+        );
+
+        let mut ticks = 2;
+        while !dragon.is_removed() && ticks < 4_000 {
+            world.game_time.advance();
+            world.tick_game(ticks, true);
+            ticks += 1;
+        }
+
+        assert!(
+            dragon.is_removed(),
+            "the death animation must finish (ticked {ticks})"
+        );
+        assert!(dragon_entity.is_dragon_dead());
+        let fight = world.dragon_fight().expect("the world owns a fight");
+        assert!(
+            fight.lock().dragon_killed(),
+            "finishing the death animation completes the fight"
         );
     }
 }

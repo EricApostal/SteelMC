@@ -290,11 +290,9 @@ impl RavagerEntity {
     /// Vanilla `Ravager.blockedByItem`: a shield block either stuns the ravager or knocks
     /// the defender back hard.
     ///
-    /// Vanilla calls this from `LivingEntity.hurtServer` when the damage was fully blocked.
-    /// Steel has no shield/item blocking hook yet (`LivingEntity::hurt_server` still carries
-    /// the `TODO: apply item blocking` marker), so this method is not called by the damage
-    /// pipeline until that hook lands; the behaviour is implemented here so the hook can
-    /// call it directly.
+    /// Called through `LivingEntity::blocked_by_item` from the damage pipeline
+    /// ([`LivingEntity::hurt_server`] → `apply_item_blocking` → `block_using_item`)
+    /// when an attacker's hit is blocked by the defender's item.
     pub fn blocked_by_item(
         &self,
         defender: &dyn Entity,
@@ -551,6 +549,18 @@ impl LivingEntity for RavagerEntity {
 
     fn on_death(&self, source: &DamageSource) {
         Raider::raider_on_death(self, source);
+    }
+
+    /// Vanilla `Ravager.blockedByItem`: a blocked hit stuns the ravager or
+    /// knocks the defender back hard.
+    fn blocked_by_item(
+        &self,
+        defender: &dyn Entity,
+        source: &DamageSource,
+        damage: f32,
+        fully_blocked: bool,
+    ) {
+        RavagerEntity::blocked_by_item(self, defender, source, damage, fully_blocked);
     }
 }
 

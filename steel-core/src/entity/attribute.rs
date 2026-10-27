@@ -2,7 +2,7 @@
 //!
 use core::iter;
 
-use simdnbt::owned::{NbtCompound, NbtList};
+use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
 use steel_protocol::packets::game::{AttributeModifierData, AttributeSnapshot};
 pub use steel_registry::attribute::AttributeModifierOperation;
 use steel_registry::attribute::AttributeRef;
@@ -398,6 +398,61 @@ impl AttributeMap {
             })
             .collect();
         NbtList::Compound(attributes)
+    }
+
+    /// Applies a vanilla `LivingEntity.attributes` packed list.
+    ///
+    /// Mirrors `LivingEntity.readAdditionalSaveData` decoding
+    /// `AttributeInstance.Packed.LIST_CODEC`: each entry names an attribute, sets
+    /// its base value and installs its permanent modifiers. Entries whose
+    /// attribute is unknown or whose ids do not parse are skipped, matching
+    /// vanilla's tolerant read.
+    pub(crate) fn apply_vanilla_nbt(&mut self, packed: &NbtList) {
+        let NbtList::Compound(attributes) = packed else {
+            return;
+        };
+        for attribute in attributes {
+            let Some(id) = attribute.string("id") else {
+                continue;
+            };
+            let Ok(key) = id.to_str().as_ref().parse::<Identifier>() else {
+                continue;
+            };
+            let Some(attribute_ref) = REGISTRY.attributes.by_key(&key) else {
+                continue;
+            };
+            if let Some(base) = attribute.double("base") {
+                self.set_base_value(attribute_ref, base);
+            }
+            let Some(NbtTag::List(NbtList::Compound(modifiers))) = attribute.get("modifiers")
+            else {
+                continue;
+            };
+            for modifier in modifiers {
+                let Some(id) = modifier.string("id") else {
+                    continue;
+                };
+                let Ok(id) = id.to_str().as_ref().parse::<Identifier>() else {
+                    continue;
+                };
+                let Some(amount) = modifier.double("amount") else {
+                    continue;
+                };
+                let operation = modifier
+                    .string("operation")
+                    .and_then(|name| AttributeModifierOperation::by_name(name.to_str().as_ref()))
+                    .unwrap_or(AttributeModifierOperation::AddValue);
+                self.set_modifier(
+                    attribute_ref,
+                    AttributeModifier {
+                        id,
+                        amount,
+                        operation,
+                    },
+                    true,
+                );
+            }
+        }
     }
 
     /// Returns whether an attribute has a modifier with the given ID.

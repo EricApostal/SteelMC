@@ -1,7 +1,10 @@
+use std::f64::consts::PI;
+
 use steel_math::DEGREE_90;
 use steel_registry::data_components::vanilla_components::{
-    CONSUMABLE, DEATH_PROTECTION, KINETIC_WEAPON, USE_EFFECTS,
+    BLOCKS_ATTACKS, CONSUMABLE, DEATH_PROTECTION, KINETIC_WEAPON, USE_EFFECTS, WEAPON,
 };
+use steel_registry::sound_event::SoundEventHolder;
 use steel_registry::stat::vanilla_stat_types;
 use steel_registry::{DyeColor, vanilla_custom_stats};
 
@@ -43,6 +46,34 @@ fn notify_player_effect_tick<E: LivingEntity + ?Sized>(entity: &E, outcome: MobE
         MobEffectDurationTick::Removed(removed) => player.on_effects_removed(&[removed]),
         MobEffectDurationTick::Unchanged => {}
     }
+}
+
+/// Decodes one vanilla `MobEffectInstance.CODEC` entry.
+///
+/// The entry is `{id, amplifier?, duration?, ambient?, show_particles?,
+/// show_icon?, hidden_effect?}`; the defaults match vanilla's codec
+/// (`amplifier`/`duration` 0, `ambient` false, particles/icon shown).
+fn mob_effect_from_vanilla_nbt(nbt: &BorrowedNbtCompoundView<'_, '_>) -> Option<MobEffectInstance> {
+    let id = nbt.string("id")?;
+    let effect = REGISTRY
+        .mob_effects
+        .by_key(&id.to_str().as_ref().parse::<Identifier>().ok()?)?;
+    let duration = nbt.int("duration").unwrap_or(0);
+    let amplifier = i32::from(nbt.byte("amplifier").unwrap_or(0));
+    let ambient = nbt.byte("ambient").is_some_and(|value| value != 0);
+    let visible = nbt.byte("show_particles").is_none_or(|value| value != 0);
+    let show_icon = nbt.byte("show_icon").is_none_or(|value| value != 0);
+    let hidden_effect = nbt
+        .compound("hidden_effect")
+        .and_then(|compound| mob_effect_from_vanilla_nbt(&compound))
+        .map(Box::new);
+    Some(
+        MobEffectInstance::with_duration(effect, duration, amplifier)
+            .with_ambient(ambient)
+            .with_visible(visible)
+            .with_show_icon(show_icon)
+            .with_hidden_effect(hidden_effect),
+    )
 }
 
 /// A trait for living entities that can take damage, heal, and die.
@@ -311,6 +342,77 @@ pub trait LivingEntity: Entity {
         if self.as_mob().is_none() {
             self.save_equipment(nbt);
         }
+    }
+
+    /// Writes the vanilla `LivingEntity.addAdditionalSaveData` state.
+    ///
+    /// This is the living-entity layer of a chunk save: `Entity::save_additional`
+    /// only serializes the concrete entity's own fields, so without this the
+    /// chunk record loses `Health`, `AbsorptionAmount`, `DeathTime`, `FallFlying`,
+    /// `attributes` and `active_effects` and the mob heals, loses its effects and
+    /// resets randomized attributes every unload.
+    ///
+    /// `LivingEntity.addAdditionalSaveData` also writes `HurtTime`, which Steel
+    /// does not model as a field (it uses `invulnerableTime` for the same window),
+    /// so it is intentionally omitted; see [`Self::load_living`].
+    fn save_living(&self, nbt: &mut NbtCompound) {
+        nbt.insert("Health", self.get_health());
+        nbt.insert(
+            "DeathTime",
+            NbtTag::Short(self.living_base().death_time() as i16),
+        );
+        nbt.insert("AbsorptionAmount", self.get_absorption_amount());
+        nbt.insert("attributes", self.attributes().lock().to_vanilla_nbt());
+
+        let mut effects = self.living_base().active_mob_effects();
+        effects.sort_by_key(|effect| effect.effect().try_id().unwrap_or(usize::MAX));
+        if !effects.is_empty() {
+            nbt.insert(
+                "active_effects",
+                NbtList::Compound(
+                    effects
+                        .iter()
+                        .map(ActiveMobEffect::to_vanilla_nbt)
+                        .collect(),
+                ),
+            );
+        }
+
+        nbt.insert("FallFlying", nbt_bool(self.is_fall_flying()));
+    }
+
+    /// Reads the vanilla `LivingEntity.readAdditionalSaveData` state written by
+    /// [`Self::save_living`].
+    ///
+    /// Mirrors vanilla's defaulting: `AbsorptionAmount` defaults to 0,
+    /// `Health` defaults to the (already-restored) max health, and `DeathTime`/
+    /// `FallFlying` default to 0/false. Vanilla's `HurtTime` is not modelled by
+    /// Steel and is skipped.
+    fn load_living(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
+        self.set_absorption_amount(nbt.float("AbsorptionAmount").unwrap_or(0.0));
+
+        if let Some(attributes) = nbt.list("attributes") {
+            self.attributes()
+                .lock()
+                .apply_vanilla_nbt(&attributes.to_owned());
+        }
+
+        for effect in self.living_base().active_mob_effects() {
+            self.living_base().remove_mob_effect(effect.effect());
+        }
+        if let Some(effects) = nbt.list("active_effects").and_then(|list| list.compounds()) {
+            for effect in effects {
+                if let Some(effect) = mob_effect_from_vanilla_nbt(&effect) {
+                    self.living_base().add_mob_effect(effect);
+                }
+            }
+        }
+
+        let max_health = self.get_max_health();
+        self.set_health(nbt.float("Health").unwrap_or(max_health));
+        self.living_base()
+            .set_death_time(i32::from(nbt.short("DeathTime").unwrap_or(0)));
+        self.set_fall_flying(nbt.byte("FallFlying").is_some_and(|value| value != 0));
     }
 
     /// Gets the current health of the entity.
@@ -725,7 +827,13 @@ pub trait LivingEntity: Entity {
         // as `original` and the post-cooldown amount as `actual`.
         let original = damage;
 
-        // TODO: apply item blocking before actually_hurt once shield/use-item hooks exist.
+        // Vanilla captures the use item before blocking so `onBlocked` reports the
+        // item that was blocking even if the block broke it.
+        let item_in_use = self.get_use_item();
+        let damage_blocked = self.apply_item_blocking(world, source, damage);
+        damage -= damage_blocked;
+        let blocked = damage_blocked > 0.0;
+
         if source.is(&vanilla_damage_type_tags::DamageTypeTag::IS_FREEZING)
             && REGISTRY
                 .entity_types
@@ -751,19 +859,36 @@ pub trait LivingEntity: Entity {
         self.resolve_player_responsible_for_damage(source);
 
         if took_full_damage {
-            self.broadcast_damage_event(world, source);
-            if !source.is(&vanilla_damage_type_tags::DamageTypeTag::NO_IMPACT) {
+            if blocked && item_in_use.has(BLOCKS_ATTACKS) {
+                self.play_block_sound(world, &item_in_use);
+            } else {
+                self.broadcast_damage_event(world, source);
+            }
+
+            if !source.is(&vanilla_damage_type_tags::DamageTypeTag::NO_IMPACT)
+                && (!blocked || damage > 0.0)
+            {
                 self.mark_hurt();
                 self.broadcast_hurt_animation(world);
             }
-            self.apply_damage_knockback(source);
+
+            let fully_blocked = blocked && damage <= 0.0;
+            if !source.is(&vanilla_damage_type_tags::DamageTypeTag::NO_KNOCKBACK) && !fully_blocked
+            {
+                self.apply_damage_knockback(source, blocked);
+            }
 
             // Vanilla `LivingEntity.hurtServer` raises the hurt triggers once the
             // victim took full damage: `ENTITY_HURT_PLAYER` when the victim is a
             // player, `PLAYER_HURT_ENTITY` when the damage entity is a player.
-            // Steel has no item blocking yet, so `blocked` is always false.
             if let Some(player) = self.as_player() {
-                raise_entity_hurt_player(player, source, original, effective_amount, false);
+                raise_entity_hurt_player(player, source, original, effective_amount, blocked);
+                if damage_blocked > 0.0 && damage_blocked < f32::MAX {
+                    player.award_custom_stat_with_count(
+                        &vanilla_custom_stats::DAMAGE_BLOCKED_BY_SHIELD,
+                        (damage_blocked * 10.0).round() as i32,
+                    );
+                }
             }
             if let Some(player) = source
                 .causing_entity()
@@ -775,7 +900,7 @@ pub trait LivingEntity: Entity {
                     source,
                     original,
                     effective_amount,
-                    false,
+                    blocked,
                 );
             }
         }
@@ -792,9 +917,12 @@ pub trait LivingEntity: Entity {
         }
         // TODO: Play secondary hurt sounds once equipment effects expose them.
 
-        self.record_last_damage_source(source);
+        // Vanilla only records the source when the hit was not fully blocked.
+        if !blocked || damage > 0.0 {
+            self.record_last_damage_source(source);
+        }
 
-        true
+        !blocked || damage > 0.0
     }
 
     /// Hook before applying damage after vanilla reductions.
@@ -940,15 +1068,15 @@ pub trait LivingEntity: Entity {
         }
     }
 
-    /// Applies vanilla hurt knockback for a damage source.
-    fn apply_damage_knockback(&self, source: &DamageSource) {
-        if source.is(&vanilla_damage_type_tags::DamageTypeTag::NO_KNOCKBACK) {
-            return;
-        }
-
+    /// Applies vanilla `LivingEntity.dealDefaultKnockback` for a damage source.
+    ///
+    /// `blocked` suppresses the damage-indicator packet, matching vanilla.
+    fn apply_damage_knockback(&self, source: &DamageSource, blocked: bool) {
         let (xd, zd) = self.damage_knockback_direction(source);
         self.knockback(DAMAGE_KNOCKBACK_POWER, xd, zd);
-        self.indicate_damage(xd, zd);
+        if !blocked {
+            self.indicate_damage(xd, zd);
+        }
     }
 
     /// Returns the horizontal direction used by vanilla damage knockback.
@@ -1789,6 +1917,219 @@ pub trait LivingEntity: Entity {
             .map_or(0, |active| active.duration() - active.remaining_ticks())
     }
 
+    /// Vanilla `LivingEntity.getUsedItemHand`: the hand holding the active use.
+    fn get_used_item_hand(&self) -> InteractionHand {
+        self.living_base()
+            .active_item_use()
+            .map_or(InteractionHand::MainHand, |active| active.hand())
+    }
+
+    /// Vanilla `LivingEntity.getActiveItem`: the item being used, otherwise the
+    /// main hand item (empty while spectating).
+    fn get_active_item(&self) -> ItemStack {
+        if self.is_spectator() {
+            ItemStack::empty()
+        } else if self.is_using_item() {
+            self.get_use_item()
+        } else {
+            self.get_item_in_hand(InteractionHand::MainHand)
+        }
+    }
+
+    /// Vanilla `LivingEntity.getWeaponItem`: the main hand item.
+    fn get_weapon_item(&self) -> ItemStack {
+        self.get_item_in_hand(InteractionHand::MainHand)
+    }
+
+    /// Vanilla `LivingEntity.getSecondsToDisableBlocking`: how long this
+    /// entity's active weapon disables a blocked shield for, or 0 when the
+    /// weapon does not disable blocking.
+    fn get_seconds_to_disable_blocking(&self) -> f32 {
+        let weapon_item = self.get_weapon_item();
+        let Some(weapon) = weapon_item.get(WEAPON) else {
+            return 0.0;
+        };
+        if weapon_item == self.get_active_item() {
+            weapon.disable_blocking_for_seconds
+        } else {
+            0.0
+        }
+    }
+
+    /// Vanilla `LivingEntity.getItemBlockingWith`: the stack this entity is
+    /// actively blocking with, once past the component's block delay.
+    fn get_item_blocking_with(&self) -> Option<ItemStack> {
+        if !self.is_using_item() {
+            return None;
+        }
+
+        let use_item = self.get_use_item();
+        let blocks_attacks = use_item.get(BLOCKS_ATTACKS)?;
+        if self.get_tick_count_using_item() >= blocks_attacks.block_delay_ticks() {
+            Some(use_item)
+        } else {
+            None
+        }
+    }
+
+    /// Vanilla `BlocksAttacks.onBlocked`: plays the blocking item's `block_sound`.
+    fn play_block_sound(&self, world: &World, item_in_use: &ItemStack) {
+        let Some(sound) = item_in_use
+            .get(BLOCKS_ATTACKS)
+            .and_then(|blocks_attacks| blocks_attacks.block_sound())
+            .and_then(SoundEventHolder::registry_ref)
+        else {
+            return;
+        };
+        world.play_sound_at(
+            sound,
+            self.sound_source(),
+            self.position(),
+            1.0,
+            0.8 + rand::random::<f32>() * 0.4,
+            None,
+        );
+    }
+
+    /// Vanilla `LivingEntity.applyItemBlocking`: the damage blocked by the item
+    /// this entity is actively blocking with.
+    ///
+    /// Returns 0 when not blocking, when the source's damage type is in the
+    /// component's `bypassed_by`, when a piercing arrow is the direct entity, or
+    /// when the hit lands outside the frontal blocking angle.
+    fn apply_item_blocking(&self, world: &World, source: &DamageSource, damage: f32) -> f32 {
+        if damage <= 0.0 {
+            return 0.0;
+        }
+
+        let Some(blocking_with) = self.get_item_blocking_with() else {
+            return 0.0;
+        };
+        let Some(blocks_attacks) = blocking_with.get(BLOCKS_ATTACKS) else {
+            return 0.0;
+        };
+
+        if blocks_attacks
+            .bypassed_by()
+            .is_some_and(|bypassed| bypassed.contains(source.damage_type))
+        {
+            return 0.0;
+        }
+        if source
+            .direct_entity()
+            .and_then(|entity| entity.as_projectile())
+            .is_some_and(|projectile| projectile.pierce_level() > 0)
+        {
+            return 0.0;
+        }
+
+        let angle = match source.source_position() {
+            Some(source_position) => {
+                let view_vector = self.calculate_view_vector(0.0, self.y_head_rot());
+                let to_source = source_position - self.position();
+                let horizontal = DVec3::new(to_source.x, 0.0, to_source.z).normalize();
+                horizontal.dot(view_vector).acos()
+            }
+            None => PI,
+        };
+
+        let damage_blocked =
+            blocks_attacks.resolve_blocked_damage(source.damage_type, damage, angle);
+        self.hurt_blocking_item(
+            world,
+            &blocking_with,
+            self.get_used_item_hand(),
+            damage_blocked,
+        );
+
+        if damage_blocked > 0.0
+            && !source.is(&vanilla_damage_type_tags::DamageTypeTag::IS_PROJECTILE)
+            && let Some(attacker) = source
+                .direct_entity()
+                .and_then(|entity| entity.as_living_entity())
+        {
+            self.block_using_item(world, attacker, source, damage, damage_blocked >= damage);
+        }
+
+        damage_blocked
+    }
+
+    /// Vanilla `BlocksAttacks.hurtBlockingItem`: players damage the blocking item,
+    /// dropping the use when it breaks. Non-players do not take item damage.
+    fn hurt_blocking_item(
+        &self,
+        _world: &World,
+        blocking_with: &ItemStack,
+        hand: InteractionHand,
+        damage_blocked: f32,
+    ) {
+        let Some(player) = self.as_player() else {
+            return;
+        };
+        player.award_stat(&vanilla_stat_types::ITEM_USED, blocking_with.item());
+
+        let Some(blocks_attacks) = blocking_with.get(BLOCKS_ATTACKS) else {
+            return;
+        };
+        let item_damage = blocks_attacks.item_damage().apply(damage_blocked);
+        if item_damage <= 0 {
+            return;
+        }
+
+        // Damage the item outside any equipment guard so the break callback can
+        // run without re-entering the player's inventory lock.
+        let slot = hand_slot(hand);
+        let infinite_materials = player.has_infinite_materials();
+        let mut broke_item = None;
+        self.with_equipment_slot_mut(slot, &mut |item| {
+            if item.hurt_and_break(item_damage, infinite_materials) {
+                broke_item = Some(item.item);
+            }
+        });
+        if let Some(item) = broke_item {
+            self.on_equipped_item_broken(item, slot);
+            self.stop_using_item();
+        }
+    }
+
+    /// Vanilla `LivingEntity.blockUsingItem`: forwards to the attacker's
+    /// `blockedByItem` hook. Players override this to also disable the shield
+    /// for the attacker's `disable_blocking_for_seconds` window.
+    fn block_using_item(
+        &self,
+        _world: &World,
+        attacker: &dyn LivingEntity,
+        source: &DamageSource,
+        damage: f32,
+        fully_blocked: bool,
+    ) {
+        attacker.blocked_by_item(self.as_entity_event_source(), source, damage, fully_blocked);
+    }
+
+    /// Vanilla `LivingEntity.blockedByItem`: the default knocks a not-fully-blocking
+    /// defender away from the attacker.
+    fn blocked_by_item(
+        &self,
+        defender: &dyn Entity,
+        _source: &DamageSource,
+        _damage: f32,
+        fully_blocked: bool,
+    ) {
+        if fully_blocked {
+            return;
+        }
+        let Some(living_defender) = defender.as_living_entity() else {
+            return;
+        };
+        let position = self.position();
+        let defender_position = defender.position();
+        living_defender.knockback(
+            0.5,
+            defender_position.x - position.x,
+            defender_position.z - position.z,
+        );
+    }
+
     /// Vanilla `LivingEntity.wasRecentlyStabbed`.
     fn was_recently_stabbed(&self, target_id: i32, ticks: i32) -> bool {
         self.level().is_some_and(|world| {
@@ -2007,7 +2348,7 @@ pub trait LivingEntity: Entity {
 
     /// Checks if the entity is blocking with a shield or similar item.
     fn is_blocking(&self) -> bool {
-        false
+        self.get_item_blocking_with().is_some()
     }
 
     /// Checks if the entity is fall flying (using elytra).

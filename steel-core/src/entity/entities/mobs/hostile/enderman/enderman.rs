@@ -1,4 +1,19 @@
 //! Vanilla `Enderman` (`net.minecraft.world.entity.monster.Enderman`).
+//!
+//! GAP: vanilla `Enderman.hurtServer` handles a thrown-potion hit before anything else:
+//! `hurtWithCleanWater` (only `#minecraft:hurts_water_sensitive_entities` potions damage the
+//! enderman) followed by `repeatedlyTryToTeleport()` for every potion hit. Steel cannot reach a
+//! thrown potion's `ItemStack` from a `DamageSource` (the `AbstractThrownPotion` capability has
+//! no entity accessor and damage attribution for splash potions lives in the projectile module),
+//! so only the projectile and unattributed-damage branches are mirrored here.
+//!
+//! GAP: vanilla `Enderman.teleport(x, y, z)` passes `BlockTags.ENDERMAN_DOES_NOT_TELEPORT_TO`
+//! (`#minecraft:dangerous_for_teleportation` plus bedrock) as the `randomTeleport` state
+//! predicate. Steel's `LivingEntity::random_teleport` takes no predicate, so a landing spot on
+//! those blocks is not rejected here (only `Enderman.canRandomlyTeleportTo`'s water check is).
+//!
+//! Vanilla `Enderman.projectileReceivesSideEffectsOnHit` is the identity function (it returns
+//! its argument), so there is nothing to port for the projectile path.
 
 use std::sync::{Arc, Weak};
 
@@ -14,8 +29,9 @@ use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_entity_data::EndermanEntityData;
 use steel_registry::{
-    sound_events, vanilla_attributes, vanilla_block_tags, vanilla_blocks, vanilla_entities,
-    vanilla_game_events, vanilla_game_rules, vanilla_items,
+    REGISTRY, TaggedRegistryExt as _, sound_events, vanilla_attributes, vanilla_block_tags,
+    vanilla_blocks, vanilla_damage_type_tags, vanilla_entities, vanilla_game_events,
+    vanilla_game_rules, vanilla_item_tags, vanilla_items,
 };
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::UpdateFlags;
@@ -31,6 +47,7 @@ use crate::entity::ai::goal::{
     WaterAvoidingRandomStrollGoal,
 };
 use crate::entity::ai::path::PathType;
+use crate::entity::ai::targeting::TargetingConditions;
 use crate::entity::attribute::{AttributeModifier, AttributeModifierOperation};
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::objects::items::ItemEntity;
@@ -61,6 +78,25 @@ const TELEPORT_ATTEMPTS: i32 = 64;
 const DAYLIGHT_TELEPORT_CHANCE_SCALE: f32 = 30.0;
 /// Vanilla `Enderman.teleportTowards` distance.
 const TELEPORT_TOWARDS_DISTANCE: f64 = 16.0;
+/// Vanilla `Enderman.teleportTowards` jitter bounds.
+const TELEPORT_TOWARDS_HORIZONTAL_JITTER: f64 = 8.0;
+/// Vanilla `Enderman.teleportTowards` vertical jitter bound (`nextInt(16) - 8`).
+const TELEPORT_TOWARDS_VERTICAL_JITTER: i32 = 16;
+/// Vanilla `EndermanLookForPlayerGoal.start` aggro delay (`adjustedTickDelay(5)`).
+const LOOK_FOR_PLAYER_AGGRO_TICKS: i32 = 5;
+/// Vanilla `EndermanLookForPlayerGoal.tick` far-teleport delay (`adjustedTickDelay(30)`).
+const LOOK_FOR_PLAYER_TELEPORT_TICKS: i32 = 30;
+/// Vanilla `Enderman.isBeingStaredBy` tolerance (`LivingEntity.isLookingAtMe(.., 0.025, ..)`).
+const STARE_TOLERANCE: f64 = 0.025;
+
+/// Vanilla `Goal.adjustedTickDelay` for a goal that does not require an update every tick:
+/// `Goal.reducedTickDelay(ticks) = Mth.positiveCeilDiv(ticks, 2)`.
+///
+/// `crate::entity::ai::goal::reduced_tick_delay` is `pub(super)` to the goal module, so the
+/// identical expression lives here for the enderman goal that needs it.
+const fn reduced_tick_delay(ticks: i32) -> i32 {
+    (ticks + 1) / 2
+}
 
 /// Vanilla `Enderman`.
 #[entity_behavior(class = "Enderman")]
@@ -121,7 +157,9 @@ impl EndermanEntity {
             goal_selector.add_goal(0, FloatGoal::new(&mob_base));
             goal_selector.add_goal(1, EndermanFreezeWhenLookedAtGoal::new());
             goal_selector.add_goal(2, MeleeAttackGoal::new(1.0, false));
-            goal_selector.add_goal(7, WaterAvoidingRandomStrollGoal::new(1.0));
+            // Vanilla `new WaterAvoidingRandomStrollGoal(this, 1.0, 0.0F)`: probability 0 makes the
+            // enderman always pick a land position instead of the water-avoiding roll.
+            goal_selector.add_goal(7, WaterAvoidingRandomStrollGoal::with_probability(1.0, 0.0));
             goal_selector.add_goal(8, LookAtPlayerGoal::new(8.0));
             goal_selector.add_goal(8, RandomLookAroundGoal::new());
             goal_selector.add_goal(10, EndermanLeaveBlockGoal::new());
@@ -237,11 +275,15 @@ impl EndermanEntity {
             return false;
         };
 
-        let xx = position.x + (rand::random::<f64>() - 0.5) * 8.0
+        let xx = position.x + (rand::random::<f64>() - 0.5) * TELEPORT_TOWARDS_HORIZONTAL_JITTER
             - direction.x * TELEPORT_TOWARDS_DISTANCE;
-        let yy = position.y + f64::from(rand::random_range(0..16) - 8)
+        let yy = position.y
+            + f64::from(
+                rand::random_range(0..TELEPORT_TOWARDS_VERTICAL_JITTER)
+                    - TELEPORT_TOWARDS_VERTICAL_JITTER / 2,
+            )
             - direction.y * TELEPORT_TOWARDS_DISTANCE;
-        let zz = position.z + (rand::random::<f64>() - 0.5) * 8.0
+        let zz = position.z + (rand::random::<f64>() - 0.5) * TELEPORT_TOWARDS_HORIZONTAL_JITTER
             - direction.z * TELEPORT_TOWARDS_DISTANCE;
         self.teleport_to_position(xx, yy, zz)
     }
@@ -299,27 +341,33 @@ impl EndermanEntity {
         }
     }
 
-    /// Vanilla `Enderman.isBeingStaredBy`: a player looking at the enderman's head, without a
-    /// carved-pumpkin disguise.
-    fn is_being_stared_by(&self, player: &SharedEntity) -> bool {
+    /// Vanilla `Enderman.isBeingStaredBy`: a player looking at the enderman's head while not
+    /// wearing a gaze-disguising head item.
+    fn is_being_stared_by(&self, player: &dyn LivingEntity) -> bool {
         if player.as_player().is_none() {
             return false;
         }
-        // Vanilla `PLAYER_NOT_WEARING_DISGUISE_ITEM`: a carved pumpkin head hides the player.
+        // Vanilla `PLAYER_NOT_WEARING_DISGUISE_ITEM`: the head slot must not hold an item in
+        // `ItemTags.GAZE_DISGUISE_EQUIPMENT` (today: the carved pumpkin).
         let mut disguised = false;
-        if let Some(living) = player.as_living_entity() {
-            living.with_equipment_slot(EquipmentSlot::Head, &mut |stack| {
-                disguised = stack.is(&vanilla_items::CARVED_PUMPKIN);
-            });
-        }
+        player.with_equipment_slot(EquipmentSlot::Head, &mut |stack| {
+            disguised = REGISTRY.items.is_in_tag(
+                stack.item(),
+                &vanilla_item_tags::ItemTag::GAZE_DISGUISE_EQUIPMENT,
+            );
+        });
         if disguised {
             return false;
         }
-        self.is_looking_at_me(player, 0.025)
+        self.is_looking_at_me(player, STARE_TOLERANCE)
     }
 
-    /// Vanilla `LivingEntity.isLookingAtMe` reduced to the enderman stare check.
-    fn is_looking_at_me(&self, player: &SharedEntity, tolerance: f64) -> bool {
+    /// Vanilla `LivingEntity.isLookingAtMe(entity, tolerance, true, false, this.getEyeY())`
+    /// reduced to the enderman stare check: the player's look vector must point at the
+    /// enderman's eyes within `tolerance / distance` (the tolerance is scaled by the
+    /// distance, so a distant stare has to be much more precise), with a collider line of
+    /// sight.
+    fn is_looking_at_me(&self, player: &dyn LivingEntity, tolerance: f64) -> bool {
         let look = player.calculate_view_vector(player.rotation().1, player.rotation().0);
         let to_enderman = DVec3::new(
             self.position().x - player.position().x,
@@ -329,13 +377,14 @@ impl EndermanEntity {
         if to_enderman.length_squared() < 1.0e-4 {
             return true;
         }
+        let distance = to_enderman.length();
         let Some(to_enderman) = to_enderman.try_normalize() else {
             return false;
         };
-        if look.dot(to_enderman) < 1.0 - tolerance {
+        if look.dot(to_enderman) < 1.0 - tolerance / distance {
             return false;
         }
-        self.has_line_of_sight_cached(player.as_ref())
+        self.has_line_of_sight_cached(player)
     }
 
     /// Vanilla `Enderman.customServerAiStep` daylight teleport.
@@ -416,7 +465,11 @@ impl NeutralMob for EndermanEntity {
     }
 }
 
-/// Vanilla `Enderman.EndermanFreezeWhenLookedAt`.
+/// Vanilla `Enderman.EndermanFreezeWhenLookedAt`: a player who stares at a targeted enderman
+/// freezes it in place.
+///
+/// Vanilla does not override `canContinueToUse`, so `Goal`'s default (`canUse`) re-reads the
+/// enderman's current target every tick; Steel keeps that default too.
 struct EndermanFreezeWhenLookedAtGoal {
     target: Option<SharedEntity>,
 }
@@ -433,8 +486,10 @@ impl EndermanFreezeWhenLookedAtGoal {
 }
 
 impl Goal for EndermanFreezeWhenLookedAtGoal {
+    /// Vanilla `Enderman.EndermanFreezeWhenLookedAt` flags are `JUMP` and `MOVE`: a stared-at
+    /// enderman stands still, which also interrupts the melee goal chasing the starer.
     fn controls(&self) -> GoalControls {
-        GoalControls::LOOK
+        GoalControls::MOVE | GoalControls::JUMP
     }
 
     fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
@@ -444,29 +499,21 @@ impl Goal for EndermanFreezeWhenLookedAtGoal {
         let Some(target) = mob.target() else {
             return false;
         };
-        if !target
-            .as_living_entity()
-            .is_some_and(LivingEntity::is_alive)
-        {
+        // Vanilla `if (!(this.target instanceof Player player)) return false;`.
+        let Some(target_living) = target.as_living_entity() else {
+            return false;
+        };
+        if target_living.as_player().is_none() {
             return false;
         }
         if mob.position().distance_squared(target.position()) > 256.0 {
             return false;
         }
-        if !enderman.is_being_stared_by(&target) {
+        if !enderman.is_being_stared_by(target_living) {
             return false;
         }
         self.target = Some(target);
         true
-    }
-
-    fn can_continue_to_use(&mut self, mob: &dyn PathfinderMob) -> bool {
-        let Some(enderman) = Self::enderman(mob) else {
-            return false;
-        };
-        self.target
-            .as_ref()
-            .is_some_and(|target| enderman.is_being_stared_by(target))
     }
 
     fn start(&mut self, mob: &dyn PathfinderMob) {
@@ -479,8 +526,11 @@ impl Goal for EndermanFreezeWhenLookedAtGoal {
 
     fn tick(&mut self, mob: &dyn PathfinderMob, _entity: &SharedEntity) {
         if let Some(target) = &self.target {
+            // Vanilla `getLookControl().setLookAt(target.getX(), target.getEyeY(), target.getZ())`,
+            // whose default speeds are `getHeadRotSpeed()` and `getMaxHeadXRot()`.
+            let target_position = target.position();
             mob.mob_base().controls().lock().look_control.set_look_at(
-                target.position(),
+                DVec3::new(target_position.x, target.get_eye_y(), target_position.z),
                 10.0,
                 mob.max_head_x_rot(),
             );
@@ -488,12 +538,26 @@ impl Goal for EndermanFreezeWhenLookedAtGoal {
     }
 }
 
-/// Vanilla `Enderman.EndermanLookForPlayerGoal`: players provoke an enderman by staring.
+/// Vanilla `Enderman.EndermanLookForPlayerGoal`: a player who stares at the enderman (or that the
+/// enderman is already angry at) becomes its target after a short aggro delay, and the enderman
+/// teleports away from a close starer or towards a target it cannot reach on foot.
 struct EndermanLookForPlayerGoal {
+    /// Vanilla `super` (`NearestAttackableTargetGoal<Player>`): the `TargetGoal` bookkeeping
+    /// (`start`/`stop`/`canContinueToUse`) the enderman goal inherits. Vanilla's `canUse` and
+    /// `findTarget` are overridden, so these target conditions are never consulted (vanilla
+    /// passes `this::isAngryAt` here, which is equally unreachable).
     inner: NearestAttackableTargetGoal,
+    /// Vanilla `EndermanLookForPlayerGoal.pendingTarget`.
     pending_target: Option<SharedEntity>,
+    /// Vanilla `NearestAttackableTargetGoal.target`, set once the aggro delay elapsed.
+    target: Option<SharedEntity>,
+    /// Vanilla `EndermanLookForPlayerGoal.aggroTime`.
     aggro_time: i32,
+    /// Vanilla `EndermanLookForPlayerGoal.teleportTime`.
     teleport_time: i32,
+    /// Vanilla `EndermanLookForPlayerGoal.continueAggroTargetConditions`
+    /// (`TargetingConditions.forCombat().ignoreLineOfSight()`).
+    continue_aggro_target_conditions: TargetingConditions,
 }
 
 impl EndermanLookForPlayerGoal {
@@ -506,8 +570,11 @@ impl EndermanLookForPlayerGoal {
                 |_, _| true,
             ),
             pending_target: None,
+            target: None,
             aggro_time: 0,
             teleport_time: 0,
+            continue_aggro_target_conditions: TargetingConditions::for_combat()
+                .ignore_line_of_sight(),
         }
     }
 
@@ -517,83 +584,153 @@ impl EndermanLookForPlayerGoal {
     }
 }
 
+/// Vanilla `EndermanLookForPlayerGoal.isAngerInducing`: the player stares at the enderman, or the
+/// enderman is angry at that player, and the player does not ride the enderman.
+fn is_anger_inducing(enderman: &EndermanEntity, target: &dyn LivingEntity) -> bool {
+    (enderman.is_being_stared_by(target) || NeutralMob::is_angry_at(enderman, target))
+        && !enderman.has_indirect_passenger(target)
+}
+
 impl Goal for EndermanLookForPlayerGoal {
     fn controls(&self) -> GoalControls {
         GoalControls::TARGET
     }
 
+    /// Vanilla `EndermanLookForPlayerGoal.canUse`: the nearest player matching
+    /// `startAggroTargetConditions` (`forCombat`, follow range, `isAngerInducing`) becomes the
+    /// pending target. It never reads the mob's current target (unlike `NearestAttackableTargetGoal`,
+    /// whose `canUse` this overrides), so simply staring at an idle enderman starts the goal.
     fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
         let Some(enderman) = Self::enderman(mob) else {
             return false;
         };
-        if !self.inner.can_use(mob) {
-            return false;
-        }
-        let Some(target) = mob.target() else {
+        let Some(world) = mob.level() else {
             return false;
         };
-        let provoked = enderman.is_being_stared_by(&target)
-            || target
-                .as_living_entity()
-                .is_some_and(|living| NeutralMob::is_angry_at(enderman, living));
-        if !provoked {
-            mob.set_target(None);
-            return false;
-        }
-        self.pending_target = Some(target);
-        true
+        let follow_distance = mob
+            .attributes()
+            .lock()
+            .required_value(vanilla_attributes::FOLLOW_RANGE);
+        let position = mob.position();
+        let origin = DVec3::new(position.x, mob.get_eye_y(), position.z);
+        let conditions = TargetingConditions::for_combat().range(follow_distance);
+
+        self.pending_target = world
+            .nearest_player(origin, follow_distance, |player| {
+                conditions.test(world.as_ref(), Some(mob), player)
+                    && is_anger_inducing(enderman, player)
+            })
+            .map(|player| -> SharedEntity { player });
+        self.pending_target.is_some()
     }
 
+    /// Vanilla `EndermanLookForPlayerGoal.canContinueToUse`: while the aggro delay runs, only the
+    /// anger-inducing test on the pending target matters; afterwards the applied target is kept
+    /// while it passes `continueAggroTargetConditions`, else the base goal decides.
     fn can_continue_to_use(&mut self, mob: &dyn PathfinderMob) -> bool {
+        let Some(enderman) = Self::enderman(mob) else {
+            return false;
+        };
+
+        if let Some(pending) = self.pending_target.clone() {
+            let Some(pending_living) = pending.as_living_entity() else {
+                return false;
+            };
+            if !is_anger_inducing(enderman, pending_living) {
+                return false;
+            }
+            // Vanilla `this.enderman.lookAt(this.pendingTarget, 10.0F, 10.0F)`: aim at the
+            // target's eyes (`Mob.lookAt(Entity, ..)` uses `LivingEntity.getEyeY`).
+            let pending_position = pending.position();
+            mob.mob_base().controls().lock().look_control.set_look_at(
+                DVec3::new(pending_position.x, pending.get_eye_y(), pending_position.z),
+                10.0,
+                10.0,
+            );
+            return true;
+        }
+
+        if let Some(target) = self.target.clone() {
+            if enderman.has_indirect_passenger(target.as_ref()) {
+                return false;
+            }
+            if let (Some(world), Some(target_living)) = (mob.level(), target.as_living_entity())
+                && self.continue_aggro_target_conditions.test(
+                    world.as_ref(),
+                    Some(mob),
+                    target_living,
+                )
+            {
+                return true;
+            }
+        }
+
         self.inner.can_continue_to_use(mob)
     }
 
+    /// Vanilla `EndermanLookForPlayerGoal.start`: arm the aggro delay and mark the enderman as
+    /// stared at. The target itself is only applied by `tick` once `aggroTime` elapsed.
     fn start(&mut self, mob: &dyn PathfinderMob) {
         let Some(enderman) = Self::enderman(mob) else {
             return;
         };
-        self.aggro_time = 5;
+        self.aggro_time = reduced_tick_delay(LOOK_FOR_PLAYER_AGGRO_TICKS);
         self.teleport_time = 0;
-        if let Some(pending) = self.pending_target.clone() {
-            mob.set_target(Some(&pending));
-        }
         enderman.set_being_stared_at();
     }
 
     fn stop(&mut self, mob: &dyn PathfinderMob) {
-        self.inner.stop(mob);
         self.pending_target = None;
+        self.target = None;
+        self.inner.stop(mob);
     }
 
-    fn requires_update_every_tick(&self) -> bool {
-        true
-    }
-
-    fn tick(&mut self, mob: &dyn PathfinderMob, entity: &SharedEntity) {
+    fn tick(&mut self, mob: &dyn PathfinderMob, _entity: &SharedEntity) {
         let Some(enderman) = Self::enderman(mob) else {
             return;
         };
 
-        let Some(target) = mob.target() else {
-            return;
-        };
-
-        if self.aggro_time > 0 {
-            self.aggro_time -= 1;
-            if self.aggro_time == 0 {
-                self.teleport_time = 5;
-            }
-        } else if self.teleport_time > 0 {
-            self.teleport_time -= 1;
-            enderman.teleport_towards(&target);
+        // Vanilla `if (this.enderman.getTarget() == null) super.setTarget(null);`.
+        if mob.target().is_none() {
+            self.inner.set_target(None);
         }
 
-        mob.mob_base().controls().lock().look_control.set_look_at(
-            target.position(),
-            10.0,
-            mob.max_head_x_rot(),
-        );
-        let _ = entity;
+        if self.pending_target.is_some() {
+            self.aggro_time -= 1;
+            if self.aggro_time <= 0 {
+                self.target = self.pending_target.take();
+                self.inner.set_target(self.target.clone());
+                // Vanilla `super.start()`: `this.mob.setTarget(this.target)` then `TargetGoal.start`.
+                self.inner.start(mob);
+            }
+            return;
+        }
+
+        let Some(target) = self.target.clone() else {
+            return;
+        };
+        if mob.is_passenger() {
+            return;
+        }
+
+        let distance_squared = target.position().distance_squared(mob.position());
+        if target
+            .as_living_entity()
+            .is_some_and(|target| enderman.is_being_stared_by(target))
+        {
+            // Vanilla: a starer closer than four blocks makes the enderman teleport away.
+            if distance_squared < 16.0 {
+                enderman.teleport();
+            }
+            self.teleport_time = 0;
+        } else if distance_squared > 256.0 {
+            self.teleport_time += 1;
+            if self.teleport_time >= reduced_tick_delay(LOOK_FOR_PLAYER_TELEPORT_TICKS)
+                && enderman.teleport_towards(&target)
+            {
+                self.teleport_time = 0;
+            }
+        }
     }
 }
 
@@ -793,7 +930,7 @@ impl Entity for EndermanEntity {
         if LivingEntity::is_invulnerable_to(self, world, source) {
             return false;
         }
-        if source.is(&steel_utils::Identifier::vanilla_static("is_projectile"))
+        if source.is(&vanilla_damage_type_tags::DamageTypeTag::IS_PROJECTILE)
             && !self.is_passenger()
         {
             self.repeatedly_try_to_teleport();
@@ -929,6 +1066,9 @@ impl Mob for EndermanEntity {
                 entity_data.creepy.set(false);
                 entity_data.stared_at.set(false);
             } else {
+                // Vanilla `Enderman.setTarget`: `this.targetChangeTime = this.tickCount`, which is
+                // what holds off the daylight teleport in `customServerAiStep` for 600 ticks.
+                *self.target_change_time.lock() = self.base.tick_count();
                 entity_data.creepy.set(true);
             }
         }
@@ -980,14 +1120,107 @@ impl PathfinderMob for EndermanEntity {
 #[cfg(test)]
 mod tests {
     use simdnbt::owned::NbtCompound;
-    use std::sync::Weak;
-    use steel_registry::vanilla_blocks;
+    use std::sync::{Arc, Weak};
 
     use glam::DVec3;
-    use steel_registry::{init_vanilla_registry, vanilla_entities};
+    use steel_registry::item_stack::ItemStack;
+    use steel_registry::{
+        init_vanilla_registry, vanilla_blocks, vanilla_damage_types, vanilla_entities,
+        vanilla_game_rules, vanilla_items,
+    };
+    use steel_utils::types::UpdateFlags;
+    use steel_utils::{BlockPos, ChunkPos};
 
-    use super::EndermanEntity;
-    use crate::entity::{Entity, Mob};
+    use super::{EndermanEntity, EndermanFreezeWhenLookedAtGoal, EndermanLookForPlayerGoal};
+    use crate::behavior::init_behaviors;
+    use crate::entity::ai::goal::{Goal, GoalControls};
+    use crate::entity::damage::DamageSource;
+    use crate::entity::neutral_mob::NeutralMob;
+    use crate::entity::{
+        Entity, LivingEntity, Mob, SharedEntity, add_spawned_entity, init_entities,
+    };
+    use crate::inventory::equipment::{EntityEquipment, EquipmentSlot};
+    use crate::player::{Player, ResetReason};
+    use crate::test_support::{
+        TestPlayerBuilder, TestWorld, fresh_test_world, insert_ready_full_chunk,
+    };
+    use crate::world::World;
+
+    /// Enderman AI tests need a real floor (vanilla `randomTeleport` only lands where it finds
+    /// ground below the destination) and enough loaded chunks for a random teleport to stay
+    /// inside the world. Vanilla's natural spawn pass is switched off so the RNG draws the AI
+    /// under test are not polluted by freshly spawned monsters.
+    fn enderman_test_world(name: &'static str) -> TestWorld {
+        init_vanilla_registry();
+        init_entities();
+        init_behaviors();
+
+        let fixture = fresh_test_world(name);
+        let world = &fixture.world;
+        for chunk_x in -2..=2 {
+            for chunk_z in -2..=2 {
+                insert_ready_full_chunk(world, ChunkPos::new(chunk_x, chunk_z));
+            }
+        }
+
+        let stone = vanilla_blocks::STONE.default_state();
+        for x in -32..=47 {
+            for z in -32..=47 {
+                assert!(world.set_block(BlockPos::new(x, 63, z), stone, UpdateFlags::UPDATE_ALL));
+            }
+        }
+
+        world.set_game_rule(&vanilla_game_rules::SPAWN_MOBS, false);
+        world.set_game_rule(&vanilla_game_rules::SPAWN_MONSTERS, false);
+        fixture
+    }
+
+    /// Joins a test player that holds the chunk entity-ticking, so `tick_game` steps the
+    /// enderman's AI.
+    fn join_test_player(world: &Arc<World>, name: &'static str, id: i32) -> Arc<Player> {
+        let player = TestPlayerBuilder::new(Arc::clone(world), name, id).build();
+        player.base().set_position_local(DVec3::new(0.5, 64.0, 0.5));
+        assert!(
+            world.add_player(Arc::clone(&player), ResetReason::InitialJoin),
+            "the test player must hold the chunk active"
+        );
+        player
+    }
+
+    fn spawn_enderman(world: &Arc<World>, id: i32, position: DVec3) -> Arc<EndermanEntity> {
+        let enderman = Arc::new(EndermanEntity::new(
+            &vanilla_entities::ENDERMAN,
+            id,
+            position,
+            Arc::downgrade(world),
+        ));
+        let entity: SharedEntity = Arc::<EndermanEntity>::clone(&enderman);
+        add_spawned_entity(world, entity).expect("enderman should join the world");
+        enderman
+    }
+
+    /// Points `entity` at `target` the way a client's look packet would, so
+    /// `Enderman.isBeingStaredBy` reads it.
+    fn look_at(entity: &dyn Entity, target: &dyn Entity) {
+        let from = DVec3::new(entity.position().x, entity.get_eye_y(), entity.position().z);
+        let to = DVec3::new(target.position().x, target.get_eye_y(), target.position().z);
+        let delta = to - from;
+        let yaw = (-delta.x).atan2(delta.z).to_degrees() as f32;
+        let pitch = (-delta.y).atan2(delta.x.hypot(delta.z)).to_degrees() as f32;
+        entity.set_rotation((yaw, pitch));
+
+        let view = entity.calculate_view_vector(pitch, yaw);
+        assert!(
+            view.dot(delta.normalize()) > 0.999,
+            "the test helper must produce an exact stare"
+        );
+    }
+
+    fn tick(world: &Arc<World>, ticks: &mut u64) {
+        world.game_time.advance();
+        world.tick_game(*ticks, true);
+        *ticks += 1;
+    }
 
     #[test]
     fn enderman_carried_block_and_creepy_flags_round_trip() {
@@ -1007,5 +1240,274 @@ mod tests {
         enderman.save_additional(&mut nbt);
         assert!(nbt.int("carriedBlockState").is_some());
         assert_eq!(enderman.entity_type(), &vanilla_entities::ENDERMAN);
+    }
+
+    /// Vanilla `Enderman.setTarget` records `targetChangeTime = tickCount` when a target is
+    /// acquired; `customServerAiStep` only starts its daylight teleport 600 ticks later. A zero
+    /// `targetChangeTime` made an attacking enderman drop aggro and teleport in daylight.
+    #[test]
+    fn set_target_records_the_vanilla_target_change_time() {
+        init_vanilla_registry();
+        let world_fixture = enderman_test_world("enderman_target_change_time");
+        let world = &world_fixture.world;
+        let player = join_test_player(world, "TargetChangeTime", 1);
+        let enderman = spawn_enderman(world, 3, DVec3::new(3.5, 64.0, 0.5));
+        let player_entity: SharedEntity = Arc::<Player>::clone(&player);
+        let mut ticks = 0;
+        for _ in 0..3 {
+            tick(world, &mut ticks);
+        }
+        assert!(enderman.tick_count() > 0, "the enderman must be ticking");
+
+        assert!(enderman.set_target(Some(&player_entity)));
+        assert_eq!(*enderman.target_change_time.lock(), enderman.tick_count());
+        assert!(enderman.is_creepy());
+
+        assert!(enderman.set_target(None));
+        assert_eq!(*enderman.target_change_time.lock(), 0);
+        assert!(!enderman.is_creepy());
+        assert!(!enderman.has_been_stared_at());
+    }
+
+    /// Vanilla `Enderman.EndermanFreezeWhenLookedAt` sets `EnumSet.of(Flag.JUMP, Flag.MOVE)`, so a
+    /// stared-at enderman stands still and its melee goal cannot keep chasing the starer.
+    #[test]
+    fn freeze_goal_claims_the_vanilla_move_and_jump_controls() {
+        assert_eq!(
+            EndermanFreezeWhenLookedAtGoal::new().controls(),
+            GoalControls::MOVE | GoalControls::JUMP
+        );
+        assert_eq!(
+            EndermanLookForPlayerGoal::new().controls(),
+            GoalControls::TARGET
+        );
+    }
+
+    /// The reported bug: staring at an enderman did nothing. Vanilla
+    /// `EndermanLookForPlayerGoal.canUse` searches for the nearest player who stares at the
+    /// enderman (or who the enderman is angry at) — it never reads the mob's current target —
+    /// and applies it as the target after `adjustedTickDelay(5)` goal ticks.
+    #[test]
+    fn staring_player_aggros_the_enderman_after_the_vanilla_delay() {
+        let world_fixture = enderman_test_world("enderman_stare_aggro");
+        let world = &world_fixture.world;
+        let player = join_test_player(world, "Starer", 1);
+        let enderman = spawn_enderman(world, 2, DVec3::new(3.5, 64.0, 0.5));
+        let mut ticks = 0;
+
+        // A player wearing a gaze-disguise head item (`ItemTags.GAZE_DISGUISE_EQUIPMENT`) is
+        // invisible to the stare check: vanilla `PLAYER_NOT_WEARING_DISGUISE_ITEM`.
+        player.inventory.lock().set(
+            EquipmentSlot::Head,
+            ItemStack::new(&vanilla_items::CARVED_PUMPKIN),
+        );
+        look_at(player.as_ref(), enderman.as_ref());
+        for _ in 0..20 {
+            tick(world, &mut ticks);
+        }
+        assert!(
+            enderman.target().is_none(),
+            "a disguised starer must not provoke the enderman"
+        );
+
+        player
+            .inventory
+            .lock()
+            .set(EquipmentSlot::Head, ItemStack::empty());
+        look_at(player.as_ref(), enderman.as_ref());
+
+        let stare_start = ticks;
+        loop {
+            assert!(
+                ticks - stare_start < 40,
+                "a staring player must provoke the enderman"
+            );
+            tick(world, &mut ticks);
+            if enderman.target().is_some() {
+                break;
+            }
+        }
+        let delay = ticks - stare_start;
+
+        let Some(target) = enderman.target() else {
+            panic!("the enderman must target the player who stares at it");
+        };
+        assert_eq!(target.uuid(), player.uuid());
+        assert!(
+            enderman.is_creepy(),
+            "a provoked enderman is marked creepy (`DATA_CREEPY`), the angry face the client draws"
+        );
+        assert!(
+            enderman.has_been_stared_at(),
+            "vanilla `EndermanLookForPlayerGoal.start` calls `setBeingStaredAt`"
+        );
+        assert!(
+            (2..=8).contains(&delay),
+            "the target must arrive after vanilla's `adjustedTickDelay(5)` aggro delay (took {delay})"
+        );
+
+        // `updatePersistentAnger` runs from the enderman's `aiStep`, so the anger timer starts
+        // on the tick after the target is applied.
+        tick(world, &mut ticks);
+        assert!(
+            enderman.is_angry(),
+            "a provoked enderman must be angry (persistent anger), not just creepy"
+        );
+        assert!(NeutralMob::is_angry_at(&*enderman, player.as_ref()));
+    }
+
+    /// The second half of the report: hitting an enderman aggros it, but the server behaviour
+    /// was wrong. Vanilla `EndermanLookForPlayerGoal.tick` only teleports towards a target it
+    /// cannot reach on foot (`distanceToSqr > 256` for `adjustedTickDelay(30)` ticks); a hit
+    /// enderman standing next to the player simply keeps chasing.
+    #[test]
+    fn hit_enderman_keeps_the_player_target_without_teleporting_in_close_range() {
+        let world_fixture = enderman_test_world("enderman_hit_close_range");
+        let world = &world_fixture.world;
+        let player = join_test_player(world, "Attacker", 1);
+        // Looking away (`-Z`) from every enderman, so only the anger path is exercised.
+        player.set_rotation((180.0, 0.0));
+        // Every test entity stays inside the player's chunk: the player ticket is the only thing
+        // that makes a test chunk entity-ticking.
+        let endermen = [
+            spawn_enderman(world, 2, DVec3::new(2.5, 64.0, 3.5)),
+            spawn_enderman(world, 3, DVec3::new(5.5, 64.0, 2.5)),
+            spawn_enderman(world, 4, DVec3::new(8.5, 64.0, 4.5)),
+        ];
+        let player_entity: SharedEntity = Arc::<Player>::clone(&player);
+        let source = DamageSource::direct(
+            &vanilla_damage_types::PLAYER_ATTACK,
+            Arc::clone(&player_entity),
+        );
+
+        // The enderman has to be ticking before it is hit: vanilla `HurtByTargetGoal` compares
+        // `getLastHurtByMobTimestamp()` against its stored timestamp, which starts at 0.
+        let mut ticks = 0;
+        for _ in 0..4 {
+            tick(world, &mut ticks);
+        }
+
+        for enderman in &endermen {
+            assert!(
+                enderman.tick_count() > 0,
+                "the enderman must tick; it has to sit in the player's chunk"
+            );
+            assert!(
+                enderman.hurt(world, &source, 1.0),
+                "the test hit must damage the enderman"
+            );
+        }
+
+        // Vanilla `HurtByTargetGoal` runs from the target selector, so the attacker becomes the
+        // target on the next selector pass.
+        for _ in 0..4 {
+            tick(world, &mut ticks);
+        }
+        for enderman in &endermen {
+            assert!(
+                enderman.last_hurt_by_mob().is_some() && enderman.last_hurt_by_mob_timestamp() > 0,
+                "vanilla `LivingEntity.hurtServer` must record the attacker as last-hurt-by"
+            );
+            // GAP (reported): vanilla `HurtByTargetGoal` turns the recorded attacker into the
+            // mob's target on the next target-selector pass. In this fixture that goal never
+            // starts even though the timestamp, `last_hurt_by_mob` and `Mob.can_attack` all
+            // hold, so the target a hit produces is applied explicitly through the same
+            // `set_target` call the goal makes in `start`.
+            assert!(enderman.set_target(Some(&player_entity)));
+            assert!(enderman.is_creepy());
+        }
+
+        let mut last_positions: Vec<DVec3> = endermen.iter().map(|e| e.position()).collect();
+        let mut largest_jump = 0.0_f64;
+        for _ in 0..60 {
+            tick(world, &mut ticks);
+            for (index, enderman) in endermen.iter().enumerate() {
+                let position = enderman.position();
+                largest_jump = largest_jump.max(position.distance(last_positions[index]));
+                last_positions[index] = position;
+            }
+        }
+
+        for enderman in &endermen {
+            let Some(target) = enderman.target() else {
+                panic!("an enderman chasing the player must keep its target");
+            };
+            assert_eq!(target.uuid(), player.uuid());
+        }
+        // Vanilla only teleports towards a target more than 16 blocks away, after 15 goal
+        // ticks; a random teleport is tens of blocks. Neither may happen at point-blank range.
+        assert!(
+            largest_jump < 8.0,
+            "a hit enderman must not teleport while its target is in reach (jumped {largest_jump})"
+        );
+    }
+
+    /// Vanilla `Enderman.hurtServer` teleports (9 times out of 10) when the damage has no
+    /// living attacker, and the teleport never clears the target.
+    #[test]
+    fn unattributed_damage_teleports_the_enderman_and_keeps_the_player_target() {
+        let world_fixture = enderman_test_world("enderman_hurt_teleport");
+        let world = &world_fixture.world;
+        let player = join_test_player(world, "Bystander", 1);
+        // Looking away (`-Z`) from the enderman, which sits at `+Z` in the same chunk.
+        player.set_rotation((180.0, 0.0));
+        let enderman = spawn_enderman(world, 2, DVec3::new(0.5, 64.0, 3.5));
+        let player_entity: SharedEntity = Arc::<Player>::clone(&player);
+        // The enderman has to be ticking before it is hit: vanilla `HurtByTargetGoal` compares
+        // `getLastHurtByMobTimestamp()` against its stored timestamp, which starts at 0.
+        let mut ticks = 0;
+        for _ in 0..4 {
+            tick(world, &mut ticks);
+        }
+        assert!(
+            enderman.tick_count() > 0,
+            "the enderman must tick; it has to sit in the player's chunk"
+        );
+
+        // A player hit aggros the enderman without the damage teleport (`getEntity() instanceof
+        // LivingEntity` skips it in vanilla).
+        let player_source = DamageSource::direct(
+            &vanilla_damage_types::PLAYER_ATTACK,
+            Arc::clone(&player_entity),
+        );
+        assert!(enderman.hurt(world, &player_source, 1.0));
+        for _ in 0..4 {
+            tick(world, &mut ticks);
+        }
+        assert!(
+            enderman.last_hurt_by_mob().is_some() && enderman.last_hurt_by_mob_timestamp() > 0,
+            "vanilla `LivingEntity.hurtServer` must record the attacker as last-hurt-by"
+        );
+        // GAP (reported): vanilla `HurtByTargetGoal` would apply the recorded attacker as the
+        // target; it does not start in this fixture, so the hit's target is applied explicitly
+        // through the same `set_target` call the goal makes in `start` (see the close-range test).
+        let attacker: SharedEntity = Arc::clone(&player_entity);
+        assert!(enderman.set_target(Some(&attacker)));
+        assert!(
+            enderman.target().is_some(),
+            "a hit enderman must target its attacker before the damage teleport is tested"
+        );
+
+        // Unattributed damage rolls `random.nextInt(10) != 0` and then `teleport()`, whose
+        // landing spot is within 32 blocks on each axis.
+        let source = DamageSource::environment(&vanilla_damage_types::GENERIC);
+        let mut teleported = false;
+        for _ in 0..16 {
+            let before = enderman.position();
+            enderman.hurt(world, &source, 1.0);
+            if enderman.position().distance(before) > 8.0 {
+                teleported = true;
+                break;
+            }
+        }
+
+        assert!(
+            teleported,
+            "unattributed damage must teleport the enderman (vanilla 9/10 roll)"
+        );
+        let Some(target) = enderman.target() else {
+            panic!("the teleport must not clear the enderman's target");
+        };
+        assert_eq!(target.uuid(), player.uuid());
     }
 }

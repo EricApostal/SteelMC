@@ -7,18 +7,22 @@ use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
 use steel_macros::entity_behavior;
 use steel_protocol::packets::game::SoundSource;
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::item_stack::ItemStack;
 use steel_registry::sound_event::SoundEventRef;
+use steel_registry::vanilla_biome_tags::BiomeTag;
+use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entity_data::PolarBearEntityData;
 use steel_registry::{sound_events, vanilla_attributes, vanilla_entities};
 use steel_utils::locks::SyncMutex;
+use steel_utils::random::RandomSource;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
 use crate::entity::ai::goal::{
-    FloatGoal, FollowParentGoal, Goal, GoalControls, HurtByTargetGoal, LookAtPlayerGoal,
-    MeleeAttackGoal, NearestAttackableTargetGoal, PanicGoal, RandomLookAroundGoal,
-    RandomStrollGoal, ResetUniversalAngerTargetGoal,
+    AngryAtPlayerTargetGoal, FloatGoal, FollowParentGoal, Goal, GoalControls, HurtByTargetGoal,
+    LookAtPlayerGoal, MeleeAttackGoal, NearestAttackableTargetGoal, PanicGoal,
+    RandomLookAroundGoal, RandomStrollGoal, ResetUniversalAngerTargetGoal,
 };
 use crate::entity::damage::DamageSource;
 use crate::entity::neutral_mob::{NeutralMob, PersistentAnger};
@@ -28,7 +32,7 @@ use crate::entity::{
     PathfinderMob, SharedEntity, SpawnGroupData,
 };
 use crate::physics::MoveResult;
-use crate::world::{LevelReader, World};
+use crate::world::World;
 use steel_utils::Downcast as _;
 
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
@@ -104,15 +108,11 @@ impl PolarBearEntity {
 
             let mut target_selector = mob_base.target_selector().lock();
             target_selector.add_goal(1, HurtByTargetGoal::new());
-            target_selector.add_goal(
-                2,
-                NearestAttackableTargetGoal::new_for_players_with_interval(
-                    20,
-                    true,
-                    true,
-                    |_, _| true,
-                ),
-            );
+            // Vanilla `PolarBear.PolarBearAttackPlayersGoal`.
+            target_selector.add_goal(2, PolarBearAttackPlayersGoal::new());
+            // Vanilla `NearestAttackableTargetGoal<>(this, Player.class, 10, true, false,
+            // this::isAngryAt)`: only a player the bear is angry at.
+            target_selector.add_goal(3, AngryAtPlayerTargetGoal::new());
             // Vanilla targets foxes when adult.
             target_selector.add_goal(
                 4,
@@ -179,6 +179,114 @@ impl PolarBearEntity {
             self.play_sound(&sound_events::ENTITY_POLAR_BEAR_WARNING, 1.0, 1.0);
         }
     }
+
+    /// Vanilla `PolarBear.checkPolarBearSpawnRules`, the `SpawnPlacements` predicate for
+    /// `EntityType.POLAR_BEAR`.
+    ///
+    /// Biomes tagged `POLAR_BEARS_SPAWN_ON_ALTERNATE_BLOCKS` (the frozen oceans) need a
+    /// bright position over a `POLAR_BEARS_SPAWNABLE_ON_ALTERNATE` block (`ice`); every
+    /// other biome falls back to `Animal.checkAnimalSpawnRules`.
+    #[must_use]
+    pub fn check_polar_bear_spawn_rules(
+        entity_type: EntityTypeRef,
+        level: &World,
+        spawn_reason: EntitySpawnReason,
+        pos: BlockPos,
+        random: &mut RandomSource,
+    ) -> bool {
+        let _ = (entity_type, random);
+        if level
+            .biome_at(pos)
+            .is_some_and(|biome| biome.has_tag(&BiomeTag::POLAR_BEARS_SPAWN_ON_ALTERNATE_BLOCKS))
+        {
+            return <Self as Animal>::is_bright_enough_to_spawn(level, pos)
+                && level
+                    .get_block_state(pos.below())
+                    .get_block()
+                    .has_tag(&BlockTag::POLAR_BEARS_SPAWNABLE_ON_ALTERNATE);
+        }
+
+        <Self as Animal>::check_animal_spawn_rules(level, spawn_reason, pos)
+    }
+}
+
+/// Vanilla `PolarBear.PolarBearAttackPlayersGoal`: an adult bear may take a player target
+/// without being provoked, but only while a cub is nearby.
+struct PolarBearAttackPlayersGoal {
+    inner: NearestAttackableTargetGoal,
+}
+
+impl PolarBearAttackPlayersGoal {
+    /// Vanilla `new PolarBear$PolarBearAttackPlayersGoal()`:
+    /// `NearestAttackableTargetGoal(bear, Player.class, 20, true, true, null)` with
+    /// `getFollowDistance()` halved.
+    fn new() -> Self {
+        Self {
+            inner: NearestAttackableTargetGoal::new_for_players_with_interval(
+                20,
+                true,
+                true,
+                |_, _| true,
+            )
+            .with_follow_distance_scale(0.5),
+        }
+    }
+}
+
+impl Goal for PolarBearAttackPlayersGoal {
+    fn controls(&self) -> GoalControls {
+        GoalControls::TARGET
+    }
+
+    /// Vanilla `PolarBearAttackPlayersGoal.canUse`: babies never use it, and the player has to
+    /// be found before the cub scan decides.
+    fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
+        let Some(bear) = bear_of(mob) else {
+            return false;
+        };
+        if AgeableMob::is_baby(bear) || !self.inner.can_use(mob) {
+            return false;
+        }
+
+        has_nearby_cub(bear)
+    }
+
+    fn can_continue_to_use(&mut self, mob: &dyn PathfinderMob) -> bool {
+        self.inner.can_continue_to_use(mob)
+    }
+
+    fn start(&mut self, mob: &dyn PathfinderMob) {
+        self.inner.start(mob);
+    }
+
+    fn stop(&mut self, mob: &dyn PathfinderMob) {
+        self.inner.stop(mob);
+    }
+
+    fn requires_update_every_tick(&self) -> bool {
+        self.inner.requires_update_every_tick()
+    }
+}
+
+/// Vanilla `PolarBearAttackPlayersGoal.canUse` cub scan: any baby polar bear inside the bear's
+/// bounding box inflated by `(8.0, 4.0, 8.0)`.
+fn has_nearby_cub(bear: &PolarBearEntity) -> bool {
+    let Some(world) = bear.level() else {
+        return false;
+    };
+
+    let search = bear.bounding_box().inflate_xyz(8.0, 4.0, 8.0);
+    world.get_entities_in_aabb(&search).iter().any(|entity| {
+        entity
+            .downcast_ref::<PolarBearEntity>()
+            .is_some_and(AgeableMob::is_baby)
+    })
+}
+
+/// The polar bear behind a goal's mob handle.
+fn bear_of(mob: &dyn PathfinderMob) -> Option<&PolarBearEntity> {
+    mob.as_entity_event_source()
+        .downcast_ref::<PolarBearEntity>()
 }
 
 /// Vanilla `PolarBear.PolarBearMeleeAttackGoal`.
@@ -191,11 +299,6 @@ impl PolarBearMeleeAttackGoal {
         Self {
             inner: MeleeAttackGoal::new(1.25, true),
         }
-    }
-
-    fn bear(mob: &dyn PathfinderMob) -> Option<&PolarBearEntity> {
-        mob.as_entity_event_source()
-            .downcast_ref::<PolarBearEntity>()
     }
 }
 
@@ -217,7 +320,7 @@ impl Goal for PolarBearMeleeAttackGoal {
     }
 
     fn stop(&mut self, mob: &dyn PathfinderMob) {
-        if let Some(bear) = Self::bear(mob) {
+        if let Some(bear) = bear_of(mob) {
             bear.set_standing(false);
         }
         self.inner.stop(mob);
@@ -230,7 +333,7 @@ impl Goal for PolarBearMeleeAttackGoal {
     fn tick(&mut self, mob: &dyn PathfinderMob, entity: &SharedEntity) {
         // Vanilla `PolarBearMeleeAttackGoal.checkAndPerformAttack`: stand up shortly before
         // striking, and stand down when in range or out of range.
-        if let Some(bear) = Self::bear(mob)
+        if let Some(bear) = bear_of(mob)
             && let Some(target) = mob.target()
         {
             let target_width = target.bounding_box().width();
@@ -421,21 +524,6 @@ impl Mob for PolarBearEntity {
     ) -> Option<SpawnGroupData> {
         self.finalize_spawn_ageable_mob(world, spawn_reason, group_data)
     }
-
-    /// Vanilla `PolarBear.checkPolarBearSpawnRules` reduced to the standard animal rules (the
-    /// alternate-block biome branch needs a biome-tag lookup this static rule cannot reach).
-    fn check_mob_spawn_rules(
-        entity_type: EntityTypeRef,
-        level: &dyn LevelReader,
-        spawn_reason: EntitySpawnReason,
-        pos: BlockPos,
-    ) -> bool
-    where
-        Self: Sized,
-    {
-        let _ = entity_type;
-        <Self as Animal>::check_animal_spawn_rules(level, spawn_reason, pos)
-    }
 }
 
 impl AgeableMob for PolarBearEntity {
@@ -475,13 +563,111 @@ impl PathfinderMob for PolarBearEntity {}
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Weak;
+    use std::sync::{Arc, Weak};
 
     use glam::DVec3;
-    use steel_registry::{init_vanilla_registry, vanilla_entities};
+    use steel_registry::{
+        init_vanilla_registry, vanilla_blocks, vanilla_damage_types, vanilla_entities,
+        vanilla_game_rules,
+    };
+    use steel_utils::types::UpdateFlags;
+    use steel_utils::{BlockPos, ChunkPos};
 
     use super::PolarBearEntity;
-    use crate::entity::Entity;
+    use crate::behavior::init_behaviors;
+    use crate::entity::damage::DamageSource;
+    use crate::entity::neutral_mob::NeutralMob;
+    use crate::entity::{AgeableMob, Entity, Mob, SharedEntity, add_spawned_entity, init_entities};
+    use crate::player::{Player, ResetReason};
+    use crate::test_support::{
+        TestPlayerBuilder, TestWorld, fresh_test_world, insert_entity_ticking_chunks,
+        settle_entity_ticking_chunk,
+    };
+    use crate::world::World;
+
+    /// Vanilla `AgeableMob.BABY_START_AGE`.
+    const BABY_START_AGE: i32 = -24_000;
+
+    /// Radius, in chunks, of the region a player holds entity-ticking: the player's
+    /// tickets cover a `simulation_distance` (2) square, whose readiness derivation
+    /// needs that square's own 5x5 `Full`, hence a 9x9 region.
+    const PLAYER_TICKING_RADIUS: i32 = 4;
+
+    /// A flat stone floor with the chunks around the origin loaded entity-ticking;
+    /// natural spawning is off so the bears the tests place are the only mobs in the
+    /// world.
+    fn bear_test_world(name: &'static str) -> TestWorld {
+        init_vanilla_registry();
+        init_entities();
+        init_behaviors();
+
+        let fixture = fresh_test_world(name);
+        let world = &fixture.world;
+        // Load the 9x9 `Full` region before any player joins: the join queues the
+        // player's tickets, and the next chunk source pass re-derives readiness from
+        // the neighborhood, demoting the origin chunk (and starving the bear) when the
+        // 5x5 `Full` is missing.
+        insert_entity_ticking_chunks(world, ChunkPos::new(0, 0), PLAYER_TICKING_RADIUS);
+
+        let stone = vanilla_blocks::STONE.default_state();
+        for x in -32..=47 {
+            for z in -32..=47 {
+                assert!(world.set_block(BlockPos::new(x, 63, z), stone, UpdateFlags::UPDATE_ALL));
+            }
+        }
+
+        world.set_game_rule(&vanilla_game_rules::SPAWN_MOBS, false);
+        world.set_game_rule(&vanilla_game_rules::SPAWN_MONSTERS, false);
+        fixture
+    }
+
+    fn tick(world: &Arc<World>, ticks: &mut u64) {
+        world.game_time.advance();
+        world.tick_game(*ticks, true);
+        *ticks += 1;
+    }
+
+    /// Joins a test player that holds the chunk entity-ticking, so `tick_game` steps the bear AI.
+    fn join_test_player(
+        world: &Arc<World>,
+        name: &'static str,
+        id: i32,
+        position: DVec3,
+    ) -> Arc<Player> {
+        let player = TestPlayerBuilder::new(Arc::clone(world), name, id).build();
+        player.set_client_loaded(true);
+        player.base().set_position_local(position);
+        assert!(
+            world.add_player(Arc::clone(&player), ResetReason::InitialJoin),
+            "the test player must hold the chunk active"
+        );
+        // The join queued the player's loading/simulation tickets; run the chunk source
+        // phase now so the origin chunk's readiness is derived from its loaded
+        // neighborhood and the bear stays in the manager's tick list.
+        settle_entity_ticking_chunk(world, ChunkPos::new(0, 0));
+        player
+    }
+
+    fn spawn_bear(
+        world: &Arc<World>,
+        id: i32,
+        position: DVec3,
+        baby: bool,
+    ) -> Arc<PolarBearEntity> {
+        let bear = Arc::new(PolarBearEntity::new(
+            &vanilla_entities::POLAR_BEAR,
+            id,
+            position,
+            Arc::downgrade(world),
+        ));
+        if baby {
+            bear.set_age(BABY_START_AGE);
+        }
+
+        let entity: SharedEntity = Arc::<PolarBearEntity>::clone(&bear);
+        add_spawned_entity(world, entity).expect("the polar bear should join the world");
+        bear
+    }
 
     #[test]
     fn polar_bear_standing_flag_round_trips() {
@@ -493,5 +679,106 @@ mod tests {
         assert!(bear.is_standing());
         assert_eq!(bear.standing_animation_scale(), 1.0);
         assert_eq!(bear.entity_type(), &vanilla_entities::POLAR_BEAR);
+    }
+
+    /// Vanilla `PolarBear.PolarBearAttackPlayersGoal`: an adult polar bear is neutral toward an
+    /// unprovoked player and only attacks once a baby polar bear stands within `(8, 4, 8)` of it.
+    #[test]
+    fn unprovoked_polar_bear_needs_a_cub_to_attack_a_player() {
+        let fixture = bear_test_world("polar_bear_cub_targeting");
+        let world = &fixture.world;
+        let player = join_test_player(world, "Prey", 1, DVec3::new(4.5, 64.0, 0.5));
+        let bear = spawn_bear(world, 2, DVec3::new(0.5, 64.0, 0.5), false);
+
+        let mut ticks = 0;
+        for _ in 0..100 {
+            tick(world, &mut ticks);
+        }
+        assert!(
+            bear.target().is_none(),
+            "an adult polar bear must ignore an unprovoked player while no cub is nearby"
+        );
+
+        let cub = spawn_bear(world, 3, DVec3::new(2.5, 64.0, 0.5), true);
+        assert!(AgeableMob::is_baby(&*cub));
+
+        // The bear takes the player as soon as it finds one; the player can die to the follow-up
+        // melee hits, so the first target the bear takes is what matters.
+        let mut first_target = None;
+        for _ in 0..100 {
+            tick(world, &mut ticks);
+            first_target = first_target.or_else(|| bear.target().map(|target| target.id()));
+        }
+        assert_eq!(
+            first_target,
+            Some(player.id()),
+            "the cub within the (8, 4, 8) box must make the adult polar bear attack the player"
+        );
+    }
+
+    /// Vanilla gates `PolarBearAttackPlayersGoal.canUse` on `!isBaby`, so a baby bear never takes
+    /// a player target even with cubs (itself included) around.
+    #[test]
+    fn baby_polar_bear_never_targets_players() {
+        let fixture = bear_test_world("polar_bear_baby_targeting");
+        let world = &fixture.world;
+        let _player = join_test_player(world, "Prey", 1, DVec3::new(4.5, 64.0, 0.5));
+        let cub = spawn_bear(world, 2, DVec3::new(0.5, 64.0, 0.5), true);
+        let _other_cub = spawn_bear(world, 3, DVec3::new(2.5, 64.0, 0.5), true);
+        assert!(AgeableMob::is_baby(&*cub));
+
+        let mut ticks = 0;
+        for _ in 0..100 {
+            tick(world, &mut ticks);
+        }
+        assert!(
+            cub.target().is_none(),
+            "a baby polar bear must not target players"
+        );
+    }
+
+    /// Vanilla `HurtByTargetGoal` plus `NearestAttackableTargetGoal(..., this::isAngryAt)`: a hit
+    /// bear hunts the player that hit it and keeps that player as its persistent anger target.
+    #[test]
+    fn a_provoked_polar_bear_hunts_the_player_that_hit_it() {
+        let fixture = bear_test_world("polar_bear_provoked_targeting");
+        let world = &fixture.world;
+        let player = join_test_player(world, "Attacker", 1, DVec3::new(4.5, 64.0, 0.5));
+        let bear = spawn_bear(world, 2, DVec3::new(0.5, 64.0, 0.5), false);
+        let player_entity: SharedEntity = Arc::<Player>::clone(&player);
+
+        let mut ticks = 0;
+        for _ in 0..20 {
+            tick(world, &mut ticks);
+        }
+        assert!(
+            bear.target().is_none(),
+            "the bear must start out neutral toward an unprovoked player"
+        );
+        assert!(
+            bear.tick_count() > 0,
+            "the bear must be stepped by the world's entity ticks for its goals to run"
+        );
+
+        let source = DamageSource::direct(
+            &vanilla_damage_types::PLAYER_ATTACK,
+            Arc::clone(&player_entity),
+        );
+        assert!(bear.hurt(world, &source, 1.0));
+
+        let mut first_target = None;
+        for _ in 0..40 {
+            tick(world, &mut ticks);
+            first_target = first_target.or_else(|| bear.target().map(|target| target.id()));
+        }
+        assert_eq!(
+            first_target,
+            Some(player.id()),
+            "the bear must hunt the player that hit it"
+        );
+        assert!(
+            NeutralMob::is_angry_at(&*bear, player.as_ref()),
+            "the bear must remember the player that hit it"
+        );
     }
 }

@@ -169,17 +169,16 @@ impl Player {
     ///
     /// Vanilla priority: `Sleeping` > `Swimming` > `FallFlying` > `SpinAttack` >
     /// `Crouching` > `Standing`. The flying ability only suppresses the crouching
-    /// branch because `is_swimming` already checks it; Steel has no auto-spin-attack
-    /// state yet, so the `SpinAttack` branch is still missing.
+    /// branch because `is_swimming` already checks it.
     pub(super) fn get_desired_pose(&self) -> EntityPose {
-        // TODO: Add the SpinAttack pose between FallFlying and Sneaking once the
-        // riptide auto-spin-attack state exists.
         if self.is_sleeping() {
             EntityPose::Sleeping
         } else if self.is_swimming() {
             EntityPose::Swimming
         } else if self.is_fall_flying() {
             EntityPose::FallFlying
+        } else if self.is_auto_spin_attack() {
+            EntityPose::SpinAttack
         } else if self.is_crouching() && !self.is_flying() {
             EntityPose::Sneaking
         } else {

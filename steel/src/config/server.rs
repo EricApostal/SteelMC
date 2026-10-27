@@ -4,7 +4,7 @@ use steel_core::{
     chunk::chunk_ticket_manager::MAX_SUPPORTED_VIEW_DISTANCE,
     config::{
         CompressionInfo, DEFAULT_MAX_CHAINED_NEIGHBOR_UPDATES, DEFAULT_SPAM_THRESHOLD_SECONDS,
-        RuntimeConfig, ServerLinks, validate_login_security,
+        DEFAULT_SPAWN_PROTECTION_RADIUS, RuntimeConfig, ServerLinks, validate_login_security,
     },
     permission::PermissionLevel,
 };
@@ -29,6 +29,11 @@ const fn default_op_permission_level() -> PermissionLevel {
 /// Vanilla `function-permission-level` default (`GAMEMASTER`).
 const fn default_function_permission_level() -> PermissionLevel {
     PermissionLevel::Gamemasters
+}
+
+/// Vanilla `spawn-protection` default radius (`16`).
+const fn default_spawn_protection_radius() -> i32 {
+    DEFAULT_SPAWN_PROTECTION_RADIUS
 }
 
 /// Steel config minimum for packet compression threshold, in bytes.
@@ -111,6 +116,10 @@ pub struct ServerConfig {
     /// Vanilla `function-permission-level`: the level command functions run with.
     #[serde(default = "default_function_permission_level")]
     pub function_permission_level: PermissionLevel,
+    /// Vanilla `spawn-protection`: the square radius, in blocks, around the world
+    /// spawn where non-operators may not edit blocks. `0` disables protection.
+    #[serde(default = "default_spawn_protection_radius")]
+    pub spawn_protection_radius: i32,
 }
 
 impl ServerConfig {
@@ -136,6 +145,7 @@ impl ServerConfig {
             enforce_whitelist: self.enforce_whitelist,
             op_permission_level: self.op_permission_level,
             function_permission_level: self.function_permission_level,
+            spawn_protection_radius: self.spawn_protection_radius,
             chat_spam_threshold_seconds: self.chat_spam_threshold_seconds,
             command_spam_threshold_seconds: self.command_spam_threshold_seconds,
             compression: self.compression,

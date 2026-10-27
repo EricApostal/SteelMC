@@ -75,11 +75,12 @@ use steel_protocol::packets::game::{
 };
 use steel_protocol::packets::game::{CLevelEvent, CSetEntityData, CSetExperience, WaypointIcon};
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
+use steel_registry::data_components::vanilla_components::BLOCKS_ATTACKS;
 use steel_registry::entity_data::{EntityPose, HumanoidArm, ParticleList};
 use steel_registry::entity_type::{EntityDimensions, EntityTypeRef};
 use steel_registry::game_rules::GameRuleRef;
 use steel_registry::mob_effect::MobEffectRef;
-use steel_registry::sound_event::SoundEventRef;
+use steel_registry::sound_event::{SoundEventHolder, SoundEventRef};
 use steel_registry::vanilla_block_tags::BlockTag;
 use steel_registry::vanilla_entity_data::PlayerEntityData;
 use steel_registry::vanilla_game_rules::{
@@ -115,6 +116,7 @@ use crate::config::RuntimeConfig;
 use crate::enchantment_helper;
 use crate::entity::LivingEntityRef;
 use crate::entity::damage::{CombatStateChange, DamageSource};
+use crate::entity::dismount_helper;
 use crate::entity::entities::ExperienceOrbEntity;
 use crate::entity::entities::mobs::hostile::warden::WardenSpawnTracker;
 use crate::entity::{
@@ -161,6 +163,7 @@ use steel_registry::items::ItemRef;
 use steel_registry::stat::vanilla_stat_types;
 use steel_utils::{
     BlockPos, BlockStateId, ChunkPos, DowncastType, DowncastTypeKey, Identifier, UuidExt as _,
+    WorldAabb,
 };
 
 use crate::inventory::container::Container;
@@ -354,6 +357,33 @@ pub struct Player {
     pub advancements: SyncMutex<PlayerAdvancement>,
     /// Vanilla `ServerRecipeBook` (unlocked recipes + book UI state).
     pub recipe_book: SyncMutex<recipe_book::ServerRecipeBook>,
+
+    /// Vanilla `LivingEntity.autoSpinAttack*`: the riptide auto-spin-attack
+    /// countdown, damage and weapon stack. Only players can start one
+    /// (vanilla `Player.startAutoSpinAttack`), so the state lives here.
+    auto_spin_attack: SyncMutex<AutoSpinAttack>,
+}
+
+/// Vanilla `LivingEntity.autoSpinAttackTicks` / `autoSpinAttackDmg` /
+/// `autoSpinAttackItemStack`.
+#[derive(Debug)]
+struct AutoSpinAttack {
+    /// Remaining spin-attack ticks; the attack runs while this is positive.
+    ticks: i32,
+    /// Vanilla `autoSpinAttackDmg`: the base damage each touched entity takes.
+    damage: f32,
+    /// Vanilla `autoSpinAttackItemStack`: the weapon used for the spin attack.
+    item: Option<ItemStack>,
+}
+
+impl Default for AutoSpinAttack {
+    fn default() -> Self {
+        Self {
+            ticks: 0,
+            damage: 0.0,
+            item: None,
+        }
+    }
 }
 
 // SAFETY: This key is owned by Steel and uniquely identifies `Player`.
@@ -406,6 +436,8 @@ impl Player {
 
     const USING_ITEM_FLAG: i8 = 1;
     const OFF_HAND_ACTIVE_ITEM_FLAG: i8 = 1 << 1;
+    /// Vanilla `LivingEntity.LIVING_ENTITY_FLAG_SPIN_ATTACK` (bit 2).
+    const SPIN_ATTACK_FLAG: i8 = 1 << 2;
 
     /// Returns the chunk sender owned by this player's connection session.
     pub(crate) fn chunk_sender(&self) -> &SyncMutex<ChunkSender> {
@@ -581,6 +613,121 @@ impl Player {
         self.inventory.lock().set_item_in_hand(hand, item);
     }
 
+    /// Vanilla `Player.startAutoSpinAttack`: stores the spin-attack damage and
+    /// weapon stack and flags the player as spinning.
+    ///
+    /// Vanilla's `removeEntitiesOnShoulder()` has no Steel counterpart yet
+    /// (shoulder entities are NBT-only stubs), so it is not called here.
+    pub fn start_auto_spin_attack(
+        &self,
+        activation_ticks: i32,
+        damage: f32,
+        item_stack: ItemStack,
+    ) {
+        {
+            let mut state = self.auto_spin_attack.lock();
+            state.ticks = activation_ticks;
+            state.damage = damage;
+            state.item = Some(item_stack);
+        }
+
+        // Vanilla gates this on `!level.isClientSide()`; Steel is server-only.
+        self.set_auto_spin_attack_flag(true);
+    }
+
+    /// Vanilla `LivingEntity.isAutoSpinAttack`.
+    #[must_use]
+    pub fn is_auto_spin_attack(&self) -> bool {
+        let flags = *self
+            .entity_data
+            .lock()
+            .living_entity()
+            .living_entity_flags
+            .get();
+        (flags & Self::SPIN_ATTACK_FLAG) != 0
+    }
+
+    /// Vanilla `LivingEntity.autoSpinAttackItemStack`, read through
+    /// `Player.getWeaponItem` while the spin attack is active.
+    #[must_use]
+    pub fn auto_spin_attack_item(&self) -> ItemStack {
+        self.auto_spin_attack
+            .lock()
+            .item
+            .clone()
+            .unwrap_or_else(ItemStack::empty)
+    }
+
+    /// Vanilla `LivingEntity.autoSpinAttackDmg`: the base damage of the spin
+    /// attack, replacing the attack-damage attribute.
+    #[must_use]
+    pub fn auto_spin_attack_damage(&self) -> f32 {
+        self.auto_spin_attack.lock().damage
+    }
+
+    /// Sets or clears the synced `LivingEntity` spin-attack flag.
+    fn set_auto_spin_attack_flag(&self, enabled: bool) {
+        let mut entity_data = self.entity_data.lock();
+        let flags = *entity_data.living_entity().living_entity_flags.get();
+        let flags = if enabled {
+            flags | Self::SPIN_ATTACK_FLAG
+        } else {
+            flags & !Self::SPIN_ATTACK_FLAG
+        };
+        entity_data
+            .living_entity_mut()
+            .living_entity_flags
+            .set(flags);
+    }
+
+    /// Vanilla `LivingEntity.aiStep`'s auto-spin-attack block: count the attack
+    /// down by one tick and sweep the box the player travelled through.
+    ///
+    /// Vanilla runs this from `LivingEntity.aiStep`, but only a player can start
+    /// an auto-spin-attack, so the tick lives on the player.
+    fn tick_auto_spin_attack(&self, before_travel_box: WorldAabb) {
+        if self.auto_spin_attack.lock().ticks <= 0 {
+            return;
+        }
+
+        self.auto_spin_attack.lock().ticks -= 1;
+        self.check_auto_spin_attack(before_travel_box, self.bounding_box());
+    }
+
+    /// Vanilla `LivingEntity.checkAutoSpinAttack`: the first living entity the
+    /// spin attack sweeps through is attacked, which ends the attack.
+    fn check_auto_spin_attack(&self, old: WorldAabb, current: WorldAabb) {
+        let sweep = WorldAabb::encapsulating(&old, &current);
+        let world = self.get_world();
+        let self_id = self.id();
+
+        let target = world
+            .get_entities_in_aabb_matching(&sweep, |entity| {
+                entity.id() != self_id && entity.as_living_entity().is_some()
+            })
+            .into_iter()
+            .next();
+
+        if let Some(target) = target {
+            // `Player.doAutoAttackOnTouch` re-enters the full attack pipeline
+            // with the spin-attack damage and weapon.
+            if let Some(player) = world.players.get_by_entity_id(self_id) {
+                let _: bool = player.attack(&target);
+            }
+            self.auto_spin_attack.lock().ticks = 0;
+            self.set_velocity(self.velocity() * -0.2);
+        } else if self.horizontal_collision() {
+            self.auto_spin_attack.lock().ticks = 0;
+        }
+
+        if self.auto_spin_attack.lock().ticks <= 0 {
+            self.set_auto_spin_attack_flag(false);
+            let mut state = self.auto_spin_attack.lock();
+            state.damage = 0.0;
+            state.item = None;
+        }
+    }
+
     /// Returns the player's configured main arm.
     #[must_use]
     pub fn main_arm(&self) -> HumanoidArm {
@@ -736,6 +883,7 @@ impl Player {
             last_action_time: SyncMutex::new(Instant::now()),
             advancements: SyncMutex::new(PlayerAdvancement::default()), // TODO save the advancement
             recipe_book: SyncMutex::new(recipe_book::ServerRecipeBook::new()),
+            auto_spin_attack: SyncMutex::new(AutoSpinAttack::default()),
         }
     }
 
@@ -1006,12 +1154,73 @@ impl Player {
     /// Vanilla `Player.canHarmPlayer` combined with the `ServerPlayer` override.
     ///
     /// `ServerPlayer.canHarmPlayer` is `!isPvpAllowed() ? false : super.canHarmPlayer(target)`,
-    /// and `Player.canHarmPlayer` is `doTeamsAllowDamage(target)`. Steel's `World` cannot
-    /// reach the server scoreboard, so the team term is always permissive here (reported
-    /// gap); the `pvp` game rule is exact.
+    /// and `Player.canHarmPlayer` is `Entity.doTeamsAllowDamage(target)`: players on the
+    /// same team may only damage each other when that team allows friendly fire.
     #[must_use]
-    pub fn can_harm_player(&self, _target: &Player) -> bool {
-        self.get_world().get_game_rule(&PVP)
+    pub fn can_harm_player(&self, target: &Player) -> bool {
+        self.get_world().get_game_rule(&PVP) && self.do_teams_allow_damage(target)
+    }
+
+    /// Vanilla `Entity.doTeamsAllowDamage`.
+    ///
+    /// Damage is always allowed when either player is teamless or they are on
+    /// different teams; when they share a team, that team's friendly-fire flag
+    /// decides. Vanilla `Team.isAlliedTo` is identity, so sharing a team name is
+    /// exactly "allied".
+    fn do_teams_allow_damage(&self, target: &Player) -> bool {
+        let Some(server) = self.server_if_present() else {
+            return true;
+        };
+        let world = self.get_world();
+        let Some(scoreboard) = server.scoreboards.get(world.domain()) else {
+            return true;
+        };
+        let own_holder = ScoreHolder::new(self.gameprofile.name());
+        let Some(own_team) = scoreboard.holder_team_name(&own_holder) else {
+            return true;
+        };
+        let same_team = scoreboard
+            .holder_team_name(&ScoreHolder::new(target.gameprofile.name()))
+            .is_some_and(|name| name == own_team);
+        if !same_team {
+            return true;
+        }
+        scoreboard
+            .team(&own_team)
+            .is_none_or(|team| team.allow_friendly_fire())
+    }
+
+    /// Vanilla `MinecraftServer.isUnderSpawnProtection` (the `DedicatedServer` override).
+    ///
+    /// A non-operator may not edit blocks within `spawn-protection` blocks of the
+    /// world spawn, measured as a square radius on the X/Z axes, in the dimension
+    /// the spawn data points at. The check is disabled when no operators exist or
+    /// the configured radius is zero, exactly like vanilla.
+    #[must_use]
+    pub(crate) fn is_under_spawn_protection(&self, pos: BlockPos) -> bool {
+        let Some(server) = self.server_if_present() else {
+            return false;
+        };
+        if server.ops().is_empty() || server.is_operator(self.gameprofile.id()) {
+            return false;
+        }
+        let radius = self.config.spawn_protection_radius;
+        if radius <= 0 {
+            return false;
+        }
+        let world = self.get_world();
+        let respawn_data = world
+            .level_data
+            .read()
+            .data()
+            .respawn_data_or_local(&world.key);
+        if respawn_data.dimension() != &world.key {
+            return false;
+        }
+        let spawn = respawn_data.pos();
+        let dx = (pos.x() - spawn.x()).abs();
+        let dz = (pos.z() - spawn.z()).abs();
+        dx.max(dz) <= radius
     }
 
     /// Whether `source` is a player, or an arrow shot by one, that may not damage this player.
@@ -1737,6 +1946,24 @@ impl Entity for Player {
             old_vehicle.id(),
             Self::passenger_ids_for_packet(old_vehicle.as_ref()),
         ));
+
+        // Vanilla `LivingEntity.stopRiding` places the dismounting player where the vehicle
+        // released it instead of leaving the body inside the hull, and vanilla
+        // `Player.getDismountPoses` is the pose order that placement searches.
+        dismount_helper::dismount_vehicle(self, old_vehicle.as_ref());
+        // The sneak flag is the dismount trigger, so it is dropped with the ride: leaving it
+        // set leaves the server crouched (pose, reach, AI visibility) until the client's
+        // next `SPlayerInput`.
+        self.set_crouching(false);
+    }
+
+    /// Vanilla `Player.getDismountPoses`.
+    fn dismount_poses(&self) -> &'static [EntityPose] {
+        &[
+            EntityPose::Standing,
+            EntityPose::Sneaking,
+            EntityPose::Swimming,
+        ]
     }
 
     fn teleport_to(&self, pos: DVec3) -> Result<(), EntityMoveError> {
@@ -2377,6 +2604,49 @@ impl LivingEntity for Player {
         Player::actually_hurt(self, world, source, amount);
     }
 
+    /// Vanilla `Player.blockUsingItem`: the base hook plus the shield-disable
+    /// window when the attacker's active weapon disables blocking (axes).
+    fn block_using_item(
+        &self,
+        world: &World,
+        attacker: &dyn LivingEntity,
+        source: &DamageSource,
+        damage: f32,
+        fully_blocked: bool,
+    ) {
+        // `LivingEntity::block_using_item` default body, inlined because a UFCS
+        // call would dispatch back into this override.
+        attacker.blocked_by_item(self.as_entity_event_source(), source, damage, fully_blocked);
+
+        let Some(item_blocking_with) = self.get_item_blocking_with() else {
+            return;
+        };
+        let Some(blocks_attacks) = item_blocking_with.get(BLOCKS_ATTACKS) else {
+            return;
+        };
+        let cooldown_ticks =
+            blocks_attacks.disable_blocking_for_ticks(attacker.get_seconds_to_disable_blocking());
+        if cooldown_ticks <= 0 {
+            return;
+        }
+
+        self.add_item_cooldown(&item_blocking_with, cooldown_ticks);
+        self.stop_using_item();
+        if let Some(sound) = blocks_attacks
+            .disabled_sound()
+            .and_then(SoundEventHolder::registry_ref)
+        {
+            world.play_sound_at(
+                sound,
+                self.sound_source(),
+                self.position(),
+                0.8,
+                0.8 + rand::random::<f32>() * 0.4,
+                None,
+            );
+        }
+    }
+
     fn hurt_broadcast_chunk(&self) -> ChunkPos {
         *self.last_chunk_pos.lock()
     }
@@ -2558,7 +2828,12 @@ impl LivingEntity for Player {
             self.reset_fall_distance();
         }
 
+        // Vanilla `LivingEntity.aiStep` snapshots the travelling box before
+        // `travel` and sweeps it for the auto-spin-attack right after. Only
+        // players can spin, so the hook lives on the player.
+        let before_travel_box = self.bounding_box();
         let result = self.default_ai_step(entity);
+        self.tick_auto_spin_attack(before_travel_box);
         self.set_y_head_rot(self.rotation().0);
         // Vanilla `Player.aiStep` ends with `handleShoulderEntities`.
         self.handle_shoulder_entities();

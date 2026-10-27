@@ -60,6 +60,7 @@ mod sit_when_ordered_to;
 mod spear_use_goal;
 mod stroll_through_village;
 mod swell_goal;
+mod tamable_panic_goal;
 mod target;
 mod target_goal;
 mod tempt_goal;
@@ -128,6 +129,7 @@ pub(crate) use restrict_sun::RestrictSunGoal;
 pub(crate) use selector::{Goal, GoalControl, GoalControls, GoalSelector, is_goal};
 pub(crate) use sit_when_ordered_to::SitWhenOrderedToGoal;
 pub(crate) use swell_goal::SwellGoal;
+pub(crate) use tamable_panic_goal::TamableAnimalPanicGoal;
 pub(crate) use target::{
     AngryAtPlayerTargetGoal, DefendVillageTargetGoal, ResetUniversalAngerTargetGoal,
 };

@@ -231,10 +231,7 @@ fn steel_main() {
     clippy::too_many_lines,
     reason = "boot sequence mirrors vanilla Main.main step for step in one read-through"
 )]
-async fn main_async(
-    chunk_runtime: Arc<Runtime>,
-    steel_config: config::SteelConfig,
-) {
+async fn main_async(chunk_runtime: Arc<Runtime>, steel_config: config::SteelConfig) {
     let cancel_token = CancellationToken::new();
 
     let logger = match init_tracing(cancel_token.clone(), steel_config.log.clone()).await {

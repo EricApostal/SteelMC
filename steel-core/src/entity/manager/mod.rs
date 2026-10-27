@@ -19,6 +19,8 @@ use super::{
     Entity, NullEntityCallback, RemovalReason, SharedEntity, snapshot_old_pos_and_rot_for_tick,
     tick_vehicle_passengers_with_ticked_if,
 };
+use crate::entity::entities::mobs::bosses::EnderDragonEntity;
+use steel_utils::Downcast as _;
 
 // Vanilla treats four blocks as the largest ordinary entity search extent.
 const ENTITY_SPATIAL_CELL_SIZE: f64 = 4.0;
@@ -419,10 +421,21 @@ impl EntityEntry {
     }
 }
 
+/// One vanilla `ServerLevel.dragonParts` entry.
+struct DragonPartEntry {
+    /// The owning dragon's id, used to tell whether the hitbox is accessible.
+    parent_id: i32,
+    entity: SharedEntity,
+}
+
 #[derive(Default)]
 struct ManagerState {
     chunk_visibility: FxHashMap<ChunkPos, EntityVisibility>,
     live_by_id: FxHashMap<i32, EntityEntry>,
+    /// Vanilla `ServerLevel.dragonParts`: the ender dragon's eight hitboxes, which
+    /// are entities but are never registered in the entity manager. Keyed by the
+    /// hitbox's id, which the client derives as `dragon id + 1 + index`.
+    dragon_parts: FxHashMap<i32, DragonPartEntry>,
     live_by_uuid: FxHashMap<Uuid, i32>,
     accessible_order: OrderedEntityIds,
     by_section: BTreeMap<PackedSectionPos, OrderedEntityIds>,
@@ -1150,12 +1163,19 @@ impl WorldEntityManager {
 
     #[must_use]
     /// Gets a live entity by session network ID.
+    ///
+    /// Vanilla `ServerLevel.getEntity(int)` also answers for the ender dragon's
+    /// hitboxes, which live outside the entity manager; see
+    /// [`Self::register_dragon_parts`].
     pub fn get_by_id(&self, entity_id: i32) -> Option<SharedEntity> {
-        self.state
-            .read()
-            .live_by_id
+        let state = self.state.read();
+        if let Some(entry) = state.live_by_id.get(&entity_id) {
+            return Some(Arc::clone(&entry.entity));
+        }
+        state
+            .dragon_parts
             .get(&entity_id)
-            .map(|entry| Arc::clone(&entry.entity))
+            .map(|part| Arc::clone(&part.entity))
     }
 
     /// Returns true if this exact entity is live or retained for chunk-unload recovery.
@@ -1174,10 +1194,18 @@ impl WorldEntityManager {
 
     #[must_use]
     /// Gets a live entity by session network ID if it is visible to vanilla gameplay lookups.
+    ///
+    /// A hitbox id (the ender dragon's parts; see [`Self::register_dragon_parts`])
+    /// resolves when its parent dragon is accessible, since a part always sits
+    /// inside the chunk the dragon is in.
     pub fn get_accessible_by_id(&self, entity_id: i32) -> Option<SharedEntity> {
         let state = self.state.read();
-        let entry = state.live_by_id.get(&entity_id)?;
-        Self::is_accessible(&state, entry).then(|| Arc::clone(&entry.entity))
+        if let Some(entry) = state.live_by_id.get(&entity_id) {
+            return Self::is_accessible(&state, entry).then(|| Arc::clone(&entry.entity));
+        }
+        let part = state.dragon_parts.get(&entity_id)?;
+        let parent = state.live_by_id.get(&part.parent_id)?;
+        Self::is_accessible(&state, parent).then(|| Arc::clone(&part.entity))
     }
 
     #[must_use]
@@ -1729,6 +1757,44 @@ impl WorldEntityManager {
         if is_accessible {
             state.accessible_order.insert(entity_id);
         }
+        Self::register_dragon_parts(state, entity_id);
+    }
+
+    /// Vanilla `ServerLevel.onTrackingStart`'s `EnderDragon` branch: publish the
+    /// dragon's eight hitboxes under their own ids.
+    ///
+    /// Vanilla clients only ever hit a dragon through these hitboxes, because
+    /// `EnderDragon.isPickable` is `false`; the ids a hit packet carries must
+    /// therefore be resolvable on the server.
+    fn register_dragon_parts(state: &mut ManagerState, entity_id: i32) {
+        let Some(entry) = state.live_by_id.get(&entity_id) else {
+            return;
+        };
+        let Some(dragon) = entry.entity.downcast_ref::<EnderDragonEntity>() else {
+            return;
+        };
+        for part in dragon.shared_parts() {
+            state.dragon_parts.insert(
+                part.id(),
+                DragonPartEntry {
+                    parent_id: entity_id,
+                    entity: part,
+                },
+            );
+        }
+    }
+
+    /// Vanilla `ServerLevel.onTrackingEnd`'s `EnderDragon` branch.
+    fn unregister_dragon_parts(state: &mut ManagerState, entity_id: i32) {
+        let Some(entry) = state.live_by_id.get(&entity_id) else {
+            return;
+        };
+        let Some(dragon) = entry.entity.downcast_ref::<EnderDragonEntity>() else {
+            return;
+        };
+        for part in dragon.shared_parts() {
+            state.dragon_parts.remove(&part.id());
+        }
     }
 
     fn contains_uuid(state: &ManagerState, uuid: Uuid) -> bool {
@@ -1797,6 +1863,7 @@ impl WorldEntityManager {
     }
 
     fn remove_live_entry(state: &mut ManagerState, entity_id: i32) -> Option<EntityEntry> {
+        Self::unregister_dragon_parts(state, entity_id);
         let entry = state.live_by_id.remove(&entity_id)?;
         state.tick_list.remove(entity_id);
         state.live_by_uuid.remove(&entry.uuid);

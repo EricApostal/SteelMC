@@ -1,6 +1,7 @@
 //! Vanilla `Emerging`: rise out of the ground in the `EMERGING` pose.
 
 use steel_registry::entity_data::EntityPose;
+use steel_registry::sound_events;
 
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::module_type as mem;
@@ -53,9 +54,10 @@ impl Behavior for Emerging {
     }
 
     fn start(&mut self, ctx: &mut BehaviorContext<'_>) {
-        // Vanilla plays `SoundEvents.WARDEN_EMERGE` here; the AI layer has no
-        // server audio path.
+        // Vanilla `Emerging.start`: `setPose(EMERGING)` then `WARDEN_EMERGE` at volume 5.
         ctx.body.set_pose(EntityPose::Emerging);
+        ctx.body
+            .play_sound(&sound_events::ENTITY_WARDEN_EMERGE, 5.0, 1.0);
     }
 
     fn stop(&mut self, ctx: &mut BehaviorContext<'_>) {

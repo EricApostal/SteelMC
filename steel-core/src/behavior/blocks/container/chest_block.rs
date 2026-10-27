@@ -24,11 +24,11 @@ use crate::behavior::block::{
     BlockBehavior, BlockEntityCreation, schedule_water_tick_if_waterlogged,
 };
 use crate::behavior::context::{BlockHitResult, BlockPlaceContext, InteractionResult};
-use crate::block_entity::BLOCK_ENTITIES;
 use crate::block_entity::entities::ChestBlockEntity;
+use crate::block_entity::{BLOCK_ENTITIES, SharedBlockEntity};
 use crate::entity::ai::path::PathComputationType;
 use crate::inventory::container::{Container, calculate_redstone_signal_from_container};
-use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
+use crate::inventory::lock::ContainerLockGuard;
 use crate::inventory::menu::kinds::{chest, double_chest};
 use crate::player::Player;
 use crate::world::{
@@ -198,24 +198,37 @@ pub(crate) fn is_chest_blocked_at(world: &dyn LevelReader, pos: BlockPos) -> boo
     is_redstone_conductor(world, world.get_block_state(above), above)
 }
 
-/// Resolves the menu containers for `pos`: the single container, or both halves
-/// when this chest forms a double chest like vanilla's `DoubleBlockCombiner`.
+/// The block entities a chest position combines with.
+///
+/// Mirrors vanilla's `ChestBlock.combine` /
+/// `DoubleBlockCombiner.NeighborCombineResult`: this chest and, when the
+/// position forms a double chest, its partner in vanilla's canonical order (for
+/// a left pair the other half comes first).
+pub(crate) struct CombinedChest {
+    pub(crate) first: SharedBlockEntity,
+    pub(crate) second: Option<SharedBlockEntity>,
+}
+
+/// Resolves the block entities of `pos` and, when it forms a double chest, of
+/// its partner.
 ///
 /// Returns `None` when vanilla's blocked check rejects the chest, in which case
 /// no menu is created at all.
-pub(crate) fn combined_refs(
+pub(crate) fn combined_chest(
     world: &dyn LevelReader,
     pos: BlockPos,
     state: BlockStateId,
-) -> Option<(ContainerRef, Option<ContainerRef>)> {
+) -> Option<CombinedChest> {
     if is_chest_blocked_at(world, pos) {
         return None;
     }
 
-    let block_entity = world.get_block_entity(pos)?;
-    let own = ContainerRef::from_block_entity(block_entity)?;
+    let own = world.get_block_entity(pos)?;
     if state.get_value(CHEST_TYPE) == ChestType::Single {
-        return Some((own, None));
+        return Some(CombinedChest {
+            first: own,
+            second: None,
+        });
     }
 
     let partner_pos = connected_direction(state).relative(pos);
@@ -230,20 +243,29 @@ pub(crate) fn combined_refs(
         || partner_state.get_value(CHEST_TYPE) == state.get_value(CHEST_TYPE)
         || partner_state.get_value(FACING) != state.get_value(FACING)
     {
-        return Some((own, None));
+        return Some(CombinedChest {
+            first: own,
+            second: None,
+        });
     }
 
-    let Some(partner) = world
-        .get_block_entity(partner_pos)
-        .and_then(ContainerRef::from_block_entity)
-    else {
-        return Some((own, None));
+    let Some(partner) = world.get_block_entity(partner_pos) else {
+        return Some(CombinedChest {
+            first: own,
+            second: None,
+        });
     };
     // Vanilla canonical order: `first` of a LEFT pair is the other half.
     if state.get_value(CHEST_TYPE) == ChestType::Right {
-        Some((own, Some(partner)))
+        Some(CombinedChest {
+            first: own,
+            second: Some(partner),
+        })
     } else {
-        Some((partner, Some(own)))
+        Some(CombinedChest {
+            first: partner,
+            second: Some(own),
+        })
     }
 }
 
@@ -254,9 +276,24 @@ pub(crate) fn open_menu(
     player: &Player,
     open_stat: CustomStatRef,
 ) -> InteractionResult {
-    let Some((first, second)) = combined_refs(world.as_ref(), pos, state) else {
+    let Some(combined) = combined_chest(world.as_ref(), pos, state) else {
         return InteractionResult::Success;
     };
+
+    // Vanilla's chest menu providers unpack the pending loot table of every
+    // combined half with the opening player before the menu is built: a single
+    // chest through `RandomizableContainerBlockEntity.createMenu`, a double
+    // chest through `ChestBlock`'s provider. Structure loot must therefore be
+    // in the slots by the time the menu reads them.
+    combined.first.unpack_loot_table(Some(player));
+    if let Some(second) = &combined.second {
+        second.unpack_loot_table(Some(player));
+    }
+
+    let Some(first) = combined.first.container_ref() else {
+        return InteractionResult::Success;
+    };
+    let second = combined.second.and_then(|second| second.container_ref());
 
     let inventory = Arc::clone(&player.inventory);
     if let Some(second) = second {
@@ -304,9 +341,23 @@ fn combined_signal(first: &dyn Container, second: &dyn Container) -> i32 {
 /// Vanilla `ChestBlock.getAnalogOutputSignal`, including the blocked check of
 /// `getContainer(..., ignoreBeingBlocked = false)`.
 pub(crate) fn analog_signal(state: BlockStateId, world: &dyn LevelReader, pos: BlockPos) -> i32 {
-    let Some((first, second)) = combined_refs(world, pos, state) else {
+    let Some(combined) = combined_chest(world, pos, state) else {
         return 0;
     };
+
+    // Vanilla `AbstractContainerMenu.getRedstoneSignalFromContainer` reads
+    // every slot through `RandomizableContainerBlockEntity.getItem`, which
+    // unpacks a pending loot table (no player drives that read) before the
+    // signal is computed.
+    combined.first.unpack_loot_table(None);
+    if let Some(second) = &combined.second {
+        second.unpack_loot_table(None);
+    }
+
+    let Some(first) = combined.first.container_ref() else {
+        return 0;
+    };
+    let second = combined.second.and_then(|second| second.container_ref());
 
     if let Some(second) = second {
         let guard = ContainerLockGuard::lock_all(&[&first, &second]);

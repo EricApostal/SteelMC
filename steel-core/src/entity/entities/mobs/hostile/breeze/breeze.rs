@@ -213,7 +213,7 @@ impl BreezeEntity {
     pub fn can_attack_breeze_target(&self, target: &dyn LivingEntity) -> bool {
         let entity_type = target.entity_type();
         (entity_type == &vanilla_entities::PLAYER || entity_type == &vanilla_entities::IRON_GOLEM)
-            && Mob::can_attack(self, target)
+            && self.can_attack_base(target)
     }
 
     /// Vanilla `Breeze.withinInnerCircleRange` (`closerThan(ourPos, 4.0, 10.0)`).

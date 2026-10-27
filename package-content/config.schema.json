@@ -101,7 +101,7 @@
         "white_list": {
           "type": "boolean",
           "description": "Whether the allowlist (whitelist.json) gates logins",
-          "default": true
+          "default": false
         },
         "enforce_whitelist": {
           "type": "boolean",
@@ -121,6 +121,13 @@
           "minimum": 0,
           "maximum": 4,
           "default": 2
+        },
+        "spawn_protection_radius": {
+          "type": "integer",
+          "description": "Vanilla spawn-protection: square radius in blocks around the world spawn where non-operators may not edit blocks; 0 disables protection",
+          "minimum": -2147483648,
+          "maximum": 2147483647,
+          "default": 16
         },
         "chat_spam_threshold_seconds": {
           "type": "integer",

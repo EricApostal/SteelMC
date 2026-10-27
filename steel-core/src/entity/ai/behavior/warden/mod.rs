@@ -9,8 +9,9 @@
 //!
 //! - Anger (`Warden.getEntityAngryAt` / `increaseAngerAt` / `AngerManagement`) is
 //!   stored on the entity, not in the brain, and no Steel entity exposes it.
-//! - Pose sounds and the sonic-boom particles/entity event leave through the
-//!   client audio and particle paths, which the AI layer cannot reach.
+//! - Pitch-only client animation state and the sonic-boom particles still leave
+//!   through the client paths; the pose sounds and the sonic-charge entity event
+//!   do go out through `Entity::play_sound` / `Entity::broadcast_entity_event`.
 
 use std::sync::Arc;
 
@@ -163,4 +164,14 @@ pub(crate) fn warden_chest_attachment(ctx: &BehaviorContext<'_>) -> DVec3 {
         ctx.body.rotation().0,
         dimensions,
     )
+}
+
+/// Vanilla `SonicBoom`'s beam origin: the warden's feet position plus its
+/// `WARDEN_CHEST` attachment offset.
+///
+/// `Warden.position()` is the feet position, not the eye position, so the chest
+/// attachment is added to `position()` and not to `getEyePosition()`.
+#[must_use]
+pub(crate) fn sonic_boom_origin(ctx: &BehaviorContext<'_>) -> DVec3 {
+    ctx.body.position() + warden_chest_attachment(ctx)
 }

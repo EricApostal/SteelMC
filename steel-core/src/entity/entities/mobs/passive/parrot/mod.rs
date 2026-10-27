@@ -35,7 +35,7 @@ use steel_utils::{BlockPos, BlockStateId, ChunkPos, DowncastType, DowncastTypeKe
 use uuid::Uuid;
 
 use crate::behavior::InteractionResult;
-use crate::entity::ai::control::{FlyingMoveControl, FlyingMoveControlInput, MoveControlOperation};
+use crate::entity::ai::control::{FlyingMoveControl, tick_flying_move_control};
 use crate::entity::ai::goal::{
     FloatGoal, FollowMobGoal, FollowOwnerGoal, Goal, GoalControls, LookAtPlayerGoal, PanicGoal,
     ShoulderRiding, SitWhenOrderedToGoal, Tameable,
@@ -47,8 +47,8 @@ use crate::entity::leash::Leashable as _;
 use crate::entity::{
     AgeableMob, AgeableMobBase, AgeableMobGroupData, Animal, AnimalBase, Entity, EntityBase,
     EntityBaseLoad, EntityEventSource, EntityPose, EntitySpawnReason, EntitySyncedData,
-    LivingEntity, LivingEntityBase, LivingTravelInput, Mob, MobBase, MobEffectInstance,
-    PathfinderMob, RemovalReason, SharedEntity, SpawnGroupData,
+    LivingEntity, LivingEntityBase, Mob, MobBase, MobEffectInstance, PathfinderMob, RemovalReason,
+    SharedEntity, SpawnGroupData,
 };
 use crate::physics::MoveResult;
 use crate::player::Player;
@@ -1204,49 +1204,10 @@ impl Mob for ParrotEntity {
     }
 
     fn tick_move_control(&self) {
-        // Vanilla `FlyingMoveControl(this, 10, false)`: `FlyingMoveControl`
-        // ticked through the shared mover; gravity-flag plumbing comes from the
-        // shared `MoveControl`-to-`LivingTravelInput` mapping (`tick_move_control`
-        // reserved-owner patch), same as ground mobs.
-        let move_control = {
-            let mut controls = self.mob_base().controls().lock();
-            let move_control = controls.move_control;
-            if matches!(move_control.operation(), MoveControlOperation::MoveTo) {
-                controls.move_control.set_wait();
-            }
-            move_control
-        };
-
-        let (_, current_pitch) = self.rotation();
-        let movement_speed = self
-            .attributes()
-            .lock()
-            .required_value(vanilla_attributes::MOVEMENT_SPEED);
-        let flying_speed = self
-            .attributes()
-            .lock()
-            .required_value(vanilla_attributes::FLYING_SPEED);
-        let output = FLYING_MOVE_CONTROL.tick(FlyingMoveControlInput {
-            operation: move_control.operation(),
-            wanted_position: move_control.wanted_position(),
-            position: self.position(),
-            y_rot: self.rotation().0,
-            x_rot: current_pitch,
-            on_ground: self.on_ground(),
-            speed_modifier: move_control.speed_modifier(),
-            movement_speed,
-            flying_speed,
-        });
-
-        self.set_rotation((output.y_rot, output.x_rot));
-        self.set_mob_speed(output.speed);
-        self.set_no_gravity(output.no_gravity);
-        let input = self.travel_input();
-        self.set_travel_input(LivingTravelInput::new(
-            input.sideways(),
-            output.yya,
-            output.zza,
-        ));
+        // Vanilla `FlyingMoveControl(this, 10, false)`: turning, pitching, the
+        // flying-speed write and the gravity flag all come from the shared
+        // implementation, which keeps the forward travel input at the flying speed.
+        tick_flying_move_control(self, FLYING_MOVE_CONTROL);
     }
 
     fn custom_server_ai_step(&self) {

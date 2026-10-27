@@ -27,6 +27,8 @@ use crate::entity::{
 use crate::physics::MoveResult;
 use crate::world::{LevelReader, World};
 
+use super::squid::{SquidBody, tick_squid_body, travel};
+
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
 /// Vanilla `GlowSquid` hurt response (`setDarkTicks(100)`).
 const HURT_DARK_TICKS: i32 = 100;
@@ -40,6 +42,8 @@ pub struct GlowSquidEntity {
     mob_base: MobBase,
     ageable_base: AgeableMobBase,
     entity_data: SyncMutex<GlowSquidEntityData>,
+    /// Vanilla `GlowSquid extends Squid`, so it runs `Squid`'s body movement.
+    body: SquidBody,
 }
 
 // SAFETY: This key is owned by Steel and uniquely identifies `GlowSquidEntity`.
@@ -93,7 +97,26 @@ impl GlowSquidEntity {
             mob_base,
             ageable_base,
             entity_data: SyncMutex::new(entity_data),
+            body: SquidBody::new(),
         }
+    }
+
+    /// Vanilla `Squid`'s body state (tentacle cycle, jet velocity, body rotation).
+    #[must_use]
+    pub(super) const fn body(&self) -> &SquidBody {
+        &self.body
+    }
+
+    /// Vanilla `Squid.xBodyRot` (server-side pitch state).
+    #[must_use]
+    pub fn x_body_rot(&self) -> f32 {
+        self.body.x_body_rot()
+    }
+
+    /// Vanilla `Squid.zBodyRot` (server-side roll state).
+    #[must_use]
+    pub fn z_body_rot(&self) -> f32 {
+        self.body.z_body_rot()
     }
 
     fn update_dirty_mob_effect_entity_data(&self) {
@@ -192,9 +215,6 @@ impl Entity for GlowSquidEntity {
 
     fn tick(self: Arc<Self>) {
         let entity: SharedEntity = Arc::<Self>::clone(&self);
-        if let Some(world) = self.level() {
-            self.glow_effects(&world);
-        }
         self.tick_living_entity(&entity);
     }
 
@@ -308,8 +328,20 @@ impl LivingEntity for GlowSquidEntity {
         1 + rand::random_range(0..3)
     }
 
+    /// Vanilla `GlowSquid.aiStep`: `super.aiStep()` — which includes `Squid`'s tentacle and
+    /// jet movement — then the dark-tick countdown and the glow trail.
     fn ai_step(&self, entity: &SharedEntity) -> Option<MoveResult> {
-        self.mob_ai_step(entity)
+        let result = self.mob_ai_step(entity);
+        tick_squid_body(self, &self.body);
+        if let Some(world) = self.level() {
+            self.glow_effects(&world);
+        }
+        result
+    }
+
+    /// Vanilla `GlowSquid` inherits `Squid.travel`.
+    fn travel(&self, entity: &SharedEntity, _input: DVec3) -> Option<MoveResult> {
+        travel(entity, self.velocity())
     }
 }
 

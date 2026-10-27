@@ -6,9 +6,13 @@
 //! towards the creaking.
 //!
 //! Vanilla reads `EnvironmentAttributes.CREAKING_ACTIVE` here (to recompute `STATE` and to decide
-//! whether the protector must despawn). Steel's timeline sampler lives in
-//! `world::environment` and is private, so this entity reads the block state instead — the block's
-//! own `updateState` must supply the attribute; see the reported dependency.
+//! whether the protector must despawn) via `CreakingHeartBlock::creaking_active`, the crate's
+//! environment-attribute bridge (a public getter on `World` is still owned by the world/environment
+//! lane).
+//! Deviation: vanilla `removeProtector(DamageSource)` calls `Creaking.creakingDeathEffects` (no
+//! Steel equivalent) and, for a null source, `Creaking.tearDown` (private to the entity lane);
+//! Steel marks the protector as tearing down and zeroes its health, so the creaking's own
+//! twitch-death path performs the tear-down.
 
 use std::mem;
 use std::sync::{Arc, Weak};
@@ -38,7 +42,7 @@ use crate::behavior::blocks::{CreakingHeartBlock, multiface_face_property};
 use crate::block_entity::{BlockEntity, BlockEntityBase};
 use crate::entity::Mob;
 use crate::entity::entities::mobs::hostile::creaking::CreakingEntity;
-use crate::entity::{Entity as _, EntitySpawnReason, SharedEntity};
+use crate::entity::{Entity as _, EntitySpawnReason, LivingEntity, SharedEntity};
 use crate::world::World;
 use crate::world::game_event::GameEventContext;
 use crate::world::spawn::SpawnStrategy;
@@ -226,21 +230,12 @@ impl CreakingHeartBlockEntity {
         if !CreakingHeartBlock::has_required_logs(state, world.as_ref(), pos) && !has_creaking {
             return state.set_value(STATE, CreakingHeartState::Uprooted);
         }
-        let heart_state = if Self::creaking_active(state) {
+        let heart_state = if CreakingHeartBlock::creaking_active(world, pos) {
             CreakingHeartState::Awake
         } else {
             CreakingHeartState::Dormant
         };
         state.set_value(STATE, heart_state)
-    }
-
-    /// Vanilla `EnvironmentAttributes.CREAKING_ACTIVE` as reflected by the block state.
-    ///
-    /// The attribute is timeline-driven (`minecraft:gameplay/creaking_active`); Steel's sampler is
-    /// private to `world::environment`, so the block's `updateState` is the only producer of the
-    /// `awake` state here. Reported dependency: expose the attribute from `World`.
-    fn creaking_active(state: BlockStateId) -> bool {
-        state.get_value(STATE) == CreakingHeartState::Awake
     }
 
     /// Vanilla `CreakingHeartBlockEntity.spawnProtector`.
@@ -403,10 +398,15 @@ impl CreakingHeartBlockEntity {
 
     /// Vanilla `CreakingHeartBlockEntity.removeProtector`.
     ///
-    /// The damage-source half additionally calls `Creaking.creakingDeathEffects` and
-    /// `Creaking.tearDown`; both are entity-lane hooks Steel does not expose yet.
+    /// Deviation: vanilla calls `Creaking.creakingDeathEffects(source)` (no Steel equivalent) and
+    /// `Creaking.tearDown()` for a null source; here the protector is marked as tearing down and
+    /// its health is zeroed, so the creaking's own twitch-death path runs the tear-down.
     pub fn remove_protector(&self, world: &Arc<World>) {
-        if self.get_creaking_protector(world).is_some() {
+        if let Some(creaking) = self.get_creaking_protector(world) {
+            if let Some(entity) = creaking.downcast_ref::<CreakingEntity>() {
+                entity.set_tearing_down();
+                LivingEntity::set_health(entity, 0.0);
+            }
             self.clear_creaking_info();
         }
     }
@@ -590,11 +590,218 @@ impl BlockEntity for CreakingHeartBlockEntity {
             let persistence_required = creaking.as_mob().is_some_and(Mob::is_persistence_required);
             // TODO(Entities): Vanilla's `creaking.playerIsStuckInYou()` clause is the third despawn
             // trigger; `Creaking` has no equivalent hook yet.
-            if (!Self::creaking_active(updated_state) && !persistence_required)
+            if (!CreakingHeartBlock::creaking_active(world, pos) && !persistence_required)
                 || self.distance_to_creaking(world) > DISTANCE_CREAKING_TOO_FAR
             {
                 self.remove_protector(world);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use glam::DVec3;
+    use steel_registry::{
+        init_vanilla_registry, vanilla_blocks, vanilla_entities, vanilla_world_clocks,
+    };
+    use steel_utils::{ChunkPos, WorldAabb};
+
+    use crate::behavior::init_behaviors;
+    use crate::block_entity::init_block_entities;
+    use crate::chunk::chunk_holder::TickingReadiness;
+    use crate::chunk::chunk_ticket_manager::ChunkTicketLevel;
+    use crate::entity::init_entities;
+    use crate::entity::next_entity_id;
+    use crate::player::{Player, ResetReason};
+    use crate::test_support::{
+        TestPlayerBuilder, TestWorld, fresh_test_world, insert_ready_full_chunk,
+    };
+
+    use super::*;
+
+    /// Vanilla `Creaking.TWITCH_DEATH_DURATION`; extra ticks give the death timer slack.
+    const TWITCH_DEATH_DURATION: u64 = 45;
+
+    const HEART_POS: BlockPos = BlockPos::new(0, 64, 0);
+
+    fn uprooted_heart_state() -> BlockStateId {
+        vanilla_blocks::CREAKING_HEART
+            .default_state()
+            .set_value(STATE, CreakingHeartState::Uprooted)
+    }
+
+    /// Builds a night world with a heart between pale-oak logs (on top of a stone floor) and a
+    /// survival player standing within `PLAYER_DETECTION_RANGE`, so `spawnProtector` can run.
+    fn awake_heart_fixture(name: &'static str) -> (TestWorld, Arc<World>, Arc<Player>) {
+        init_vanilla_registry();
+        init_behaviors();
+        init_entities();
+        init_block_entities();
+        let world_fixture = fresh_test_world(name);
+        let world = Arc::clone(&world_fixture.world);
+        for chunk_x in -1..=1 {
+            for chunk_z in -1..=1 {
+                let chunk_pos = ChunkPos::new(chunk_x, chunk_z);
+                let holder = insert_ready_full_chunk(&world, chunk_pos);
+                // Mark the chunks entity-ticking so the spawned protector's AI/death tick runs.
+                holder.set_simulation_level(Some(ChunkTicketLevel::ENTITY_TICKING_CHUNK));
+                holder.transition_ticking_readiness(TickingReadiness::EntityTicking);
+                world.update_entity_chunk_visibility(chunk_pos, holder.entity_visibility());
+            }
+        }
+        let stone = vanilla_blocks::STONE.default_state();
+        for x in -16..=16 {
+            for z in -16..=16 {
+                world.set_block(BlockPos::new(x, 63, z), stone, UpdateFlags::UPDATE_ALL);
+            }
+        }
+        let log = vanilla_blocks::PALE_OAK_LOG.default_state();
+        world.set_block(HEART_POS.above(), log, UpdateFlags::UPDATE_ALL);
+        world.set_block(HEART_POS.below(), log, UpdateFlags::UPDATE_ALL);
+        world.set_block(HEART_POS, uprooted_heart_state(), UpdateFlags::UPDATE_ALL);
+        assert_eq!(
+            world.set_clock_total_ticks(&vanilla_world_clocks::OVERWORLD, 18_000),
+            Some(())
+        );
+
+        let player =
+            TestPlayerBuilder::new(Arc::clone(&world), "HeartTester", next_entity_id()).build();
+        player.base().set_position_local(DVec3::new(3.5, 64.0, 0.5));
+        assert!(
+            world.add_player(Arc::clone(&player), ResetReason::InitialJoin),
+            "the test player must hold the chunk entity-ticking"
+        );
+        (world_fixture, world, player)
+    }
+
+    fn creakings(world: &Arc<World>) -> Vec<SharedEntity> {
+        world.get_entities_in_aabb_matching(
+            &WorldAabb::of_size(DVec3::new(0.5, 64.0, 0.5), 48.0, 48.0, 48.0),
+            |entity| entity.entity_type() == &vanilla_entities::CREAKING,
+        )
+    }
+
+    /// Vanilla `CreakingHeartBlockEntity.serverTick`: an awake heart with a player within 32 blocks
+    /// spawns a `Creaking` protector and links it. Before the fix the `awake` state was unreachable,
+    /// so `spawnProtector` never ran.
+    #[test]
+    fn awake_heart_with_a_nearby_player_spawns_a_creaking() {
+        let (_fixture, world, _player) = awake_heart_fixture("creaking_heart_spawn");
+        let block_entity = world
+            .get_block_entity(HEART_POS)
+            .expect("the heart must own a block entity");
+        let heart = block_entity
+            .downcast_ref::<CreakingHeartBlockEntity>()
+            .expect("the block entity is a creaking heart");
+
+        heart.tick(&world);
+
+        assert_eq!(
+            world.get_block_state(HEART_POS).get_value(STATE),
+            CreakingHeartState::Awake,
+            "the ticking heart must recompute its awake state from the attribute"
+        );
+        let spawned = creakings(&world);
+        assert_eq!(
+            spawned.len(),
+            1,
+            "the awake heart must spawn exactly one protector"
+        );
+        assert_eq!(
+            heart.creaking(),
+            Some(spawned[0].uuid()),
+            "the heart must link the spawned creaking"
+        );
+    }
+
+    /// Vanilla `CreakingHeartBlockEntity.creakingHurt` on an awake heart with a linked protector:
+    /// the heart spreads resin onto the pale-oak logs around it. This is the resin half of the
+    /// pale-garden mechanic that stayed unreachable while the heart was always dormant.
+    #[test]
+    fn hurt_awake_heart_spreads_resin() {
+        let (_fixture, world, _player) = awake_heart_fixture("creaking_heart_resin");
+        let block_entity = world
+            .get_block_entity(HEART_POS)
+            .expect("the heart must own a block entity");
+        let heart = block_entity
+            .downcast_ref::<CreakingHeartBlockEntity>()
+            .expect("the block entity is a creaking heart");
+
+        heart.tick(&world);
+        assert!(
+            !creakings(&world).is_empty(),
+            "the heart needs a linked protector before it can spread resin"
+        );
+
+        heart.creaking_hurt(&world);
+
+        let mut resin = 0;
+        for x in -3..=3 {
+            for y in -3..=3 {
+                for z in -3..=3 {
+                    if world.get_block_state(HEART_POS.offset(x, y, z)).get_block()
+                        == &vanilla_blocks::RESIN_CLUMP
+                    {
+                        resin += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            resin > 0,
+            "the hurt awake heart must spread resin onto the logs"
+        );
+    }
+
+    /// Vanilla `CreakingHeartBlockEntity.removeProtector` on heart destruction: the link is cleared
+    /// and the protector is torn down. Breaking the block routes through
+    /// `preRemoveSideEffects`, matching the block's `playerWillDestroy`/explosion callbacks.
+    #[test]
+    fn breaking_the_heart_tears_down_the_protector() {
+        let (_fixture, world, _player) = awake_heart_fixture("creaking_heart_teardown");
+        let block_entity = world
+            .get_block_entity(HEART_POS)
+            .expect("the heart must own a block entity");
+        let heart = block_entity
+            .downcast_ref::<CreakingHeartBlockEntity>()
+            .expect("the block entity is a creaking heart");
+
+        heart.tick(&world);
+        let spawned = creakings(&world);
+        assert_eq!(
+            spawned.len(),
+            1,
+            "the heart must have a protector to tear down"
+        );
+        let creaking = spawned[0]
+            .downcast_ref::<CreakingEntity>()
+            .expect("the protector is a creaking");
+
+        // Breaking the heart fires `preRemoveSideEffects` -> `removeProtector`.
+        assert!(world.destroy_block(HEART_POS, false));
+        assert_eq!(
+            heart.creaking(),
+            None,
+            "the heart must release the protector"
+        );
+        assert!(
+            creaking.is_tearing_down(),
+            "the protector must switch into its tear-down state"
+        );
+        assert!(
+            LivingEntity::is_dead_or_dying(creaking),
+            "the protector's health must be zeroed"
+        );
+
+        // The creaking's own death path removes it once the tear-down is under way; the entity
+        // manager tick is the same entry point the fish/wolf AI tests use to step mobs.
+        for tick in 0..TWITCH_DEATH_DURATION + 5 {
+            world.entity_manager().tick_entities(tick as i32, true);
+        }
+        assert!(
+            creaking.is_removed(),
+            "the protector must be torn down once the heart is gone"
+        );
     }
 }

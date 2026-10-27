@@ -68,7 +68,9 @@ use steel_utils::{
 use crate::behavior::InteractionResult;
 use crate::chunk::heightmap::HeightmapType;
 use crate::entity::ai::brain::Brain;
-use crate::entity::ai::control::{FlyingMoveControl, FlyingMoveControlInput, MoveControlOperation};
+use crate::entity::ai::control::{
+    FlyingMoveControl, MoveControlOperation, tick_flying_move_control,
+};
 use crate::entity::ai::goal::{FloatGoal, Goal, GoalControls};
 use crate::entity::ai::navigation::NavigationKind;
 use crate::entity::ai::targeting::TargetingConditions;
@@ -819,44 +821,7 @@ impl HappyGhastEntity {
 
     /// Vanilla `FlyingMoveControl<>(this, 180, true)` (the baby control).
     fn tick_baby_flying_move_control(&self) {
-        let move_control = {
-            let mut controls = self.mob_base().controls().lock();
-            let move_control = controls.move_control;
-            if matches!(move_control.operation(), MoveControlOperation::MoveTo) {
-                controls.move_control.set_wait();
-            }
-            move_control
-        };
-
-        let (_, current_pitch) = self.rotation();
-        let (movement_speed, flying_speed) = {
-            let attributes = self.attributes().lock();
-            (
-                attributes.required_value(vanilla_attributes::MOVEMENT_SPEED),
-                attributes.required_value(vanilla_attributes::FLYING_SPEED),
-            )
-        };
-        let output = BABY_FLYING_MOVE_CONTROL.tick(FlyingMoveControlInput {
-            operation: move_control.operation(),
-            wanted_position: move_control.wanted_position(),
-            position: self.position(),
-            y_rot: self.rotation().0,
-            x_rot: current_pitch,
-            on_ground: self.on_ground(),
-            speed_modifier: move_control.speed_modifier(),
-            movement_speed,
-            flying_speed,
-        });
-
-        self.set_rotation((output.y_rot, output.x_rot));
-        self.set_mob_speed(output.speed);
-        self.set_no_gravity(output.no_gravity);
-        let input = self.travel_input();
-        self.set_travel_input(LivingTravelInput::new(
-            input.sideways(),
-            output.yya,
-            output.zza,
-        ));
+        tick_flying_move_control(self, BABY_FLYING_MOVE_CONTROL);
     }
 
     fn update_dirty_mob_effect_entity_data(&self) {

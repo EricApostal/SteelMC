@@ -19,11 +19,9 @@ use crate::entity::ai::walk::WalkPathEvaluator;
 use crate::physics::{CollisionWorld, WorldCollisionProvider};
 use crate::world::World;
 
+/// Vanilla `DismountHelper.offsetsForDirection`: the eight candidate columns a
+/// passenger can step out into, in vanilla's search order.
 #[must_use]
-#[expect(
-    dead_code,
-    reason = "vanilla DismountHelper foundation; vehicle dismounts use this next"
-)]
 pub(crate) const fn offsets_for_direction(forward: steel_utils::Direction) -> [(i32, i32); 8] {
     let right = forward.rotate_y_clockwise();
     let left = right.opposite();
@@ -52,11 +50,8 @@ pub(crate) fn can_dismount_to(world: &Arc<World>, aabb: &WorldAabb) -> bool {
         && world.world_border_snapshot().is_within_bounds(*aabb)
 }
 
+/// Vanilla `DismountHelper.canDismountTo(CollisionGetter, Vec3, LivingEntity, Pose)`.
 #[must_use]
-#[expect(
-    dead_code,
-    reason = "vanilla DismountHelper foundation; vehicle dismounts use this next"
-)]
 pub(crate) fn can_dismount_to_pose(
     world: &Arc<World>,
     location: DVec3,
@@ -74,10 +69,61 @@ pub(crate) fn can_dismount_to_pose(
     can_dismount_to(world, &aabb)
 }
 
+/// Vanilla `LivingEntity.dismountVehicle`: places `passenger` where `vehicle` released it.
+///
+/// Vanilla reaches this from `LivingEntity.stopRiding`, so the ride relationship is
+/// already torn down and only the position is left to fix up.
+pub(crate) fn dismount_vehicle(passenger: &dyn Entity, vehicle: &dyn Entity) {
+    let Some(world) = passenger.level() else {
+        return;
+    };
+
+    let location = if passenger.is_removed() {
+        passenger.position()
+    } else if !vehicle.is_removed()
+        && !world
+            .get_block_state(vehicle.block_position())
+            .get_block()
+            .has_tag(&BlockTag::PORTALS)
+    {
+        vehicle.get_dismount_location_for_passenger(passenger)
+    } else {
+        free_dismount_location(&world, passenger, vehicle)
+    };
+
+    passenger.dismount_to(location);
+}
+
+/// Vanilla `LivingEntity.dismountVehicle`'s fallback used when the vehicle is gone or
+/// inside a portal: the passenger's own column, nudged to the closest free spot.
+fn free_dismount_location(
+    world: &Arc<World>,
+    passenger: &dyn Entity,
+    vehicle: &dyn Entity,
+) -> DVec3 {
+    let position = passenger.position();
+    let base = DVec3::new(position.x, position.y.max(vehicle.position().y), position.z);
+    let dimensions = passenger.dimensions_for_pose(passenger.pose());
+    if dimensions.width > 4.0 || dimensions.height > 4.0 {
+        return base;
+    }
+
+    let width = f64::from(dimensions.width);
+    let height = f64::from(dimensions.height);
+    let half_height = height / 2.0;
+    let center = base + DVec3::new(0.0, half_height, 0.0);
+    let allowed_centers = [WorldAabb::of_size(center, width, height, width)];
+    let provider = WorldCollisionProvider::for_entity(world, passenger);
+    provider
+        .find_free_position(&allowed_centers, center, width, height, width)
+        .map_or(base, |free| free + DVec3::new(0.0, -half_height, 0.0))
+}
+
+/// Vanilla `DismountHelper.findCeilingFrom`.
 #[must_use]
 #[expect(
     dead_code,
-    reason = "vanilla DismountHelper foundation; vehicle dismounts use this next"
+    reason = "vanilla DismountHelper foundation; the AbstractMinecart dismount override uses this next"
 )]
 pub(crate) fn find_ceiling_from(
     pos: BlockPos,
@@ -156,7 +202,7 @@ pub(crate) fn find_safe_dismount_location(
     Some(position)
 }
 
-fn non_climbable_shape(world: &Arc<World>, pos: BlockPos) -> OffsetVoxelShape {
+pub(crate) fn non_climbable_shape(world: &Arc<World>, pos: BlockPos) -> OffsetVoxelShape {
     let state = world.get_block_state(pos);
     let block = state.get_block();
     let is_open_trapdoor = block.has_tag(&BlockTag::TRAPDOORS)
@@ -166,7 +212,23 @@ fn non_climbable_shape(world: &Arc<World>, pos: BlockPos) -> OffsetVoxelShape {
         return OffsetVoxelShape::without_offset(VoxelShape::EMPTY);
     }
 
-    let behavior = BLOCK_BEHAVIORS.get_behavior(block);
+    block_collision_shape(world, pos)
+}
+
+/// Vanilla `BlockGetter.getBlockFloorHeight(BlockPos)`: the height a passenger
+/// standing in `pos` rests at, or negative infinity when there is no floor.
+#[must_use]
+pub(crate) fn get_block_floor_height(world: &Arc<World>, pos: BlockPos) -> f64 {
+    block_floor_height(
+        block_collision_shape(world, pos),
+        block_collision_shape(world, pos.below()),
+    )
+}
+
+/// Vanilla `BlockState.getCollisionShape`: the plain collision shape of `pos`.
+fn block_collision_shape(world: &Arc<World>, pos: BlockPos) -> OffsetVoxelShape {
+    let state = world.get_block_state(pos);
+    let behavior = BLOCK_BEHAVIORS.get_behavior(state.get_block());
     let shape =
         behavior.get_collision_shape(state, world.as_ref(), pos, BlockCollisionContext::empty());
     if shape.is_empty() {
@@ -197,7 +259,9 @@ fn block_floor_height(block_shape: OffsetVoxelShape, below_block_shape: OffsetVo
     }
 }
 
-fn is_block_floor_valid(block_floor_height: f64) -> bool {
+/// Vanilla `DismountHelper.isBlockFloorValid`.
+#[must_use]
+pub(crate) fn is_block_floor_valid(block_floor_height: f64) -> bool {
     !block_floor_height.is_infinite() && block_floor_height < 1.0
 }
 

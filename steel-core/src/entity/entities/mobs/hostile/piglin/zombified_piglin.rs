@@ -32,7 +32,7 @@ use steel_utils::{
 
 use crate::behavior::BLOCK_BEHAVIORS;
 use crate::entity::ai::goal::{
-    HurtByTargetGoal, NearestAttackableTargetGoal, ResetUniversalAngerTargetGoal,
+    AngryAtPlayerTargetGoal, HurtByTargetGoal, ResetUniversalAngerTargetGoal,
     WaterAvoidingRandomStrollGoal, ZombieAttackGoal,
 };
 use crate::entity::ai::path::PathType;
@@ -160,15 +160,10 @@ impl ZombifiedPiglinEntity {
 
             let mut target_selector = mob_base.target_selector().lock();
             target_selector.add_goal(1, HurtByTargetGoal::new().set_alert_others(empty()));
-            target_selector.add_goal(
-                2,
-                NearestAttackableTargetGoal::new_for_players_with_interval(
-                    10,
-                    true,
-                    false,
-                    |_, _| true,
-                ),
-            );
+            // Vanilla `NearestAttackableTargetGoal<>(this, Player.class, 10, true, false,
+            // this::isAngryAt)`: zombified piglins are neutral and only chase a player that
+            // angered them.
+            target_selector.add_goal(2, AngryAtPlayerTargetGoal::new());
             target_selector.add_goal(3, ResetUniversalAngerTargetGoal::new(true));
         }
 
@@ -654,13 +649,86 @@ impl PathfinderMob for ZombifiedPiglinEntity {}
 #[cfg(test)]
 mod tests {
     use simdnbt::owned::NbtCompound;
-    use std::sync::Weak;
+    use std::sync::{Arc, Weak};
 
     use glam::DVec3;
-    use steel_registry::{init_vanilla_registry, vanilla_entities};
+    use steel_registry::{
+        init_vanilla_registry, vanilla_blocks, vanilla_damage_types, vanilla_entities,
+        vanilla_game_rules,
+    };
+    use steel_utils::types::UpdateFlags;
+    use steel_utils::{BlockPos, ChunkPos};
 
     use super::ZombifiedPiglinEntity;
-    use crate::entity::Entity;
+    use crate::behavior::init_behaviors;
+    use crate::entity::damage::DamageSource;
+    use crate::entity::{Entity, Mob, SharedEntity, add_spawned_entity, init_entities};
+    use crate::player::{Player, ResetReason};
+    use crate::test_support::{
+        TestPlayerBuilder, TestWorld, fresh_test_world, insert_ready_full_chunk,
+    };
+    use crate::world::World;
+
+    /// A flat stone floor with loaded chunks and no natural spawning; the piglins under test are
+    /// the only mobs in the world.
+    fn piglin_test_world(name: &'static str) -> TestWorld {
+        init_vanilla_registry();
+        init_entities();
+        init_behaviors();
+
+        let fixture = fresh_test_world(name);
+        let world = &fixture.world;
+        for chunk_x in -2..=2 {
+            for chunk_z in -2..=2 {
+                insert_ready_full_chunk(world, ChunkPos::new(chunk_x, chunk_z));
+            }
+        }
+
+        let stone = vanilla_blocks::STONE.default_state();
+        for x in -32..=47 {
+            for z in -32..=47 {
+                assert!(world.set_block(BlockPos::new(x, 63, z), stone, UpdateFlags::UPDATE_ALL));
+            }
+        }
+        // Vanilla zombified piglins burn in daylight; the tests stay short enough that the fire
+        // tick cannot matter, but natural spawning stays off so nothing else joins.
+        world.set_game_rule(&vanilla_game_rules::SPAWN_MOBS, false);
+        world.set_game_rule(&vanilla_game_rules::SPAWN_MONSTERS, false);
+        fixture
+    }
+
+    fn tick(world: &Arc<World>, ticks: &mut u64) {
+        world.game_time.advance();
+        world.tick_game(*ticks, true);
+        *ticks += 1;
+    }
+
+    fn join_test_player(
+        world: &Arc<World>,
+        name: &'static str,
+        id: i32,
+        position: DVec3,
+    ) -> Arc<Player> {
+        let player = TestPlayerBuilder::new(Arc::clone(world), name, id).build();
+        player.base().set_position_local(position);
+        assert!(
+            world.add_player(Arc::clone(&player), ResetReason::InitialJoin),
+            "the test player must hold the chunk active"
+        );
+        player
+    }
+
+    fn spawn_piglin(world: &Arc<World>, id: i32, position: DVec3) -> Arc<ZombifiedPiglinEntity> {
+        let piglin = Arc::new(ZombifiedPiglinEntity::new(
+            &vanilla_entities::ZOMBIFIED_PIGLIN,
+            id,
+            position,
+            Arc::downgrade(world),
+        ));
+        let entity: SharedEntity = Arc::<ZombifiedPiglinEntity>::clone(&piglin);
+        add_spawned_entity(world, entity).expect("the zombified piglin should join the world");
+        piglin
+    }
 
     #[test]
     fn zombified_piglin_baby_and_anger_state_round_trip() {
@@ -681,5 +749,43 @@ mod tests {
         assert_eq!(nbt.byte("IsBaby"), Some(1));
         assert_eq!(nbt.byte("CanBreakDoors"), Some(1));
         assert_eq!(piglin.entity_type(), &vanilla_entities::ZOMBIFIED_PIGLIN);
+    }
+
+    /// Vanilla `ZombifiedPiglin.addBehaviourGoals` registers
+    /// `NearestAttackableTargetGoal(this, Player.class, 10, true, false, this::isAngryAt)`, so a
+    /// zombified piglin is neutral until a player angers it.
+    #[test]
+    fn zombified_piglin_ignores_unprovoked_players_and_hunts_its_attacker() {
+        let fixture = piglin_test_world("zombified_piglin_player_targeting");
+        let world = &fixture.world;
+        let player = join_test_player(world, "Prey", 1, DVec3::new(4.5, 64.0, 0.5));
+        let piglin = spawn_piglin(world, 2, DVec3::new(0.5, 64.0, 0.5));
+
+        let mut ticks = 0;
+        for _ in 0..30 {
+            tick(world, &mut ticks);
+        }
+        assert!(
+            piglin.target().is_none(),
+            "a zombified piglin must stay neutral toward an unprovoked player"
+        );
+
+        let player_entity: SharedEntity = Arc::<Player>::clone(&player);
+        let source = DamageSource::direct(
+            &vanilla_damage_types::PLAYER_ATTACK,
+            Arc::clone(&player_entity),
+        );
+        assert!(piglin.hurt(world, &source, 1.0));
+
+        let mut first_target = None;
+        for _ in 0..12 {
+            tick(world, &mut ticks);
+            first_target = first_target.or_else(|| piglin.target().map(|target| target.id()));
+        }
+        assert_eq!(
+            first_target,
+            Some(player.id()),
+            "the piglin must hunt the player that hit it"
+        );
     }
 }

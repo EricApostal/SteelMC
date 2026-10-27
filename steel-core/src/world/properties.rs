@@ -127,10 +127,13 @@ impl World {
     }
 
     /// Checks if a player may interact with the world at the given position.
-    /// Currently only checks if position is within world bounds.
+    ///
+    /// Mirrors vanilla `ServerLevel.mayInteract`'s spawn-protection term: a
+    /// player may not edit blocks inside the spawn-protection radius around the
+    /// world spawn, in addition to the position being within valid bounds.
     #[must_use]
-    pub const fn may_interact(&self, _player: &Player, pos: BlockPos) -> bool {
-        self.is_in_valid_bounds(pos)
+    pub fn may_interact(&self, player: &Player, pos: BlockPos) -> bool {
+        self.is_in_valid_bounds(pos) && !player.is_under_spawn_protection(pos)
     }
 
     /// Checks if a block's collision shape at the given position is unobstructed by entities.

@@ -30,7 +30,7 @@ use crate::block_entity::entities::sculk_sensor::{
 use crate::block_entity::{BlockEntity, BlockEntityBase};
 use crate::entity::Entity;
 use crate::entity::entities::ItemEntity;
-use crate::entity::entities::mobs::hostile::warden::WardenSpawnTracker;
+use crate::entity::entities::mobs::hostile::warden::{WardenEntity, WardenSpawnTracker};
 use crate::entity::projectile::Projectile;
 use crate::player::Player;
 use crate::world::game_event::vibration::{
@@ -45,8 +45,21 @@ const WARNING_SOUND_RADIUS: i32 = 10;
 /// Vanilla `SculkShriekerBlockEntity.MAX_WARNING_LEVEL` gate for `trySummonWarden`.
 const WARDEN_SUMMON_WARNING_LEVEL: i32 = 4;
 
+/// Vanilla `SculkShriekerBlockEntity.tryRespond` darkness radius
+/// (`Warden.applyDarknessAround(level, center, null, 40)`).
+const SHRIEK_DARKNESS_RADIUS: i32 = 40;
+
 const SHRIEKING: &BoolProperty = &BlockStateProperties::SHRIEKING;
 const CAN_SUMMON: &BoolProperty = &BlockStateProperties::CAN_SUMMON;
+
+/// Vanilla `Vec3.atCenterOf(pos)`.
+fn pos_center(pos: BlockPos) -> DVec3 {
+    DVec3::new(
+        f64::from(pos.x()) + 0.5,
+        f64::from(pos.y()) + 0.5,
+        f64::from(pos.z()) + 0.5,
+    )
+}
 
 /// Vanilla `SculkShriekerBlockEntity.tryGetPlayer`.
 fn try_get_player(world: &Arc<World>, source: &dyn Entity) -> Option<Arc<Player>> {
@@ -158,9 +171,9 @@ impl ShriekerCore {
         if !self.try_summon_warden(world, warning_level) {
             self.play_warden_reply_sound(world, warning_level);
         }
-        // TODO(MobAI): Vanilla also runs `Warden.applyDarknessAround(level, center, null, 40)`;
-        // Steel's darkness helper is an instance method on `WardenEntity`, so the static
-        // center-based variant has to land in the Warden lane first.
+        // Vanilla `tryRespond`: `Warden.applyDarknessAround(level, Vec3.atCenterOf(pos), null, 40)`
+        // after every escalated reply (the summon branch included, exactly as vanilla does).
+        WardenEntity::apply_darkness_around_at(world, pos_center(self.pos), SHRIEK_DARKNESS_RADIUS);
     }
 
     /// Vanilla `trySummonWarden`.
@@ -364,5 +377,144 @@ impl BlockEntity for SculkShriekerBlockEntity {
         if let Some(world) = self.get_level() {
             self.respond_if_shrieking(&world, state);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use glam::DVec3;
+    use steel_registry::entity_data::EntityPose;
+    use steel_registry::{vanilla_blocks, vanilla_mob_effects};
+    use steel_utils::types::UpdateFlags;
+    use steel_utils::{ChunkPos, WorldAabb};
+
+    use super::*;
+    use crate::block_entity::SharedBlockEntity;
+    use crate::bootstrap::init_globals;
+    use crate::entity::ai::behavior::warden as warden_ai;
+    use crate::entity::ai::brain::memory::module_type as mem;
+    use crate::entity::entities::mobs::hostile::warden::WardenEntity;
+    use crate::entity::{Entity, LivingEntity, Mob, SharedEntity};
+    use crate::player::ResetReason;
+    use crate::test_support::{
+        TestPlayerBuilder, TestWorld, fresh_test_world, insert_ready_full_chunk,
+    };
+    use crate::world::World;
+
+    /// The shrieker sits at the center of chunk `(0, 0)`.
+    const SHRIEKER_POS: BlockPos = BlockPos::new(8, 64, 8);
+    const SHRIEKER_CENTER: DVec3 = DVec3::new(8.5, 64.5, 8.5);
+
+    fn shrieker_world(key: &'static str) -> TestWorld {
+        init_globals();
+        let world = fresh_test_world(key);
+        insert_ready_full_chunk(&world.world, ChunkPos::from_block_pos(SHRIEKER_POS));
+        let state = vanilla_blocks::SCULK_SHRIEKER
+            .default_state()
+            .set_value(CAN_SUMMON, true);
+        assert!(
+            world
+                .world
+                .set_block(SHRIEKER_POS, state, UpdateFlags::UPDATE_NONE)
+        );
+        world
+    }
+
+    fn shrieker(world: &Arc<World>) -> SharedBlockEntity {
+        let entity = world
+            .get_block_entity(SHRIEKER_POS)
+            .expect("placing a sculk shrieker must create its block entity");
+        assert!(
+            entity.downcast_ref::<SculkShriekerBlockEntity>().is_some(),
+            "the shrieker block entity must keep its concrete type"
+        );
+        entity
+    }
+
+    fn shrieker_core(placed: &SharedBlockEntity) -> &SculkShriekerBlockEntity {
+        placed
+            .downcast_ref::<SculkShriekerBlockEntity>()
+            .expect("checked concrete shrieker type")
+    }
+
+    fn observer(world: &Arc<World>, name: &str, id: i32, pos: DVec3) -> Arc<Player> {
+        let player = TestPlayerBuilder::new(Arc::clone(world), name, id).build();
+        player.set_client_loaded(true);
+        player.base().set_position_local(pos);
+        assert!(world.add_player(Arc::clone(&player), ResetReason::InitialJoin));
+        player
+    }
+
+    #[test]
+    fn response_applies_darkness_at_the_vanilla_duration_and_radius() {
+        let fixture = shrieker_world("shrieker_response_darkness");
+        let world = &fixture.world;
+
+        let inside = observer(world, "ShriekerInside", 1, SHRIEKER_CENTER);
+        // 41 blocks above the block center: just outside `SHRIEK_DARKNESS_RADIUS`.
+        let outside = observer(
+            world,
+            "ShriekerOutside",
+            2,
+            SHRIEKER_CENTER + DVec3::Y * 41.0,
+        );
+
+        let placed = shrieker(world);
+        // Below `WARDEN_SUMMON_WARNING_LEVEL`: the reply branch, which vanilla follows
+        // with `applyDarknessAround`.
+        *shrieker_core(&placed).core.warning_level.lock() = 1;
+        shrieker_core(&placed).try_respond(world);
+
+        let effect = inside
+            .mob_effect(vanilla_mob_effects::DARKNESS)
+            .expect("the escalated shriek must darken a nearby survival player");
+        assert_eq!(effect.duration(), 260);
+        assert_eq!(effect.amplifier(), 0);
+        assert!(
+            outside.mob_effect(vanilla_mob_effects::DARKNESS).is_none(),
+            "a player beyond the 40-block radius must stay unaffected"
+        );
+    }
+
+    #[test]
+    fn summoning_a_warden_puts_it_in_the_emerging_state() {
+        let fixture = shrieker_world("shrieker_summons_emerging_warden");
+        let world = &fixture.world;
+
+        let placed = shrieker(world);
+        *shrieker_core(&placed).core.warning_level.lock() = WARDEN_SUMMON_WARNING_LEVEL;
+        shrieker_core(&placed).try_respond(world);
+
+        let search = WorldAabb::of_size(SHRIEKER_CENTER + DVec3::Y * 0.5, 16.0, 16.0, 16.0);
+        let summoned: Vec<SharedEntity> = world
+            .get_entities_in_aabb_matching(&search, |entity| {
+                entity.downcast_ref::<WardenEntity>().is_some()
+            })
+            .into_iter()
+            .collect();
+        assert_eq!(
+            summoned.len(),
+            1,
+            "the shrieker must summon exactly one warden"
+        );
+
+        let warden = summoned[0]
+            .downcast_ref::<WardenEntity>()
+            .expect("the summoned entity must be a WardenEntity");
+        assert_eq!(
+            Entity::pose(warden),
+            EntityPose::Emerging,
+            "a TRIGGERED warden must spawn in the EMERGING pose"
+        );
+
+        let brain = Mob::brain(warden).expect("a warden owns a brain").lock();
+        assert!(brain.has_memory_value(&mem::IS_EMERGING));
+        assert_eq!(
+            brain.time_until_expiry(&mem::IS_EMERGING),
+            i64::from(warden_ai::EMERGE_DURATION),
+            "the emerge memory must run for the vanilla EMERGE_DURATION"
+        );
     }
 }

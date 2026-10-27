@@ -22,13 +22,12 @@ use crate::entity::ai::control::rotate_towards;
 use crate::entity::ai::goal::{Goal, GoalControls, NearestAttackableTargetGoal};
 use crate::entity::damage::DamageSource;
 use crate::entity::{
-    ENTITIES, Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySpawnReason, EntitySyncedData,
-    LivingEntity, LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, SharedEntity,
-    next_entity_id,
+    ENTITIES, Entity, EntityBase, EntityBaseLoad, EntityPose, EntitySyncedData, LivingEntity,
+    LivingEntityBase, Mob, MobBase, Monster, PathfinderMob, SharedEntity, next_entity_id,
 };
 use crate::physics::MoveResult;
 use crate::player::Player;
-use crate::world::{LevelReader, World};
+use crate::world::World;
 
 use super::abstract_cube_mob::{
     CubeMoveState, CubeSquish, clamp_cube_size, cube_jump_delay, cube_max_health,
@@ -697,29 +696,6 @@ impl Mob for SlimeEntity {
     /// Vanilla `AbstractCubeMob.getMaxHeadXRot` returns 0.
     fn max_head_x_rot(&self) -> f32 {
         0.0
-    }
-
-    /// Vanilla `Slime.checkSlimeSpawnRules`: non-peaceful only, spawners delegate to the shared
-    /// mob rules.
-    ///
-    /// BLOCKED(slime spawn): the swamp surface-spawn chance and the slime-chunk seed roll need
-    /// biome-tag and chunk-seed queries this static rule cannot reach, so only the peaceful gate
-    /// and the spawner path are exact here.
-    fn check_mob_spawn_rules(
-        entity_type: EntityTypeRef,
-        level: &dyn LevelReader,
-        spawn_reason: EntitySpawnReason,
-        pos: BlockPos,
-    ) -> bool
-    where
-        Self: Sized,
-    {
-        // Vanilla delegates spawner spawns to `checkMobSpawnRules`; the inlined `Mob`
-        // default returns `true` before its surface check, so a spawner always passes
-        // here. Everything else needs the swamp surface chance and the slime-chunk seed
-        // roll this static rule cannot reach.
-        let _ = (entity_type, level, pos);
-        spawn_reason.is_spawner()
     }
 }
 

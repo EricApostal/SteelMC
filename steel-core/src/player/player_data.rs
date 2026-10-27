@@ -2,7 +2,12 @@
 //!
 //! This module defines the data format for saving and loading player state.
 
+use std::io::Cursor;
+
 use rustc_hash::FxHashSet;
+use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
+use simdnbt::borrow::read_compound as read_borrowed_compound;
+use simdnbt::owned::NbtCompound;
 use steel_registry::REGISTRY;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::stat::Stat;
@@ -26,7 +31,7 @@ use crate::{
 
 /// Current data version for player saves.
 /// Increment when making breaking changes to the format.
-pub const PLAYER_DATA_VERSION: i32 = 9;
+pub const PLAYER_DATA_VERSION: i32 = 10;
 
 /// Persistent player data saved by Steel's storage backend.
 ///
@@ -66,6 +71,13 @@ pub struct PersistentPlayerData {
 
     /// Current health points.
     pub health: f32,
+
+    /// Vanilla `LivingEntity` save payload (`Health`, `attributes`,
+    /// `active_effects`, `DeathTime`, `FallFlying`), in the same NBT shape chunk
+    /// saves use. Without it a relog drops the player's potion/beacon effects and
+    /// attribute modifiers; the in-memory death-respawn copy hides the loss
+    /// until the player disconnects.
+    pub living_nbt: Vec<u8>,
 
     /// Current game mode (0=survival, 1=creative, 2=adventure, 3=spectator).
     pub game_mode: i32,
@@ -261,6 +273,7 @@ impl PersistentPlayerData {
             was_in_powder_snow: fire_freeze.was_in_powder_snow(),
             has_visual_fire: fire_freeze.has_visual_fire(),
             health: player.get_health(),
+            living_nbt: Self::living_nbt_from_player(player),
             game_mode: player.game_mode() as i32,
             prev_game_mode: player
                 .previous_game_mode()
@@ -342,6 +355,18 @@ impl PersistentPlayerData {
             attach: *vehicle.uuid().as_bytes(),
             entity,
         })
+    }
+
+    /// Snapshots the player's vanilla `LivingEntity` save payload.
+    ///
+    /// Reuses [`LivingEntity::save_living`] so player persistence carries exactly
+    /// the same fields (health, attributes, active effects, ...) as chunk saves.
+    fn living_nbt_from_player(player: &Player) -> Vec<u8> {
+        let mut nbt = NbtCompound::new();
+        player.save_living(&mut nbt);
+        let mut bytes = Vec::new();
+        nbt.write(&mut bytes);
+        bytes
     }
 }
 
@@ -473,6 +498,17 @@ impl PersistentPlayerData {
 
         // Health
         player.set_health(self.health);
+
+        // Vanilla `LivingEntity.readAdditionalSaveData`: attributes, active
+        // effects and death/fall-flying state. Also re-applies `Health`, which
+        // always matches the tracked `health` above.
+        if !self.living_nbt.is_empty()
+            && let Ok(borrowed) =
+                read_borrowed_compound(&mut Cursor::new(self.living_nbt.as_slice()))
+        {
+            let view: BorrowedNbtCompoundView<'_, '_> = (&borrowed).into();
+            player.load_living(view);
+        }
 
         // Game mode
         player.restore_game_modes(

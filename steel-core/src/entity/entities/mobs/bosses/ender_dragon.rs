@@ -47,7 +47,7 @@ use crate::entity::entities::objects::explosives::EndCrystalEntity;
 use crate::entity::{
     Entity, EntityBase, EntityBaseLoad, EntityEventSource as _, EntityPose, EntitySyncedData,
     LivingEntity, LivingEntityBase, Mob, MobBase, MobEffectInstance, Monster, PathfinderMob,
-    RemovalReason, SharedEntity,
+    RemovalReason, SharedEntity, reserve_entity_id,
 };
 use crate::physics::{MoveResult, MoverType};
 use crate::world::{LevelReader, World};
@@ -305,28 +305,40 @@ impl DragonState {
 /// The eight vanilla `EnderDragonPart` hitboxes owned by a dragon.
 pub(crate) struct EnderDragonParts {
     /// Vanilla `head`.
-    pub(crate) head: EnderDragonPartEntity,
+    pub(crate) head: Arc<EnderDragonPartEntity>,
     /// Vanilla `neck`.
-    pub(crate) neck: EnderDragonPartEntity,
+    pub(crate) neck: Arc<EnderDragonPartEntity>,
     /// Vanilla `body`.
-    pub(crate) body: EnderDragonPartEntity,
+    pub(crate) body: Arc<EnderDragonPartEntity>,
     /// Vanilla `tail1`.
-    pub(crate) tail1: EnderDragonPartEntity,
+    pub(crate) tail1: Arc<EnderDragonPartEntity>,
     /// Vanilla `tail2`.
-    pub(crate) tail2: EnderDragonPartEntity,
+    pub(crate) tail2: Arc<EnderDragonPartEntity>,
     /// Vanilla `tail3`.
-    pub(crate) tail3: EnderDragonPartEntity,
+    pub(crate) tail3: Arc<EnderDragonPartEntity>,
     /// Vanilla `wing1`.
-    pub(crate) wing1: EnderDragonPartEntity,
+    pub(crate) wing1: Arc<EnderDragonPartEntity>,
     /// Vanilla `wing2`.
-    pub(crate) wing2: EnderDragonPartEntity,
+    pub(crate) wing2: Arc<EnderDragonPartEntity>,
 }
 
 impl EnderDragonParts {
-    fn new(world: Weak<World>) -> Self {
-        let make =
-            |kind: EnderDragonPartKind| EnderDragonPartEntity::new(kind, Weak::clone(&world));
-        Self {
+    /// Builds the eight hitboxes of the dragon with id `dragon_id`.
+    ///
+    /// Vanilla's parts pull their own ids from the level counter straight after
+    /// the dragon's own id, so they end up as `dragon_id + 1 + index`; the client
+    /// recreates them with exactly those ids (`EnderDragon.recreateFromPacket`),
+    /// which is what lets a client's attack on a part resolve to it. Steel
+    /// assigns them explicitly and reserves them on the counter.
+    fn new(dragon_id: i32, world: Weak<World>) -> Self {
+        let make = |kind: EnderDragonPartKind| {
+            Arc::new(EnderDragonPartEntity::new(
+                kind,
+                dragon_id + 1 + kind.index(),
+                Weak::clone(&world),
+            ))
+        };
+        let parts = Self {
             head: make(EnderDragonPartKind::Head),
             neck: make(EnderDragonPartKind::Neck),
             body: make(EnderDragonPartKind::Body),
@@ -335,11 +347,13 @@ impl EnderDragonParts {
             tail3: make(EnderDragonPartKind::Tail3),
             wing1: make(EnderDragonPartKind::Wing1),
             wing2: make(EnderDragonPartKind::Wing2),
-        }
+        };
+        reserve_entity_id(dragon_id + 8);
+        parts
     }
 
     /// Returns the parts in vanilla `subEntities` order.
-    pub(crate) const fn sub_entities(&self) -> [&EnderDragonPartEntity; 8] {
+    pub(crate) fn sub_entities(&self) -> [&EnderDragonPartEntity; 8] {
         [
             &self.head,
             &self.neck,
@@ -349,6 +363,22 @@ impl EnderDragonParts {
             &self.tail3,
             &self.wing1,
             &self.wing2,
+        ]
+    }
+
+    /// Returns the parts as vanilla `ServerLevel.dragonParts` entries
+    /// (`dragon id + 1 + index` → hitbox).
+    pub(crate) fn shared_entities(&self) -> [SharedEntity; 8] {
+        let share = |part: &Arc<EnderDragonPartEntity>| Arc::clone(part) as SharedEntity;
+        [
+            share(&self.head),
+            share(&self.neck),
+            share(&self.body),
+            share(&self.tail1),
+            share(&self.tail2),
+            share(&self.tail3),
+            share(&self.wing1),
+            share(&self.wing2),
         ]
     }
 
@@ -401,6 +431,7 @@ impl EnderDragonEntity {
     }
 
     fn new_with_base(base: EntityBase, entity_type: EntityTypeRef, world: Weak<World>) -> Self {
+        let dragon_id = base.id();
         let living_base = LivingEntityBase::new(entity_type);
         let mob_base = MobBase::new();
         let mut entity_data = EnderDragonEntityData::new();
@@ -417,7 +448,7 @@ impl EnderDragonEntity {
             mob_base,
             entity_data: SyncMutex::new(entity_data),
             state: SyncMutex::new(DragonState::new()),
-            parts: EnderDragonParts::new(world),
+            parts: EnderDragonParts::new(dragon_id, world),
             phases: EnderDragonPhaseManager::new(),
         };
         // Vanilla `EnderDragonPhaseManager` constructor: `setPhase(HOVERING)`.
@@ -493,6 +524,23 @@ impl EnderDragonEntity {
     #[must_use]
     pub(crate) fn shared_handle(&self) -> Option<SharedEntity> {
         self.parts.head.parent()
+    }
+
+    /// Returns this dragon's eight hitboxes as shared handles, in vanilla
+    /// `subEntities` order.
+    ///
+    /// The world registers them under their ids so a client's attack on a part
+    /// (which is the only way to hit a dragon, since vanilla's own
+    /// `EnderDragon.isPickable` is `false`) resolves to the hitbox that was hit.
+    #[must_use]
+    pub(crate) fn shared_parts(&self) -> [SharedEntity; 8] {
+        self.parts.shared_entities()
+    }
+
+    /// Returns the vanilla id of one of this dragon's hitboxes.
+    #[must_use]
+    pub fn part_id(&self, part: EnderDragonPartKind) -> i32 {
+        self.parts.sub_entities()[part.index() as usize].id()
     }
 
     /// Vanilla `DATA_PHASE`.
@@ -1445,6 +1493,32 @@ impl Entity for EnderDragonEntity {
     /// part, which applies the phase hook and the quarter damage scaling.
     fn hurt(&self, world: &World, source: &DamageSource, amount: f32) -> bool {
         self.hurt_dragon(EnderDragonPartKind::Body, world, source, amount)
+    }
+
+    /// Vanilla `EnderDragon.checkDespawn` is an empty override: the fight's dragon
+    /// never despawns (and never accumulates vanilla's `noActionTime`).
+    fn check_despawn(&self) {}
+
+    /// Vanilla `EnderDragon.kill(ServerLevel)`.
+    ///
+    /// `/kill` reaches this method directly (the command calls
+    /// `Entity.kill(level)`), and vanilla's dragon overrides it: the dragon is
+    /// removed outright and the fight is told, starting the death sequence
+    /// (`EnderDragonFight.setDragonKilled` opens the exit portal, spawns the next
+    /// gateway and drops the dragon egg). Vanilla's inherited route —
+    /// `LivingEntity.kill` damage with `generic_kill` — could never kill the
+    /// dragon, because `EnderDragon.hurt` only forwards damage that is
+    /// player-caused or in `ALWAYS_HURTS_ENDER_DRAGONS` (explosions), and
+    /// `generic_kill` is neither.
+    fn kill(&self, _world: &World) {
+        self.set_removed(RemovalReason::Killed);
+        self.game_event(&vanilla_game_events::ENTITY_DIE);
+        if self.dragon_fight_present() {
+            self.update_dragon_fight_bar();
+            if let Some(world) = self.level() {
+                dragon_fight::notify_dragon_killed(&world, self.uuid());
+            }
+        }
     }
 
     fn save_additional(&self, nbt: &mut NbtCompound) {

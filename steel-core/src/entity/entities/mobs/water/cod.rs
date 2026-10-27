@@ -76,7 +76,7 @@ impl CodEntity {
     fn new_with_base(base: EntityBase, entity_type: EntityTypeRef) -> Self {
         let living_base = LivingEntityBase::new(entity_type);
         let mob_base = MobBase::new();
-        abstract_fish::initialize_water_pathfinding_malus(&mob_base);
+        abstract_fish::initialize_water_animal_pathfinding(&mob_base);
         let mut entity_data = CodEntityData::new();
         living_base.initialize_synced_data(&mut entity_data);
         abstract_fish::register_abstract_fish_goals(&mob_base);
@@ -322,6 +322,11 @@ impl Mob for CodEntity {
 
     fn tick_path_navigation(&self) {
         PathfinderMob::tick_pathfinder_path_navigation(self);
+    }
+
+    /// Vanilla `AbstractFish`'s constructor installs `FishMoveControl`.
+    fn tick_move_control(&self) {
+        abstract_fish::tick_fish_move_control(self);
     }
 
     /// Vanilla `AbstractSchoolingFish.getMaxSpawnClusterSize` = `getMaxSchoolSize`.
