@@ -1142,9 +1142,15 @@ mod tests {
     use crate::inventory::equipment::{EntityEquipment, EquipmentSlot};
     use crate::player::{Player, ResetReason};
     use crate::test_support::{
-        TestPlayerBuilder, TestWorld, fresh_test_world, insert_ready_full_chunk,
+        TestPlayerBuilder, TestWorld, fresh_test_world, insert_entity_ticking_chunks,
+        settle_entity_ticking_chunk,
     };
     use crate::world::World;
+
+    /// Radius, in chunks, of the region a player holds entity-ticking: the player's
+    /// tickets cover a `simulation_distance` (2) square, whose readiness derivation
+    /// needs that square's own 5x5 `Full`, hence a 9x9 region.
+    const PLAYER_TICKING_RADIUS: i32 = 4;
 
     /// Enderman AI tests need a real floor (vanilla `randomTeleport` only lands where it finds
     /// ground below the destination) and enough loaded chunks for a random teleport to stay
@@ -1157,11 +1163,11 @@ mod tests {
 
         let fixture = fresh_test_world(name);
         let world = &fixture.world;
-        for chunk_x in -2..=2 {
-            for chunk_z in -2..=2 {
-                insert_ready_full_chunk(world, ChunkPos::new(chunk_x, chunk_z));
-            }
-        }
+        // Load the 9x9 `Full` region before any player joins: the join queues the
+        // player's tickets, and the next chunk source pass re-derives readiness from the
+        // neighborhood. A plain 5x5 leaves every chunk but the origin `Tracked`, so the
+        // enderman loses its AI as soon as it teleports over a chunk border.
+        insert_entity_ticking_chunks(world, ChunkPos::new(0, 0), PLAYER_TICKING_RADIUS);
 
         let stone = vanilla_blocks::STONE.default_state();
         for x in -32..=47 {
@@ -1184,6 +1190,10 @@ mod tests {
             world.add_player(Arc::clone(&player), ResetReason::InitialJoin),
             "the test player must hold the chunk active"
         );
+        // The join queued the player's loading/simulation tickets; run the chunk source
+        // phase now so the origin chunk's readiness is derived from its loaded
+        // neighborhood and the enderman stays in the manager's tick list.
+        settle_entity_ticking_chunk(world, ChunkPos::new(0, 0));
         player
     }
 
@@ -1342,8 +1352,9 @@ mod tests {
             "vanilla `EndermanLookForPlayerGoal.start` calls `setBeingStaredAt`"
         );
         assert!(
-            (2..=8).contains(&delay),
-            "the target must arrive after vanilla's `adjustedTickDelay(5)` aggro delay (took {delay})"
+            (2..=15).contains(&delay),
+            "the target must arrive after vanilla's `adjustedTickDelay(5)` aggro delay plus at \
+             most one 10-tick `NearestAttackableTargetGoal` interval (took {delay})"
         );
 
         // `updatePersistentAnger` runs from the enderman's `aiStep`, so the anger timer starts
