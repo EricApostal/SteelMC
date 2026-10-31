@@ -155,6 +155,17 @@ impl World {
         })
     }
 
+    /// Adds or refreshes vanilla's dragon arena ticket (`TicketType.DRAGON` at
+    /// `EnderDragonFight.ARENA_TICKET_LEVEL`, centred on chunk (0, 0)).
+    pub(crate) fn place_dragon_arena_ticket(&self) {
+        self.chunk_map.place_dragon_arena_ticket();
+    }
+
+    /// Removes vanilla's dragon arena ticket when no player watches the fight.
+    pub(crate) fn remove_dragon_arena_ticket(&self) {
+        self.chunk_map.remove_dragon_arena_ticket();
+    }
+
     /// Adds or refreshes vanilla's portal chunk ticket for a post-teleport entity.
     pub(crate) fn place_portal_ticket(&self, ticket_position: BlockPos) {
         self.chunk_map.place_portal_ticket(ticket_position);

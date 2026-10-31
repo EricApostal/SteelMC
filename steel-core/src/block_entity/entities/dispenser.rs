@@ -30,9 +30,12 @@ use steel_utils::{
     BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier, locks::SyncMutex,
 };
 
+use crate::behavior::advancement_hooks::raise_generate_loot;
 use crate::block_entity::{BlockEntity, BlockEntityBase};
+use crate::entity::{LivingEntity as _, entity_loot_ref, living_loot_equipment};
 use crate::inventory::container::Container;
 use crate::inventory::lock::{ContainerRef, SharedContainer};
+use crate::player::Player;
 use crate::world::World;
 
 /// Number of slots in a dispenser and a dropper (3x3 grid).
@@ -240,7 +243,7 @@ macro_rules! dispenser_block_entity {
             pub fn get_random_slot(&self) -> Option<usize> {
                 // Vanilla `DispenserBlockEntity.getRandomSlot` unpacks the pending
                 // loot table before sampling.
-                self.unpack_loot_table();
+                self.unpack_loot_table(None);
                 let container = self.container.lock();
                 let mut replace_slot = None;
                 let mut replace_odds = 1;
@@ -255,26 +258,34 @@ macro_rules! dispenser_block_entity {
                 replace_slot
             }
 
-            /// Vanilla `RandomizableContainer.unpackLootTable(null)`.
+            /// Vanilla `RandomizableContainer.unpackLootTable`.
             ///
             /// Generates the pending table's items and places them with
             /// `LootTable.fill`'s slot selection, then clears the table. Vanilla runs
             /// this from every container read (`getItem`, `isEmpty`, `removeItem`,
-            /// `setItem`, `getRandomSlot` and menu creation); Steel's callers invoke it
-            /// explicitly because the container capability is read through
+            /// `setItem`), from `getRandomSlot`, and from `createMenu` with the
+            /// opening player; Steel's callers invoke it explicitly because the
+            /// container capability is read through
             /// [`ContainerRef`](crate::inventory::lock::ContainerRef).
-            pub fn unpack_loot_table(&self) {
-                let (loot_table, seed) = {
+            pub fn unpack_loot_table(&self, player: Option<&Player>) {
+                let world = self.get_level();
+                // Vanilla clears the table before resolving and rolling it, so a
+                // broken key cannot leave the container permanently pending.
+                let (loot_table_key, seed) = {
                     let mut container = self.container.lock();
-                    let Some(loot_table_key) = container.loot_table.as_ref() else {
+                    let Some(loot_table_key) = container.loot_table.take() else {
                         return;
                     };
-                    let Some(loot_table) = REGISTRY.loot_tables.by_key(loot_table_key) else {
-                        return;
-                    };
-                    container.loot_table = None;
-                    (loot_table, container.loot_table_seed)
+                    (loot_table_key, container.loot_table_seed)
                 };
+                let Some(loot_table) = REGISTRY.loot_tables.by_key(&loot_table_key) else {
+                    log::warn!("Dispenser has unknown loot table {loot_table_key}");
+                    return;
+                };
+                // Vanilla fires `GENERATE_LOOT` before the loot is rolled.
+                if let (Some(player), Some(world)) = (player, world.as_ref()) {
+                    raise_generate_loot(player, world, &loot_table_key);
+                }
                 let pos = self.get_block_pos();
                 let origin = (
                     f64::from(pos.x()) + 0.5,
@@ -282,11 +293,12 @@ macro_rules! dispenser_block_entity {
                     f64::from(pos.z()) + 0.5,
                 );
                 if seed == 0 {
-                    self.fill_from_loot_table(loot_table, origin, &mut rand::rng());
+                    self.fill_from_loot_table(loot_table, origin, player, &mut rand::rng());
                 } else {
                     self.fill_from_loot_table(
                         loot_table,
                         origin,
+                        player,
                         &mut StdRng::seed_from_u64(seed as u64),
                     );
                 }
@@ -297,11 +309,18 @@ macro_rules! dispenser_block_entity {
                 &self,
                 loot_table: LootTableRef,
                 origin: (f64, f64, f64),
+                player: Option<&Player>,
                 rng: &mut R,
             ) {
+                let equipment = player.map(living_loot_equipment);
                 let items = {
                     let mut context =
                         LootContext::new(rng).with_origin(origin.0, origin.1, origin.2);
+                    if let (Some(player), Some(equipment)) = (player, equipment.as_ref()) {
+                        context = context
+                            .with_luck(player.get_luck())
+                            .with_this_entity(entity_loot_ref(player, Some(equipment)));
+                    }
                     loot_table.get_random_items(&mut context)
                 };
                 let mut container = self.container.lock();
@@ -338,11 +357,15 @@ macro_rules! dispenser_block_entity {
                 &self.base
             }
 
+            fn unpack_loot_table(&self, player: Option<&Player>) {
+                $name::unpack_loot_table(self, player);
+            }
+
             fn pre_remove_side_effects(&self, pos: BlockPos, _state: BlockStateId) {
                 // Vanilla `Containers.dropContents` reads the container through
                 // `RandomizableContainerBlockEntity.getItem`, which unpacks a
                 // pending loot table first.
-                self.unpack_loot_table();
+                self.unpack_loot_table(None);
                 let items = {
                     let mut container = self.container.lock();
                     mem::replace(

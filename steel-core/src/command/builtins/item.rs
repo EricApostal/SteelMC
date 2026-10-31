@@ -840,6 +840,37 @@ fn block_accessor_from(
     )?))
 }
 
+/// Vanilla `ExecuteCommand.countItems`: the total count of source stacks whose
+/// item predicate matches, using the same `ItemAccessor` slot readers as `/item`.
+pub(super) fn count_matching_items(
+    context: &SteelCommandContext<CommandSource>,
+    source_kind: ItemSourceKind,
+    slots_name: &str,
+    predicate_name: &str,
+) -> Result<i32, CommandSyntaxError> {
+    let slots = context.slot_source(slots_name)?;
+    let predicate = context.item_predicate(predicate_name)?;
+    let source = context.source();
+    let stacks = match source_kind {
+        ItemSourceKind::Entity => {
+            EntityItemAccessor::new(context.entities("source")?).get_slots(source, slots)?
+        }
+        ItemSourceKind::Block => BlockItemAccessor::new(loaded_block_position(context, "source")?)
+            .get_slots(source, slots)?,
+    };
+    Ok(stacks
+        .iter()
+        .filter(|stack| predicate.matches(stack))
+        .fold(0, |total, stack| total.wrapping_add(stack.count())))
+}
+
+/// Which `SOURCE_PROVIDERS` entry `execute if items` reads from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ItemSourceKind {
+    Entity,
+    Block,
+}
+
 /// Vanilla `ItemCommands.getSlotsFromProvider`: builds the slot-source context
 /// (container = the target provider, this-entity = the command source entity)
 /// and provides the slots.

@@ -117,6 +117,30 @@ impl Click {
     }
 }
 
+/// The vanilla `ClickAction` an item override observes.
+///
+/// Vanilla's enum also carries the non-mouse actions (`QUICK_MOVE`, `SWAP`, …),
+/// but every item override compares against `PRIMARY`/`SECONDARY` only, so the
+/// menu converts mouse clicks to these two variants.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClickAction {
+    /// The primary (left) mouse button.
+    Primary,
+    /// The secondary (right) mouse button.
+    Secondary,
+}
+
+impl ClickAction {
+    /// Maps a mouse button to the vanilla click action.
+    #[must_use]
+    pub const fn from_button(button: MouseButton) -> Self {
+        match button {
+            MouseButton::Left => Self::Primary,
+            MouseButton::Right => Self::Secondary,
+        }
+    }
+}
+
 /// A mouse button, decoded from the raw `button` field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MouseButton {

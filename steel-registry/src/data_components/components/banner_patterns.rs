@@ -114,6 +114,14 @@ impl BannerPatternLayers {
         &self.layers
     }
 
+    /// Vanilla `BannerPatternLayers.removeLast`: a copy without the final layer.
+    #[must_use]
+    pub fn remove_last(&self) -> Self {
+        let mut layers = self.layers.clone();
+        layers.pop();
+        Self { layers }
+    }
+
     fn to_nbt_tag_ref(&self) -> NbtTag {
         if self.layers.is_empty() {
             return NbtTag::List(NbtList::Empty);

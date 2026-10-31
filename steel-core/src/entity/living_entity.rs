@@ -124,6 +124,11 @@ pub trait LivingEntity: Entity {
     fn base_tick_living_entity(&self) {
         self.advance_living_rotation_for_base_tick();
         self.living_base().tick_swing_state();
+        // Vanilla `LivingEntity.baseTick` starts with
+        // `EnchantmentHelper.tickEffects` (Soul Speed's server tick effects).
+        if let Some(world) = self.level() {
+            enchantment_helper::tick_enchantments(self, &world);
+        }
         self.entity_base_tick();
         self.tick_living_environmental_damage();
     }
@@ -353,10 +358,13 @@ pub trait LivingEntity: Entity {
     /// resets randomized attributes every unload.
     ///
     /// `LivingEntity.addAdditionalSaveData` also writes `HurtTime`, which Steel
-    /// does not model as a field (it uses `invulnerableTime` for the same window),
-    /// so it is intentionally omitted; see [`Self::load_living`].
+    /// persists alongside the other transient living fields.
     fn save_living(&self, nbt: &mut NbtCompound) {
         nbt.insert("Health", self.get_health());
+        nbt.insert(
+            "HurtTime",
+            NbtTag::Short(self.living_base().hurt_time() as i16),
+        );
         nbt.insert(
             "DeathTime",
             NbtTag::Short(self.living_base().death_time() as i16),
@@ -385,9 +393,8 @@ pub trait LivingEntity: Entity {
     /// [`Self::save_living`].
     ///
     /// Mirrors vanilla's defaulting: `AbsorptionAmount` defaults to 0,
-    /// `Health` defaults to the (already-restored) max health, and `DeathTime`/
-    /// `FallFlying` default to 0/false. Vanilla's `HurtTime` is not modelled by
-    /// Steel and is skipped.
+    /// `Health` defaults to the (already-restored) max health, and `HurtTime`/
+    /// `DeathTime`/`FallFlying` default to 0/0/false.
     fn load_living(&self, nbt: BorrowedNbtCompoundView<'_, '_>) {
         self.set_absorption_amount(nbt.float("AbsorptionAmount").unwrap_or(0.0));
 
@@ -410,6 +417,7 @@ pub trait LivingEntity: Entity {
 
         let max_health = self.get_max_health();
         self.set_health(nbt.float("Health").unwrap_or(max_health));
+        self.set_hurt_time(i32::from(nbt.short("HurtTime").unwrap_or(0)));
         self.living_base()
             .set_death_time(i32::from(nbt.short("DeathTime").unwrap_or(0)));
         self.set_fall_flying(nbt.byte("FallFlying").is_some_and(|value| value != 0));
@@ -660,6 +668,27 @@ pub trait LivingEntity: Entity {
     /// Sets the remaining hurt-cooldown ticks.
     fn set_invulnerable_time(&self, invulnerable_time: i32) {
         self.living_base().set_invulnerable_time(invulnerable_time);
+    }
+
+    /// Returns the hurt-flash ticks remaining (vanilla `LivingEntity.hurtTime`).
+    fn hurt_time(&self) -> i32 {
+        self.living_base().hurt_time()
+    }
+
+    /// Sets the hurt-flash ticks remaining.
+    fn set_hurt_time(&self, hurt_time: i32) {
+        self.living_base().set_hurt_time(hurt_time);
+    }
+
+    /// Returns the current hurt-flash length (vanilla `LivingEntity.hurtDuration`).
+    fn hurt_duration(&self) -> i32 {
+        self.living_base().hurt_duration()
+    }
+
+    /// Returns whether this entity was hurt within the last hurt flash
+    /// (vanilla `LivingEntity.wasHurtRecently`).
+    fn was_hurt_recently(&self) -> bool {
+        self.living_base().was_hurt_recently()
     }
 
     /// Sets the remaining memory time without touching the remembered player.
@@ -2696,6 +2725,8 @@ pub trait LivingEntity: Entity {
         // Vanilla `LivingEntity.tick` runs `updatingUsingItem` right after
         // `super.tick()`, before `aiStep`.
         self.updating_using_item(entity);
+        // Vanilla `LivingEntity.tick` counts `hurtTime` down before the damage cooldown.
+        self.living_base().decrement_hurt_time();
         self.living_base().decrement_invulnerable_time();
         self.tick_mob_effects();
         self.detect_equipment_updates();

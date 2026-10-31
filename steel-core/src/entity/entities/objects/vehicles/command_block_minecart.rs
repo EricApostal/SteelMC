@@ -9,16 +9,15 @@
 //! `NewMinecartBehavior` when `minecart_improvements` is enabled; Steel always
 //! uses the stable `OldMinecartBehavior` physics from [`super::minecart_base`].
 //!
-//! Missing dependency: command execution. Vanilla calls
-//! `BaseCommandBlock.performCommand(ServerLevel)` which builds a `GAMEMASTER`
-//! `CommandSourceStack` and runs `Commands.performPrefixedCommand`. Steel builds
-//! its dispatcher in `steel-core/src/command/builtins/mod.rs` but exposes no
-//! entity-facing "run this string" entry point, so
-//! [`CommandBlockMinecartEntity::perform_command`] is gated and documented rather
-//! than stubbed; the storage, synced data, and trigger timing are complete.
+//! Command execution mirrors `BaseCommandBlock.performCommand` with the vanilla
+//! `GAMEMASTER` source attached to this cart: the string runs against the owning
+//! world's server through the shared command execution queue
+//! ([`crate::command::execution::perform_prefixed_command`]).
 
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Weak};
 
+use chrono::Local;
 use glam::DVec3;
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::NbtCompound;
@@ -28,24 +27,29 @@ use steel_registry::items::ItemRef;
 use steel_registry::vanilla_entity_data::{
     AbstractMinecartEntityData, MinecartCommandBlockEntityData,
 };
+use steel_registry::vanilla_game_rules::{COMMAND_BLOCK_OUTPUT, SEND_COMMAND_FEEDBACK};
 use steel_registry::{vanilla_blocks, vanilla_items};
 use steel_utils::axis::Axis;
 use steel_utils::block_util::FoundRectangle;
 use steel_utils::locks::SyncMutex;
 use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
-use text_components::TextComponent;
+use text_components::{Modifier as _, TextComponent};
 
 use crate::behavior::InteractionResult;
+use crate::command::execution::{
+    CommandOutputCapture, CommandResultCallback, CommandSource, perform_prefixed_command,
+};
 use crate::entity::damage::DamageSource;
 use crate::entity::{Entity, EntityBase, EntityBaseLoad, EntitySyncedData};
+use crate::permission::PermissionLevel;
 use crate::player::Player;
 use crate::world::World;
 
 use super::minecart_base::{self, Minecart, MinecartState};
 
 /// Vanilla `MinecartCommandBlock.ACTIVATION_DELAY`.
-const ACTIVATION_DELAY: i32 = 4;
+pub(crate) const ACTIVATION_DELAY: i32 = 4;
 /// Vanilla `BaseCommandBlock.NO_LAST_EXECUTION`.
 const NO_LAST_EXECUTION: i64 = -1;
 /// Vanilla `BaseCommandBlock` easter egg command (`Searge`).
@@ -145,6 +149,16 @@ impl CommandBlockMinecartEntity {
         self.entity_data.lock().id_command_name.set(command);
     }
 
+    /// Test hook for `Minecart::activate_minecart`.
+    ///
+    /// The `Minecart` trait is `pub(super)`-scoped to the vehicles module, but the
+    /// command-block activation tests live in `block_entity::entities::command_block`,
+    /// so expose the one method they drive rather than widening the trait.
+    #[cfg(test)]
+    pub(crate) fn activate_minecart_for_test(&self, world: &Arc<World>, powered: bool) {
+        self.activate_command_block(world, powered);
+    }
+
     /// The last command's success count, vanilla `BaseCommandBlock.getSuccessCount`.
     #[must_use]
     pub fn success_count(&self) -> i32 {
@@ -186,7 +200,7 @@ impl CommandBlockMinecartEntity {
 
     /// Vanilla `MinecartCommandBlock.activateMinecart`: run on a powered
     /// activator rail, at most once per four ticks.
-    fn activate_command_block(&self, world: &World, powered: bool) {
+    fn activate_command_block(&self, world: &Arc<World>, powered: bool) {
         if !powered {
             return;
         }
@@ -204,10 +218,9 @@ impl CommandBlockMinecartEntity {
     /// Vanilla `BaseCommandBlock.performCommand`.
     ///
     /// The command string, the same-game-tick guard, the `Searge` easter egg and the
-    /// execution bookkeeping are mirrored exactly; only the dispatch into the command
-    /// dispatcher is unavailable (see the module docs), so `SuccessCount` stays at its
-    /// reset value and `LastOutput` keeps its previous value until that API lands.
-    fn perform_command(&self, world: &World) -> bool {
+    /// execution bookkeeping mirror vanilla; the command itself runs with the vanilla
+    /// `GAMEMASTER` source attached to this cart.
+    fn perform_command(&self, world: &Arc<World>) -> bool {
         let game_time = world.game_time();
         if game_time == self.command.lock().last_execution {
             return false;
@@ -223,14 +236,14 @@ impl CommandBlockMinecartEntity {
             return true;
         }
 
+        let track_output = self.command.lock().track_output;
         self.command.lock().success_count = 0;
         // Vanilla `BaseCommandBlock.performCommand`: a disabled command block never runs the
         // command, and `StringUtil.isNullOrEmpty` only rejects the empty string.
         if world.is_command_block_enabled() && !command.is_empty() {
-            // MISSING API: `Commands.performPrefixedCommand(source, command)`.
-            // `steel-core/src/command/builtins/mod.rs:96` builds the dispatcher, but no
-            // entity-facing execute-string entry point exists yet.
-            let _ = command;
+            // Vanilla clears the previous output before dispatch.
+            self.command.lock().last_output = None;
+            self.dispatch(world, &command, track_output);
         }
 
         let update_last_execution = self.command.lock().update_last_execution;
@@ -240,6 +253,67 @@ impl CommandBlockMinecartEntity {
             NO_LAST_EXECUTION
         };
         true
+    }
+
+    /// Runs `command` with `MinecartCommandBase.createCommandSourceStack`'s source: the
+    /// cart's position, rotation and entity at `GAMEMASTER` level.
+    fn dispatch(&self, world: &Arc<World>, command: &str, track_output: bool) {
+        let Some(server) = world.server() else {
+            return;
+        };
+        let captured = Arc::new(SyncMutex::new(None::<TextComponent>));
+        let output = track_output.then(|| {
+            let captured = Arc::clone(&captured);
+            let accepts_success = world.get_game_rule(&SEND_COMMAND_FEEDBACK);
+            let informs_admins = world.get_game_rule(&COMMAND_BLOCK_OUTPUT);
+            CommandOutputCapture::new(
+                move |message| {
+                    // Vanilla `CloseableCommandBlockSource.sendSystemMessage`.
+                    *captured.lock() = Some(
+                        TextComponent::plain(format!("[{}] ", Local::now().format("%H:%M:%S")))
+                            .add_child(message.clone()),
+                    );
+                },
+                accepts_success,
+                true,
+                informs_admins,
+            )
+        });
+
+        let mut source = CommandSource::for_command_block(
+            server,
+            Arc::clone(world),
+            self.position(),
+            self.rotation(),
+            PermissionLevel::Gamemasters,
+            output,
+        );
+        if let Some(entity) = world.get_entity_by_id(self.id()) {
+            // Vanilla passes the cart itself as the `CommandSourceStack` entity.
+            source = source.with_entity(entity);
+        }
+        let source = Arc::new(source);
+
+        let successes = Arc::new(AtomicI32::new(0));
+        let callback = CommandResultCallback::new({
+            let successes = Arc::clone(&successes);
+            move |success, _result| {
+                if success {
+                    successes.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        });
+        perform_prefixed_command(&source, command, callback);
+        self.command.lock().success_count = successes.load(Ordering::Relaxed);
+
+        if track_output {
+            // Vanilla only refreshes the synced output when the command emitted a message.
+            let captured = captured.lock().clone();
+            match captured {
+                Some(output) => self.set_last_output(Some(output)),
+                None => self.command.lock().last_output = None,
+            }
+        }
     }
 }
 

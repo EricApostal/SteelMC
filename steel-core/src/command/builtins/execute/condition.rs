@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use simdnbt::owned::NbtTag;
-use steel_registry::{blocks::block_state_ext::BlockStateExt as _, vanilla_blocks};
+use steel_registry::loot_table::LootContext;
+use steel_registry::{
+    REGISTRY, RegistryExt as _, blocks::block_state_ext::BlockStateExt as _, vanilla_blocks,
+};
 use steel_utils::{
     BlockPos, BoundingBox, ChunkPos, SectionPos,
     nbt::{NbtPath, compare_nbt_compounds},
@@ -12,14 +15,23 @@ use steel_utils::{
 use text_components::TextComponent;
 
 use super::super::super::{
-    brigadier::{CommandNodeBuilder, CommandRedirectTarget, CommandSyntaxError},
+    brigadier::{
+        ArgumentSuggestionContext, CommandNodeBuilder, CommandRedirectTarget, CommandSyntaxError,
+        SuggestionsBuilder,
+    },
     execution::{
         CommandSource, SteelArgumentType, SteelCommandContext, SteelCommandRuntime, argument,
         literal,
     },
 };
+use super::super::{item, stopwatch};
 use super::{objective, source_command_storage, source_scoreboard};
-use crate::{block_entity::SharedBlockEntity, command::missing_argument, world::World};
+use crate::{
+    block_entity::SharedBlockEntity,
+    command::missing_argument,
+    entity::{entity_loot_ref, loot::loot_level_view, loot_equipment},
+    world::World,
+};
 
 type Builder = CommandNodeBuilder<CommandSource, SteelCommandRuntime>;
 
@@ -27,23 +39,10 @@ const EXECUTE_ROOT: CommandRedirectTarget = CommandRedirectTarget::CommandRoot;
 const MAX_BLOCKS_REGION: i64 = 32_768;
 
 pub(super) fn conditionals(name: &'static str, expected: bool) -> Builder {
-    // TODO: Add `items` once Steel has a slot-source argument plus item accessors.
-    // Vanilla `execute if items <slots> <item_predicate>` needs `SlotSourceArgument`
-    // (`execute/argument.rs`, owner: `Commands`) and the `ItemAccessor` providers that
-    // read a player inventory/container (`command/execution`, owner: `Commands`, with
-    // the container inventories from the `Menus` lane). Steel has
-    // `SteelArgumentType::item_predicate()` and `ItemPredicate::matches`, but no slot
-    // source and no item accessor, so the branch cannot parse or count items yet.
-    // TODO: Add `predicate` and `function` once their runtime registries are ported.
-    // `predicate` needs the loot-predicate registry behind vanilla's
-    // `ResourceOrIdArgument.lootPredicate` (owner: loot/advancement lane);
-    // `function` needs a command-function registry plus the `InCommandFunction`
-    // source modifier (`FunctionArgument`/`/function` do not exist yet, owner:
-    // `Commands` function-command lane).
-    // TODO: Add `stopwatch` once Steel has the stopwatch system (`ServerStopwatches`
-    // and the `/stopwatch` command, owner: `Commands`). Vanilla checks
-    // `Stopwatches.get(id).elapsedSeconds()` against a float range; there is no
-    // stopwatch state to read today.
+    // TODO: Add `function` once the command queue exposes a continuation for a
+    // finished function call. Vanilla's `ExecuteIfFunctionCustomModifier` needs
+    // `scheduleFunctionConditionsAndTest` plus an `InCommandFunction` adapter,
+    // which Steel's `CommandResultCallback` (result only) cannot express yet.
     literal(name)
         .then(biome_condition(expected))
         .then(block_condition(expected))
@@ -51,8 +50,11 @@ pub(super) fn conditionals(name: &'static str, expected: bool) -> Builder {
         .then(data_condition(expected))
         .then(dimension_condition(expected))
         .then(entity_condition(expected))
+        .then(items_condition(expected))
         .then(loaded_condition(expected))
+        .then(predicate_condition(expected))
         .then(score_condition(expected))
+        .then(stopwatch_condition(expected))
 }
 
 fn data_condition(expected: bool) -> Builder {
@@ -441,6 +443,118 @@ fn entity_condition(expected: bool) -> Builder {
     )
 }
 
+fn predicate_condition(expected: bool) -> Builder {
+    literal("predicate").then(
+        argument("predicate", SteelArgumentType::predicate())
+            .forks(EXECUTE_ROOT, move |context| {
+                let matches = predicate_matches(context)?;
+                Ok(conditional_sources(context.source(), expected, matches))
+            })
+            .executes(move |context| {
+                execute_boolean_condition(context, expected, predicate_matches(context)?)
+            }),
+    )
+}
+
+/// Vanilla `ExecuteCommand.checkCustomPredicate`: `COMMAND` loot params with
+/// `ORIGIN` and the optional source `THIS_ENTITY`.
+fn predicate_matches(
+    context: &SteelCommandContext<CommandSource>,
+) -> Result<bool, CommandSyntaxError> {
+    let key = context.identifier("predicate")?.clone();
+    let Some(predicate) = REGISTRY.predicates.by_key(&key) else {
+        return Err(CommandSyntaxError::dynamic(
+            translations::ARGUMENT_RESOURCE_NOT_FOUND
+                .message([key.to_string(), "minecraft:predicate".to_owned()])
+                .component(),
+        ));
+    };
+
+    let source = context.source();
+    let origin = source.position();
+    let equipment = source
+        .entity()
+        .and_then(|entity| loot_equipment(entity.as_ref()));
+    let mut rng = rand::rng();
+    let mut params = LootContext::new(&mut rng).with_origin(origin.x, origin.y, origin.z);
+    if let Some(entity) = source.entity() {
+        params = params.with_this_entity(entity_loot_ref(entity.as_ref(), equipment.as_ref()));
+    }
+    let level = loot_level_view(source.world(), (origin.x, origin.y, origin.z));
+    params = params.with_location(&level);
+    Ok(predicate.condition.test(&mut params))
+}
+
+fn stopwatch_condition(expected: bool) -> Builder {
+    let suggestions = |_: &ArgumentSuggestionContext<'_, _, _>,
+                       builder: &mut SuggestionsBuilder<'_>| {
+        stopwatch::suggest_stopwatches(builder);
+    };
+    literal("stopwatch").then(
+        argument("id", SteelArgumentType::identifier_argument())
+            .suggests(suggestions)
+            .then(
+                argument("range", SteelArgumentType::double_range())
+                    .forks(EXECUTE_ROOT, move |context| {
+                        let matches = stopwatch_matches(context)?;
+                        Ok(conditional_sources(context.source(), expected, matches))
+                    })
+                    .executes(move |context| {
+                        execute_boolean_condition(context, expected, stopwatch_matches(context)?)
+                    }),
+            ),
+    )
+}
+
+/// Vanilla `ExecuteCommand.checkStopwatch`.
+fn stopwatch_matches(
+    context: &SteelCommandContext<CommandSource>,
+) -> Result<bool, CommandSyntaxError> {
+    let id = context.identifier("id")?.clone();
+    let tick = context.source().server().current_tick();
+    let Some(elapsed) = stopwatch::elapsed_seconds(tick, &id) else {
+        return Err(stopwatch::does_not_exist(&id));
+    };
+    Ok(context.double_range("range")?.matches(elapsed))
+}
+
+fn items_condition(expected: bool) -> Builder {
+    literal("items")
+        .then(
+            literal("block").then(
+                argument("source", SteelArgumentType::block_pos())
+                    .then(items_slots(item::ItemSourceKind::Block, expected)),
+            ),
+        )
+        .then(
+            literal("entity").then(
+                argument("source", SteelArgumentType::entity())
+                    .then(items_slots(item::ItemSourceKind::Entity, expected)),
+            ),
+        )
+}
+
+/// `slots <slot_source> <item_predicate>` shared by both item source providers.
+fn items_slots(kind: item::ItemSourceKind, expected: bool) -> Builder {
+    argument("slots", SteelArgumentType::slot_source()).then(
+        argument("item_predicate", SteelArgumentType::item_predicate())
+            .forks(EXECUTE_ROOT, move |context| {
+                let count = item_match_count(context, kind)?;
+                Ok(conditional_sources(context.source(), expected, count > 0))
+            })
+            .executes(move |context| {
+                execute_numeric_condition(context, expected, item_match_count(context, kind)?)
+            }),
+    )
+}
+
+fn item_match_count(
+    context: &SteelCommandContext<CommandSource>,
+    kind: item::ItemSourceKind,
+) -> Result<i32, CommandSyntaxError> {
+    item::count_matching_items(context, kind, "slots", "item_predicate")
+}
+
 fn loaded_condition(expected: bool) -> Builder {
     literal("loaded").then(
         argument("pos", SteelArgumentType::block_pos())
@@ -725,5 +839,100 @@ mod tests {
         assert!(!block_entity_data_matches(Some(&source), Some(&different)));
         assert!(!block_entity_data_matches(Some(&source), None));
         assert!(block_entity_data_matches(None, Some(&matching)));
+    }
+}
+
+#[cfg(test)]
+mod condition_graph_tests {
+    use super::super::super::create_dispatcher;
+    use crate::command::{
+        brigadier::{CommandDispatcher, NodeId},
+        execution::{CommandSource, SteelArgumentType, SteelCommandRuntime},
+    };
+    use steel_registry::init_vanilla_registry;
+
+    type Dispatcher = CommandDispatcher<CommandSource, SteelCommandRuntime>;
+
+    fn child(dispatcher: &Dispatcher, parent: NodeId, name: &str) -> NodeId {
+        let Some(children) = dispatcher.children(parent) else {
+            panic!("parent node should exist");
+        };
+        let Some(child) = children.iter().copied().find(|child| {
+            dispatcher
+                .node(*child)
+                .is_some_and(|node| node.name() == name)
+        }) else {
+            panic!("child {name} should exist");
+        };
+        child
+    }
+
+    fn argument(
+        dispatcher: &Dispatcher,
+        parent: NodeId,
+        name: &str,
+        expected: &SteelArgumentType,
+    ) -> NodeId {
+        let node = child(dispatcher, parent, name);
+        assert_eq!(
+            dispatcher.node(node).and_then(|node| node.argument_type()),
+            Some(expected)
+        );
+        node
+    }
+
+    #[test]
+    fn predicate_stopwatch_and_items_branches_match_vanilla() {
+        init_vanilla_registry();
+        let Ok(dispatcher) = create_dispatcher() else {
+            panic!("built-in commands should register");
+        };
+        let execute = child(&dispatcher, dispatcher.root(), "execute");
+
+        for name in ["if", "unless"] {
+            let condition = child(&dispatcher, execute, name);
+
+            let predicate = child(&dispatcher, condition, "predicate");
+            argument(
+                &dispatcher,
+                predicate,
+                "predicate",
+                &SteelArgumentType::predicate(),
+            );
+
+            let stopwatch = child(&dispatcher, condition, "stopwatch");
+            let id = argument(
+                &dispatcher,
+                stopwatch,
+                "id",
+                &SteelArgumentType::identifier_argument(),
+            );
+            argument(&dispatcher, id, "range", &SteelArgumentType::double_range());
+
+            let items = child(&dispatcher, condition, "items");
+            for (provider, source_type) in [
+                ("block", SteelArgumentType::block_pos()),
+                ("entity", SteelArgumentType::entity()),
+            ] {
+                let source = argument(
+                    &dispatcher,
+                    child(&dispatcher, items, provider),
+                    "source",
+                    &source_type,
+                );
+                let slots = argument(
+                    &dispatcher,
+                    source,
+                    "slots",
+                    &SteelArgumentType::slot_source(),
+                );
+                argument(
+                    &dispatcher,
+                    slots,
+                    "item_predicate",
+                    &SteelArgumentType::item_predicate(),
+                );
+            }
+        }
     }
 }

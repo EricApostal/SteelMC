@@ -55,6 +55,9 @@ spawn_protection_radius = 16
 chat_spam_threshold_seconds = 10
 # Vanilla command spam threshold window in seconds
 command_spam_threshold_seconds = 10
+# Whether to accept clients transferred from another server with vanilla `/transfer`
+# (vanilla `accepts-transfers`, default false)
+accepts_transfers = false
 
 # Optional worker counts for server thread pools. 0 or omitted uses each pool's automatic default.
 [server.threads]

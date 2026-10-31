@@ -37,6 +37,9 @@ pub mod names {
     /// `data/maps.toml`. Steel keeps all maps of a world in one file because its
     /// saved-data names are static strings and vanilla keys each map by id.
     pub const MAPS: SavedDataName = SavedDataName::trusted("maps");
+    /// Vanilla `TimerQueue.TYPE` (`minecraft:scheduled_events`), persisted as
+    /// `data/scheduled_events.toml`.
+    pub const SCHEDULED_EVENTS: SavedDataName = SavedDataName::trusted("scheduled_events");
 }
 
 /// Name of a per-world saved data entry.

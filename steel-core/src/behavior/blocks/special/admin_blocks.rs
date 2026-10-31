@@ -28,7 +28,7 @@ use crate::behavior::{
     InventoryAccess,
 };
 use crate::block_entity::entities::{
-    CommandBlockEntity, StructureBlockEntity, TestInstanceBlockEntity,
+    CommandBlockEntity, CommandBlockMode, StructureBlockEntity, TestInstanceBlockEntity,
 };
 use crate::block_entity::{BLOCK_ENTITIES, BlockEntityTicker};
 use crate::player::Player;
@@ -102,13 +102,24 @@ impl BlockBehavior for CommandBlock {
         let Some(command_be) = entity.downcast_ref::<CommandBlockEntity>() else {
             return;
         };
-        // Vanilla `CommandBlock.setPoweredAndUpdate`: on a rising edge a non-automatic
-        // impulse/chain block marks its condition met and schedules the one-tick execution.
+        // Vanilla `CommandBlock.setPoweredAndUpdate`: on a rising edge an automatic
+        // (chain) or sequence block never schedules its own tick; otherwise the block
+        // marks its condition met and schedules the one-tick execution.
         let is_powered = world.has_neighbor_signal(pos);
-        if command_be.set_powered(is_powered) && is_powered && !command_be.is_automatic() {
-            command_be.mark_condition_met();
-            world.schedule_block_tick_default(pos, self.block, 1);
+        // Vanilla `CommandBlock.setPoweredAndUpdate`: compare against the previous state
+        // first and do nothing when the edge did not change. `set_powered` returns the
+        // *previous* value, so a rising edge (false -> true) must not be mistaken for
+        // "unchanged".
+        let previous = command_be.set_powered(is_powered);
+        if previous == is_powered || !is_powered {
+            return;
         }
+        // Vanilla: an automatic (chain) or sequence block never schedules its own tick.
+        if command_be.is_automatic() || command_be.mode() == CommandBlockMode::Sequence {
+            return;
+        }
+        command_be.mark_condition_met();
+        world.schedule_block_tick_default(pos, self.block, 1);
     }
 
     fn tick(&self, _state: BlockStateId, world: &Arc<World>, pos: BlockPos) {

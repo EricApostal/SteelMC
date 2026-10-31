@@ -426,6 +426,63 @@ struct DragonPartEntry {
     /// The owning dragon's id, used to tell whether the hitbox is accessible.
     parent_id: i32,
     entity: SharedEntity,
+    bounding_box: WorldAabb,
+    spatial_cells: SmallVec<[EntitySpatialCell; 8]>,
+}
+
+impl DragonPartEntry {
+    fn new(parent_id: i32, entity: SharedEntity) -> Self {
+        let bounding_box = entity.bounding_box();
+        Self {
+            parent_id,
+            entity,
+            bounding_box,
+            spatial_cells: EntitySpatialCellBounds::from_aabb(&bounding_box).cells(),
+        }
+    }
+}
+
+/// One entry of an `aabb` entity query.
+///
+/// Vanilla `Level.getEntities(Entity, AABB, Predicate)` also returns the ender
+/// dragon's hitboxes, which live outside the entity lookup; [`DragonPartEntry`]
+/// is that arm here.
+enum EntityQueryEntry<'a> {
+    Live(&'a EntityEntry),
+    DragonPart(&'a DragonPartEntry),
+}
+
+impl<'a> EntityQueryEntry<'a> {
+    fn entity(&self) -> &'a SharedEntity {
+        match self {
+            Self::Live(entry) => &entry.entity,
+            Self::DragonPart(entry) => &entry.entity,
+        }
+    }
+
+    const fn bounding_box(&self) -> WorldAabb {
+        match self {
+            Self::Live(entry) => entry.bounding_box,
+            Self::DragonPart(entry) => entry.bounding_box,
+        }
+    }
+
+    /// Vanilla orders a part with its parent: parts are only reachable through
+    /// the dragon's own section.
+    fn query_order(&self, state: &ManagerState) -> EntityQueryOrder {
+        match self {
+            Self::Live(entry) => entry.query_order(),
+            Self::DragonPart(entry) => state.live_by_id.get(&entry.parent_id).map_or_else(
+                || EntityQueryOrder {
+                    section: PackedSectionPos::from(SectionPos::from_entity_pos(
+                        entry.entity.position(),
+                    )),
+                    insertion: u64::MAX,
+                },
+                EntityEntry::query_order,
+            ),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -1241,9 +1298,9 @@ impl WorldEntityManager {
     ) -> bool {
         let state = self.state.read();
         for entry in Self::entity_query_entries(&state, aabb) {
-            if Self::is_accessible(&state, entry)
-                && entry.bounding_box.intersects(*aabb)
-                && predicate(entry.entity.as_ref())
+            if Self::is_query_entry_accessible(&state, &entry)
+                && entry.bounding_box().intersects(*aabb)
+                && predicate(entry.entity().as_ref())
             {
                 return true;
             }
@@ -1262,11 +1319,11 @@ impl WorldEntityManager {
         let state = self.state.read();
         let mut result = Vec::new();
         for entry in Self::entity_query_entries(&state, aabb) {
-            if Self::is_accessible(&state, entry)
-                && entry.bounding_box.intersects(*aabb)
-                && predicate(entry.entity.as_ref())
+            if Self::is_query_entry_accessible(&state, &entry)
+                && entry.bounding_box().intersects(*aabb)
+                && predicate(entry.entity().as_ref())
             {
-                result.push(entry.bounding_box);
+                result.push(entry.bounding_box());
             }
         }
 
@@ -1299,13 +1356,18 @@ impl WorldEntityManager {
         Self::entity_query_entries(&state, aabb)
             .into_iter()
             .filter(|entry| {
-                Self::is_accessible(&state, entry) && entry.bounding_box.intersects(*aabb)
+                Self::is_query_entry_accessible(&state, entry)
+                    && entry.bounding_box().intersects(*aabb)
             })
-            .map(|entry| Arc::clone(&entry.entity))
+            .map(|entry| Arc::clone(entry.entity()))
             .collect()
     }
 
     /// Gets all live entities visible to vanilla gameplay lookups.
+    ///
+    /// The ender dragon's hitboxes are not included: vanilla `getAllEntities`
+    /// reads the entity lookup, while `dragonParts` is a separate registry. Use
+    /// [`Self::get_entities_in_aabb`] (or [`Self::get_by_id`]) for hitboxes.
     #[must_use]
     pub fn get_accessible_entities(&self) -> Vec<SharedEntity> {
         let state = self.state.read();
@@ -1318,7 +1380,10 @@ impl WorldEntityManager {
             .collect()
     }
 
-    fn entity_query_entries<'a>(state: &'a ManagerState, aabb: &WorldAabb) -> Vec<&'a EntityEntry> {
+    fn entity_query_entries<'a>(
+        state: &'a ManagerState,
+        aabb: &WorldAabb,
+    ) -> Vec<EntityQueryEntry<'a>> {
         let bounds = EntitySpatialCellBounds::from_aabb(aabb);
         let mut populated_cells = SmallVec::<[&OrderedEntityIds; 8]>::new();
 
@@ -1345,7 +1410,7 @@ impl WorldEntityManager {
         if let [cell] = populated_cells.as_slice() {
             return cell
                 .iter()
-                .filter_map(|entity_id| state.live_by_id.get(entity_id))
+                .filter_map(|entity_id| Self::resolve_query_entry(state, *entity_id))
                 .collect();
         }
 
@@ -1355,10 +1420,104 @@ impl WorldEntityManager {
         }
         let mut entries = entity_ids
             .into_iter()
-            .filter_map(|entity_id| state.live_by_id.get(&entity_id))
+            .filter_map(|entity_id| Self::resolve_query_entry(state, entity_id))
             .collect::<Vec<_>>();
-        entries.sort_unstable_by_key(|entry| entry.query_order());
+        entries.sort_unstable_by_key(|entry| entry.query_order(state));
         entries
+    }
+
+    /// Resolves a spatial-cell id to its query entry.
+    ///
+    /// Dragon hitbox ids live in `by_spatial_cell` alongside ordinary entities so
+    /// projectile raycasts can find them (vanilla `Level.getEntities` returns
+    /// them too), but their entries are kept in `dragon_parts`.
+    fn resolve_query_entry(state: &ManagerState, entity_id: i32) -> Option<EntityQueryEntry<'_>> {
+        if let Some(entry) = state.live_by_id.get(&entity_id) {
+            return Some(EntityQueryEntry::Live(entry));
+        }
+        state
+            .dragon_parts
+            .get(&entity_id)
+            .map(EntityQueryEntry::DragonPart)
+    }
+
+    /// Returns whether `entity_id` is one of the ender dragon's hitboxes.
+    ///
+    /// Vanilla `EnderDragonPart`s are entities but have their own level registry;
+    /// callers that mean "the dragon entity" (or that mirror vanilla's
+    /// `EntityTypeTest` queries, which never see parts) filter them out with this.
+    #[must_use]
+    pub fn is_dragon_part(&self, entity_id: i32) -> bool {
+        self.state.read().dragon_parts.contains_key(&entity_id)
+    }
+
+    /// Returns the id of the dragon owning hitbox `entity_id`, if it is one.
+    ///
+    /// Vanilla `EnderDragonPart.parentMob`; queries that exclude a dragon
+    /// (`Level.getEntities(except, …)`) must exclude its hitboxes too.
+    #[must_use]
+    pub fn dragon_part_parent(&self, entity_id: i32) -> Option<i32> {
+        self.state
+            .read()
+            .dragon_parts
+            .get(&entity_id)
+            .map(|part| part.parent_id)
+    }
+
+    /// Refreshes the spatial index for the hitboxes of dragon `dragon_id`.
+    ///
+    /// Dragon-part query entries cache their bounds, exactly like ordinary live
+    /// entities; the dragon repositions its hitboxes every tick
+    /// (`EnderDragon.update_parts`), so the caller must commit those positions
+    /// here instead of through [`Self::commit_move`].
+    pub fn sync_dragon_parts(&self, dragon_id: i32) {
+        let mut state = self.state.write();
+        let part_ids = state
+            .dragon_parts
+            .iter()
+            .filter(|(_, part)| part.parent_id == dragon_id)
+            .map(|(part_id, _)| *part_id)
+            .collect::<SmallVec<[i32; 8]>>();
+
+        for part_id in part_ids {
+            let Some(part) = state.dragon_parts.get_mut(&part_id) else {
+                continue;
+            };
+            let bounding_box = part.entity.bounding_box();
+            let new_cells = EntitySpatialCellBounds::from_aabb(&bounding_box).cells();
+            if part.spatial_cells == new_cells {
+                part.bounding_box = bounding_box;
+                continue;
+            }
+
+            let previous_cells = mem::take(&mut part.spatial_cells);
+            Self::remove_from_spatial_cells(&mut state, &previous_cells, part_id);
+            let query_order = state.live_by_id.get(&dragon_id).map_or_else(
+                || EntityQueryOrder {
+                    section: PackedSectionPos::from(SectionPos::from_entity_pos(
+                        bounding_box.min_corner(),
+                    )),
+                    insertion: u64::MAX,
+                },
+                EntityEntry::query_order,
+            );
+            Self::insert_into_spatial_cells(&mut state, &new_cells, part_id, query_order);
+            if let Some(part) = state.dragon_parts.get_mut(&part_id) {
+                part.bounding_box = bounding_box;
+                part.spatial_cells = new_cells;
+            }
+        }
+    }
+
+    /// Returns whether a query entry is visible to vanilla gameplay lookups.
+    fn is_query_entry_accessible(state: &ManagerState, entry: &EntityQueryEntry<'_>) -> bool {
+        match entry {
+            EntityQueryEntry::Live(entry) => Self::is_accessible(state, entry),
+            EntityQueryEntry::DragonPart(entry) => state
+                .live_by_id
+                .get(&entry.parent_id)
+                .is_some_and(|parent| Self::is_accessible(state, parent)),
+        }
     }
 
     fn entity_ids_in_chunk_order(state: &ManagerState, chunk: ChunkPos) -> Vec<i32> {
@@ -1765,7 +1924,9 @@ impl WorldEntityManager {
     ///
     /// Vanilla clients only ever hit a dragon through these hitboxes, because
     /// `EnderDragon.isPickable` is `false`; the ids a hit packet carries must
-    /// therefore be resolvable on the server.
+    /// therefore be resolvable on the server. They are also indexed in
+    /// `by_spatial_cell` so `get_entities_in_aabb` and the projectile raycasts
+    /// built on it find them, like vanilla `Level.getEntities` does.
     fn register_dragon_parts(state: &mut ManagerState, entity_id: i32) {
         let Some(entry) = state.live_by_id.get(&entity_id) else {
             return;
@@ -1773,14 +1934,21 @@ impl WorldEntityManager {
         let Some(dragon) = entry.entity.downcast_ref::<EnderDragonEntity>() else {
             return;
         };
-        for part in dragon.shared_parts() {
-            state.dragon_parts.insert(
-                part.id(),
-                DragonPartEntry {
-                    parent_id: entity_id,
-                    entity: part,
-                },
+        let query_order = entry.query_order();
+        let parts = dragon.shared_parts();
+        let mut entries = SmallVec::<[DragonPartEntry; 8]>::new();
+        for part in parts {
+            let entry = DragonPartEntry::new(entity_id, part);
+            Self::insert_into_spatial_cells(
+                state,
+                &entry.spatial_cells,
+                entry.entity.id(),
+                query_order,
             );
+            entries.push(entry);
+        }
+        for entry in entries {
+            state.dragon_parts.insert(entry.entity.id(), entry);
         }
     }
 
@@ -1793,8 +1961,15 @@ impl WorldEntityManager {
             return;
         };
         for part in dragon.shared_parts() {
-            state.dragon_parts.remove(&part.id());
+            Self::remove_dragon_part(state, part.id());
         }
+    }
+
+    fn remove_dragon_part(state: &mut ManagerState, part_id: i32) {
+        let Some(part) = state.dragon_parts.remove(&part_id) else {
+            return;
+        };
+        Self::remove_from_spatial_cells(state, &part.spatial_cells, part_id);
     }
 
     fn contains_uuid(state: &ManagerState, uuid: Uuid) -> bool {

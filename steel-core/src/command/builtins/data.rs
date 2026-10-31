@@ -14,6 +14,7 @@ use steel_utils::{
     BlockPos, Identifier,
     nbt::{
         NbtNumeric as _, NbtPath, NbtPathMutationError, merge_nbt_compounds, nbt_compounds_equal,
+        to_canonical_snbt,
     },
     text::command_nbt_component,
     translations,
@@ -267,31 +268,131 @@ fn remove_target(target: DataTarget) -> Builder {
     )
 }
 
-/// Builds the `modify` subtree for one provider, matching
-/// `DataCommands.decorateModification` for the `value` source: `modify
-/// <target> <targetPath> (insert <index>|prepend|append|set|merge) value
-/// <value>`.
+/// Builds the `modify` subtree for one provider, mirroring
+/// `DataCommands.decorateModification`: every manipulator accepts the `value`,
+/// `from` and `string` sources.
 fn modify_target(target: DataTarget) -> Builder {
-    let indexed = argument("index", ArgumentType::integer(i32::MIN, i32::MAX))
-        .then(value_branch(DataManipulator::Insert, target));
+    let indexed = decoration_sources(
+        argument("index", ArgumentType::integer(i32::MIN, i32::MAX)),
+        DataManipulator::Insert,
+        target,
+    );
     let target_path = argument("targetPath", SteelArgumentType::nbt_path())
         .then(literal("insert").then(indexed))
-        .then(value_branch(DataManipulator::Prepend, target))
-        .then(value_branch(DataManipulator::Append, target))
-        .then(value_branch(DataManipulator::Set, target))
-        .then(value_branch(DataManipulator::Merge, target));
+        .then(modification_branches(DataManipulator::Prepend, target))
+        .then(modification_branches(DataManipulator::Append, target))
+        .then(modification_branches(DataManipulator::Set, target))
+        .then(modification_branches(DataManipulator::Merge, target));
     literal("modify").then(
         literal(target.provider())
             .then(argument("target", target.argument_type()).then(target_path)),
     )
 }
 
-/// Builds the `value <value>` source for one manipulator literal.
-fn value_branch(manipulator: DataManipulator, target: DataTarget) -> Builder {
-    literal(manipulator.name()).then(
-        argument("value", SteelArgumentType::nbt_tag())
-            .executes(move |context| manipulate_value(context, target, manipulator)),
-    )
+/// One manipulator literal with all three source branches.
+fn modification_branches(manipulator: DataManipulator, target: DataTarget) -> Builder {
+    decoration_sources(literal(manipulator.name()), manipulator, target)
+}
+
+/// Vanilla `DataCommands.decorateModification`: the decorator node (a manipulator
+/// literal, or `insert`'s `index` argument) gets the three *sibling* sources
+/// `value`/`from`/`string`, each with its own provider chain.
+fn decoration_sources(
+    decorator: Builder,
+    manipulator: DataManipulator,
+    target: DataTarget,
+) -> Builder {
+    decorator
+        .then(
+            argument("value", SteelArgumentType::nbt_tag())
+                .executes(move |context| manipulate_value(context, target, manipulator)),
+        )
+        .then(from_branch(manipulator, target))
+        .then(string_branch(manipulator, target))
+}
+
+/// `from <provider> <source> [<sourcePath>]`.
+fn from_branch(manipulator: DataManipulator, target: DataTarget) -> Builder {
+    let mut branch = literal("from");
+    for source in [DataTarget::Entity, DataTarget::Block, DataTarget::Storage] {
+        branch = branch.then(
+            literal(source.provider()).then(
+                argument("source", source.argument_type())
+                    .executes(move |context| {
+                        manipulate_from(context, target, manipulator, source, false)
+                    })
+                    .then(
+                        argument("sourcePath", SteelArgumentType::nbt_path()).executes(
+                            move |context| {
+                                manipulate_from(context, target, manipulator, source, true)
+                            },
+                        ),
+                    ),
+            ),
+        );
+    }
+    branch
+}
+
+/// `string <provider> <source> [<sourcePath>] <start> [<end>]`.
+fn string_branch(manipulator: DataManipulator, target: DataTarget) -> Builder {
+    let mut branch = literal("string");
+    for source in [DataTarget::Entity, DataTarget::Block, DataTarget::Storage] {
+        branch = branch.then(
+            literal(source.provider()).then(
+                argument("source", source.argument_type())
+                    .executes(move |context| {
+                        manipulate_string(context, target, manipulator, source, false, None, None)
+                    })
+                    .then(
+                        argument("sourcePath", SteelArgumentType::nbt_path())
+                            .executes(move |context| {
+                                manipulate_string(
+                                    context,
+                                    target,
+                                    manipulator,
+                                    source,
+                                    true,
+                                    None,
+                                    None,
+                                )
+                            })
+                            .then(
+                                argument("start", ArgumentType::integer(i32::MIN, i32::MAX))
+                                    .executes(move |context| {
+                                        let start = context.integer("start")?;
+                                        manipulate_string(
+                                            context,
+                                            target,
+                                            manipulator,
+                                            source,
+                                            true,
+                                            Some(start),
+                                            None,
+                                        )
+                                    })
+                                    .then(
+                                        argument("end", ArgumentType::integer(i32::MIN, i32::MAX))
+                                            .executes(move |context| {
+                                                let start = context.integer("start")?;
+                                                let end = context.integer("end")?;
+                                                manipulate_string(
+                                                    context,
+                                                    target,
+                                                    manipulator,
+                                                    source,
+                                                    true,
+                                                    Some(start),
+                                                    Some(end),
+                                                )
+                                            }),
+                                    ),
+                            ),
+                    ),
+            ),
+        );
+    }
+    branch
 }
 
 /// Resolves the provider's `DataAccessor` the way vanilla's `access(context)` does.
@@ -301,10 +402,19 @@ pub(super) fn resolve(
     context: &SteelCommandContext<CommandSource>,
     target: DataTarget,
 ) -> Result<DataAccessor<'_>, CommandSyntaxError> {
+    resolve_named(context, target, "target")
+}
+
+/// Resolves a provider's `DataAccessor` for a named target/source argument.
+fn resolve_named<'a>(
+    context: &'a SteelCommandContext<CommandSource>,
+    target: DataTarget,
+    name: &str,
+) -> Result<DataAccessor<'a>, CommandSyntaxError> {
     match target {
-        DataTarget::Entity => Ok(DataAccessor::Entity(context.entity("target")?)),
+        DataTarget::Entity => Ok(DataAccessor::Entity(context.entity(name)?)),
         DataTarget::Block => {
-            let position = loaded_block_position(context, "target")?;
+            let position = loaded_block_position(context, name)?;
             let source = context.source();
             let block_entity = source
                 .world()
@@ -317,7 +427,7 @@ pub(super) fn resolve(
             })
         }
         DataTarget::Storage => {
-            let id = context.identifier("target")?.clone();
+            let id = context.identifier(name)?.clone();
             let source = context.source();
             let domain = source.world().domain();
             let storage = source
@@ -480,6 +590,112 @@ fn manipulate_value(
 ) -> Result<i32, CommandSyntaxError> {
     let value = context.nbt_tag("value")?.clone();
     manipulate_data(context, target, manipulator, vec![value])
+}
+
+/// Vanilla `DataCommands.getSingletonSource` / `resolveSourcePath` for the
+/// `from` source: the source accessor's whole compound, or the tags its
+/// `sourcePath` selects.
+fn manipulate_from(
+    context: &SteelCommandContext<CommandSource>,
+    target: DataTarget,
+    manipulator: DataManipulator,
+    source: DataTarget,
+    with_path: bool,
+) -> Result<i32, CommandSyntaxError> {
+    let values = source_values(context, source, with_path)?;
+    manipulate_data(context, target, manipulator, values)
+}
+
+/// Vanilla `DataCommands`' `string <source> [<sourcePath>] <start> [<end>]`:
+/// stringify the selected tags and slice each string by Java's UTF-16 offsets.
+fn manipulate_string(
+    context: &SteelCommandContext<CommandSource>,
+    target: DataTarget,
+    manipulator: DataManipulator,
+    source: DataTarget,
+    with_path: bool,
+    start: Option<i32>,
+    end: Option<i32>,
+) -> Result<i32, CommandSyntaxError> {
+    let values = source_values(context, source, with_path)?;
+    let values = values
+        .iter()
+        .map(|tag| {
+            let text = get_as_text(tag)?;
+            substring(&text, start, end).map(|text| NbtTag::String(text.into()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    manipulate_data(context, target, manipulator, values)
+}
+
+/// The source tags vanilla's `getSingletonSource`/`resolveSourcePath` produce.
+fn source_values(
+    context: &SteelCommandContext<CommandSource>,
+    source: DataTarget,
+    with_path: bool,
+) -> Result<Vec<NbtTag>, CommandSyntaxError> {
+    let accessor = resolve_named(context, source, "source")?;
+    let data = NbtTag::Compound(accessor.data());
+    if with_path {
+        Ok(context.nbt_path("sourcePath")?.get(&data))
+    } else {
+        Ok(vec![data])
+    }
+}
+
+/// Vanilla `DataCommands.getAsText`: strings stay unquoted, numeric tags use
+/// their SNBT `toString`, and every other tag is `ERROR_EXPECTED_VALUE`.
+fn get_as_text(tag: &NbtTag) -> Result<String, CommandSyntaxError> {
+    match tag {
+        NbtTag::String(value) => Ok(value.to_string_lossy().into_owned()),
+        NbtTag::Byte(_)
+        | NbtTag::Short(_)
+        | NbtTag::Int(_)
+        | NbtTag::Long(_)
+        | NbtTag::Float(_)
+        | NbtTag::Double(_) => to_canonical_snbt(tag).ok_or_else(|| expected_value(tag)),
+        _ => Err(expected_value(tag)),
+    }
+}
+
+/// Vanilla `DataCommands.ERROR_EXPECTED_VALUE` (`commands.data.modify.expected_value`).
+fn expected_value(tag: &NbtTag) -> CommandSyntaxError {
+    CommandSyntaxError::dynamic(
+        translations::COMMANDS_DATA_MODIFY_EXPECTED_VALUE
+            .message([command_nbt_component(tag, false)])
+            .component(),
+    )
+}
+
+/// Vanilla `DataCommands.substring(String, Integer, Integer)`: Java's
+/// `String.substring` offsets over UTF-16 code units, with the invalid-range
+/// error carrying the resolved offsets.
+fn substring(
+    value: &str,
+    start: Option<i32>,
+    end: Option<i32>,
+) -> Result<String, CommandSyntaxError> {
+    let units: Vec<u16> = value.encode_utf16().collect();
+    let length = i32::try_from(units.len()).unwrap_or(i32::MAX);
+    let start = start.map_or(0, |start| offset(start, length));
+    let end = end.map_or(length, |end| offset(end, length));
+    if start < 0 || end > length || start > end {
+        return Err(CommandSyntaxError::dynamic(
+            translations::COMMANDS_DATA_MODIFY_INVALID_SUBSTRING
+                .message([start.to_string(), end.to_string()])
+                .component(),
+        ));
+    }
+    let start = usize::try_from(start).unwrap_or(0);
+    let end = usize::try_from(end).unwrap_or(0);
+    String::from_utf16(&units[start..end]).map_err(|_| {
+        CommandSyntaxError::dynamic("NBT string contains an unpaired UTF-16 surrogate")
+    })
+}
+
+/// Vanilla `DataCommands.getOffset`.
+const fn offset(index: i32, length: i32) -> i32 {
+    if index < 0 { length + index } else { index }
 }
 
 /// Vanilla `DataCommands.manipulateData`: applies one `DataManipulator` to the
@@ -787,7 +1003,11 @@ mod tests {
                 .node(*child)
                 .is_some_and(|node| node.name() == name)
         }) else {
-            panic!("child {name} should exist");
+            let names: Vec<String> = children
+                .iter()
+                .filter_map(|child| dispatcher.node(*child).map(|node| node.name().to_owned()))
+                .collect();
+            panic!("child {name} should exist; children = {names:?}");
         };
         child
     }
@@ -811,6 +1031,55 @@ mod tests {
             panic!("command node should exist");
         };
         assert!(node.is_executable());
+    }
+
+    /// Asserts `value`, `from` and `string` under one manipulator node, with
+    /// vanilla's provider arguments and `sourcePath`/`start`/`end` chain.
+    fn assert_source_branches(dispatcher: &Dispatcher, operation: NodeId) {
+        let value = argument_node(
+            dispatcher,
+            operation,
+            "value",
+            &SteelArgumentType::nbt_tag(),
+        );
+        assert_executable(dispatcher, value);
+
+        let integer = SteelArgumentType::from(ArgumentType::integer(i32::MIN, i32::MAX));
+        let from = child(dispatcher, operation, "from");
+        let string = child(dispatcher, operation, "string");
+        for (provider, argument_type) in [
+            ("entity", SteelArgumentType::entity()),
+            ("block", SteelArgumentType::block_pos()),
+            ("storage", SteelArgumentType::storage_key()),
+        ] {
+            let from_source = argument_node(
+                dispatcher,
+                child(dispatcher, from, provider),
+                "source",
+                &argument_type,
+            );
+            argument_node(
+                dispatcher,
+                from_source,
+                "sourcePath",
+                &SteelArgumentType::nbt_path(),
+            );
+
+            let string_source = argument_node(
+                dispatcher,
+                child(dispatcher, string, provider),
+                "source",
+                &argument_type,
+            );
+            let source_path = argument_node(
+                dispatcher,
+                string_source,
+                "sourcePath",
+                &SteelArgumentType::nbt_path(),
+            );
+            let start = argument_node(dispatcher, source_path, "start", &integer);
+            argument_node(dispatcher, start, "end", &integer);
+        }
     }
 
     #[test]
@@ -880,6 +1149,7 @@ mod tests {
                     &SteelArgumentType::nbt_tag(),
                 );
                 assert_executable(&dispatcher, value);
+                assert_source_branches(&dispatcher, operation);
             }
             let insert = child(&dispatcher, target_path, "insert");
             let insert_index = argument_node(
@@ -888,17 +1158,51 @@ mod tests {
                 "index",
                 &SteelArgumentType::from(ArgumentType::integer(i32::MIN, i32::MAX)),
             );
-            // Vanilla nests the manipulator literal under its index:
-            // `insert <index> insert value <value>`.
-            let insert_operation = child(&dispatcher, insert_index, "insert");
-            let insert_value = argument_node(
-                &dispatcher,
-                insert_operation,
-                "value",
-                &SteelArgumentType::nbt_tag(),
-            );
-            assert_executable(&dispatcher, insert_value);
+            // Vanilla's `insert` decorator adds the source branches directly
+            // under the index: `insert <index> value <value>`.
+            assert_source_branches(&dispatcher, insert_index);
         }
+    }
+
+    #[test]
+    fn string_source_uses_vanilla_text_and_utf16_slices() {
+        assert_eq!(
+            get_as_text(&NbtTag::String("plain".into())).expect("string tag"),
+            "plain"
+        );
+        assert_eq!(get_as_text(&NbtTag::Int(7)).expect("int tag"), "7");
+        assert_eq!(get_as_text(&NbtTag::Float(1.0)).expect("float tag"), "1.0f");
+        assert_eq!(
+            get_as_text(&NbtTag::Double(2.5)).expect("double tag"),
+            "2.5d"
+        );
+
+        let unsupported = get_as_text(&NbtTag::List(NbtList::Int(vec![1])))
+            .expect_err("only string and numeric tags stringify");
+        assert_eq!(
+            message_key(&unsupported.message_component()),
+            "commands.data.modify.expected_value"
+        );
+
+        assert_eq!(
+            substring("abcdef", Some(1), Some(3)).expect("inside range"),
+            "bc"
+        );
+        assert_eq!(
+            substring("abcdef", Some(-2), None).expect("negative start"),
+            "ef"
+        );
+        // Java substring indexes UTF-16 code units.
+        assert_eq!(
+            substring("a😀b", Some(0), Some(3)).expect("surrogate pair boundary"),
+            "a😀"
+        );
+
+        let invalid = substring("abc", Some(1), Some(9)).expect_err("end is out of range");
+        assert_eq!(
+            message_key(&invalid.message_component()),
+            "commands.data.modify.invalid_substring"
+        );
     }
 
     #[test]
@@ -1264,6 +1568,49 @@ mod tests {
             message_key(&error.message_component()),
             translations::COMMANDS_DATA_MODIFY_EXPECTED_OBJECT.0,
             "non-compound merge target should use `commands.data.modify.expected_object`"
+        );
+    }
+
+    /// Vanilla `/data modify entity ... set Health` runs `Entity.load`, whose
+    /// `LivingEntity.readAdditionalSaveData` link restores health. Steel keeps
+    /// that link separate, so `load_with_owned_components` must apply it or the
+    /// edit is silently ignored.
+    #[test]
+    fn entity_set_data_applies_the_living_layer_health() {
+        use std::sync::Arc;
+
+        use glam::DVec3;
+        use steel_registry::vanilla_entities;
+
+        use crate::bootstrap::init_globals;
+        use crate::entity::entities::PigEntity;
+        use crate::entity::{SharedEntity, next_entity_id};
+        use crate::test_support::fresh_test_world;
+
+        init_globals();
+        let fixture = fresh_test_world("data_entity_health");
+        let entity: SharedEntity = Arc::new(PigEntity::new(
+            &vanilla_entities::PIG,
+            next_entity_id(),
+            DVec3::new(8.5, 64.0, 8.5),
+            Arc::downgrade(&fixture.world),
+        ));
+        let living = entity.as_living_entity().expect("a pig is a living entity");
+        assert!(
+            (living.get_health() - living.get_max_health()).abs() < f32::EPSILON,
+            "a freshly created pig starts at full health"
+        );
+
+        let mut data = NbtCompound::new();
+        data.insert("Health", 7.5_f32);
+        DataAccessor::Entity(Arc::clone(&entity))
+            .set_data(data)
+            .expect("`/data modify entity ... set Health` should apply");
+
+        assert!(
+            (living.get_health() - 7.5).abs() < f32::EPSILON,
+            "the living layer must apply the edited Health, got {}",
+            living.get_health()
         );
     }
 }

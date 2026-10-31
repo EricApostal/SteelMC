@@ -5,6 +5,7 @@ use rustc_hash::FxHashMap;
 use simdnbt::owned::{NbtCompound, NbtTag};
 use simdnbt::{FromNbtTag, ToNbtTag};
 use steel_utils::Identifier;
+use steel_utils::codec::VarInt;
 use steel_utils::hash::{ComponentHasher, HashComponent, HashEntry, sort_map_entries};
 use steel_utils::nbt::NbtNumeric as _;
 use steel_utils::serial::{ReadFrom, WriteTo};
@@ -23,6 +24,7 @@ pub struct InstrumentValue {
     sound_event: SoundEventHolder,
     use_duration: f32,
     range: f32,
+    durability_damage: i32,
     description: TextComponent,
 }
 
@@ -31,6 +33,7 @@ impl InstrumentValue {
         sound_event: SoundEventHolder,
         use_duration: f32,
         range: f32,
+        durability_damage: i32,
         description: TextComponent,
     ) -> Result<Self, InvalidInstrumentValue> {
         if !is_positive_float(use_duration) {
@@ -39,10 +42,14 @@ impl InstrumentValue {
         if !is_positive_float(range) {
             return Err(InvalidInstrumentValue::Range(range));
         }
+        if durability_damage < 0 {
+            return Err(InvalidInstrumentValue::DurabilityDamage(durability_damage));
+        }
         Ok(Self {
             sound_event,
             use_duration,
             range,
+            durability_damage,
             description,
         })
     }
@@ -51,14 +58,17 @@ impl InstrumentValue {
         sound_event: SoundEventHolder,
         use_duration: f32,
         range: f32,
+        durability_damage: i32,
         description: TextComponent,
     ) -> Self {
         assert!(is_positive_float(use_duration));
         assert!(is_positive_float(range));
+        assert!(durability_damage >= 0);
         Self {
             sound_event,
             use_duration,
             range,
+            durability_damage,
             description,
         }
     }
@@ -78,6 +88,13 @@ impl InstrumentValue {
         self.range
     }
 
+    /// Vanilla `Instrument.durabilityDamage`: durability lost when the
+    /// instrument is played. Zero for every vanilla goat horn.
+    #[must_use]
+    pub const fn durability_damage(&self) -> i32 {
+        self.durability_damage
+    }
+
     #[must_use]
     pub const fn description(&self) -> &TextComponent {
         &self.description
@@ -88,6 +105,11 @@ impl InstrumentValue {
         compound.insert("sound_event", self.sound_event.clone().to_nbt_tag());
         compound.insert("use_duration", self.use_duration);
         compound.insert("range", self.range);
+        // Vanilla's codec reads `durability_damage` as an optional field with a
+        // default of zero, so a zero value is omitted on encode.
+        if self.durability_damage != 0 {
+            compound.insert("durability_damage", self.durability_damage);
+        }
         compound.insert("description", self.description.to_codec_nbt());
         NbtTag::Compound(compound)
     }
@@ -102,6 +124,7 @@ impl PartialEq for InstrumentValue {
         self.sound_event == other.sound_event
             && java_float_equals(self.use_duration, other.use_duration)
             && java_float_equals(self.range, other.range)
+            && self.durability_damage == other.durability_damage
             && self.description == other.description
     }
 }
@@ -115,6 +138,7 @@ impl WriteTo for InstrumentValue {
         self.sound_event.write(writer)?;
         self.use_duration.write(writer)?;
         self.range.write(writer)?;
+        VarInt(self.durability_damage).write(writer)?;
         WriteTo::write(&self.description.to_codec_nbt(), writer)
     }
 }
@@ -125,6 +149,7 @@ impl ReadFrom for InstrumentValue {
             SoundEventHolder::read(data)?,
             f32::read(data)?,
             f32::read(data)?,
+            VarInt::read(data)?.0,
             TextComponent::read(data)?,
         )
         .map_err(Error::other)
@@ -141,10 +166,15 @@ impl FromNbtTag for InstrumentValue {
     fn from_nbt_tag(tag: simdnbt::borrow::NbtTag) -> Option<Self> {
         let compound = tag.compound()?;
         let description = TextComponent::from_nbt(&compound.get("description")?.to_owned())?;
+        let durability_damage = match compound.get("durability_damage") {
+            Some(value) => value.codec_i32()?,
+            None => 0,
+        };
         Self::new(
             SoundEventHolder::from_nbt_tag(compound.get("sound_event")?)?,
             compound.get("use_duration")?.codec_f32()?,
             compound.get("range")?.codec_f32()?,
+            durability_damage,
             description,
         )
         .ok()
@@ -157,6 +187,10 @@ impl HashComponent for InstrumentValue {
         push_hash_entry(&mut entries, "sound_event", &self.sound_event);
         push_hash_entry(&mut entries, "use_duration", &self.use_duration);
         push_hash_entry(&mut entries, "range", &self.range);
+        // Mirrors the NBT codec: a zero durability damage is omitted.
+        if self.durability_damage != 0 {
+            push_hash_entry(&mut entries, "durability_damage", &self.durability_damage);
+        }
         push_hash_entry(&mut entries, "description", &self.description);
         sort_map_entries(&mut entries);
         hasher.start_map();
@@ -181,6 +215,7 @@ fn push_hash_entry<T: HashComponent + ?Sized>(entries: &mut Vec<HashEntry>, key:
 pub enum InvalidInstrumentValue {
     UseDuration(f32),
     Range(f32),
+    DurabilityDamage(i32),
 }
 
 impl Display for InvalidInstrumentValue {
@@ -188,6 +223,9 @@ impl Display for InvalidInstrumentValue {
         match self {
             Self::UseDuration(value) => write!(formatter, "use duration must be positive: {value}"),
             Self::Range(value) => write!(formatter, "range must be positive: {value}"),
+            Self::DurabilityDamage(value) => {
+                write!(formatter, "durability damage must be non-negative: {value}")
+            }
         }
     }
 }

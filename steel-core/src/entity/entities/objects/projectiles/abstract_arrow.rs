@@ -335,6 +335,16 @@ pub trait AbstractArrow: Projectile + Sized {
         self.abstract_arrow_base().fired_from_weapon()
     }
 
+    /// Stores the weapon stack back after the block-hit enchantment fold.
+    ///
+    /// Vanilla hands the live `getWeaponItem()` stack to `onHitBlock`, so any
+    /// `change_item_damage` it suffers persists; Steel reads a copy, so the
+    /// fold result is written back here. `None` is vanilla's `onBreak`
+    /// callback (the weapon broke).
+    fn store_hit_block_weapon(&self, _world: &World, weapon: Option<ItemStack>) {
+        self.abstract_arrow_base().set_fired_from_weapon(weapon);
+    }
+
     /// Applies subclass effects after a successful hit (potion effects,
     /// glowing, …).
     fn do_post_hurt_effects(&self, _mob: &SharedEntity) {}
@@ -829,9 +839,19 @@ pub trait AbstractArrow: Projectile + Sized {
             .set_last_state(Some(world.get_block_state(hit.block_pos)));
         Arc::clone(&self).projectile_on_hit_block(hit);
 
-        // TODO: Run vanilla `hitBlockEnchantmentEffects` once
-        // `enchantment_helper` exposes an `on_hit_block` fold; no bow, crossbow
-        // or trident enchantment in vanilla data has block-hit effects today.
+        // Vanilla `AbstractArrow.hitBlockEnchantmentEffects`: run the weapon's
+        // `minecraft:hit_block` effects with the hit block as loot origin.
+        if let Some(mut weapon) = self.get_weapon_item() {
+            let owner = self.get_owner();
+            let broke = enchantment_helper::on_hit_block_with_weapon(
+                &world,
+                &mut weapon,
+                self.as_ref(),
+                hit.block_pos,
+                owner.as_ref(),
+            );
+            self.store_hit_block_weapon(&world, (!broke).then_some(weapon));
+        }
 
         let movement = self.velocity();
         let offset = DVec3::new(

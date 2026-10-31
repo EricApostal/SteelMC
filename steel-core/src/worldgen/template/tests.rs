@@ -14,9 +14,12 @@ use steel_registry::loot_table::LootContext;
 use steel_registry::vanilla_custom_stats;
 use steel_registry::vanilla_entities;
 use steel_utils::ChunkPos;
+use steel_utils::types::InteractionHand;
 
 use crate::behavior::blocks::open_menu;
-use crate::behavior::{BLOCK_BEHAVIORS, init_behaviors};
+use crate::behavior::{
+    BLOCK_BEHAVIORS, BlockHitResult, InteractionResult, InventoryAccess, init_behaviors,
+};
 use crate::block_entity::init_block_entities;
 use crate::inventory::lock::ContainerLockGuard;
 use crate::test_support::{
@@ -767,8 +770,23 @@ fn expected_loot(table: &Identifier, seed: i64, pos: BlockPos) -> BTreeMap<Ident
 
 /// The chest block of a one-block template carrying `loot_table`.
 fn loot_chest_template(registry: &Registry, loot_table: &str) -> StructureTemplate {
+    loot_container_template(
+        registry,
+        &vanilla_blocks::CHEST,
+        "minecraft:chest",
+        loot_table,
+    )
+}
+
+/// One-block template of a randomizable container carrying `loot_table`.
+fn loot_container_template(
+    registry: &Registry,
+    block: BlockRef,
+    id: &str,
+    loot_table: &str,
+) -> StructureTemplate {
     let mut nbt = NbtCompound::new();
-    nbt.insert("id", "minecraft:chest");
+    nbt.insert("id", id);
     nbt.insert("LootTable", loot_table);
     // Overwritten by placement's reseed, exactly like a vanilla template seed.
     nbt.insert("LootTableSeed", 1234_i64);
@@ -777,7 +795,7 @@ fn loot_chest_template(registry: &Registry, loot_table: &str) -> StructureTempla
         palettes: vec![StructureTemplatePalette {
             blocks: vec![StructureBlockInfo {
                 pos: BlockPos::ZERO,
-                state: registry.blocks.get_default_state_id(&vanilla_blocks::CHEST),
+                state: registry.blocks.get_default_state_id(block),
                 nbt: Some(nbt),
             }],
         }],
@@ -808,8 +826,11 @@ fn structure_chest_rolls_its_loot_table_on_first_open_only() {
         seed, 0,
         "vanilla `StructureTemplate.placeInWorld` reseeds a randomizable container"
     );
+    // Reading through a `ContainerRef` now unpacks (vanilla `getItem`), so the
+    // pending table is checked on the saved NBT instead: an unopened chest
+    // stores the table, not items.
     assert!(
-        chest_items(world, pos).iter().all(ItemStack::is_empty),
+        saved_chest_nbt(world, pos).get("Items").is_none(),
         "an unopened structure chest holds no items"
     );
 
@@ -851,6 +872,145 @@ fn structure_chest_rolls_its_loot_table_on_first_open_only() {
     assert!(
         saved_chest_nbt(world, pos).string("LootTable").is_none(),
         "an unpacked chest saves its items instead of the table"
+    );
+}
+
+/// A barrel is the other 27-slot randomizable container. Vanilla's
+/// `RandomizableContainerBlockEntity.createMenu` unpacks its pending table with
+/// the opening player, so a structure barrel must already hold its loot when
+/// the menu reads the slots.
+#[test]
+fn structure_barrel_rolls_its_loot_table_on_first_open_only() {
+    let registry = test_registry();
+    let pos = BlockPos::new(4, 64, 4);
+    let fixture = chest_test_world("barrel_loot_first_open", pos, IVec3::new(1, 1, 1));
+    let world = &fixture.world;
+    let player = TestPlayerBuilder::new(Arc::clone(world), "BarrelLooter", 1).build();
+    let template = loot_container_template(
+        &registry,
+        &vanilla_blocks::BARREL,
+        "minecraft:barrel",
+        "minecraft:chests/village/village_weaponsmith",
+    );
+
+    place_test_template(world, &registry, &template, pos);
+
+    let (table, seed) =
+        pending_loot_table(world, pos).expect("the template's loot table must survive placement");
+    assert_eq!(
+        table,
+        Identifier::vanilla_static("chests/village/village_weaponsmith")
+    );
+    assert_ne!(
+        seed, 0,
+        "vanilla `StructureTemplate.placeInWorld` reseeds a randomizable container"
+    );
+    assert!(
+        saved_chest_nbt(world, pos).get("Items").is_none(),
+        "an unopened structure barrel holds no items"
+    );
+
+    // Right-clicking the barrel runs `useWithoutItem`, whose menu creation must
+    // unpack the pending table with the opening player.
+    let state = world.get_block_state(pos);
+    let behavior = BLOCK_BEHAVIORS.get_behavior(&vanilla_blocks::BARREL);
+    let hit = BlockHitResult {
+        location: DVec3::new(4.5, 64.5, 4.5),
+        direction: Direction::Up,
+        block_pos: pos,
+        miss: false,
+        inside: false,
+        world_border_hit: false,
+    };
+    let mut access = InventoryAccess::new(Arc::clone(&player.inventory), InteractionHand::MainHand);
+    assert_eq!(
+        behavior.use_without_item(state, world, pos, &player, &hit, &mut access),
+        InteractionResult::Success
+    );
+
+    let opened = item_totals(&chest_items(world, pos));
+    assert!(
+        !opened.is_empty(),
+        "a village barrel must hold loot after its first open"
+    );
+    assert_eq!(
+        opened,
+        expected_loot(&table, seed, pos),
+        "the barrel must hold exactly the loot table's items for its seed"
+    );
+
+    // Taking the loot and opening again must not reroll the table.
+    take_all_items(world, pos);
+    assert_eq!(
+        behavior.use_without_item(state, world, pos, &player, &hit, &mut access),
+        InteractionResult::Success
+    );
+    assert!(
+        chest_items(world, pos).iter().all(ItemStack::is_empty),
+        "an unpacked loot table must not roll a second time"
+    );
+    assert!(
+        saved_chest_nbt(world, pos).string("LootTable").is_none(),
+        "an unpacked barrel saves its items instead of the table"
+    );
+}
+
+/// Dispensers and droppers are randomizable containers too: vanilla's
+/// `RandomizableContainerBlockEntity.createMenu` unpacks the pending table with
+/// the opening player, so opening their 3x3 menu must roll it (the firing path
+/// already does).
+#[test]
+fn structure_dispenser_rolls_its_loot_table_when_menu_opens() {
+    let registry = test_registry();
+    let pos = BlockPos::new(4, 64, 4);
+    let fixture = chest_test_world("dispenser_loot_menu", pos, IVec3::new(1, 1, 1));
+    let world = &fixture.world;
+    let player = TestPlayerBuilder::new(Arc::clone(world), "DispenserLooter", 1).build();
+    let template = loot_container_template(
+        &registry,
+        &vanilla_blocks::DISPENSER,
+        "minecraft:dispenser",
+        "minecraft:chests/village/village_plains_house",
+    );
+
+    place_test_template(world, &registry, &template, pos);
+
+    let (table, seed) =
+        pending_loot_table(world, pos).expect("the template's loot table must survive placement");
+    assert_ne!(
+        seed, 0,
+        "vanilla `StructureTemplate.placeInWorld` reseeds a randomizable container"
+    );
+
+    let state = world.get_block_state(pos);
+    let behavior = BLOCK_BEHAVIORS.get_behavior(&vanilla_blocks::DISPENSER);
+    let hit = BlockHitResult {
+        location: DVec3::new(4.5, 64.5, 4.5),
+        direction: Direction::Up,
+        block_pos: pos,
+        miss: false,
+        inside: false,
+        world_border_hit: false,
+    };
+    let mut access = InventoryAccess::new(Arc::clone(&player.inventory), InteractionHand::MainHand);
+    assert_eq!(
+        behavior.use_without_item(state, world, pos, &player, &hit, &mut access),
+        InteractionResult::Success
+    );
+
+    let opened = item_totals(&chest_items(world, pos));
+    assert!(
+        !opened.is_empty(),
+        "a structure dispenser must hold loot when its menu opens"
+    );
+    assert_eq!(
+        opened,
+        expected_loot(&table, seed, pos),
+        "the dispenser must hold exactly the loot table's items for its seed"
+    );
+    assert!(
+        saved_chest_nbt(world, pos).string("LootTable").is_none(),
+        "an unpacked dispenser saves its items instead of the table"
     );
 }
 

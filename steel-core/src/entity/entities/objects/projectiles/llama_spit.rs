@@ -20,6 +20,7 @@ use steel_utils::{BlockPos, DowncastType, DowncastTypeKey, axis::Axis};
 
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::objects::projectiles::hurting::do_post_attack_effects;
+use crate::entity::living_entity::LivingEntity;
 use crate::entity::{
     Entity, EntityBase, EntityBaseLoad, EntitySyncedData, Projectile, ProjectileBase,
     RemovalReason, SharedEntity,
@@ -77,8 +78,11 @@ impl LlamaSpitEntity {
         world: Weak<World>,
     ) -> Self {
         let width = f64::from(owner.base().dimensions().width);
-        let (yaw, _) = owner.rotation();
-        let yaw = f64::from(yaw).to_radians();
+        // Vanilla `LlamaSpit(Level, Llama)` uses `llama.yBodyRot`, not the head yaw.
+        let body_yaw = owner
+            .as_living_entity()
+            .map_or(owner.rotation().0, LivingEntity::y_body_rot);
+        let yaw = f64::from(body_yaw).to_radians();
         let position = owner.position()
             + DVec3::new(
                 -(width + SPAWN_FORWARD_OFFSET) * 0.5 * yaw.sin(),

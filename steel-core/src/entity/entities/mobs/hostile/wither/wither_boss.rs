@@ -37,7 +37,7 @@ use steel_utils::{
 use text_components::TextComponent;
 use uuid::Uuid;
 
-use crate::entity::ai::control::rotate_towards;
+use crate::entity::ai::control::{FlyingMoveControl, rotate_towards, tick_flying_move_control};
 use crate::entity::ai::goal::{
     Goal, GoalControls, HurtByTargetGoal, LookAtPlayerGoal, NearestAttackableTargetGoal,
     RandomLookAroundGoal, RangedAttackGoal, RangedAttackMob, WaterAvoidingRandomFlyingGoal,
@@ -109,6 +109,8 @@ const SPAWN_EFFECT_HEIGHT: f32 = 3.3;
 const RANGED_ATTACK_SPEED_MODIFIER: f64 = 1.0;
 const RANGED_ATTACK_INTERVAL: i32 = 40;
 const RANGED_ATTACK_RADIUS: f32 = 20.0;
+/// Vanilla `WitherBoss` constructor: `new FlyingMoveControl<>(this, 10, false)`.
+const WITHER_MOVE_CONTROL: FlyingMoveControl = FlyingMoveControl::new(10, false);
 /// Vanilla `Mob.getMaxUpStep` fallback when the step-height attribute is absent.
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
 /// Vanilla `WitherBoss` initial synced alternative-target ids.
@@ -1017,6 +1019,13 @@ impl Mob for WitherBossEntity {
         PathfinderMob::tick_pathfinder_path_navigation(self);
     }
 
+    /// Vanilla `WitherBoss` constructor installs `FlyingMoveControl(10, false)` on top of
+    /// the `aiStep` flight steering: `MoveTo` requests hover the wither (no gravity) and
+    /// pitch/climb toward the wanted point through `FLYING_SPEED`.
+    fn tick_move_control(&self) {
+        tick_flying_move_control(self, WITHER_MOVE_CONTROL);
+    }
+
     fn ambient_sound(&self) -> Option<SoundEventRef> {
         Some(&sound_events::ENTITY_WITHER_AMBIENT)
     }
@@ -1693,6 +1702,94 @@ mod tests {
         assert_eq!(
             wanted.z.to_bits(),
             (f64::from(waypoint.z()) + 0.5).to_bits()
+        );
+    }
+}
+
+#[cfg(test)]
+mod flight_tests {
+    use std::sync::Arc;
+
+    use glam::DVec3;
+    use steel_registry::{
+        init_vanilla_registry, vanilla_blocks, vanilla_entities, vanilla_game_rules,
+    };
+    use steel_utils::types::UpdateFlags;
+    use steel_utils::{BlockPos, ChunkPos};
+
+    use super::WitherBossEntity;
+    use crate::behavior::init_behaviors;
+    use crate::entity::entities::PigEntity;
+    use crate::entity::{
+        Entity, Mob, SharedEntity, add_spawned_entity, init_entities, next_entity_id,
+    };
+    use crate::test_support::{fresh_test_world, insert_entity_ticking_chunks};
+
+    /// Vanilla `WitherBoss` installs `FlyingMoveControl(10, false)` next to its `aiStep`
+    /// steering: a `MoveTo` request hovers (no gravity) and climbs/pitches at the flying
+    /// speed. Without it the wither falls under normal gravity while the ranged goal
+    /// moves it, so the altitude assertion fails on the ground-move-control path.
+    #[test]
+    fn wither_holds_altitude_while_flying_toward_its_target() {
+        init_vanilla_registry();
+        init_entities();
+        init_behaviors();
+        let fixture = fresh_test_world("wither_holds_altitude");
+        let world = &fixture.world;
+        insert_entity_ticking_chunks(world, ChunkPos::new(0, 0), 2);
+        assert!(world.set_game_rule(&vanilla_game_rules::SPAWN_MOBS, false));
+
+        // A platform keeps the target at the wither's own altitude, so any descent is the
+        // mobile's own flight, not a target falling into the void.
+        let stone = vanilla_blocks::STONE.default_state();
+        for x in 4..=13 {
+            for z in 24..=32 {
+                assert!(world.set_block(BlockPos::new(x, 70, z), stone, UpdateFlags::UPDATE_ALL));
+            }
+        }
+
+        let start = DVec3::new(8.5, 72.0, 8.5);
+        let wither = Arc::new(WitherBossEntity::new(
+            &vanilla_entities::WITHER,
+            next_entity_id(),
+            start,
+            Arc::downgrade(world),
+        ));
+        add_spawned_entity(
+            world,
+            Arc::<WitherBossEntity>::clone(&wither) as SharedEntity,
+        )
+        .expect("the wither should join the world");
+
+        let pig = Arc::new(PigEntity::new(
+            &vanilla_entities::PIG,
+            next_entity_id(),
+            DVec3::new(8.5, 71.0, 30.5),
+            Arc::downgrade(world),
+        ));
+        pig.set_persistence_required();
+        let pig_entity: SharedEntity = Arc::<PigEntity>::clone(&pig) as SharedEntity;
+        add_spawned_entity(world, Arc::clone(&pig_entity))
+            .expect("the target should join the world");
+
+        assert!(wither.set_target(Some(&pig_entity)));
+
+        let mut lowest = f64::MAX;
+        let mut gravity_cleared = false;
+        for tick in 0..60 {
+            world.entity_manager().tick_entities(tick, true);
+            lowest = lowest.min(wither.position().y);
+            gravity_cleared |= wither.is_no_gravity();
+        }
+
+        assert!(
+            gravity_cleared,
+            "vanilla `FlyingMoveControl` must clear gravity while the wither flies"
+        );
+        assert!(
+            lowest > start.y - 2.0,
+            "the wither fell from y={} to y={lowest}: the flying control is not holding altitude",
+            start.y
         );
     }
 }

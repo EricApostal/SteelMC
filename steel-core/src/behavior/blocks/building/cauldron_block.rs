@@ -1,8 +1,8 @@
-//! State-driven cauldron behavior needed by comparators.
+//! Cauldron block behavior: comparator output, drip filling, and item interactions.
 //!
-//! Cauldron item interactions and drip filling remain separate block mechanics;
-//! this module implements the complete vanilla analog-output contract shared by
-//! empty, water, and powder-snow cauldrons.
+//! The `(cauldron, item)` table lives in [`cauldron_interactions`], mirroring
+//! vanilla `CauldronInteractions`. This module owns the state-driven behavior
+//! shared by the empty, water, and powder-snow cauldrons.
 
 use std::sync::Arc;
 
@@ -13,13 +13,20 @@ use steel_registry::{
         block_state_ext::BlockStateExt as _,
         properties::{BlockStateProperties, Direction, IntProperty},
     },
+    items::item::BlockHitResult,
     level_events, vanilla_blocks, vanilla_fluids, vanilla_game_events,
 };
+use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, BlockStateId, types::UpdateFlags};
 
 use crate::{
-    behavior::{BlockBehavior, BlockPlaceContext, blocks::vegetation},
+    behavior::{
+        BlockBehavior, BlockPlaceContext, InteractionResult, InventoryAccess,
+        blocks::building::cauldron_interactions::{self, CauldronKind},
+        blocks::vegetation,
+    },
     entity::ai::path::PathComputationType,
+    player::Player,
     world::{LevelReader, World, game_event::GameEventContext},
 };
 
@@ -42,6 +49,27 @@ impl CauldronBlock {
 impl BlockBehavior for CauldronBlock {
     fn get_state_for_placement(&self, _context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
         Some(self.block.default_state())
+    }
+
+    fn use_item_on(
+        &self,
+        state: BlockStateId,
+        world: &Arc<World>,
+        pos: BlockPos,
+        player: &Player,
+        hand: InteractionHand,
+        _hit_result: &BlockHitResult,
+        inv: &mut InventoryAccess,
+    ) -> InteractionResult {
+        cauldron_interactions::use_item_on(
+            CauldronKind::Empty,
+            state,
+            world,
+            pos,
+            player,
+            hand,
+            inv,
+        )
     }
 
     fn has_analog_output_signal(&self, _state: BlockStateId) -> bool {
@@ -117,6 +145,26 @@ impl LayeredCauldronBlock {
 impl BlockBehavior for LayeredCauldronBlock {
     fn get_state_for_placement(&self, _context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
         Some(self.block.default_state())
+    }
+
+    fn use_item_on(
+        &self,
+        state: BlockStateId,
+        world: &Arc<World>,
+        pos: BlockPos,
+        player: &Player,
+        hand: InteractionHand,
+        _hit_result: &BlockHitResult,
+        inv: &mut InventoryAccess,
+    ) -> InteractionResult {
+        // Both layered cauldrons share this behavior; vanilla distinguishes them
+        // by their interaction dispatcher (and precipitation type).
+        let kind = if self.block == &vanilla_blocks::POWDER_SNOW_CAULDRON {
+            CauldronKind::PowderSnow
+        } else {
+            CauldronKind::Water
+        };
+        cauldron_interactions::use_item_on(kind, state, world, pos, player, hand, inv)
     }
 
     fn has_analog_output_signal(&self, _state: BlockStateId) -> bool {

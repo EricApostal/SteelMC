@@ -26,7 +26,10 @@ use steel_utils::random::{
 use steel_utils::{BlockPos, ChunkPos, Identifier};
 use steel_worldgen::biomes;
 
-use self::context::{ChunkGeneratorType, EndGenerator, NetherGenerator, OverworldGenerator};
+use self::context::{
+    AmplifiedGenerator, CavesGenerator, ChunkGeneratorType, EndGenerator, FloatingIslandsGenerator,
+    LargeBiomesGenerator, NetherGenerator, OverworldGenerator,
+};
 use crate::chunk::Chunk;
 use crate::worldgen::region::WorldGenRegion;
 use crate::worldgen::structure::{StructureGenerator, StructureStart};

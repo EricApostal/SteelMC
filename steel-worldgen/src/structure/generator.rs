@@ -125,7 +125,7 @@ impl StructureBiomeProvider for BiomeSourceKind {
         // settings. `FlatLevelSource` keeps `ChunkGenerator.getOrigin`, i.e.
         // `ChunkPos.ZERO`.
         match self {
-            Self::Overworld(_) | Self::Nether(_) | Self::End(_) => {
+            Self::Overworld(_) | Self::LargeBiomes(_) | Self::Nether(_) | Self::End(_) => {
                 ChunkPos::from_block_pos(self.initial_spawn_search_origin())
             }
             Self::Fixed(_) | Self::Checkerboard(_) => ChunkPos::new(0, 0),
@@ -136,6 +136,12 @@ impl StructureBiomeProvider for BiomeSourceKind {
         let key = match self {
             Self::Overworld(source) => {
                 format!("multi_noise/minecraft:overworld/{}", source.seed())
+            }
+            Self::LargeBiomes(source) => {
+                format!(
+                    "multi_noise/minecraft:overworld_large_biomes/{}",
+                    source.seed()
+                )
             }
             Self::Nether(source) => {
                 format!("multi_noise/minecraft:the_nether/{}", source.seed())

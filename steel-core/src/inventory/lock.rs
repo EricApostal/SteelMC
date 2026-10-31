@@ -180,6 +180,27 @@ impl ContainerRef {
             .and_then(|owner| owner.block_entity.current_block_entity())
     }
 
+    /// Rolls the owning block entity's pending loot table, mirroring vanilla
+    /// `RandomizableContainerBlockEntity`'s reads.
+    ///
+    /// Vanilla unpacks on every `isEmpty`/`getItem`/`removeItem`/`setItem`, so
+    /// any read through this reference must see a structure container's loot.
+    /// Steel reads through the erased container instead of the block entity, so
+    /// [`ContainerLockGuard::lock_all`] runs this before taking any locks: the
+    /// hook generates the items and marks the block entity changed without the
+    /// container mutex held, which keeps the comparator re-entry and the
+    /// loot-context callbacks off the lock.
+    ///
+    /// Containers that are not owned by a block entity (player inventories,
+    /// crafting slots, entity containers) and containers whose type has no
+    /// pending loot table do nothing. Calling this twice is safe: the hook
+    /// clears the table before rolling it.
+    pub fn unpack_loot_table(&self, player: Option<&Player>) {
+        if let Some(block_entity) = self.owner_block_entity() {
+            block_entity.unpack_loot_table(player);
+        }
+    }
+
     /// Locks this container and returns a guard.
     fn lock(&self) -> LockedContainer {
         LockedContainer(SyncMutex::lock_arc(&self.source))
@@ -235,6 +256,14 @@ impl ContainerLockGuard {
 
         // Deduplicate (in case same container passed multiple times)
         sources.dedup_by_key(|(id, _)| *id);
+
+        // Vanilla `RandomizableContainerBlockEntity` unpacks a pending loot
+        // table on every container read. Run that hook before any container
+        // mutex is taken, so the loot fill's `setChanged`/comparator re-entry
+        // can never deadlock against this guard.
+        for (_, container) in &sources {
+            container.unpack_loot_table(None);
+        }
 
         // Lock all in sorted order
         let mut guards = Vec::with_capacity(sources.len());

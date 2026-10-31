@@ -143,6 +143,11 @@
           "maximum": 2147483647,
           "default": 10
         },
+        "accepts_transfers": {
+          "type": "boolean",
+          "description": "Whether to accept clients transferred from another server with vanilla /transfer (vanilla `accepts-transfers`)",
+          "default": false
+        },
         "compression": {
           "type": "object",
           "description": "Compression settings",

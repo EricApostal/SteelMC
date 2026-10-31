@@ -286,7 +286,7 @@ fn spatial_query_candidates_skip_distant_entities_in_the_same_section() {
         &WorldAabb::new(0.0, 63.0, 0.0, 2.0, 66.0, 2.0),
     )
     .into_iter()
-    .map(|entry| entry.entity.id())
+    .map(|entry| entry.entity().id())
     .collect::<Vec<_>>();
 
     assert_eq!(candidate_ids, vec![nearby.id()]);
@@ -353,4 +353,79 @@ fn delayed_bounding_box_callback_cannot_restore_stale_bounds() {
     let current = manager.get_entities_in_aabb(&current_bounds);
     assert_eq!(current.len(), 1);
     assert!(Arc::ptr_eq(&current[0], &entity));
+}
+
+#[test]
+fn dragon_hitboxes_join_spatial_queries_and_leave_with_their_dragon() {
+    use crate::entity::entities::mobs::bosses::{EnderDragonEntity, EnderDragonPartKind};
+    use steel_utils::Downcast as _;
+
+    steel_registry::init_vanilla_registry();
+    let manager = WorldEntityManager::new();
+    load_chunk(&manager, ChunkPos::new(0, 0));
+
+    let dragon: SharedEntity = Arc::new(EnderDragonEntity::new(
+        &vanilla_entities::ENDER_DRAGON,
+        1,
+        DVec3::new(0.5, 64.0, 0.5),
+        Weak::new(),
+    ));
+    assert!(
+        manager
+            .add_live_entity(Arc::clone(&dragon), EntityOwnership::ManagerOwned)
+            .is_ok()
+    );
+    let dragon_entity = dragon
+        .downcast_ref::<EnderDragonEntity>()
+        .expect("the registered entity is an ender dragon");
+
+    let head_id = dragon_entity.part_id(EnderDragonPartKind::Head);
+    let head = manager
+        .get_by_id(head_id)
+        .expect("a hitbox id resolves through the dragon-part registry");
+    assert_eq!(head_id, dragon.id() + 1 + EnderDragonPartKind::Head.index());
+    assert!(manager.is_dragon_part(head_id));
+    assert!(!manager.is_dragon_part(dragon.id()));
+
+    // Vanilla positions the hitboxes from the dragon's tick; the manager has to
+    // follow them into the spatial index, because they are not registered.
+    assert!(
+        head.try_set_position(DVec3::new(8.0, 64.0, 0.5)).is_ok(),
+        "the hitbox moves with its dragon"
+    );
+    manager.sync_dragon_parts(dragon.id());
+
+    let head_box = WorldAabb::new(7.0, 63.0, 0.0, 9.0, 65.0, 1.0);
+    assert!(
+        manager
+            .get_entities_in_aabb(&head_box)
+            .iter()
+            .any(|entity| entity.id() == head_id),
+        "the hitbox must be discoverable through an AABB entity query"
+    );
+    assert!(
+        manager
+            .get_accessible_entities()
+            .iter()
+            .all(|entity| entity.id() != head_id),
+        "vanilla `getAllEntities` does not return hitboxes"
+    );
+    assert_eq!(
+        manager
+            .get_entities_in_aabb_matching(&head_box, |entity| entity.id() == head_id)
+            .len(),
+        1,
+        "the hitbox is the only match for its own id"
+    );
+
+    assert!(
+        manager
+            .remove_live_entity(dragon.id(), RemovalReason::Discarded)
+            .is_some()
+    );
+    assert!(
+        manager.get_entities_in_aabb(&head_box).is_empty(),
+        "the hitboxes leave the spatial index with their dragon"
+    );
+    assert!(manager.get_by_id(head_id).is_none());
 }

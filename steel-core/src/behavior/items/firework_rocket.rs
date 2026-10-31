@@ -86,9 +86,11 @@ impl ItemBehavior for FireworkRocketItem {
         }
 
         if context.player.drop_all_leash_connections(None) {
-            context.world.play_sound_at(
+            // Vanilla `FireworkRocketItem.use`: `playSound(null, player, LEAD_BREAK, …)`.
+            context.world.play_sound_from_entity(
                 &sound_events::ITEM_LEAD_BREAK,
                 SoundSource::Neutral,
+                context.player.id(),
                 context.player.position(),
                 1.0,
                 1.0,

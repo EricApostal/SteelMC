@@ -126,3 +126,36 @@ fn zombie_villager_nbt_round_trip_keeps_villager_data_and_conversion() {
         "the curing player must survive a save/load round trip"
     );
 }
+
+#[test]
+fn zombie_reinforcement_target_falls_back_to_the_attacker() {
+    use std::sync::Arc;
+
+    use steel_registry::vanilla_damage_types;
+
+    use crate::entity::damage::DamageSource;
+    use crate::entity::{Mob, SharedEntity};
+    use crate::test_support::{TestPlayerBuilder, fresh_test_world};
+
+    init_vanilla_registry();
+
+    let fixture = fresh_test_world("zombie_reinforcement_target");
+    let player = TestPlayerBuilder::new(Arc::clone(&fixture.world), "ZombieAttacker", 1).build();
+    let attacker: SharedEntity = player;
+    let zombie = ZombieEntity::new(
+        &vanilla_entities::ZOMBIE,
+        2,
+        DVec3::ZERO,
+        Arc::downgrade(&fixture.world),
+    );
+
+    assert!(zombie.target().is_none());
+    let source = DamageSource::direct(&vanilla_damage_types::PLAYER_ATTACK, Arc::clone(&attacker));
+
+    // Vanilla `Zombie.hurtServer` uses `getTarget()`, else the source entity, so
+    // reinforcements spawned from an untargeted zombie hunt the attacker.
+    let selected = zombie
+        .reinforcement_target(&source)
+        .expect("the attacker must become the reinforcement target");
+    assert!(Arc::ptr_eq(&selected, &attacker));
+}

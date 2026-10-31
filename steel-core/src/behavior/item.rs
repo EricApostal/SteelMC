@@ -28,6 +28,9 @@ use crate::entity::MobEffectInstance;
 use crate::entity::consume_effect::apply_consume_effect;
 use crate::entity::damage::DamageSource;
 use crate::entity::{Entity, LivingEntity, LivingEntityRef, SharedEntity};
+use crate::inventory::click::ClickAction;
+use crate::inventory::lock::ContainerLockGuard;
+use crate::inventory::slots::Slot;
 use crate::player::{Player, player_inventory::EquipmentSwapResult};
 use crate::world::World;
 
@@ -279,6 +282,39 @@ pub trait ItemBehavior: Send + Sync {
     #[must_use]
     fn can_fit_inside_container_items(&self) -> bool {
         true
+    }
+
+    /// Vanilla `Item.overrideStackedOnOther`: lets the stack in the cursor
+    /// handle a click on `slot` before the default pickup behavior runs.
+    ///
+    /// `stack` is the carried stack owned by this behavior. Return `true` when
+    /// the click was handled.
+    fn override_stacked_on_other(
+        &self,
+        _stack: &mut ItemStack,
+        _slot: &dyn Slot,
+        _guard: &mut ContainerLockGuard,
+        _action: ClickAction,
+        _player: &Player,
+    ) -> bool {
+        false
+    }
+
+    /// Vanilla `Item.overrideOtherStackedOnMe`: lets the stack in `slot` handle
+    /// a click from the carried `other` stack before the default behavior runs.
+    ///
+    /// `stack` is the slot stack owned by this behavior; `other` is the carried
+    /// stack. Return `true` when the click was handled.
+    fn override_other_stacked_on_me(
+        &self,
+        _stack: &mut ItemStack,
+        _other: &mut ItemStack,
+        _slot: &dyn Slot,
+        _guard: &mut ContainerLockGuard,
+        _action: ClickAction,
+        _player: &Player,
+    ) -> bool {
+        false
     }
 
     /// Returns this item behavior as a `SpawnEggItem`.

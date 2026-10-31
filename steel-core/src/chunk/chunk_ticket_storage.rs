@@ -16,6 +16,12 @@ pub(crate) const PORTAL_TICKET_RADIUS: u8 = 3;
 pub(crate) const ENDER_PEARL_TICKET_TIMEOUT_TICKS: i64 =
     vanilla_ticket_types::ENDER_PEARL.timeout();
 const ENDER_PEARL_TICKET_RADIUS: u8 = 2;
+/// Vanilla `EnderDragonFight.ARENA_TICKET_LEVEL`: the radius whose full-chunk
+/// propagation level is 9, i.e. `ChunkLevel.byStatus(FULL) - 9`.
+pub(crate) const DRAGON_ARENA_TICKET_RADIUS: u8 = 9;
+
+/// Vanilla `EnderDragonFight` uses `new ChunkPos(0, 0)` as the arena centre.
+const ARENA_CENTER: ChunkPos = ChunkPos::new(0, 0);
 
 type StoredTickets = Vec<StoredChunkTicket>;
 
@@ -116,6 +122,13 @@ impl TimedTicketExpiration {
 #[must_use]
 const fn portal_ticket() -> ChunkTicket {
     ChunkTicket::for_full_chunk_radius(&vanilla_ticket_types::PORTAL, PORTAL_TICKET_RADIUS)
+}
+
+/// Vanilla's dragon arena ticket: `TicketType.DRAGON` centred on chunk (0, 0)
+/// with `ARENA_TICKET_LEVEL`, added each tick while a player watches the fight.
+#[must_use]
+const fn dragon_arena_ticket() -> ChunkTicket {
+    ChunkTicket::for_full_chunk_radius(&vanilla_ticket_types::DRAGON, DRAGON_ARENA_TICKET_RADIUS)
 }
 
 /// Vanilla's force-load ticket: `TicketType.FORCED` at
@@ -356,6 +369,16 @@ impl ChunkTicketStorage {
         pos: ChunkPos,
     ) -> SourceProjectionChanges {
         self.add_ticket(pos, portal_ticket())
+    }
+
+    /// Adds or refreshes Vanilla's dragon arena ticket at the arena centre.
+    pub(crate) fn add_or_refresh_dragon_arena_ticket(&mut self) -> SourceProjectionChanges {
+        self.add_ticket(ARENA_CENTER, dragon_arena_ticket())
+    }
+
+    /// Removes Vanilla's dragon arena ticket when no player watches the fight.
+    pub(crate) fn remove_dragon_arena_ticket(&mut self) -> SourceProjectionChanges {
+        self.remove_ticket(ARENA_CENTER, dragon_arena_ticket())
     }
 
     /// Adds or refreshes Vanilla's in-flight ender pearl ticket.

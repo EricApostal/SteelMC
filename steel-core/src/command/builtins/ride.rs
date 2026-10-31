@@ -25,11 +25,14 @@ pub(super) fn registration() -> CommandRegistration<CommandSource> {
 
 fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
     literal("ride").then(
-        argument("target", SteelArgumentType::entity()).then(
-            literal("mount")
-                .then(argument("vehicle", SteelArgumentType::entity()).executes(mount))
-                .then(literal("dismount").executes(dismount)),
-        ),
+        argument("target", SteelArgumentType::entity())
+            .then(
+                literal("mount")
+                    .then(argument("vehicle", SteelArgumentType::entity()).executes(mount)),
+            )
+            // `dismount` is a sibling of `mount`, both direct children of the
+            // `target` argument.
+            .then(literal("dismount").executes(dismount)),
     )
 }
 
@@ -127,4 +130,70 @@ fn is_self_or_passenger(target: &SharedEntity, vehicle: &SharedEntity) -> bool {
             .any(|passenger| contains(passenger, wanted, depth + 1))
     }
     contains(target, vehicle, 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::create_dispatcher;
+    use crate::command::{
+        brigadier::{CommandDispatcher, CommandNode, NodeId},
+        execution::{CommandSource, SteelArgumentType, SteelCommandRuntime},
+    };
+    use steel_registry::init_vanilla_registry;
+
+    type Dispatcher = CommandDispatcher<CommandSource, SteelCommandRuntime>;
+
+    fn child(dispatcher: &Dispatcher, parent: NodeId, name: &str) -> NodeId {
+        let Some(children) = dispatcher.children(parent) else {
+            panic!("parent node should exist");
+        };
+        let Some(child) = children.iter().copied().find(|child| {
+            dispatcher
+                .node(*child)
+                .is_some_and(|node| node.name() == name)
+        }) else {
+            panic!("child {name} should exist");
+        };
+        child
+    }
+
+    fn has_child(dispatcher: &Dispatcher, parent: NodeId, name: &str) -> bool {
+        dispatcher.children(parent).is_some_and(|children| {
+            children.iter().any(|child| {
+                dispatcher
+                    .node(*child)
+                    .is_some_and(|node| node.name() == name)
+            })
+        })
+    }
+
+    #[test]
+    fn ride_dismount_is_a_sibling_of_mount() {
+        init_vanilla_registry();
+        let Ok(dispatcher) = create_dispatcher() else {
+            panic!("built-in commands should register");
+        };
+        let root = child(&dispatcher, dispatcher.root(), "ride");
+        let target = child(&dispatcher, root, "target");
+        assert_eq!(
+            dispatcher
+                .node(target)
+                .and_then(|node| node.argument_type()),
+            Some(&SteelArgumentType::entity())
+        );
+
+        let mount = child(&dispatcher, target, "mount");
+        let dismount = child(&dispatcher, target, "dismount");
+        assert!(!has_child(&dispatcher, mount, "dismount"));
+        assert!(
+            dispatcher
+                .node(dismount)
+                .is_some_and(CommandNode::is_executable)
+        );
+        assert!(
+            dispatcher
+                .node(child(&dispatcher, mount, "vehicle"))
+                .is_some_and(CommandNode::is_executable)
+        );
+    }
 }

@@ -359,8 +359,10 @@ fn firework_star_fade(recipe: &FireworkStarFadeRecipe, input: &CraftingInput) ->
 
 /// Matches the fixed 3×3 map-scaling layout and its saved-map restrictions.
 ///
-/// The source map's [`super::MapRecipeData`] must be attached to the center
-/// input slot so exploration maps and maps at the maximum scale are rejected.
+/// Vanilla `MapExtendingRecipe.matches` needs the level to look up
+/// `MapItem.getSavedData`; Steel's caller attaches the source map's
+/// [`super::MapRecipeData`] to the center input slot so a map at the maximum
+/// scale is rejected.
 fn map_extending(recipe: &MapExtendingRecipe, input: &CraftingInput) -> bool {
     if input.width != CRAFTING_TABLE_GRID_SIZE
         || input.height != CRAFTING_TABLE_GRID_SIZE
@@ -380,11 +382,12 @@ fn map_extending(recipe: &MapExtendingRecipe, input: &CraftingInput) -> bool {
             }
         }
     }
-    // TODO: Populate this from saved map data once maps are implemented.
+    // The caller attached the source map's saved data; without it the recipe
+    // cannot match, exactly like a missing `MapItemSavedData` in vanilla.
     let Some(data) = input.map_data(CRAFTING_TABLE_CENTER_SLOT) else {
         return false;
     };
-    !data.exploration_map && data.scale < MAX_MAP_SCALE
+    data.scale < MAX_MAP_SCALE
 }
 
 fn repair_item(_recipe: &RepairItemRecipe, input: &CraftingInput) -> bool {

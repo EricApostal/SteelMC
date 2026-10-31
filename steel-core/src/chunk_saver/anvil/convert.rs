@@ -1,9 +1,13 @@
 //! Whole-world conversion between Steel's native `.srg` format and vanilla Anvil.
 //!
 //! `import_world` reads a vanilla world directory (`level.dat`, `region/`, `entities/`, `poi/`,
-//! `data/`) and writes a Steel world directory (`level.toml`, `region/*.srg`, `data/*.toml`).
+//! `data/`, `playerdata/`) and writes a Steel world directory (`level.toml`, `region/*.srg`,
+//! `data/*.toml`, plus the domain's `<players>/data/<uuid>` files).
 //! `export_world` does the reverse. Both directions reuse the live backend codecs, so conversion
 //! and the running server cannot drift apart.
+//!
+//! Player data belongs to the whole domain, not one world: it is written under the domain's
+//! `players/` directory next to the `worlds/` folder (see [`super::player_data`]).
 //!
 //! The dimension height (`min_y`/`height`) cannot be derived from region files alone, so the
 //! caller supplies it: overworld `-64 / 384`, nether and end `0 / 256`.
@@ -43,6 +47,8 @@ pub struct AnvilConversionReport {
     pub block_entities: u64,
     /// POI ticket records carried across.
     pub pois: u64,
+    /// Player data files converted.
+    pub players: u64,
     /// Region files converted.
     pub regions: u64,
     /// Fields intentionally dropped (each one also warns once at conversion time).
@@ -58,6 +64,8 @@ impl AnvilConversionReport {
                 "Steel-internal light sections when writing Anvil",
                 "`level.dat` bookkeeping Steel does not model (`DataPacks`, `ServerBrands`, `removed_features`, custom dimensions)",
                 "saved data without a Steel model: `maps/`, `scoreboard`, `chunk_tickets`, `world_gen_settings` dimensions, command storage",
+                "player keys without a Steel model (`Air`, `fall_distance`, `PortalCooldown`, `SleepTimer`, `sleeping_pos`, `LastDeathLocation`, `ShoulderEntityLeft`/`Right`, `warden_spawn_tracker`, `post_effects`, …); each file's present keys are logged and reported by `playerdata` conversion",
+                "vanilla `stats/<uuid>.json` and `advancements/<uuid>.json` (separate files, not part of `playerdata/<uuid>.dat`; Steel keeps them in its own player files)",
             ],
             ..Self::default()
         }
@@ -264,6 +272,14 @@ pub async fn import_world(
     }
 
     import_level_data(vanilla_dir, steel_dir)?;
+    let (players, player_unmapped) =
+        super::player_data::import_player_data(vanilla_dir, steel_dir)?;
+    report.players += players;
+    for key in player_unmapped {
+        if !report.dropped.contains(&key) {
+            report.dropped.push(key);
+        }
+    }
     manager.close_all().await?;
     Ok(report)
 }
@@ -343,6 +359,7 @@ pub async fn export_world(
     }
 
     export_level_data(steel_dir, vanilla_dir)?;
+    report.players += super::player_data::export_player_data(steel_dir, vanilla_dir)?;
     Ok(report)
 }
 

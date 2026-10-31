@@ -10,12 +10,10 @@
 //! trident. Vanilla's `shouldRender` (always true) is client-local and has no
 //! server counterpart.
 //!
-//! GAP(`thrown_trident`): `hitBlockEnchantmentEffects` (block-hit enchantment
-//! effects with an `onBreak` callback) is not run — `enchantment_helper`
-//! exposes no `on_hit_block` fold (also TODO in [`AbstractArrow`]).
-//! GAP(`thrown_trident`): the weapon-break callback that kills the trident is not
-//! invoked — `enchantment_helper::do_post_attack_effects_with_item_source` has
-//! no `on_break` callback.
+//! GAP(`thrown_trident`): `doPostAttackEffectsWithItemSourceOnBreak`'s
+//! `onBreak` callback (which kills the trident when the weapon stack breaks on
+//! an entity hit) has no counterpart — `do_post_attack_effects_with_item_source`
+//! exposes no `on_break` hook.
 //! GAP(`thrown_trident`): vanilla deflects with
 //! `new Vec3(0.02, 0.2, 0.02)` as the power vector (the trident nearly stops
 //! after a hit), while `Projectile::deflect` takes no power vector and
@@ -496,6 +494,18 @@ impl AbstractArrow for ThrownTridentEntity {
     /// the enchantments applied on hit.
     fn get_weapon_item(&self) -> Option<ItemStack> {
         Some(self.get_pickup_item_stack_origin())
+    }
+
+    /// Vanilla `ThrownTrident.hitBlockEnchantmentEffects`' `onBreak` callback:
+    /// a trident whose weapon stack breaks is killed, and durability damage from
+    /// the block-hit fold is written back to the pickup stack (Java passes the
+    /// live stack).
+    fn store_hit_block_weapon(&self, world: &World, weapon: Option<ItemStack>) {
+        if let Some(weapon) = weapon {
+            self.set_pickup_item_stack(weapon);
+        } else {
+            self.kill(world);
+        }
     }
 
     /// Vanilla `ThrownTrident.tryPickup`: a returning trident is caught by its

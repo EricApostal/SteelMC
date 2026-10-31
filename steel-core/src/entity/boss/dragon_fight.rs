@@ -22,12 +22,13 @@ use glam::DVec3;
 use serde::{Deserialize, Serialize};
 use steel_registry::REGISTRY;
 use steel_registry::level_events::{ANIMATION_DRAGON_SUMMON_ROAR, ANIMATION_END_GATEWAY_SPAWN};
+use steel_registry::vanilla_block_entity_types;
 use steel_registry::vanilla_blocks;
 use steel_registry::vanilla_entities;
 use steel_utils::random::Random as _;
 use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::translations;
-use steel_utils::{BlockPos, BlockStateId, Direction, WorldAabb};
+use steel_utils::{BlockPos, BlockStateId, ChunkPos, Direction, WorldAabb};
 use text_components::TextComponent;
 use uuid::Uuid;
 
@@ -35,6 +36,7 @@ use steel_protocol::packets::game::{BossBarColor, BossBarOverlay};
 
 use super::event::ServerBossEvent;
 use crate::chunk::heightmap::HeightmapType;
+use crate::chunk::status::ChunkStatus;
 use crate::entity::entities::EndCrystalEntity;
 use crate::entity::spawn::create_entity_instance;
 use crate::entity::{Entity, RemovalReason, SharedEntity};
@@ -311,7 +313,15 @@ impl EnderDragonFight {
             self.ticks_since_last_player_scan = 0;
         }
 
-        if self.players.is_empty() || !self.is_arena_loaded(world) {
+        if self.players.is_empty() {
+            // Vanilla removes the arena ticket whenever no player watches the fight.
+            world.remove_dragon_arena_ticket();
+            return;
+        }
+        // Vanilla requests the arena each tick so the fight's chunks stay loaded
+        // independently of any player's view distance.
+        world.place_dragon_arena_ticket();
+        if !self.is_arena_loaded(world) {
             return;
         }
 
@@ -432,6 +442,13 @@ impl EnderDragonFight {
         self.set_dirty();
     }
 
+    /// Vanilla `ServerLevel.getDragons`, which queries by `EntityTypeTest` and so
+    /// never sees the dragon's hitboxes.
+    ///
+    /// Steel's AABB query returns the `EnderDragonPart` hitboxes too (vanilla
+    /// `Level.getEntities` does the same), and they share the `ender_dragon`
+    /// entity type, so they must be filtered out here or `scan_state` would bind
+    /// or remove a part as if it were the dragon.
     fn dragons_in_arena(&self, world: &Arc<World>) -> Vec<SharedEntity> {
         let center = self.pool_center();
         let box_ = WorldAabb::of_size(
@@ -440,41 +457,51 @@ impl EnderDragonFight {
             DRAGON_LISTEN_RADIUS * 2.0,
             DRAGON_LISTEN_RADIUS * 2.0,
         );
-        world.get_entities_in_aabb_matching(&box_, |entity| {
-            entity.entity_type() == &vanilla_entities::ENDER_DRAGON
-        })
+        let entity_manager = world.entity_manager();
+        world
+            .get_entities_in_aabb(&box_)
+            .into_iter()
+            .filter(|entity| {
+                entity.entity_type() == &vanilla_entities::ENDER_DRAGON
+                    && !entity_manager.is_dragon_part(entity.id())
+            })
+            .collect()
     }
 
     /// Vanilla `EnderDragonFight.hasActiveExitPortal`: any end-portal block
     /// inside the podium footprint.
+    /// Vanilla `EnderDragonFight.hasActiveExitPortal`: any
+    /// `TheEndPortalBlockEntity` inside `origin`'s ±`ARENA_SIZE_CHUNKS` chunk box.
+    /// An inactive fountain has only bedrock, so it reports no active portal.
     fn has_active_exit_portal(&self, world: &Arc<World>) -> bool {
-        let Some(ring_y) = self.find_exit_portal_ring_y(world) else {
-            return false;
-        };
-        let end_portal = PODIUM_STATES.end_portal;
-        for dx in -PODIUM_RADIUS..=PODIUM_RADIUS {
-            for dz in -PODIUM_RADIUS..=PODIUM_RADIUS {
-                let pos = BlockPos::new(self.origin.x() + dx, ring_y, self.origin.z() + dz);
-                if world.get_block_state(pos) == end_portal {
-                    return true;
-                }
-            }
-        }
-        false
+        self.find_end_portal_block_entity(world).is_some()
     }
 
-    /// The podium ring Y: the top of the four-block bedrock pillar at the
-    /// origin column, minus three (vanilla finds it through the bedrock
-    /// `BlockPattern`; Steel uses the known `EndPodiumFeature` geometry).
-    fn find_exit_portal_ring_y(&self, world: &Arc<World>) -> Option<i32> {
-        let podium = Self::podium_location(self.origin);
-        let x = podium.x();
-        let z = podium.z();
-        let top = LevelReader::height_at(world, HeightmapType::MotionBlockingNoLeaves, x, z);
-        let bedrock = PODIUM_STATES.bedrock;
-        for y in (world.get_min_y() + 1..=top).rev() {
-            if world.get_block_state(BlockPos::new(x, y, z)) == bedrock {
-                return Some((y - 3).max(world.get_min_y() + 1));
+    /// Returns the position of the first `THE_END_PORTAL` block entity in the
+    /// arena, which is the block entity vanilla's portal scans key on.
+    fn find_end_portal_block_entity(&self, world: &Arc<World>) -> Option<BlockPos> {
+        let center = ChunkPos::from_block_pos(self.origin);
+        for dx in -ARENA_SIZE_CHUNKS..=ARENA_SIZE_CHUNKS {
+            for dz in -ARENA_SIZE_CHUNKS..=ARENA_SIZE_CHUNKS {
+                let chunk_pos = ChunkPos::new(center.0.x + dx, center.0.y + dz);
+                let portal = world
+                    .chunk_map
+                    .active_full_chunk_holder(chunk_pos)
+                    .and_then(|holder| {
+                        holder.try_chunk(ChunkStatus::Full).and_then(|chunk| {
+                            chunk
+                                .block_entity_storage()
+                                .get_all()
+                                .into_iter()
+                                .find(|entity| {
+                                    entity.get_type() == &vanilla_block_entity_types::END_PORTAL
+                                })
+                        })
+                    })
+                    .map(|entity| entity.get_block_pos());
+                if let Some(portal) = portal {
+                    return Some(portal);
+                }
             }
         }
         None
@@ -485,8 +512,11 @@ impl EnderDragonFight {
         if let Some(location) = self.exit_portal_location {
             return Some(location);
         }
-        let ring_y = self.find_exit_portal_ring_y(world)?;
-        let location = BlockPos::new(self.origin.x(), ring_y, self.origin.z());
+        // Vanilla matches the podium pattern around each portal block entity and
+        // caches the pattern's podium position; the block entity's own level is the
+        // ring, which is all `spawnExitPortal` needs for its cached location.
+        let portal = self.find_end_portal_block_entity(world)?;
+        let location = BlockPos::new(self.origin.x(), portal.y(), self.origin.z());
         self.exit_portal_location = Some(location);
         self.set_dirty();
         Some(location)
@@ -955,7 +985,7 @@ impl EnderDragonFight {
 }
 
 /// Vanilla `SavedData` record for [`EnderDragonFight`].
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct EnderDragonFightData {
     /// Whether the first-tick legacy scan still needs to run.
     #[serde(default = "default_true")]
@@ -987,6 +1017,26 @@ pub struct EnderDragonFightData {
     /// Fight origin (vanilla `BlockPos.ZERO`), persisted so Steel can reload it.
     #[serde(default)]
     pub origin: [i32; 3],
+}
+
+impl Default for EnderDragonFightData {
+    /// Vanilla has no saved fight on a fresh End and calls
+    /// `EnderDragonFight.createDefault()`, which starts with
+    /// `needsStateScanning = true` so the first tick scans the arena.
+    fn default() -> Self {
+        Self {
+            needs_state_scanning: true,
+            dragon_killed: false,
+            previously_killed: false,
+            respawn_stage: None,
+            respawn_time: 0,
+            dragon_uuid: None,
+            exit_portal_location: None,
+            gateways: Vec::new(),
+            respawn_crystals: Vec::new(),
+            origin: [0, 0, 0],
+        }
+    }
 }
 
 const fn default_true() -> bool {
@@ -1421,6 +1471,14 @@ mod tests {
     /// (`insert_entity_ticking_chunks`). Vanilla natural spawning is off so nothing
     /// else fills the chunks while the dragon flies.
     fn live_end_arena(key: &'static str, ticking_radius: i32) -> (TestWorld, SharedEntity) {
+        live_end_arena_with_portal(key, ticking_radius, true)
+    }
+
+    fn live_end_arena_with_portal(
+        key: &'static str,
+        ticking_radius: i32,
+        with_portal: bool,
+    ) -> (TestWorld, SharedEntity) {
         init_vanilla_registry();
         init_behaviors();
         init_entities();
@@ -1455,12 +1513,35 @@ mod tests {
                 .dragon_fight()
                 .expect("the End fixture's world owns a dragon fight");
             let mut fight = fight.lock();
-            fight.spawn_exit_portal(world, false);
+            if with_portal {
+                fight.spawn_exit_portal(world, false);
+            }
             fight
                 .create_new_dragon(world)
                 .expect("the fight spawns a dragon")
         };
         (fixture, dragon)
+    }
+
+    /// A fresh-End fight with a player present, i.e. the operator's real scenario:
+    /// no portal has been built and the fight uses the player to populate its boss
+    /// bar, which is vanilla's gate for running the state scan.
+    fn fresh_end_fight_with_player(key: &'static str) -> (TestWorld, Arc<Player>, SharedEntity) {
+        // Vanilla `EnderDragonFight.isArenaLoaded` needs `ARENA_SIZE_CHUNKS` (8) chunks
+        // around the origin at `FULL`, so the fixture must load that whole square or the
+        // fight never runs its state scan.
+        let (fixture, dragon) = live_end_arena_with_portal(key, ARENA_SIZE_CHUNKS, false);
+        let world = &fixture.world;
+        let player =
+            TestPlayerBuilder::new(Arc::clone(world), "DragonWatcher", next_entity_id()).build();
+        player.set_client_loaded(true);
+        player.snap_to(DVec3::new(0.5, f64::from(ISLAND_SURFACE_Y), 12.5), 0.0, 0.0);
+        assert!(
+            world.add_player(Arc::clone(&player), ResetReason::InitialJoin),
+            "the test player must hold the origin chunk active"
+        );
+        settle_entity_ticking_chunk(world, ChunkPos::new(0, 0));
+        (fixture, player, dragon)
     }
 
     /// The arena plus a player standing on the podium platform, as the attack path
@@ -1655,6 +1736,61 @@ mod tests {
         );
     }
 
+    /// A fresh End **does** get the fountain, but in its inactive form: vanilla
+    /// `EnderDragonFight.createDefault` sets `needsStateScanning`, the first tick runs
+    /// `scanState`, and with no portal present it calls `spawnExitPortal(false)` —
+    /// the bedrock ring and pillar without the portal blocks. The active portal only
+    /// appears when the dragon dies.
+    #[test]
+    fn fresh_end_builds_the_inactive_fountain_on_the_first_tick() {
+        let (fixture, _player, _dragon) = fresh_end_fight_with_player("end_fresh_no_portal");
+        let world = &fixture.world;
+
+        let podium_height =
+            || LevelReader::height_at(world, HeightmapType::MotionBlockingNoLeaves, 0, 0);
+        let scan = || ISLAND_SURFACE_Y - 4..=ISLAND_SURFACE_Y + 12;
+        let portal_blocks = || {
+            let end_portal = PODIUM_STATES.end_portal;
+            let mut count = 0;
+            for dx in -PODIUM_RADIUS..=PODIUM_RADIUS {
+                for dz in -PODIUM_RADIUS..=PODIUM_RADIUS {
+                    for y in scan() {
+                        if world.get_block_state(BlockPos::new(dx, y, dz)) == end_portal {
+                            count += 1;
+                        }
+                    }
+                }
+            }
+            count
+        };
+
+        assert_eq!(
+            podium_height(),
+            ISLAND_SURFACE_Y + 1,
+            "the fixture starts with bare island terrain"
+        );
+        assert_eq!(portal_blocks(), 0, "the fixture starts with no portal");
+
+        // The fight runs its state scan once a player is on the boss bar (every 20
+        // ticks), which builds the inactive fountain so the dragon has something to
+        // perch on.
+        for tick in 1..=40 {
+            world.game_time.advance();
+            world.tick_game(tick, true);
+        }
+
+        assert!(
+            podium_height() > ISLAND_SURFACE_Y + 1,
+            "the state scan must build the fountain's bedrock pillar, height {}",
+            podium_height()
+        );
+        assert_eq!(
+            portal_blocks(),
+            0,
+            "a first fight's fountain is inactive: no portal blocks before the kill"
+        );
+    }
+
     /// A player's attack reaches the dragon through the hitbox the vanilla client
     /// actually sends.
     ///
@@ -1755,6 +1891,155 @@ mod tests {
         assert_eq!(
             quartered, 3.0,
             "body hits are damage / 4 + min(damage, 1) = 8 / 4 + 1"
+        );
+    }
+
+    /// A projectile aimed at a hitbox finds it and damages the dragon.
+    ///
+    /// Vanilla `ProjectileUtil.getEntityHitResult` searches
+    /// `Level.getEntities(projectile, aabb, predicate)`, which returns the ender
+    /// dragon's hitboxes; the arrow has to see the `EnderDragonPart` through the
+    /// spatial index and forwards its own damage to the dragon.
+    #[test]
+    fn arrow_hitting_a_hitbox_damages_the_dragon() {
+        use crate::entity::entities::objects::projectiles::{AbstractArrow as _, ArrowEntity};
+        use crate::entity::projectile::get_entity_hit_result;
+
+        let (fixture, player, dragon) = live_end_fight("end_dragon_arrow");
+        let world = &fixture.world;
+        let dragon_entity = dragon_of(&dragon);
+
+        // Hover in place at a reachable height, facing +z so its head sits over
+        // the walkable platform and nothing but the dragon is in the arrow's path.
+        dragon_entity.set_phase(EnderDragonPhase::Hovering);
+        dragon.snap_to(
+            DVec3::new(0.5, f64::from(ISLAND_SURFACE_Y), 0.5),
+            180.0,
+            0.0,
+        );
+        player.snap_to(DVec3::new(0.5, f64::from(ISLAND_SURFACE_Y), 11.0), 0.0, 0.0);
+        for tick in 0..PART_SETTLE_TICKS {
+            world.game_time.advance();
+            world.tick_game(tick, true);
+        }
+
+        let body = world
+            .get_accessible_entity_by_id(dragon_entity.part_id(EnderDragonPartKind::Body))
+            .expect("the body hitbox resolves in the level");
+        let body_position = body.position();
+
+        // The index itself: a vanilla `ProjectileUtil.getEntityHitResult` probe
+        // along the arrow's path must report the hitbox.
+        // One block above the body centre: the arrow must not start flush with
+        // the bedrock platform's top face at `ISLAND_SURFACE_Y - 1`.
+        let probe_from = body_position + DVec3::new(0.0, 1.0, 3.0);
+        let probe = get_entity_hit_result(
+            world,
+            probe_from,
+            body_position,
+            WorldAabb::new(
+                probe_from.x - 2.0,
+                probe_from.y - 2.0,
+                probe_from.z - 2.0,
+                probe_from.x + 2.0,
+                probe_from.y + 2.0,
+                probe_from.z + 2.0,
+            ),
+            0.0,
+            Entity::can_be_hit_by_projectile,
+        )
+        .expect("a raycast at a dragon hitbox must find it");
+        assert_eq!(
+            probe.entity.id(),
+            body.id(),
+            "the raycast hits the body hitbox"
+        );
+
+        let arrow_entity = ArrowEntity::new(
+            &vanilla_entities::ARROW,
+            next_entity_id(),
+            probe_from,
+            Arc::downgrade(world),
+        );
+        // Vanilla `EnderDragon.hurt` only deducts health when the damage's causing
+        // entity is a player (or the type is ALWAYS_HURTS_ENDER_DRAGONS), so the
+        // arrow must carry its shooter, exactly like an arrow fired from a bow.
+        let shooter: SharedEntity = Arc::clone(&player) as SharedEntity;
+        arrow_entity.init_arrow(ItemStack::new(&vanilla_items::ARROW), None, Some(&shooter));
+        let arrow: SharedEntity = Arc::new(arrow_entity);
+        arrow.set_velocity(DVec3::new(0.0, 0.0, -3.0));
+        assert!(
+            world.try_add_entity(Arc::clone(&arrow)).is_ok(),
+            "the arrow spawns in the loaded arena"
+        );
+
+        let before = dragon_entity.get_health();
+        let mut tick = PART_SETTLE_TICKS;
+        while !arrow.is_removed() && tick < PART_SETTLE_TICKS + 20 {
+            world.game_time.advance();
+            world.tick_game(tick, true);
+            tick += 1;
+        }
+
+        assert!(
+            dragon_entity.get_health() < before,
+            "the arrow must damage the dragon through its hitbox, health {} -> {} (arrow at {:?}, removed {})",
+            before,
+            dragon_entity.get_health(),
+            arrow.position(),
+            arrow.is_removed()
+        );
+    }
+
+    /// The fight's arena scan sees the dragon itself, never one of its hitboxes.
+    ///
+    /// The eight `EnderDragonPart`s share the `ender_dragon` entity type and are
+    /// now part of the AABB entity query, so a type-only filter would report nine
+    /// "dragons" and `scan_state` would bind or discard a hitbox as the dragon.
+    #[test]
+    fn arena_scan_reports_the_dragon_and_ignores_its_hitboxes() {
+        let (fixture, dragon) = playerless_live_end_fight("end_arena_scan");
+        let world = &fixture.world;
+        let dragon_entity = dragon_of(&dragon);
+
+        // Let the dragon place its hitboxes inside the arena, so they really are
+        // within the scan's search box rather than sitting at the spawn default.
+        for tick in 0..PART_SETTLE_TICKS {
+            world.game_time.advance();
+            world.tick_game(tick, true);
+        }
+        assert!(
+            dragon_entity.shared_parts().iter().any(|part| world
+                .get_entities_in_aabb(&part.bounding_box())
+                .iter()
+                .any(|entity| entity.id() == part.id())),
+            "the hitboxes are indexed where the dragon placed them"
+        );
+
+        let fight = world.dragon_fight().expect("the world owns a fight");
+        let mut fight = fight.lock();
+        let dragons = fight.dragons_in_arena(world);
+        assert_eq!(dragons.len(), 1, "one dragon, not one dragon plus hitboxes");
+        assert_eq!(dragons[0].id(), dragon.id());
+
+        // A fresh scan adopts the dragon entity; the hitboxes stay untouched. A
+        // legacy `scan_state` cannot be used here: with no open exit portal it
+        // discards whatever it finds, which is the other half of the hazard.
+        fight.dragon_uuid = None;
+        fight.find_or_create_dragon(world);
+        assert_eq!(fight.dragon_uuid, Some(dragon.uuid()));
+        assert!(!dragon.is_removed(), "the scan must not discard the dragon");
+        assert_eq!(
+            fight.dragons_in_arena(world).len(),
+            1,
+            "adopting the dragon must not spawn a second one"
+        );
+        assert!(
+            dragon_entity
+                .shared_parts()
+                .iter()
+                .all(|part| !part.is_removed()),
+            "the scan must not discard a hitbox"
         );
     }
 

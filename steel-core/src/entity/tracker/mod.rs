@@ -9,9 +9,9 @@ use std::sync::Arc;
 use glam::DVec3;
 use rustc_hash::FxHashSet;
 use steel_protocol::packets::game::{
-    AttributeSnapshot, CAddEntity, CRemoveEntities, CSetEntityData, CSetEntityLink,
-    CSetEntityMotion, CSetEquipment, CSetPassengers, CUpdateAttributes, EquipmentSlotItem,
-    to_angle_byte,
+    AttributeSnapshot, CAddEntity, CMoveMinecartAlongTrack, CRemoveEntities, CSetEntityData,
+    CSetEntityLink, CSetEntityMotion, CSetEquipment, CSetPassengers, CUpdateAttributes,
+    EquipmentSlotItem, to_angle_byte,
 };
 use steel_registry::entity_data::DataValue;
 use steel_registry::{RegistryEntry, vanilla_entities};
@@ -19,7 +19,9 @@ use steel_utils::ChunkPos;
 use steel_utils::locks::{SyncMutex, SyncRwLock};
 
 use crate::chunk::player_chunk_view::PlayerChunkView;
-use crate::entity::entities::objects::HurtingProjectile;
+use crate::entity::entities::objects::{
+    HurtingProjectile, MinecartSync, NEW_MINECART_BEHAVIOR_IMPLEMENTED,
+};
 use crate::entity::leash::Leashable;
 use crate::entity::{
     Entity, EntityMovementSyncPacket, MobEffectSyncPacket, ServerEntityMovementSyncState,
@@ -411,6 +413,24 @@ impl EntityTracker {
                 entity.clear_velocity_sync();
             }
             result.for_each_packet(|packet| packets_to_broadcast.push((entity_id, packet)));
+            // Vanilla `ServerEntity.handleMinecartPosRot` ships the steps the cart
+            // recorded since the last sync as one `ClientboundMoveMinecartPacket`,
+            // but only for `NewMinecartBehavior` carts. Steel runs the stable
+            // behaviour, so the packet is held behind the same gate as recording.
+            if NEW_MINECART_BEHAVIOR_IMPLEMENTED {
+                let minecart_steps = entity
+                    .as_minecart()
+                    .map_or_else(Vec::default, MinecartSync::take_minecart_lerp_steps);
+                if !minecart_steps.is_empty() {
+                    packets_to_broadcast.push((
+                        entity_id,
+                        EntityMovementSyncPacket::Minecart(CMoveMinecartAlongTrack {
+                            entity_id,
+                            lerp_steps: minecart_steps,
+                        }),
+                    ));
+                }
+            }
             if entity.hurt_marked() {
                 let velocity = entity.velocity();
                 packets_to_broadcast.push((

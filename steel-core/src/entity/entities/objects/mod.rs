@@ -32,5 +32,6 @@ pub use technical::{
 pub use vehicles::{
     BoatEntity, BoatStatus, ChestBoatEntity, ChestBoatStorage, ChestMinecartEntity,
     ChestRaftEntity, CommandBlockMinecartEntity, FurnaceMinecartEntity, HopperMinecartEntity,
-    MinecartEntity, RaftEntity, SpawnerMinecartEntity, TntMinecartEntity,
+    MinecartEntity, MinecartSync, NEW_MINECART_BEHAVIOR_IMPLEMENTED, RaftEntity,
+    SpawnerMinecartEntity, TntMinecartEntity,
 };

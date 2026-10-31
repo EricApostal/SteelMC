@@ -6,6 +6,7 @@
 //! release in [`super::shoot`] needs the breeze wind charge factory.
 
 use glam::DVec3;
+use steel_protocol::packets::game::SoundSource;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::entity_data::EntityPose;
 use steel_registry::{sound_events, vanilla_attributes, vanilla_blocks, vanilla_mob_effects};
@@ -163,8 +164,16 @@ impl Behavior for LongJump {
         }
 
         ctx.body.set_pose(EntityPose::Inhaling);
-        ctx.body
-            .play_sound(&sound_events::ENTITY_BREEZE_CHARGE, 1.0, 1.0);
+        // Vanilla `LongJump.start`: `level.playSound(null, breeze, BREEZE_CHARGE, HOSTILE, …)`.
+        ctx.level.play_sound_from_entity(
+            &sound_events::ENTITY_BREEZE_CHARGE,
+            SoundSource::Hostile,
+            ctx.body.id(),
+            ctx.body.position(),
+            1.0,
+            1.0,
+            None,
+        );
         if let Some(target_pos) = ctx.get_memory(&mem::BREEZE_JUMP_TARGET) {
             ctx.body
                 .look_at(EntityAnchor::Eyes, block_center(target_pos));

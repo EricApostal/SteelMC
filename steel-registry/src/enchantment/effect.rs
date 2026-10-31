@@ -1,6 +1,7 @@
 use crate::REGISTRY;
 use crate::TaggedRegistryExt;
 use crate::attribute::{AttributeModifierOperation, AttributeRef};
+use crate::blocks::BlockRef;
 use crate::damage_type::DamageTypeRef;
 use crate::entity_type::EntityTypeRef;
 use crate::feature::{BlockPredicate, BlockStateData};
@@ -346,6 +347,29 @@ impl EnchantmentItemSet {
     }
 }
 
+/// The block-testing half of a generated `minecraft:location_check`
+/// requirement.
+///
+/// Only the two const-constructible `BlockPredicate` shapes vanilla data uses
+/// are modelled: a block tag and a direct block list, both without an inner
+/// offset (the outer `LocationCheck.offset` carries the shift). Any other
+/// block predicate keeps the requirement unsupported at generation time.
+#[derive(Debug, PartialEq, Eq)]
+pub enum LocationCheckBlock {
+    Tag(Identifier),
+    Blocks(&'static [BlockRef]),
+}
+
+impl LocationCheckBlock {
+    #[must_use]
+    pub fn matches(&self, block: BlockRef) -> bool {
+        match self {
+            Self::Tag(tag) => block.has_tag(tag),
+            Self::Blocks(blocks) => blocks.contains(&block),
+        }
+    }
+}
+
 /// Vanilla loot condition subset used by generated enchantment effects.
 #[derive(Debug, PartialEq)]
 pub enum EnchantmentEffectRequirements {
@@ -368,6 +392,13 @@ pub enum EnchantmentEffectRequirements {
     },
     MatchTool {
         items: Option<EnchantmentItemSet>,
+    },
+    /// Vanilla `LocationCheck`: tests the block at the effect origin (shifted
+    /// by `offset`) against the generated predicate subset.
+    LocationCheck {
+        offset: IVec3,
+        block: Option<LocationCheckBlock>,
+        can_see_sky: Option<bool>,
     },
     Unsupported {
         condition: Identifier,
@@ -413,6 +444,7 @@ impl EnchantmentEffectRequirements {
             | Self::DamageSourceProperties(_)
             | Self::RandomChance { .. }
             | Self::WeatherCheck { .. }
+            | Self::LocationCheck { .. }
             | Self::Unsupported { .. } => None,
         }
     }

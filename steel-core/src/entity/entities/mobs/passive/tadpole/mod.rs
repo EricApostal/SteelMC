@@ -11,9 +11,6 @@
 //!
 //! ## Deviations
 //!
-//! - Vanilla `Tadpole.TadpoleMoveControl`/`SmoothSwimmingLookControl` and the
-//!   `WaterBoundPathNavigation` are not ported; Steel's shared move/look controls and
-//!   navigation are used with the vanilla `WATER` malus of 0.
 //! - `WaterAnimal.handleAirSupply` is already covered by
 //!   `LivingEntity::base_tick_living_entity`'s air-supply tick, so it is not repeated.
 //! - Release: `MobBucketItem` runs [`TadpoleEntity::load_from_bucket_data`] and
@@ -48,8 +45,12 @@ use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 use crate::behavior::InteractionResult;
 use crate::behavior::advancement_hooks::raise_filled_bucket;
 use crate::entity::ai::brain::Brain;
-use crate::entity::ai::path::PathType;
+use crate::entity::ai::control::{
+    SmoothSwimmingLookControl, SmoothSwimmingMoveControl, tick_smooth_swimming_look_control,
+    tick_smooth_swimming_move_control,
+};
 use crate::entity::damage::DamageSource;
+use crate::entity::entities::mobs::water::abstract_fish;
 use crate::entity::leash::Leashable;
 use crate::entity::{AgeableMobBase, ConversionParams};
 use crate::entity::{
@@ -80,6 +81,11 @@ const WATER_SINK_IMPULSE: f64 = -0.005;
 /// Vanilla `AbstractFish` bucket pickup/empty sounds play at volume/pitch 1.
 const BUCKET_SOUND_VOLUME: f32 = 1.0;
 const BUCKET_SOUND_PITCH: f32 = 1.0;
+/// Vanilla `Tadpole` constructor: `SmoothSwimmingMoveControl(this, 85, 10, 0.02F, 0.1F, true)`.
+const TADPOLE_MOVE_CONTROL: SmoothSwimmingMoveControl =
+    SmoothSwimmingMoveControl::new(85, 10, 0.02, 0.1, true);
+/// Vanilla `Tadpole` constructor: `SmoothSwimmingLookControl(this, 10)`.
+const TADPOLE_LOOK_CONTROL: SmoothSwimmingLookControl = SmoothSwimmingLookControl::new(10);
 
 /// Runtime state vanilla keeps in `Tadpole` fields rather than synched data.
 #[derive(Debug, Clone, Copy, Default)]
@@ -128,11 +134,9 @@ impl TadpoleEntity {
         let living_base = LivingEntityBase::new(entity_type);
         let mob_base = MobBase::new();
         AnimalBase::initialize_pathfinding_malus(&mob_base);
-        // Vanilla `WaterAnimal(WATER, 0.0F)`.
-        mob_base
-            .pathfinding_malus()
-            .lock()
-            .set(PathType::Water, 0.0);
+        // Vanilla `Tadpole.createNavigation` -> `WaterBoundPathNavigation`, and
+        // `WaterAnimal` sets the `WATER` malus to 0.
+        abstract_fish::initialize_water_animal_pathfinding(&mob_base);
         let mut entity_data = TadpoleEntityData::new();
         living_base.initialize_synced_data(&mut entity_data);
 
@@ -616,6 +620,16 @@ impl Mob for TadpoleEntity {
 
     fn tick_path_navigation(&self) {
         PathfinderMob::tick_pathfinder_path_navigation(self);
+    }
+
+    /// Vanilla `Tadpole` constructor installs `SmoothSwimmingMoveControl`.
+    fn tick_move_control(&self) {
+        tick_smooth_swimming_move_control(self, TADPOLE_MOVE_CONTROL);
+    }
+
+    /// Vanilla `Tadpole` constructor installs `SmoothSwimmingLookControl`.
+    fn tick_look_control(&self) {
+        tick_smooth_swimming_look_control(self, TADPOLE_LOOK_CONTROL);
     }
 
     /// Vanilla `Tadpole.getAmbientSound` returns `null`.

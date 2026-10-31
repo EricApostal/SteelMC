@@ -12,7 +12,7 @@ pub use biome_source::{
 };
 pub use climate_sampler::OverworldClimateSampler;
 pub use nether_climate_sampler::NetherClimateSampler;
-pub use spawn_target::{find_spawn_position, spawn_target_fitness};
+pub use spawn_target::{SpawnTargetEntry, find_spawn_position, spawn_target_fitness};
 
 /// Hashes the world seed into the value biome sampling actually uses, so
 /// nearby seeds don't produce visibly correlated biome layouts.

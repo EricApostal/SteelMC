@@ -203,9 +203,12 @@ impl MushroomCowEntity {
 
     /// Shears the mooshroom, converting it into a normal cow and dropping vanilla loot.
     pub fn shear(&self, world: &Arc<World>, tool: &ItemStack) {
-        world.play_sound_at(
+        // Vanilla's `shear` uses the entity overload of `playSound`, which sends
+        // `ClientboundSoundEntityPacket` so the sound follows the entity.
+        world.play_sound_from_entity(
             &sound_events::ENTITY_MOOSHROOM_SHEAR,
             SoundSource::Players,
+            self.id(),
             self.position(),
             1.0,
             1.0,

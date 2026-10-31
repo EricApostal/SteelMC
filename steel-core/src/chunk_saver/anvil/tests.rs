@@ -740,3 +740,672 @@ mod version_gate {
             .expect("test directory should be removable");
     }
 }
+
+mod player_data {
+    use super::*;
+    use crate::chunk_saver::anvil::nbt::read_raw_nbt;
+    use crate::chunk_saver::anvil::player_data::{
+        ImportedPlayer, export_player_data, import_player_data, player_from_vanilla_nbt,
+        player_to_vanilla_nbt,
+    };
+    use crate::datafixer::DATA_VERSION;
+    use crate::player::player_data::PLAYER_DATA_VERSION;
+    use crate::player::player_data_storage::decode_persistent_player;
+    use steel_registry::vanilla_items;
+    use steel_utils::BlockPos;
+    use steel_utils::uuid_ext::UuidExt as _;
+    use uuid::Uuid;
+
+    fn sample_uuid() -> Uuid {
+        Uuid::from_u128(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef)
+    }
+
+    fn vehicle_uuid() -> Uuid {
+        Uuid::from_u128(0x0fed_cba9_8765_4321_0fed_cba9_8765_4321)
+    }
+
+    fn item(id: &str, count: i32) -> NbtCompound {
+        let mut item = NbtCompound::new();
+        item.insert("id", id.to_owned());
+        item.insert("count", count);
+        item
+    }
+
+    fn slot(slot: i8, id: &str, count: i32) -> NbtCompound {
+        let mut stack = item(id, count);
+        stack.insert("Slot", NbtTag::Byte(slot));
+        stack
+    }
+
+    fn entity(id: &str, uuid: Uuid) -> NbtCompound {
+        let mut entity = NbtCompound::new();
+        entity.insert("id", id.to_owned());
+        entity.insert("UUID", NbtTag::IntArray(uuid.to_int_array().to_vec()));
+        entity.insert("Pos", NbtList::Double(vec![2.5, 65.0, -3.5]));
+        entity.insert("Motion", NbtList::Double(vec![0.0, 0.1, 0.0]));
+        entity.insert("Rotation", NbtList::Float(vec![45.0, 10.0]));
+        entity
+    }
+
+    /// A hand-built record with the exact layout `PlayerDataStorage.save` produces for a
+    /// player with items, effects, a bed respawn, a vehicle and an in-flight ender pearl.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one hand-built fixture mirroring the exact vanilla player compound keys keeps the layout auditable in one place"
+    )]
+    fn sample_player_nbt(data_version: i32) -> NbtCompound {
+        let mut nbt = NbtCompound::new();
+        nbt.insert("DataVersion", data_version);
+        nbt.insert(
+            "UUID",
+            NbtTag::IntArray(sample_uuid().to_int_array().to_vec()),
+        );
+        nbt.insert("Pos", NbtList::Double(vec![1.5, 64.0, -2.5]));
+        nbt.insert("Motion", NbtList::Double(vec![0.1, 0.0, -0.1]));
+        nbt.insert("Rotation", NbtList::Float(vec![90.0, -30.0]));
+        nbt.insert("OnGround", NbtTag::Byte(1));
+        nbt.insert("Fire", NbtTag::Short(20));
+        nbt.insert("TicksFrozen", 40);
+        nbt.insert("HasVisualFire", NbtTag::Byte(1));
+        nbt.insert("Health", 18.5f32);
+        nbt.insert("DeathTime", NbtTag::Short(0));
+        nbt.insert("AbsorptionAmount", 2.0f32);
+        nbt.insert("FallFlying", NbtTag::Byte(0));
+
+        let mut attribute = NbtCompound::new();
+        attribute.insert("id", "minecraft:generic.max_health".to_owned());
+        attribute.insert("base", 20.0f64);
+        let mut modifier = NbtCompound::new();
+        modifier.insert("id", "minecraft:test_bonus".to_owned());
+        modifier.insert("amount", 2.0f64);
+        modifier.insert("operation", "add_value".to_owned());
+        attribute.insert("modifiers", NbtList::Compound(vec![modifier]));
+        nbt.insert("attributes", NbtList::Compound(vec![attribute]));
+
+        let mut speed = NbtCompound::new();
+        speed.insert("id", "minecraft:speed".to_owned());
+        speed.insert("duration", 200);
+        speed.insert("amplifier", NbtTag::Byte(1));
+        speed.insert("ambient", NbtTag::Byte(1));
+        speed.insert("show_particles", NbtTag::Byte(0));
+        speed.insert("show_icon", NbtTag::Byte(1));
+        nbt.insert("active_effects", NbtList::Compound(vec![speed]));
+
+        nbt.insert(
+            "Inventory",
+            NbtList::Compound(vec![
+                slot(0, "minecraft:stone", 64),
+                slot(10, "minecraft:diamond_sword", 1),
+            ]),
+        );
+        nbt.insert("SelectedItemSlot", 3);
+        nbt.insert(
+            "EnderItems",
+            NbtList::Compound(vec![slot(4, "minecraft:ender_pearl", 16)]),
+        );
+
+        let mut equipment = NbtCompound::new();
+        equipment.insert(
+            "head",
+            NbtTag::Compound(item("minecraft:diamond_helmet", 1)),
+        );
+        equipment.insert("offhand", NbtTag::Compound(item("minecraft:shield", 1)));
+        nbt.insert("equipment", NbtTag::Compound(equipment));
+
+        nbt.insert("XpP", 0.25f32);
+        nbt.insert("XpLevel", 7);
+        nbt.insert("XpTotal", 100);
+        nbt.insert("XpSeed", 42);
+        nbt.insert("Score", 9);
+        nbt.insert("foodLevel", 17);
+        nbt.insert("foodTickTimer", 5);
+        nbt.insert("foodSaturationLevel", 3.5f32);
+        nbt.insert("foodExhaustionLevel", 0.75f32);
+
+        let mut abilities = NbtCompound::new();
+        abilities.insert("invulnerable", NbtTag::Byte(1));
+        abilities.insert("flying", NbtTag::Byte(0));
+        abilities.insert("mayfly", NbtTag::Byte(1));
+        abilities.insert("instabuild", NbtTag::Byte(1));
+        abilities.insert("mayBuild", NbtTag::Byte(0));
+        abilities.insert("flySpeed", 0.075f32);
+        abilities.insert("walkSpeed", 0.15f32);
+        nbt.insert("abilities", NbtTag::Compound(abilities));
+
+        nbt.insert("playerGameType", 1);
+        nbt.insert("previousPlayerGameType", 0);
+        nbt.insert("seenCredits", NbtTag::Byte(1));
+        nbt.insert("Dimension", "minecraft:overworld".to_owned());
+
+        let mut respawn = NbtCompound::new();
+        respawn.insert("dimension", "minecraft:overworld".to_owned());
+        respawn.insert("pos", NbtList::Int(vec![10, 64, 10]));
+        respawn.insert("yaw", 90.0f32);
+        respawn.insert("pitch", 0.0f32);
+        respawn.insert("forced", NbtTag::Byte(1));
+        nbt.insert("respawn", NbtTag::Compound(respawn));
+
+        let mut root_vehicle = NbtCompound::new();
+        root_vehicle.insert(
+            "Attach",
+            NbtTag::IntArray(vehicle_uuid().to_int_array().to_vec()),
+        );
+        root_vehicle.insert(
+            "Entity",
+            NbtTag::Compound(entity("minecraft:oak_boat", vehicle_uuid())),
+        );
+        nbt.insert("RootVehicle", NbtTag::Compound(root_vehicle));
+
+        let mut pearl = entity("minecraft:ender_pearl", vehicle_uuid());
+        pearl.insert("ender_pearl_dimension", "minecraft:the_nether".to_owned());
+        nbt.insert("ender_pearls", NbtList::Compound(vec![pearl]));
+
+        let mut recipe_book = NbtCompound::new();
+        recipe_book.insert("isGuiOpen", NbtTag::Byte(1));
+        recipe_book.insert("isFilteringCraftable", NbtTag::Byte(0));
+        recipe_book.insert("isFurnaceGuiOpen", NbtTag::Byte(1));
+        recipe_book.insert("isFurnaceFilteringCraftable", NbtTag::Byte(0));
+        recipe_book.insert("isBlastingFurnaceGuiOpen", NbtTag::Byte(0));
+        recipe_book.insert("isBlastingFurnaceFilteringCraftable", NbtTag::Byte(0));
+        recipe_book.insert("isSmokerGuiOpen", NbtTag::Byte(0));
+        recipe_book.insert("isSmokerFilteringCraftable", NbtTag::Byte(0));
+        recipe_book.insert(
+            "recipes",
+            NbtList::String(vec![
+                "minecraft:crafting_table".into(),
+                "minecraft:stick".into(),
+            ]),
+        );
+        recipe_book.insert(
+            "toBeDisplayed",
+            NbtList::String(vec!["minecraft:stick".into()]),
+        );
+        nbt.insert("recipeBook", NbtTag::Compound(recipe_book));
+
+        // Present in real files but with no Steel destination: must be reported, not dropped
+        // silently.
+        nbt.insert("Air", NbtTag::Short(300));
+        nbt.insert("fall_distance", 1.25f64);
+        let mut death = NbtCompound::new();
+        death.insert("dimension", "minecraft:overworld".to_owned());
+        death.insert("pos", NbtList::Int(vec![1, 2, 3]));
+        nbt.insert("LastDeathLocation", NbtTag::Compound(death));
+        nbt
+    }
+
+    fn imported() -> ImportedPlayer {
+        init_vanilla_registry();
+        player_from_vanilla_nbt(&sample_player_nbt(DATA_VERSION), "test player")
+            .expect("a vanilla-shaped player record must import")
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "asserting every imported field in one test documents the complete vanilla-to-Steel mapping"
+    )]
+    fn vanilla_player_record_imports_every_modelled_field() {
+        let imported = imported();
+        let data = &imported.data;
+
+        assert_eq!(data.pos, [1.5, 64.0, -2.5]);
+        assert_eq!(data.motion, [0.1, 0.0, -0.1]);
+        assert_eq!(data.rotation, [90.0, -30.0]);
+        assert!(data.on_ground);
+        assert!(!data.fall_flying);
+        assert_eq!(data.remaining_fire_ticks, 20);
+        assert_eq!(data.ticks_frozen, 40);
+        assert!(data.has_visual_fire);
+        assert_eq!(data.health, 18.5);
+        assert_eq!(data.game_mode, 1);
+        assert_eq!(data.prev_game_mode, Some(0));
+        assert_eq!(data.selected_slot, 3);
+        assert_eq!(data.world, "minecraft:overworld");
+        assert_eq!(data.food_level, 17);
+        assert_eq!(data.food_tick_timer, 5);
+        assert_eq!(data.food_saturation_level, 3.5);
+        assert_eq!(data.food_exhaustion_level, 0.75);
+        assert_eq!(data.data_version, PLAYER_DATA_VERSION);
+        assert_eq!(data.experience_level, 7);
+        assert_eq!(data.experience_progress, 0.25);
+        assert_eq!(data.experience_total, 100);
+        assert_eq!(data.enchantment_seed, 42);
+        assert_eq!(data.score, 9);
+        assert!(data.seen_credits);
+
+        assert!(data.abilities.invulnerable);
+        assert!(!data.abilities.flying);
+        assert!(data.abilities.may_fly);
+        assert!(data.abilities.instabuild);
+        assert!(!data.abilities.may_build);
+        assert_eq!(data.abilities.flying_speed, 0.075);
+        assert_eq!(data.abilities.walking_speed, 0.15);
+
+        let stone = data
+            .inventory
+            .iter()
+            .find(|slot| slot.slot == 0)
+            .expect("hotbar slot 0");
+        assert_eq!(stone.item.item().key, vanilla_items::STONE.key);
+        assert_eq!(stone.item.count(), 64);
+        assert_eq!(
+            data.inventory
+                .iter()
+                .find(|slot| slot.slot == 10)
+                .expect("present")
+                .item
+                .item()
+                .key,
+            vanilla_items::DIAMOND_SWORD.key
+        );
+        assert_eq!(
+            data.inventory
+                .iter()
+                .find(|slot| slot.slot == 39)
+                .expect("helmet was moved from `equipment` to slot 39")
+                .item
+                .item()
+                .key,
+            vanilla_items::DIAMOND_HELMET.key
+        );
+        assert_eq!(
+            data.inventory
+                .iter()
+                .find(|slot| slot.slot == 40)
+                .expect("offhand was moved from `equipment` to slot 40")
+                .item
+                .item()
+                .key,
+            vanilla_items::SHIELD.key
+        );
+        assert_eq!(data.ender_items.len(), 1);
+        assert_eq!(data.ender_items[0].slot, 4);
+        assert_eq!(data.ender_items[0].item.count(), 16);
+
+        let respawn = data.respawn_config.as_ref().expect("bed respawn");
+        assert_eq!(
+            respawn.respawn_data.dimension(),
+            &Identifier::vanilla_static("overworld")
+        );
+        assert_eq!(respawn.respawn_data.pos(), BlockPos::new(10, 64, 10));
+        assert_eq!(respawn.respawn_data.yaw, 90.0);
+        assert_eq!(respawn.respawn_data.pitch, 0.0);
+        assert!(respawn.forced);
+
+        let root_vehicle = data.root_vehicle.as_ref().expect("root vehicle");
+        assert_eq!(root_vehicle.attach, *vehicle_uuid().as_bytes());
+        assert_eq!(
+            root_vehicle.entity.entity_type,
+            Identifier::vanilla_static("oak_boat")
+        );
+
+        assert_eq!(data.ender_pearls.len(), 1);
+        assert_eq!(data.ender_pearls[0].world, "minecraft:the_nether");
+        assert_eq!(
+            data.ender_pearls[0].entity.entity_type,
+            Identifier::vanilla_static("ender_pearl")
+        );
+
+        assert!(data.recipe_book.settings.crafting.open);
+        assert!(!data.recipe_book.settings.crafting.filtering);
+        assert!(data.recipe_book.settings.furnace.open);
+        assert_eq!(
+            data.recipe_book.known,
+            vec![
+                Identifier::vanilla_static("crafting_table"),
+                Identifier::vanilla_static("stick")
+            ]
+        );
+        assert_eq!(
+            data.recipe_book.highlight,
+            vec![Identifier::vanilla_static("stick")]
+        );
+
+        assert!(imported.unmapped.contains(&"Air"));
+        assert!(imported.unmapped.contains(&"fall_distance"));
+        assert!(imported.unmapped.contains(&"LastDeathLocation"));
+
+        let living = read_raw_nbt(&data.living_nbt).expect("living payload");
+        assert_eq!(living.float("Health"), Some(18.5));
+        assert_eq!(living.short("DeathTime"), Some(0));
+        assert_eq!(living.float("AbsorptionAmount"), Some(2.0));
+        assert_eq!(living.byte("FallFlying"), Some(0));
+        let Some(NbtTag::List(NbtList::Compound(attributes))) = living.get("attributes") else {
+            panic!("attributes must be carried into the living payload");
+        };
+        assert_eq!(attributes.len(), 1);
+        assert_eq!(
+            attributes[0]
+                .string("id")
+                .expect("present")
+                .to_str()
+                .as_ref(),
+            "minecraft:generic.max_health"
+        );
+        assert_eq!(attributes[0].double("base"), Some(20.0));
+        let Some(NbtTag::List(NbtList::Compound(effects))) = living.get("active_effects") else {
+            panic!("active effects must be carried into the living payload");
+        };
+        assert_eq!(
+            effects[0].string("id").expect("present").to_str().as_ref(),
+            "minecraft:speed"
+        );
+        assert_eq!(effects[0].int("duration"), Some(200));
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "asserting every exported key and type against the jar is clearest as one sequential test"
+    )]
+    fn exported_player_record_has_vanilla_keys_and_types() {
+        init_vanilla_registry();
+        let data = imported().data;
+        let nbt = player_to_vanilla_nbt(&data, sample_uuid()).expect("player must export");
+
+        assert_eq!(nbt.int("DataVersion"), Some(DATA_VERSION));
+        assert_eq!(
+            nbt.get("UUID").and_then(|tag| tag.int_array()),
+            Some(sample_uuid().to_int_array().as_slice())
+        );
+        assert_eq!(
+            nbt.get("Pos"),
+            Some(&NbtTag::List(NbtList::Double(vec![1.5, 64.0, -2.5])))
+        );
+        assert_eq!(
+            nbt.get("Motion"),
+            Some(&NbtTag::List(NbtList::Double(vec![0.1, 0.0, -0.1])))
+        );
+        assert_eq!(
+            nbt.get("Rotation"),
+            Some(&NbtTag::List(NbtList::Float(vec![90.0, -30.0])))
+        );
+        assert_eq!(nbt.get("OnGround"), Some(&NbtTag::Byte(1)));
+        assert_eq!(nbt.get("Fire"), Some(&NbtTag::Short(20)));
+        assert_eq!(nbt.int("TicksFrozen"), Some(40));
+        assert_eq!(nbt.get("HasVisualFire"), Some(&NbtTag::Byte(1)));
+        assert_eq!(nbt.float("Health"), Some(18.5));
+        assert_eq!(nbt.short("DeathTime"), Some(0));
+        assert_eq!(nbt.float("AbsorptionAmount"), Some(2.0));
+        assert_eq!(nbt.byte("FallFlying"), Some(0));
+        assert_eq!(nbt.int("SelectedItemSlot"), Some(3));
+        assert_eq!(nbt.float("XpP"), Some(0.25));
+        assert_eq!(nbt.int("XpLevel"), Some(7));
+        assert_eq!(nbt.int("XpTotal"), Some(100));
+        assert_eq!(nbt.int("XpSeed"), Some(42));
+        assert_eq!(nbt.int("Score"), Some(9));
+        assert_eq!(nbt.int("foodLevel"), Some(17));
+        assert_eq!(nbt.int("foodTickTimer"), Some(5));
+        assert_eq!(nbt.float("foodSaturationLevel"), Some(3.5));
+        assert_eq!(nbt.float("foodExhaustionLevel"), Some(0.75));
+        assert_eq!(nbt.int("playerGameType"), Some(1));
+        assert_eq!(nbt.int("previousPlayerGameType"), Some(0));
+        assert_eq!(nbt.byte("seenCredits"), Some(1));
+        assert_eq!(
+            nbt.string("Dimension").expect("present").to_str().as_ref(),
+            "minecraft:overworld"
+        );
+
+        let abilities = nbt.compound("abilities").expect("abilities");
+        for key in ["invulnerable", "flying", "mayfly", "instabuild", "mayBuild"] {
+            assert!(matches!(abilities.get(key), Some(NbtTag::Byte(_))), "{key}");
+        }
+        assert_eq!(abilities.float("flySpeed"), Some(0.075));
+        assert_eq!(abilities.float("walkSpeed"), Some(0.15));
+
+        let Some(NbtTag::List(NbtList::Compound(inventory))) = nbt.get("Inventory") else {
+            panic!("Inventory must be a compound list");
+        };
+        assert_eq!(inventory.len(), 2);
+        let stone = inventory
+            .iter()
+            .find(|stack| stack.byte("Slot") == Some(0))
+            .expect("present");
+        assert_eq!(
+            stone.string("id").expect("present").to_str().as_ref(),
+            "minecraft:stone"
+        );
+        assert_eq!(stone.int("count"), Some(64));
+        assert!(
+            inventory
+                .iter()
+                .all(|stack| stack.byte("Slot").is_some_and(|slot| slot < 36))
+        );
+
+        let equipment = nbt.compound("equipment").expect("equipment carries armour");
+        assert_eq!(
+            equipment
+                .compound("head")
+                .expect("present")
+                .string("id")
+                .expect("present")
+                .to_str()
+                .as_ref(),
+            "minecraft:diamond_helmet"
+        );
+        assert_eq!(
+            equipment
+                .compound("offhand")
+                .expect("present")
+                .string("id")
+                .expect("present")
+                .to_str()
+                .as_ref(),
+            "minecraft:shield"
+        );
+
+        let Some(NbtTag::List(NbtList::Compound(ender))) = nbt.get("EnderItems") else {
+            panic!("EnderItems must be a compound list");
+        };
+        assert_eq!(ender[0].byte("Slot"), Some(4));
+        assert_eq!(ender[0].int("count"), Some(16));
+
+        assert!(
+            matches!(nbt.get("attributes"), Some(NbtTag::List(NbtList::Compound(attributes))) if attributes.len() == 1)
+        );
+        assert!(
+            matches!(nbt.get("active_effects"), Some(NbtTag::List(NbtList::Compound(effects))) if effects.len() == 1)
+        );
+
+        let respawn = nbt.compound("respawn").expect("respawn");
+        assert_eq!(
+            respawn
+                .string("dimension")
+                .expect("present")
+                .to_str()
+                .as_ref(),
+            "minecraft:overworld"
+        );
+        assert_eq!(
+            respawn.get("pos"),
+            Some(&NbtTag::List(NbtList::Int(vec![10, 64, 10])))
+        );
+        assert_eq!(respawn.float("yaw"), Some(90.0));
+        assert_eq!(respawn.byte("forced"), Some(1));
+
+        let root = nbt.compound("RootVehicle").expect("RootVehicle");
+        assert_eq!(
+            root.get("Entity")
+                .and_then(|tag| tag.compound())
+                .expect("present")
+                .string("id")
+                .expect("present")
+                .to_str()
+                .as_ref(),
+            "minecraft:oak_boat"
+        );
+        assert!(matches!(root.get("Attach"), Some(NbtTag::IntArray(_))));
+
+        let Some(NbtTag::List(NbtList::Compound(pearls))) = nbt.get("ender_pearls") else {
+            panic!("ender_pearls must be a compound list");
+        };
+        assert_eq!(
+            pearls[0]
+                .string("ender_pearl_dimension")
+                .expect("present")
+                .to_str()
+                .as_ref(),
+            "minecraft:the_nether"
+        );
+
+        let book = nbt.compound("recipeBook").expect("recipeBook");
+        assert_eq!(book.byte("isGuiOpen"), Some(1));
+        assert_eq!(book.byte("isFilteringCraftable"), Some(0));
+        assert_eq!(book.byte("isFurnaceGuiOpen"), Some(1));
+        assert!(book.list("recipes").expect("present").strings().is_some());
+        assert_eq!(
+            book.list("recipes")
+                .expect("present")
+                .strings()
+                .expect("present")
+                .len(),
+            2
+        );
+
+        // Keys Steel cannot represent are not invented on export.
+        assert!(nbt.get("Air").is_none());
+        assert!(nbt.get("fall_distance").is_none());
+        assert!(nbt.get("LastDeathLocation").is_none());
+    }
+
+    #[test]
+    fn exported_record_reimports_to_the_same_state() {
+        init_vanilla_registry();
+        let original = imported().data;
+        let exported = player_to_vanilla_nbt(&original, sample_uuid()).expect("export");
+        let reimported = player_from_vanilla_nbt(&exported, "round trip")
+            .expect("exported record must import")
+            .data;
+
+        assert_eq!(reimported.pos, original.pos);
+        assert_eq!(reimported.motion, original.motion);
+        assert_eq!(reimported.rotation, original.rotation);
+        assert_eq!(reimported.health, original.health);
+        assert_eq!(reimported.food_level, original.food_level);
+        assert_eq!(reimported.experience_level, original.experience_level);
+        assert_eq!(reimported.enchantment_seed, original.enchantment_seed);
+        assert_eq!(reimported.world, original.world);
+        assert_eq!(reimported.inventory.len(), original.inventory.len());
+        for slot in &original.inventory {
+            let other = reimported
+                .inventory
+                .iter()
+                .find(|other| other.slot == slot.slot)
+                .expect("slot survives");
+            assert_eq!(other.item.item().key, slot.item.item().key);
+            assert_eq!(other.item.count(), slot.item.count());
+        }
+        assert_eq!(reimported.ender_items.len(), original.ender_items.len());
+        assert_eq!(reimported.recipe_book, original.recipe_book);
+        assert_eq!(
+            reimported.respawn_config.as_ref().map(|r| (
+                r.respawn_data.dimension().clone(),
+                r.respawn_data.pos(),
+                r.forced
+            )),
+            original.respawn_config.as_ref().map(|r| (
+                r.respawn_data.dimension().clone(),
+                r.respawn_data.pos(),
+                r.forced
+            ))
+        );
+        assert_eq!(
+            reimported.root_vehicle.as_ref().map(|v| v.attach),
+            original.root_vehicle.as_ref().map(|v| v.attach)
+        );
+        assert_eq!(
+            reimported.ender_pearls[0].world,
+            original.ender_pearls[0].world
+        );
+    }
+
+    #[test]
+    fn stale_player_data_version_is_refused() {
+        init_vanilla_registry();
+        let Err(error) =
+            player_from_vanilla_nbt(&sample_player_nbt(DATA_VERSION - 1), "stale player")
+        else {
+            panic!("a player record from another data version must be refused");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(error.to_string().contains("player data"));
+        assert!(error.to_string().contains("stale player"));
+    }
+
+    #[test]
+    fn unrepresentable_inventory_slot_is_refused() {
+        init_vanilla_registry();
+        let mut nbt = NbtCompound::new();
+        nbt.insert("DataVersion", DATA_VERSION);
+        nbt.insert("Dimension", "minecraft:overworld".to_owned());
+        nbt.insert(
+            "Inventory",
+            NbtList::Compound(vec![slot(60, "minecraft:stone", 1)]),
+        );
+        let Err(error) = player_from_vanilla_nbt(&nbt, "bad slot") else {
+            panic!("slot 60 has no Steel destination and must be refused");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("slot 60"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn player_data_files_import_and_export_between_worlds() {
+        init_vanilla_registry();
+        let directory = test_directory("playerdata-world");
+        let vanilla = directory.join("vanilla");
+        let steel_world = directory.join("steel").join("worlds").join("overworld");
+        fs::create_dir_all(vanilla.join("playerdata"))
+            .await
+            .expect("vanilla playerdata directory");
+        fs::create_dir_all(&steel_world)
+            .await
+            .expect("steel world directory");
+
+        let vanilla_file = vanilla
+            .join("playerdata")
+            .join(format!("{}.dat", sample_uuid()));
+        fs::write(
+            &vanilla_file,
+            write_gzip_nbt(&sample_player_nbt(DATA_VERSION)).expect("record encodes"),
+        )
+        .await
+        .expect("vanilla player record");
+
+        let (players, unmapped) =
+            import_player_data(&vanilla, &steel_world).expect("player import");
+        assert_eq!(players, 1);
+        assert!(unmapped.contains(&"Air"));
+
+        let steel_file = directory
+            .join("steel")
+            .join("players")
+            .join("data")
+            .join(sample_uuid().to_string());
+        let bytes = fs::read(&steel_file)
+            .await
+            .expect("Steel player file was written");
+        let stored = decode_persistent_player(&bytes, "test").expect("Steel player file decodes");
+        assert_eq!(stored.pos, [1.5, 64.0, -2.5]);
+        assert_eq!(stored.experience_total, 100);
+
+        let exported = directory.join("exported");
+        assert_eq!(
+            export_player_data(&steel_world, &exported).expect("player export"),
+            1
+        );
+        let exported_file = exported
+            .join("playerdata")
+            .join(format!("{}.dat", sample_uuid()));
+        let exported_bytes = fs::read(&exported_file)
+            .await
+            .expect("exported player record");
+        let exported_nbt = read_compressed_nbt(&exported_bytes).expect("gzip NBT");
+        assert_eq!(exported_nbt.int("DataVersion"), Some(DATA_VERSION));
+        assert_eq!(exported_nbt.float("Health"), Some(18.5));
+
+        fs::remove_dir_all(directory)
+            .await
+            .expect("test directory should be removable");
+    }
+}

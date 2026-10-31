@@ -2,12 +2,16 @@ use std::sync::Arc;
 
 use steel_macros::block_behavior;
 use steel_registry::blocks::{BlockRef, properties::Direction, shapes::VoxelShape};
+use steel_registry::items::item::BlockHitResult;
+use steel_utils::types::InteractionHand;
 use steel_utils::{BlockLocalAabb, BlockPos, BlockStateId};
 
 use crate::{
-    behavior::{BlockBehavior, BlockPlaceContext},
+    behavior::blocks::building::cauldron_interactions::{self, CauldronKind},
+    behavior::{BlockBehavior, BlockPlaceContext, InteractionResult, InventoryAccess},
     entity::ai::path::PathComputationType,
     entity::{Entity, InsideBlockEffectCollector, InsideBlockEffectType},
+    player::Player,
     world::{LevelReader, World},
 };
 
@@ -27,7 +31,8 @@ const CAULDRON_FILLED_ENTITY_INSIDE_SHAPE: VoxelShape =
 
 /// Behavior for lava cauldrons.
 ///
-/// Cauldron interactions and drip filling remain separate block mechanics.
+/// Item interactions come from the shared [`cauldron_interactions`] table;
+/// drip filling remains on the empty cauldron behavior.
 #[block_behavior]
 pub struct LavaCauldronBlock {
     block: BlockRef,
@@ -44,6 +49,19 @@ impl LavaCauldronBlock {
 impl BlockBehavior for LavaCauldronBlock {
     fn get_state_for_placement(&self, _context: &BlockPlaceContext<'_>) -> Option<BlockStateId> {
         Some(self.block.default_state())
+    }
+
+    fn use_item_on(
+        &self,
+        state: BlockStateId,
+        world: &Arc<World>,
+        pos: BlockPos,
+        player: &Player,
+        hand: InteractionHand,
+        _hit_result: &BlockHitResult,
+        inv: &mut InventoryAccess,
+    ) -> InteractionResult {
+        cauldron_interactions::use_item_on(CauldronKind::Lava, state, world, pos, player, hand, inv)
     }
 
     fn get_entity_inside_collision_shape(

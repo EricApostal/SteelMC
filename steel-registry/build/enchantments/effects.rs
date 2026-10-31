@@ -5,10 +5,11 @@ use super::{
     EntityPredicateJson, EntityTargetJson, EntityTypePredicateJson, EntityTypeSetJson,
     EntityTypeSpecificPredicateJson, EntityVehiclePredicateJson, FloatProviderJson,
     FloatProviderTypedJson, GameType, Ident, Identifier, ItemHolderSetJson, LevelBasedValueJson,
-    LevelBasedValueTypedJson, MobEffectSelectionJson, ParticlePositionSourceJson,
-    ParticleVelocitySourceJson, RequirementsJson, Span, TargetedConditionalEntityEffectJson,
-    TargetedConditionalValueEffectJson, ToShoutySnakeCase, TokenStream, ValueEffectJson,
-    damage_type_ref_token, generate_sound_event_ref, identifier_token, quote,
+    LevelBasedValueTypedJson, LocationCheckBlockJson, MobEffectSelectionJson,
+    ParticlePositionSourceJson, ParticleVelocitySourceJson, RequirementsJson, Span,
+    TargetedConditionalEntityEffectJson, TargetedConditionalValueEffectJson, ToShoutySnakeCase,
+    TokenStream, ValueEffectJson, damage_type_ref_token, generate_sound_event_ref,
+    identifier_token, quote,
 };
 
 pub(super) fn attribute_ref_token(attribute: &Identifier) -> TokenStream {
@@ -730,6 +731,32 @@ pub(super) fn generate_requirements_value(
         RequirementsJson::Unsupported { condition } => {
             let condition = identifier_token(condition);
             quote! { EnchantmentEffectRequirements::Unsupported { condition: #condition } }
+        }
+        RequirementsJson::LocationCheck {
+            offset,
+            block,
+            can_see_sky,
+        } => {
+            let [x, y, z] = *offset;
+            let block = match block {
+                None => quote! { None },
+                Some(LocationCheckBlockJson::Tag(tag)) => {
+                    let tag = identifier_token(tag);
+                    quote! { Some(LocationCheckBlock::Tag(#tag)) }
+                }
+                Some(LocationCheckBlockJson::Blocks(blocks)) => {
+                    let blocks = blocks.iter().map(block_ref_token);
+                    quote! { Some(LocationCheckBlock::Blocks(&[#(#blocks),*])) }
+                }
+            };
+            let can_see_sky = optional_bool_token(*can_see_sky);
+            quote! {
+                EnchantmentEffectRequirements::LocationCheck {
+                    offset: IVec3::new(#x, #y, #z),
+                    block: #block,
+                    can_see_sky: #can_see_sky,
+                }
+            }
         }
     }
 }

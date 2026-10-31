@@ -37,6 +37,7 @@ use crate::command::{
 use crate::config::ResolvedDomainConfig;
 use crate::config::{ResolvedWorldConfig, RuntimeConfig, WorldsConfig, validate_login_security};
 use crate::datapack::init as datapack_init;
+use crate::datapack::{datapacks, try_datapacks};
 use crate::entity::damage::DamageHistory;
 use crate::entity::entities::mobs::npc::wandering_trader::WanderingTraderSpawner;
 use crate::entity::{
@@ -239,7 +240,7 @@ pub async fn test_server_with_worlds_and_config(
     }
     let white_list = config.white_list;
 
-    Ok(Arc::new(Server {
+    let server = Arc::new(Server {
         damage_history,
         config,
         permission_groups,
@@ -274,7 +275,9 @@ pub async fn test_server_with_worlds_and_config(
         pending_world_changes: SyncMutex::new(Vec::new()),
         pending_domain_switches: SyncMutex::new(Vec::new()),
         player_idle_timeout: AtomicI32::new(0),
-    }))
+    });
+    server.attach_worlds();
+    Ok(server)
 }
 
 #[derive(Clone, Copy)]
@@ -829,6 +832,15 @@ impl Server {
         }
         worlds.validate_game_times()?;
 
+        // Vanilla `MinecraftServer` computes its `TimerQueue` from the overworld's
+        // `SavedDataStorage`, so `/schedule` entries survive a restart.
+        if let Some(overworld) = worlds.server_default_world() {
+            datapacks()
+                .load_schedules(&overworld.saved_data)
+                .await
+                .map_err(|error| format!("failed to load scheduled events: {error}"))?;
+        }
+
         let scoreboards = DomainScoreboards::load(&worlds)
             .await
             .map_err(|error| format!("failed to load domain scoreboards: {error}"))?;
@@ -892,6 +904,17 @@ impl Server {
         self.service_keys.profile_key_validator()
     }
 
+    /// Installs this server into every loaded world.
+    ///
+    /// Worlds are constructed before the server's `Arc` exists, so the server hands each
+    /// world a weak self-reference right after it is wrapped. World-local ticks (command
+    /// blocks and command-block minecarts) use that handle to reach the command runtime.
+    pub fn attach_worlds(self: &Arc<Self>) {
+        for world in self.worlds.values() {
+            world.attach_server(Arc::downgrade(self));
+        }
+    }
+
     /// Returns whether secure chat can currently be enforced.
     #[must_use]
     pub fn enforces_secure_chat(&self) -> bool {
@@ -910,6 +933,26 @@ impl Server {
         CommandDataSaveResults {
             scoreboards: self.scoreboards.save(&self.worlds).await,
             storage: self.save_command_storage().await,
+        }
+    }
+
+    /// Vanilla `TimerQueue` saved data, stored on the overworld like
+    /// `ServerLevel`'s `DataStorage` entry.
+    ///
+    /// `forced` mirrors `/save-all`: the periodic autosave skips the write while
+    /// the overworld has `/save-off` set.
+    async fn save_scheduled_events(&self, forced: bool) {
+        let Some(overworld) = self.worlds.server_default_world() else {
+            return;
+        };
+        if !forced && overworld.no_save() {
+            return;
+        }
+        let Some(datapacks) = try_datapacks() else {
+            return;
+        };
+        if let Err(error) = datapacks.save_schedules(&overworld.saved_data).await {
+            log::error!("Failed to save scheduled events: {error}");
         }
     }
 
@@ -958,6 +1001,8 @@ impl Server {
             Ok(saved) => tracing::debug!(saved, "save stored domain command storage"),
             Err(error) => log::error!("save failed to store domain command storage: {error}"),
         }
+
+        self.save_scheduled_events(forced).await;
 
         let mut chunks_saved = 0usize;
         let mut levels_saved = 0usize;

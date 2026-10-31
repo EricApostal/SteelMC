@@ -166,7 +166,8 @@ fn convert_single(from: &dyn Mob, to: &dyn Mob, to_arc: &SharedEntity, params: C
 
     // Vanilla copies only the timer, not the remembered player.
     to.set_last_hurt_by_player_memory_time(from.last_hurt_by_player_memory_time());
-    // TODO: Copy vanilla `hurtTime` once Steel supports the hurt-flash counter.
+    // Vanilla `ConversionType.SINGLE` copies `hurtTime` (not `hurtDuration`).
+    to.set_hurt_time(from.hurt_time());
 
     to.set_y_body_rot(from.y_body_rot());
     to.set_on_ground(from.on_ground());

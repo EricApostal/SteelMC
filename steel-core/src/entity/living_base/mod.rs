@@ -44,6 +44,8 @@ const MIN_EFFECT_AMPLIFIER: i32 = 0;
 const MAX_EFFECT_AMPLIFIER: i32 = 255;
 const SPRINT_SPEED_MODIFIER_AMOUNT: f64 = 0.3;
 const POST_IMPULSE_GRACE_TICKS: i32 = 40;
+/// Vanilla `LivingEntity.hurtServer`/`handleDamageEvent` hurt-flash duration.
+const HURT_FLASH_DURATION: i32 = 10;
 
 /// Runtime mob-effect state.
 ///
@@ -640,7 +642,12 @@ impl ActiveItemUseState {
 struct LivingEntityState {
     effects_dirty: bool,
     death_processed: bool,
+    /// Vanilla `LivingEntity.damageCooldownTime`.
     invulnerable_time: i32,
+    /// Vanilla `LivingEntity.hurtTime`: hurt-flash ticks left, counted down each tick.
+    hurt_time: i32,
+    /// Vanilla `LivingEntity.hurtDuration`: hurt-flash length the current flash started with.
+    hurt_duration: i32,
     last_hurt: f32,
     last_hurt_by_player: Option<Uuid>,
     last_hurt_by_player_entity: Option<WeakEntity>,
@@ -677,6 +684,8 @@ impl LivingEntityState {
             effects_dirty: false,
             death_processed: false,
             invulnerable_time: 0,
+            hurt_time: 0,
+            hurt_duration: 0,
             last_hurt: 0.0,
             last_hurt_by_player: None,
             last_hurt_by_player_entity: None,
@@ -712,6 +721,8 @@ impl LivingEntityState {
         self.death_processed = false;
         self.death_time = 0;
         self.invulnerable_time = 0;
+        self.hurt_time = 0;
+        self.hurt_duration = 0;
         self.last_hurt = 0.0;
         self.absorption_amount = 0.0;
         self.skip_drop_experience = false;
@@ -1639,6 +1650,34 @@ impl LivingEntityBase {
         self.state.lock().invulnerable_time
     }
 
+    /// Vanilla `LivingEntity.hurtTime`: hurt-flash ticks remaining.
+    pub fn hurt_time(&self) -> i32 {
+        self.state.lock().hurt_time
+    }
+
+    /// Sets vanilla `LivingEntity.hurtTime`.
+    pub fn set_hurt_time(&self, hurt_time: i32) {
+        self.state.lock().hurt_time = hurt_time;
+    }
+
+    /// Vanilla `LivingEntity.hurtDuration`: length of the current hurt flash.
+    pub fn hurt_duration(&self) -> i32 {
+        self.state.lock().hurt_duration
+    }
+
+    /// Vanilla `LivingEntity.wasHurtRecently`: `hurtTime > 0`.
+    pub fn was_hurt_recently(&self) -> bool {
+        self.state.lock().hurt_time > 0
+    }
+
+    /// Counts the hurt flash down by one tick, like vanilla `LivingEntity.tick`.
+    pub fn decrement_hurt_time(&self) {
+        let mut state = self.state.lock();
+        if state.hurt_time > 0 {
+            state.hurt_time -= 1;
+        }
+    }
+
     /// Sets the remaining hurt-cooldown ticks.
     pub fn set_invulnerable_time(&self, invulnerable_time: i32) {
         self.state.lock().invulnerable_time = invulnerable_time;
@@ -1652,7 +1691,8 @@ impl LivingEntityBase {
         }
     }
 
-    /// Applies vanilla hurt cooldown bookkeeping.
+    /// Applies vanilla `LivingEntity.hurtServer` damage-cooldown bookkeeping,
+    /// including the hurt flash vanilla starts on a full hit.
     ///
     /// Returns `None` when damage should be ignored because death was already
     /// processed or the amount did not exceed the active invulnerability frame.
@@ -1676,6 +1716,8 @@ impl LivingEntityBase {
         } else {
             state.last_hurt = amount;
             state.invulnerable_time = 20;
+            state.hurt_duration = HURT_FLASH_DURATION;
+            state.hurt_time = state.hurt_duration;
             Some((true, amount))
         }
     }

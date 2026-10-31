@@ -4,11 +4,6 @@
 //! a `minecraft:instrument` component; playing it starts the item's active use,
 //! plays the instrument sound, damages the horn and applies the instrument's
 //! cooldown.
-//!
-//! **Vanilla differences:** the instrument's `durability_damage` and the
-//! `ItemCooldowns.addCooldown(stack, ticks)` entry point are missing (see the
-//! module comments in the play path), so the horn neither self-damages nor
-//! applies its own cooldown.
 
 use std::sync::Arc;
 
@@ -70,18 +65,32 @@ impl ItemBehavior for InstrumentItem {
 
         // Vanilla `InstrumentItem.use` order: start the use, then play.
         context.player.start_using_item(context.hand);
-        context.inv.with_item(|stack| {
-            if let Some(component) = stack.get(INSTRUMENT) {
-                Self::play(world, player, component.value());
-            }
-        });
+        let Some(instrument) = context.inv.with_item(|stack| {
+            stack
+                .get(INSTRUMENT)
+                .map(|component| component.value().clone())
+        }) else {
+            return InteractionResult::Fail;
+        };
+        Self::play(world, player, &instrument);
 
-        // Vanilla additionally applies `instrument.durabilityDamage()` here and
-        // starts `floor(useDuration * 20)` ticks of cooldown. Steel's
-        // `InstrumentValue` carries no `durability_damage` field
-        // (`steel-registry/src/instrument.rs:22-27`) and `ItemCooldowns` exposes only
-        // `add_from_stack` (`steel-core/src/player/item_cooldowns.rs:41`), so both
-        // effects are blocked on those APIs.
+        // Vanilla damages the horn by `instrument.durabilityDamage()` and then
+        // starts `floor(useDuration * 20)` ticks of cooldown.
+        let durability_damage = instrument.durability_damage();
+        if durability_damage > 0 {
+            let has_infinite_materials = player.has_infinite_materials();
+            context
+                .inv
+                .with_item(|stack| stack.hurt_and_break(durability_damage, has_infinite_materials));
+        }
+
+        let use_duration = instrument.use_duration();
+        if use_duration > 0.0 {
+            let cooldown_ticks = (use_duration * 20.0).floor() as i32;
+            context
+                .inv
+                .with_item(|stack| player.add_item_cooldown(stack, cooldown_ticks));
+        }
 
         let item = context.inv.with_item(|stack| stack.item());
         player.award_stat(&vanilla_stat_types::ITEM_USED, item);
@@ -96,5 +105,95 @@ impl ItemBehavior for InstrumentItem {
 
     fn get_use_animation(&self, _stack: &ItemStack) -> ItemUseAnimation {
         ItemUseAnimation::TootHorn
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use steel_registry::data_components::components::InstrumentComponent;
+    use steel_registry::data_components::vanilla_components::INSTRUMENT;
+    use steel_registry::instrument::InstrumentValue;
+    use steel_registry::item_stack::ItemStack;
+    use steel_registry::sound_event::SoundEventHolder;
+    use steel_registry::{RegistryHolder, init_vanilla_registry, vanilla_items};
+    use steel_utils::Identifier;
+    use steel_utils::types::InteractionHand;
+    use text_components::TextComponent;
+
+    use crate::behavior::item::ItemBehavior;
+    use crate::behavior::{InteractionResult, UseItemContext, init_behaviors};
+    use crate::player::Player;
+    use crate::test_support::{TestPlayerBuilder, fresh_test_world};
+    use crate::world::World;
+
+    use super::InstrumentItem;
+
+    /// Builds a damageable stack carrying an inline instrument.
+    ///
+    /// Vanilla goat horns are not damageable (no `max_damage`), so a data-driven
+    /// instrument with `durability_damage` can only exist on a damageable item.
+    fn inline_instrument(use_duration: f32, durability_damage: i32) -> ItemStack {
+        let value = InstrumentValue::new(
+            SoundEventHolder::Direct {
+                sound_id: Identifier::vanilla_static("test_horn"),
+                fixed_range: Some(16.0),
+            },
+            use_duration,
+            16.0,
+            durability_damage,
+            TextComponent::plain("Test horn"),
+        )
+        .expect("inline instrument should be valid");
+        let mut stack = ItemStack::new(&vanilla_items::DIAMOND_SWORD);
+        stack.set(
+            INSTRUMENT,
+            InstrumentComponent::new(RegistryHolder::direct(value)),
+        );
+        stack
+    }
+
+    fn play_horn(player: &Arc<Player>, world: &Arc<World>, stack: ItemStack) -> InteractionResult {
+        player
+            .inventory
+            .lock()
+            .set_item_in_hand(InteractionHand::MainHand, stack);
+        let mut context = UseItemContext::new(
+            player,
+            InteractionHand::MainHand,
+            world,
+            Arc::clone(&player.inventory),
+        );
+        InstrumentItem.use_item(&mut context)
+    }
+
+    fn hand_item(player: &Player) -> ItemStack {
+        player
+            .inventory
+            .lock()
+            .get_item_in_hand(InteractionHand::MainHand)
+            .clone()
+    }
+
+    #[test]
+    fn playing_an_instrument_damages_it_and_applies_its_cooldown() {
+        init_vanilla_registry();
+        init_behaviors();
+
+        let world_fixture = fresh_test_world("instrument_damage_cooldown");
+        let world = &world_fixture.world;
+        let player = TestPlayerBuilder::new(Arc::clone(world), "InstrumentTester", 1).build();
+        let instrument = inline_instrument(3.5, 2);
+
+        assert_eq!(
+            play_horn(&player, world, instrument),
+            InteractionResult::Consume
+        );
+
+        let after = hand_item(&player);
+        assert_eq!(after.get_damage_value(), 2);
+        // Vanilla `floor(useDuration * 20)` = 70 ticks of cooldown.
+        assert!(player.is_item_on_cooldown(&after));
     }
 }

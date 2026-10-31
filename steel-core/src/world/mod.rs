@@ -24,6 +24,7 @@ use crate::entity::raid::{PatrolSpawner, Raids};
 use crate::map::MapStorage;
 use crate::poi::OccupationStatus;
 use crate::portal::WorldChangeRequest;
+use crate::server::Server;
 use crate::world::custom_spawner::CustomSpawner;
 use crate::world::game_event::{
     GameEventContext, GameEventDispatcher, GameEventListenerCount, GameEventListenerStorage,
@@ -341,6 +342,13 @@ pub struct World {
     custom_spawners: SyncMutex<Vec<Box<dyn CustomSpawner>>>,
     /// World-change requests queued by world-local ticks for server safe-point processing.
     pending_world_changes: SyncMutex<Vec<(SharedEntity, WorldChangeRequest)>>,
+    /// Weak handle to the server that owns this world, installed after the server is
+    /// constructed.
+    ///
+    /// World-local ticks (command blocks, command-block minecarts) use it to reach the
+    /// command dispatcher. Vanilla `ServerLevel` keeps a strong `MinecraftServer`
+    /// reference; Steel uses a weak one because the server owns its worlds.
+    server: SyncRwLock<Option<Weak<Server>>>,
 }
 
 impl World {
@@ -522,6 +530,7 @@ impl World {
                 ender_dragon_fight,
                 custom_spawners: SyncMutex::new(Vec::new()),
                 pending_world_changes: SyncMutex::new(Vec::new()),
+                server: SyncRwLock::new(None),
             }
         });
 

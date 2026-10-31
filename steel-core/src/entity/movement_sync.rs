@@ -2,9 +2,9 @@
 
 use glam::DVec3;
 use steel_protocol::packets::game::{
-    CEntityPositionSync, CMoveEntityPos, CMoveEntityPosRot, CMoveEntityRot, CProjectilePower,
-    CRotateHead, CSetEntityMotion, PackedEntityDelta, PositionPath, VecDelta, calc_delta,
-    to_angle_byte,
+    CEntityPositionSync, CMoveEntityPos, CMoveEntityPosRot, CMoveEntityRot,
+    CMoveMinecartAlongTrack, CProjectilePower, CRotateHead, CSetEntityMotion, PackedEntityDelta,
+    PositionPath, VecDelta, calc_delta, to_angle_byte,
 };
 use steel_registry::{entity_type::EntityTypeRef, vanilla_entities};
 
@@ -146,6 +146,13 @@ pub enum EntityMovementSyncPacket {
     HeadRotation(CRotateHead),
     /// Full absolute position sync.
     PositionSync(CEntityPositionSync),
+    /// Minecart track interpolation steps recorded since the last sync.
+    ///
+    /// Vanilla `ServerEntity.handleMinecartPosRot` sends
+    /// `ClientboundMoveMinecartPacket` with `NewMinecartBehavior.lerpSteps`
+    /// instead of an ordinary movement packet for carts that use the
+    /// experimental movement.
+    Minecart(CMoveMinecartAlongTrack),
     /// Velocity sync.
     Velocity(CSetEntityMotion),
     /// Acceleration-power sync that vanilla bundles with a hurting projectile's

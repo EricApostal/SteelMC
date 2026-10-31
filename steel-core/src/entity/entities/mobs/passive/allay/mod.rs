@@ -691,13 +691,16 @@ impl Mob for AllayEntity {
                 && self.is_dancing()
                 && self.can_duplicate()
                 && {
-                    world.play_sound(
+                    // Vanilla `Allay.mobInteract` passes the player as the excluded
+                    // listener and the allay as the sound's source entity.
+                    world.play_sound_from_entity(
                         &sound_events::BLOCK_AMETHYST_BLOCK_CHIME,
                         SoundSource::Neutral,
-                        self.block_position(),
+                        self.id(),
+                        self.position(),
                         2.0,
                         1.0,
-                        None,
+                        Some(player.id()),
                     );
                     true
                 }
@@ -716,13 +719,14 @@ impl Mob for AllayEntity {
             );
             Self::remove_interaction_item(player, hand);
             if let Some(world) = self.level() {
-                world.play_sound(
+                world.play_sound_from_entity(
                     &sound_events::ENTITY_ALLAY_ITEM_GIVEN,
                     SoundSource::Neutral,
-                    self.block_position(),
+                    self.id(),
+                    self.position(),
                     2.0,
                     1.0,
-                    None,
+                    Some(player.id()),
                 );
             }
             self.brain
@@ -738,13 +742,14 @@ impl Mob for AllayEntity {
         {
             self.set_item_in_hand(InteractionHand::MainHand, ItemStack::empty());
             if let Some(world) = self.level() {
-                world.play_sound(
+                world.play_sound_from_entity(
                     &sound_events::ENTITY_ALLAY_ITEM_TAKEN,
                     SoundSource::Neutral,
-                    self.block_position(),
+                    self.id(),
+                    self.position(),
                     2.0,
                     1.0,
-                    None,
+                    Some(player.id()),
                 );
             }
             let animation = self.interact_animation(InteractionHand::MainHand);

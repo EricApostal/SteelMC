@@ -24,8 +24,10 @@ use steel_registry::vanilla_biomes;
 use steel_utils::random::Random as _;
 use steel_utils::random::legacy_random::LegacyRandom;
 use steel_utils::{BlockPos, Identifier};
+use steel_worldgen::density::DimensionNoises;
+use steel_worldgen::density_functions::large_biomes::{self, LargeBiomesNoises};
 use steel_worldgen::density_functions::nether::NetherColumnCache;
-use steel_worldgen::density_functions::overworld::OverworldColumnCache;
+use steel_worldgen::density_functions::overworld::{self, OverworldNoises};
 use steel_worldgen::multi_noise::{
     NETHER_BIOME_PARAMETERS, OVERWORLD_BIOME_PARAMETERS, get_nether_biome_cached,
     get_overworld_biome_cached,
@@ -41,7 +43,13 @@ use steel_worldgen::noise::EndIslands;
 #[non_exhaustive]
 pub enum BiomeSourceKind {
     /// Overworld biome source (multi-noise climate matching).
-    Overworld(OverworldBiomeSource),
+    Overworld(OverworldBiomeSource<OverworldNoises>),
+    /// Overworld large-biomes biome source.
+    ///
+    /// Same overworld parameter list as [`Self::Overworld`], but the climate sampler
+    /// uses the `minecraft:overworld_large_biomes` router that widens biomes, matching
+    /// vanilla's `NoiseGeneratorSettings.LARGE_BIOMES` climate sampler.
+    LargeBiomes(OverworldBiomeSource<LargeBiomesNoises>),
     /// Nether biome source (multi-noise temperature/vegetation matching).
     Nether(NetherBiomeSource),
     /// End biome source (spatial distance + erosion threshold).
@@ -60,6 +68,12 @@ impl BiomeSourceKind {
     #[must_use]
     pub fn overworld(seed: u64) -> Self {
         Self::Overworld(OverworldBiomeSource::new(seed))
+    }
+
+    /// Create a large-biomes overworld biome source with the given world seed.
+    #[must_use]
+    pub fn large_biomes(seed: u64) -> Self {
+        Self::LargeBiomes(OverworldBiomeSource::new(seed))
     }
 
     /// Create a nether biome source with the given world seed.
@@ -103,7 +117,7 @@ impl BiomeSourceKind {
     #[must_use]
     pub fn possible_biome_refs(&self) -> Vec<BiomeRef> {
         let biomes: Vec<BiomeRef> = match self {
-            Self::Overworld(_) => OVERWORLD_BIOME_PARAMETERS
+            Self::Overworld(_) | Self::LargeBiomes(_) => OVERWORLD_BIOME_PARAMETERS
                 .values()
                 .iter()
                 .map(|(_, biome)| *biome)
@@ -144,7 +158,12 @@ impl BiomeSourceKind {
     #[must_use]
     pub fn chunk_sampler(&self) -> ChunkBiomeSampler<'_> {
         match self {
-            Self::Overworld(source) => source.chunk_sampler(),
+            Self::Overworld(source) => {
+                ChunkBiomeSampler::Overworld(Box::new(OverworldChunkBiomeSampler::new(source)))
+            }
+            Self::LargeBiomes(source) => {
+                ChunkBiomeSampler::LargeBiomes(Box::new(OverworldChunkBiomeSampler::new(source)))
+            }
             Self::Nether(source) => source.chunk_sampler(),
             Self::End(source) => source.chunk_sampler(),
             Self::Fixed(source) => source.chunk_sampler(),
@@ -263,7 +282,12 @@ impl BiomeSourceKind {
     #[must_use]
     pub fn initial_spawn_search_origin(&self) -> BlockPos {
         match self {
-            Self::Overworld(source) => source.climate_sampler().find_spawn_position(),
+            Self::Overworld(source) => source
+                .climate_sampler()
+                .find_spawn_position(overworld::SPAWN_TARGETS),
+            Self::LargeBiomes(source) => source
+                .climate_sampler()
+                .find_spawn_position(large_biomes::SPAWN_TARGETS),
             Self::Nether(_) | Self::End(_) | Self::Fixed(_) | Self::Checkerboard(_) => {
                 BlockPos::new(0, 0, 0)
             }
@@ -403,7 +427,9 @@ const fn out_from_origin_next(origin: i32, step: i32, max: i32, min: i32, curren
 /// per-quart sampling path (1536 calls per overworld chunk).
 pub enum ChunkBiomeSampler<'a> {
     /// Overworld sampler (climate → R-tree lookup).
-    Overworld(Box<OverworldChunkBiomeSampler<'a>>),
+    Overworld(Box<OverworldChunkBiomeSampler<'a, OverworldNoises>>),
+    /// Overworld large-biomes sampler (large-biomes climate → overworld R-tree lookup).
+    LargeBiomes(Box<OverworldChunkBiomeSampler<'a, LargeBiomesNoises>>),
     /// Nether sampler (climate → R-tree lookup).
     Nether(Box<NetherChunkBiomeSampler<'a>>),
     /// End sampler (spatial distance thresholds).
@@ -420,6 +446,7 @@ impl ChunkBiomeSampler<'_> {
     pub fn sample(&mut self, quart_x: i32, quart_y: i32, quart_z: i32) -> BiomeRef {
         match self {
             Self::Overworld(s) => s.sample(quart_x, quart_y, quart_z),
+            Self::LargeBiomes(s) => s.sample(quart_x, quart_y, quart_z),
             Self::Nether(s) => s.sample(quart_x, quart_y, quart_z),
             Self::End(s) => s.sample(quart_x, quart_y, quart_z),
             Self::Fixed(s) => s.sample(),
@@ -438,6 +465,7 @@ impl ChunkBiomeSampler<'_> {
     pub fn init_grid(&mut self, chunk_block_x: i32, chunk_block_z: i32) {
         match self {
             Self::Overworld(s) => s.init_grid(chunk_block_x, chunk_block_z),
+            Self::LargeBiomes(s) => s.init_grid(chunk_block_x, chunk_block_z),
             Self::Nether(s) => s.init_grid(chunk_block_x, chunk_block_z),
             Self::End(_) | Self::Fixed(_) | Self::Checkerboard(_) => {}
         }
@@ -446,16 +474,19 @@ impl ChunkBiomeSampler<'_> {
 
 /// Multi-noise biome source for the overworld.
 ///
-/// Uses compiled overworld density functions to sample climate parameters, then
+/// Uses the settings' compiled density functions to sample climate parameters, then
 /// looks up the biome in the overworld parameter list (`RTree`).
 ///
-/// Equivalent to vanilla's `MultiNoiseBiomeSource` with the overworld preset.
-pub struct OverworldBiomeSource {
+/// Equivalent to vanilla's `MultiNoiseBiomeSource` with the overworld preset. Generic
+/// over the settings because vanilla derives the climate sampler from the chunk
+/// generator's `NoiseGeneratorSettings` (`minecraft:overworld` vs
+/// `minecraft:overworld_large_biomes`).
+pub struct OverworldBiomeSource<N: DimensionNoises = OverworldNoises> {
     seed: u64,
-    climate_sampler: OverworldClimateSampler,
+    climate_sampler: OverworldClimateSampler<N>,
 }
 
-impl OverworldBiomeSource {
+impl<N: DimensionNoises> OverworldBiomeSource<N> {
     /// Create a new overworld biome source with the given world seed.
     #[must_use]
     pub fn new(seed: u64) -> Self {
@@ -473,26 +504,26 @@ impl OverworldBiomeSource {
 
     /// Access the underlying climate sampler (for tests, spawn point search, etc.).
     #[must_use]
-    pub const fn climate_sampler(&self) -> &OverworldClimateSampler {
+    pub const fn climate_sampler(&self) -> &OverworldClimateSampler<N> {
         &self.climate_sampler
-    }
-
-    fn chunk_sampler(&self) -> ChunkBiomeSampler<'_> {
-        ChunkBiomeSampler::Overworld(Box::new(OverworldChunkBiomeSampler {
-            source: self,
-            column_cache: OverworldColumnCache::new(),
-            biome_cache: None,
-        }))
     }
 }
 
-pub struct OverworldChunkBiomeSampler<'a> {
-    source: &'a OverworldBiomeSource,
-    column_cache: OverworldColumnCache,
+pub struct OverworldChunkBiomeSampler<'a, N: DimensionNoises = OverworldNoises> {
+    source: &'a OverworldBiomeSource<N>,
+    column_cache: N::ColumnCache,
     biome_cache: Option<usize>,
 }
 
-impl OverworldChunkBiomeSampler<'_> {
+impl<'a, N: DimensionNoises> OverworldChunkBiomeSampler<'a, N> {
+    fn new(source: &'a OverworldBiomeSource<N>) -> Self {
+        Self {
+            source,
+            column_cache: N::ColumnCache::default(),
+            biome_cache: None,
+        }
+    }
+
     fn sample(&mut self, quart_x: i32, quart_y: i32, quart_z: i32) -> BiomeRef {
         let target =
             self.source

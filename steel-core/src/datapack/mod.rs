@@ -21,6 +21,7 @@
 //! [`resend_clients`].
 
 use std::{
+    io,
     path::{Path, PathBuf},
     sync::{
         Arc, OnceLock,
@@ -29,7 +30,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use steel_utils::{Identifier, locks::SyncRwLock};
+use steel_utils::{
+    Identifier,
+    locks::SyncRwLock,
+    saved_data::{SavedDataManager, names as saved_data_names},
+};
 
 pub(crate) mod function;
 pub(crate) mod pack;
@@ -47,7 +52,7 @@ pub(crate) use repository::{
     WorldPackSource, world_datapack_dir,
 };
 pub(crate) use resource::{MultiPackResourceManager, ReloadableResourceManager};
-pub(crate) use schedule::{ScheduleMode, ScheduleRegistry, ScheduledCallback};
+pub(crate) use schedule::{ScheduleMode, ScheduleRegistry, ScheduledCallback, ScheduledEventsData};
 
 use crate::command::{command_tree_packet, execution::CommandSource, sender::CommandSender};
 use crate::player::{Player, recipe_book};
@@ -175,6 +180,32 @@ impl DatapackManager {
     #[must_use]
     pub(crate) const fn schedules(&self) -> &Arc<SyncRwLock<ScheduleRegistry>> {
         &self.schedules
+    }
+
+    /// Vanilla `MinecraftServer.getScheduledEvents`: loads the overworld's saved queue.
+    ///
+    /// Vanilla computes `TimerQueue.TYPE` from the overworld's `SavedDataStorage`
+    /// when the server starts, so pending `/schedule` entries survive a restart.
+    ///
+    /// # Errors
+    /// Propagates a malformed saved-data file or filesystem error.
+    pub(crate) async fn load_schedules(&self, saved_data: &SavedDataManager) -> io::Result<()> {
+        let data: ScheduledEventsData = saved_data
+            .load_or_default(saved_data_names::SCHEDULED_EVENTS)
+            .await?;
+        *self.schedules.write() = ScheduleRegistry::from_saved(data);
+        Ok(())
+    }
+
+    /// Persists the queue as vanilla's overworld `scheduled_events` saved data.
+    ///
+    /// # Errors
+    /// Propagates filesystem errors from the saved-data write.
+    pub(crate) async fn save_schedules(&self, saved_data: &SavedDataManager) -> io::Result<()> {
+        let data = self.schedules.read().to_saved();
+        saved_data
+            .save(saved_data_names::SCHEDULED_EVENTS, &data)
+            .await
     }
 
     /// Vanilla `ReloadCommand` + `MinecraftServer.reloadResources`: re-discovers

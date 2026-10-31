@@ -547,6 +547,8 @@ fn new_arguments_serialize_with_vanilla_protocol_ids() {
         (SteelArgumentType::attribute(), 46),           // minecraft:resource
         (SteelArgumentType::particle(), 27),            // minecraft:particle
         (SteelArgumentType::swing_animation(), 60),     // minecraft:swing_animation
+        (SteelArgumentType::int_number_provider(), 56), // minecraft:context_int_provider
+        (SteelArgumentType::float_number_provider(), 55), // minecraft:context_float_provider
     ] {
         assert_eq!(resource_protocol_discriminant(&argument), expected);
     }

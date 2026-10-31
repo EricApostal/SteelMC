@@ -107,6 +107,11 @@ pub struct RuntimeConfig {
     pub compression: Option<CompressionInfo>,
     /// All settings and configurations for server links.
     pub server_links: Option<ServerLinks>,
+    /// Vanilla `accepts-transfers`: whether a `transfer` handshake may log in.
+    ///
+    /// Vanilla's dedicated server property defaults to `false`; a client that connects
+    /// with the transfer intent is disconnected with `multiplayer.disconnect.transfers_disabled`.
+    pub accepts_transfers: bool,
     /// Optional count of persistent inter-tick gameplay packet workers.
     pub packet_workers: Option<usize>,
     /// Optional worker count for the Rayon chunk generation pool.
@@ -146,6 +151,7 @@ impl Default for RuntimeConfig {
             command_spam_threshold_seconds: DEFAULT_SPAM_THRESHOLD_SECONDS,
             compression: Some(CompressionInfo::default()),
             server_links: None,
+            accepts_transfers: false,
             packet_workers: None,
             chunk_generation_threads: None,
             chunk_encoding_threads: None,
@@ -226,6 +232,36 @@ pub struct ServerLinks {
     /// List of server links to display
     #[serde(default)]
     pub links: Vec<ConfigLink>,
+}
+
+/// Rejection reason for a server link that vanilla would not accept either.
+pub const INVALID_SERVER_LINK_URL: &str = "server_links links must be absolute http or https URLs";
+
+impl ServerLinks {
+    /// Validates every link URL like vanilla's `Util.parseAndValidateUntrustedUri`.
+    ///
+    /// Vanilla only resolves the single `bug-report-link` property through that helper,
+    /// which requires a parseable URI whose scheme is `http` or `https` (case-insensitive)
+    /// and logs a warning for anything else. Steel's richer list is rejected at config load
+    /// instead of silently dropping entries. `Url` percent-encodes whitespace where Java's
+    /// `URI` refuses it, so raw whitespace is rejected too.
+    ///
+    /// # Errors
+    /// Returns [`INVALID_SERVER_LINK_URL`] when a link is not an absolute http(s) URL.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        for link in &self.links {
+            if link.url.chars().any(char::is_whitespace) {
+                return Err(INVALID_SERVER_LINK_URL);
+            }
+            let Ok(url) = reqwest::Url::parse(&link.url) else {
+                return Err(INVALID_SERVER_LINK_URL);
+            };
+            if !matches!(url.scheme(), "http" | "https") {
+                return Err(INVALID_SERVER_LINK_URL);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Configuration for world storage.
@@ -891,6 +927,11 @@ fn parse_difficulty(value: &str) -> Result<Difficulty, String> {
 
 #[cfg(test)]
 mod tests {
+    #![expect(
+        clippy::assert_is_empty,
+        reason = "`assert!(!xs.is_empty())` reads better here than a length comparison"
+    )]
+
     use super::*;
     use std::env::temp_dir;
     use steel_registry::init_vanilla_registry;
@@ -904,6 +945,74 @@ mod tests {
         );
         assert_eq!(validate_login_security(false, true), Ok(()));
         assert_eq!(validate_login_security(false, false), Ok(()));
+    }
+
+    #[test]
+    fn configured_server_links_reach_the_configuration_packet() {
+        use steel_protocol::packet_traits::ClientPacket;
+        use steel_protocol::utils::ConnectionProtocol;
+
+        let config = RuntimeConfig {
+            server_links: Some(ServerLinks {
+                enable: true,
+                links: vec![
+                    ConfigLink {
+                        label: ConfigLabel::BuiltIn(ServerLinksType::BugReport),
+                        url: "https://example.com/issues".to_owned(),
+                    },
+                    ConfigLink {
+                        label: ConfigLabel::Custom(TextComponent::plain("Discord")),
+                        url: "https://discord.gg/steel".to_owned(),
+                    },
+                ],
+            }),
+            ..RuntimeConfig::default()
+        };
+
+        let packet = config
+            .server_links_packet()
+            .expect("an enabled non-empty list must produce a packet");
+        assert_eq!(packet.links.len(), 2);
+        assert_eq!(packet.links[0].url, "https://example.com/issues");
+        assert!(matches!(
+            &packet.links[0].label,
+            Or::Left(ServerLinksType::BugReport)
+        ));
+        assert!(packet.links[0].is_built_in);
+        assert_eq!(packet.links[1].url, "https://discord.gg/steel");
+        assert!(matches!(&packet.links[1].label, Or::Right(_)));
+        assert!(!packet.links[1].is_built_in);
+
+        // The configuration phase encodes the packet with the config-state id; a client
+        // therefore receives the configured list rather than an empty one.
+        let mut bytes = Vec::new();
+        packet
+            .write_packet(&mut bytes, ConnectionProtocol::Config)
+            .expect("server links must encode during configuration");
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn server_links_validation_matches_vanillas_untrusted_uri_rules() {
+        let link = |url: &str| ServerLinks {
+            enable: true,
+            links: vec![ConfigLink {
+                label: ConfigLabel::BuiltIn(ServerLinksType::Website),
+                url: url.to_owned(),
+            }],
+        };
+
+        assert_eq!(link("https://example.com").validate(), Ok(()));
+        assert_eq!(link("HTTP://example.com").validate(), Ok(()));
+        assert_eq!(
+            link("ftp://example.com").validate(),
+            Err(INVALID_SERVER_LINK_URL)
+        );
+        assert_eq!(
+            link("/relative/path").validate(),
+            Err(INVALID_SERVER_LINK_URL)
+        );
+        assert_eq!(link("not a url").validate(), Err(INVALID_SERVER_LINK_URL));
     }
 
     fn registries() -> (WorldGeneratorRegistry, WorldStorageRegistry) {

@@ -377,6 +377,18 @@ impl ChunkSchedulingCoordinator {
         ingress.record_changes(changes);
     }
 
+    pub(crate) fn add_or_refresh_dragon_arena_ticket(&self) {
+        let mut ingress = self.ticket_ingress.lock();
+        let changes = ingress.storage.add_or_refresh_dragon_arena_ticket();
+        ingress.record_changes(changes);
+    }
+
+    pub(crate) fn remove_dragon_arena_ticket(&self) {
+        let mut ingress = self.ticket_ingress.lock();
+        let changes = ingress.storage.remove_dragon_arena_ticket();
+        ingress.record_changes(changes);
+    }
+
     pub(crate) fn add_or_refresh_ender_pearl_ticket(&self, pos: ChunkPos) {
         let mut ingress = self.ticket_ingress.lock();
         let changes = ingress.storage.add_or_refresh_ender_pearl_ticket(pos);

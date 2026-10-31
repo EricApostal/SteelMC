@@ -1,3 +1,5 @@
+use std::sync::Weak;
+
 use super::{
     AddEntityError, Arc, BLOCK_DROPS, BlockPos, ChunkPos, ChunkStatus, DVec3, Direction, Entity,
     EntityChunkCallback, EntityLifecycleChanges, EntityOwnership, EntityTracker, EntityVisibility,
@@ -6,6 +8,7 @@ use super::{
     RemovalReason, SectionPos, SharedEntity, SharedGameEventListener, SyncMutex, World, WorldAabb,
     WorldChangeRequest, block_entity_ticker, mem, vanilla_entities,
 };
+use crate::server::Server;
 
 pub(super) struct NavigatingMobTracker {
     ids: SyncMutex<FxHashSet<i32>>,
@@ -480,6 +483,23 @@ impl World {
     /// Queues a world change from world-local code for server safe-point processing.
     pub fn queue_world_change(&self, entity: SharedEntity, request: WorldChangeRequest) {
         self.pending_world_changes.lock().push((entity, request));
+    }
+
+    /// Installs the server that owns this world.
+    ///
+    /// Called once per world right after the server's `Arc` exists; world-local ticks
+    /// (command blocks and command-block minecarts) use [`Self::server`] to reach the
+    /// command runtime.
+    pub(crate) fn attach_server(&self, server: Weak<Server>) {
+        *self.server.write() = Some(server);
+    }
+
+    /// Returns the owning server, or `None` for a world that is not attached to one.
+    ///
+    /// Detached worlds exist only in tests; vanilla always has a `MinecraftServer`.
+    #[must_use]
+    pub(crate) fn server(&self) -> Option<Arc<Server>> {
+        self.server.read().as_ref().and_then(Weak::upgrade)
     }
 
     pub(crate) fn drain_world_changes(&self) -> Vec<(SharedEntity, WorldChangeRequest)> {

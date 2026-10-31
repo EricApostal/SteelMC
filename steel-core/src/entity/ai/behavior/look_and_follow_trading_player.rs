@@ -6,6 +6,7 @@ use crate::entity::SharedEntity;
 use crate::entity::ai::brain::behavior::{Behavior, BehaviorContext, BehaviorState};
 use crate::entity::ai::brain::memory::MemoryStatus;
 use crate::entity::ai::brain::memory::module_type as mem;
+use crate::entity::living_entity::LivingEntity;
 
 /// Vanilla `LookAndFollowTradingPlayerSink.WALK_CLOSE_ENOUGH`.
 const WALK_CLOSE_ENOUGH: i32 = 2;
@@ -71,13 +72,9 @@ fn can_follow(body: &SharedEntity) -> bool {
 }
 
 /// Vanilla `LivingEntity.wasHurtRecently` is `hurtTime > 0`.
-///
-/// Steel tracks vanilla `invulnerableTime` (set to 20 on hurt, decremented every
-/// tick) but not `hurtTime`; `invulnerableTime > 10` holds for exactly the ten
-/// ticks where vanilla's `hurtTime > 0`.
 fn was_hurt_recently(body: &SharedEntity) -> bool {
     body.as_living_entity()
-        .is_some_and(|living| living.invulnerable_time() > 10)
+        .is_some_and(LivingEntity::was_hurt_recently)
 }
 
 impl Behavior for LookAndFollowTradingPlayerSink {

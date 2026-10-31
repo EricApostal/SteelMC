@@ -36,7 +36,12 @@ use crate::{
     player::{Player, PlayerConnection},
 };
 
-use crate::inventory::click::{Click, ClickOutcome, SwapTarget, can_item_quick_replace};
+use crate::behavior::ITEM_BEHAVIORS;
+use crate::inventory::click::{
+    Click, ClickAction, ClickOutcome, SwapTarget, can_item_quick_replace,
+};
+use crate::inventory::equipment::EquipmentSlot;
+use crate::inventory::slots::{ArmorSlot, Slot};
 
 /// A menu opened by a player: the shared click machinery plus one
 /// [`MenuKind`].
@@ -337,8 +342,6 @@ impl Menu {
 
     /// Handles a click action in this menu. Packet clicks are validated via
     /// [`Click::parse`]; invalid programmatically constructed clicks are ignored.
-    ///
-    /// TODO: Add `tryItemClickBehaviorOverride` for bundle item support.
     pub fn clicked(&mut self, click: Click, player: &Player) {
         if !click.is_valid_for(self.behavior().slot_count()) {
             log::debug!(
@@ -347,6 +350,8 @@ impl Menu {
             );
             return;
         }
+
+        let armor_before = self.armor_snapshot();
 
         // Vanilla's `doClick` consults the ability flag, not the game mode.
         let has_infinite_materials = player.has_infinite_materials();
@@ -381,7 +386,9 @@ impl Menu {
                 kind.on_slot_clicked(behavior, &mut guard, click, player)
             };
 
-            if outcome == ClickOutcome::Fallthrough {
+            if outcome == ClickOutcome::Fallthrough
+                && !self.try_item_click_behaviour_override(click, player)
+            {
                 match click {
                     Click::Pickup { slot, button } => {
                         self.behavior_mut().do_pickup(slot, button, player);
@@ -420,10 +427,97 @@ impl Menu {
             self.slots_changed(&mut guard, player);
         }
 
+        // Vanilla `ArmorSlot.setByPlayer` runs `onEquipItem` for every
+        // player-driven armor write. Steel keeps the click machinery slot-
+        // agnostic, so the armor slots are diffed once after the action.
+        self.publish_equipment_changes(&armor_before, player);
+
         // Every container lock is released here, so kinds that publish menu
         // state into entity-owned data (the mount menu's equipment mirrors)
         // can safely touch the entity.
         self.kind_mut().after_click(player);
+    }
+
+    /// The armor slots' current equipment, captured before a player action.
+    fn armor_snapshot(&self) -> Vec<(usize, EquipmentSlot, ItemStack)> {
+        let guard = self.behavior().lock_all_containers();
+        self.behavior()
+            .slots()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| {
+                let armor = slot.downcast_ref::<ArmorSlot>()?;
+                Some((
+                    index,
+                    armor.equipment_slot(),
+                    armor.get_item(&guard).clone(),
+                ))
+            })
+            .collect()
+    }
+
+    /// Runs vanilla `ArmorSlot.setByPlayer`'s `onEquipItem` for armor slots
+    /// whose stack changed during the action.
+    fn publish_equipment_changes(
+        &self,
+        snapshot: &[(usize, EquipmentSlot, ItemStack)],
+        player: &Player,
+    ) {
+        if snapshot.is_empty() {
+            return;
+        }
+        let guard = self.behavior().lock_all_containers();
+        for (index, equipment_slot, previous) in snapshot {
+            let current = self.behavior().slots()[*index].get_item(&guard);
+            player.on_equip_item(*equipment_slot, previous, current);
+        }
+    }
+
+    /// Vanilla `AbstractContainerMenu.tryItemClickBehaviourOverride`.
+    ///
+    /// Only mouse clicks carry a `PRIMARY`/`SECONDARY` action; every other
+    /// click kind maps to a vanilla action no item override observes, so it is
+    /// skipped here.
+    fn try_item_click_behaviour_override(&mut self, click: Click, player: &Player) -> bool {
+        let Click::Pickup { slot, button } = click else {
+            return false;
+        };
+        let action = ClickAction::from_button(button);
+        let mut guard = self.behavior().lock_all_containers();
+        let slot_ref = &self.behavior().slots()[slot];
+
+        // Vanilla asks the carried stack first, then the stack in the slot.
+        let mut carried = self.behavior().carried().clone();
+        let carried_behavior = ITEM_BEHAVIORS.get_behavior(carried.item());
+        if carried_behavior.override_stacked_on_other(
+            &mut carried,
+            slot_ref.as_ref(),
+            &mut guard,
+            action,
+            player,
+        ) {
+            *self.behavior_mut().carried_mut() = carried;
+            return true;
+        }
+
+        let slot_stack = slot_ref.get_item(&guard).clone();
+        let mut next_slot_stack = slot_stack.clone();
+        let slot_behavior = ITEM_BEHAVIORS.get_behavior(slot_stack.item());
+        let handled = slot_behavior.override_other_stacked_on_me(
+            &mut next_slot_stack,
+            &mut carried,
+            slot_ref.as_ref(),
+            &mut guard,
+            action,
+            player,
+        );
+        if handled {
+            slot_ref.set_item(&mut guard, next_slot_stack);
+        }
+        // The slot override may only clear the bundle selection, so the carried
+        // stack is written back even when the click fell through.
+        *self.behavior_mut().carried_mut() = carried;
+        handled
     }
 
     /// Handles quick move (shift-click).

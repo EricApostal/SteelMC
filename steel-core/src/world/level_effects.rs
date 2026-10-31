@@ -14,6 +14,7 @@ use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
 use crate::loot::slot::SlotProvider;
 use crate::loot::slot::entity::EntitySlots;
 use crate::loot::{LootSlotSources, LootedContainer};
+use steel_protocol::packets::game::CSoundEntity;
 use steel_registry::sound_event::SoundEventHolder;
 use steel_registry::vanilla_particle_types::{BUBBLE, SPLASH};
 
@@ -643,6 +644,93 @@ impl World {
             let dist_sq = dx * dx + dy * dy + dz * dz;
 
             if sound_is_within_range(sound, volume, dist_sq) {
+                player.connection.send_encoded(encoded.clone());
+            }
+            true
+        });
+    }
+
+    /// Plays a sound attached to an entity, broadcasting to nearby players.
+    ///
+    /// Mirrors vanilla `ServerLevel.playSeededSound(except, Entity sourceEntity, …)`,
+    /// which sends `ClientboundSoundEntityPacket` so the client keeps the sound
+    /// glued to the moving entity instead of a fixed point in the world.
+    ///
+    /// # Arguments
+    /// * `sound` - The sound event to play
+    /// * `source` - The sound source category
+    /// * `entity_id` - Network id of the entity the sound follows
+    /// * `pos` - The entity's position, used only to pick the receivers
+    /// * `volume` - Volume multiplier (1.0 = normal)
+    /// * `pitch` - Pitch multiplier (1.0 = normal)
+    /// * `exclude` - Optional entity ID to exclude from receiving the sound
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors vanilla's `playSeededSound(except, sourceEntity, …)` parameters"
+    )]
+    pub fn play_sound_from_entity(
+        &self,
+        sound: SoundEventRef,
+        source: SoundSource,
+        entity_id: i32,
+        pos: DVec3,
+        volume: f32,
+        pitch: f32,
+        exclude: Option<i32>,
+    ) {
+        self.play_sound_holder_from_entity(
+            &SoundEventHolder::Registry(sound),
+            source,
+            entity_id,
+            pos,
+            volume,
+            pitch,
+            exclude,
+        );
+    }
+
+    /// Broadcasts a registry or direct sound holder attached to an entity.
+    ///
+    /// Vanilla `ServerLevel.playSeededSound(except, Entity, Holder<SoundEvent>, …)`:
+    /// the packet carries the entity id, so the range filter uses the entity's
+    /// position only to decide who receives the packet.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors vanilla's `playSeededSound(except, sourceEntity, …)` parameters"
+    )]
+    pub fn play_sound_holder_from_entity(
+        &self,
+        sound: &SoundEventHolder,
+        source: SoundSource,
+        entity_id: i32,
+        pos: DVec3,
+        volume: f32,
+        pitch: f32,
+        exclude: Option<i32>,
+    ) {
+        let seed = rand::random::<i64>();
+        let packet = CSoundEntity {
+            sound: sound.clone(),
+            source,
+            id: entity_id,
+            volume,
+            pitch,
+            seed,
+        };
+        let Ok(encoded) =
+            EncodedPacket::from_bare(packet, self.compression, ConnectionProtocol::Play)
+        else {
+            log::warn!("Failed to encode entity sound packet");
+            return;
+        };
+
+        // Vanilla `PlayerList.broadcast` with the source entity's range.
+        self.players.iter_players(|_, player| {
+            if exclude == Some(player.id()) {
+                return true;
+            }
+            let delta = player.position() - pos;
+            if sound_is_within_range(sound, volume, delta.length_squared()) {
                 player.connection.send_encoded(encoded.clone());
             }
             true

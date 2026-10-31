@@ -634,12 +634,12 @@ pub(crate) fn populate_zombie_equipment_enchantments(
 }
 
 impl ZombieEntity {
-    /// Checked when damage lands; mirrors the vanilla `hurtServer` re-target and
-    /// reinforcement roll. The vanilla source entity is not observable through
-    /// Steel's `before_actually_hurt` hook, so re-targeting to the attacker is
-    /// omitted; reinforcements defend the current target.
-    /// Reinforcements re-target and roll (vanilla `Zombie.hurtServer`).
-    pub(crate) fn on_about_to_be_hurt(&self) {
+    /// Vanilla `Zombie.hurtServer` re-target and reinforcement roll, run once the
+    /// damage lands.
+    ///
+    /// Reinforcements target this zombie's current target, or the damage source's
+    /// entity when it has none.
+    pub(crate) fn on_about_to_be_hurt(&self, source: &DamageSource) {
         let Some(world) = self.level() else {
             return;
         };
@@ -657,7 +657,7 @@ impl ZombieEntity {
         if f64::from(random.next_f32()) >= chance {
             return;
         }
-        let Some(target) = self.target() else {
+        let Some(target) = self.reinforcement_target(source) else {
             return;
         };
         let entity_type = self.entity_type();
@@ -718,6 +718,17 @@ impl ZombieEntity {
             self.apply_reinforcement_charges(reinforcement_mob);
             break;
         }
+    }
+
+    /// Vanilla `Zombie.hurtServer`'s reinforcement target: this zombie's current
+    /// target, or the living entity that dealt the damage when it has none.
+    pub(crate) fn reinforcement_target(&self, source: &DamageSource) -> Option<SharedEntity> {
+        self.target().or_else(|| {
+            source
+                .causing_entity()
+                .filter(|entity| entity.as_living_entity().is_some())
+                .cloned()
+        })
     }
 
     /// Vanilla `Zombie.hurtServer` rolls a reinforcement candidate position inside
@@ -1037,8 +1048,8 @@ impl LivingEntity for ZombieEntity {
         })
     }
 
-    fn before_actually_hurt(&self, _source: &DamageSource, _amount: f32) {
-        self.on_about_to_be_hurt();
+    fn before_actually_hurt(&self, source: &DamageSource, _amount: f32) {
+        self.on_about_to_be_hurt(source);
     }
 
     fn should_drop_experience(&self) -> bool {

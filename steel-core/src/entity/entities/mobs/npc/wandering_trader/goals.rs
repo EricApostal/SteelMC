@@ -16,15 +16,6 @@ use crate::entity::{Entity, LivingEntity, PathfinderMob, SharedEntity};
 
 use super::merchant::TraderState;
 
-/// Vanilla `LivingEntity.wasHurtRecently` is `hurtTime > 0`.
-///
-/// Steel tracks vanilla `invulnerableTime` (set to 20 on hurt, decremented every
-/// tick) but not `hurtTime`; `invulnerableTime > 10` holds for exactly the ten
-/// ticks where vanilla's `hurtTime > 0`.
-fn was_hurt_recently(mob: &dyn PathfinderMob) -> bool {
-    mob.living_base().invulnerable_time() > 10
-}
-
 /// Vanilla `TradeWithPlayerGoal`.
 pub(crate) struct TradeWithPlayerGoal {
     state: Arc<TraderState>,
@@ -45,7 +36,7 @@ impl Goal for TradeWithPlayerGoal {
         if !Entity::is_alive(mob.as_entity_event_source())
             || mob.is_in_water()
             || !mob.on_ground()
-            || was_hurt_recently(mob)
+            || mob.was_hurt_recently()
         {
             return false;
         }

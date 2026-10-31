@@ -86,8 +86,10 @@ impl CraftingHandler {
 /// while `limited_crafting` is enabled and the player's recipe book does not
 /// contain it.
 fn crafting_result(crafting: &CraftingContainer, player: Option<&Player>) -> ItemStack {
+    let world = player.map(Player::get_world);
+    let world = world.as_deref();
     if let Some(player) = player
-        && let Some(recipe) = recipe_manager::find_recipe_ref(crafting)
+        && let Some(recipe) = recipe_manager::find_recipe_ref(crafting, world)
         && !is_special(recipe)
         && player.get_world().get_game_rule(&LIMITED_CRAFTING)
         && !player.recipe_book().contains(recipe.key())
@@ -95,7 +97,7 @@ fn crafting_result(crafting: &CraftingContainer, player: Option<&Player>) -> Ite
         return ItemStack::empty();
     }
 
-    recipe_manager::assemble_for_container(crafting).unwrap_or_else(ItemStack::empty)
+    recipe_manager::assemble_for_container(crafting, world).unwrap_or_else(ItemStack::empty)
 }
 
 impl ResultHandler for CraftingHandler {
@@ -126,17 +128,20 @@ impl ResultHandler for CraftingHandler {
         // raised with the container locks released — a player's equipment *is* its
         // inventory, which the guard already holds, so `raise_recipe_crafted` would
         // self-deadlock underneath it.
-        if let Some((recipe, ingredients)) = crafted_recipe_from_guard(guard, self.crafting_id()) {
+        if let Some((recipe, ingredients)) =
+            crafted_recipe_from_guard(guard, self.crafting_id(), player)
+        {
             guard.run_unlocked(|| award_crafted_recipe(player, recipe, &ingredients));
         }
 
         let mut remainder_overflow: Vec<ItemStack> = Vec::new();
 
+        let world = player.get_world();
         let remainders_and_positioned = {
             let crafting = guard
                 .get_typed::<CraftingContainer>(self.crafting_id())
                 .expect("crafting container not locked");
-            recipe_manager::get_remaining_items(crafting)
+            recipe_manager::get_remaining_items(crafting, Some(world.as_ref()))
         };
 
         let Some((remainders, positioned)) = remainders_and_positioned else {
@@ -200,7 +205,7 @@ impl ResultHandler for CraftingHandler {
         None
     }
 
-    fn is_result_valid(&self, guard: &ContainerLockGuard, _player: &Player) -> bool {
+    fn is_result_valid(&self, guard: &ContainerLockGuard, player: &Player) -> bool {
         let Some(result) = guard.get(self.result_id()) else {
             return false;
         };
@@ -213,7 +218,10 @@ impl ResultHandler for CraftingHandler {
             return false;
         };
 
-        let Some(assembled) = recipe_manager::assemble_for_container(crafting) else {
+        let world = player.get_world();
+        let Some(assembled) =
+            recipe_manager::assemble_for_container(crafting, Some(world.as_ref()))
+        else {
             return false;
         };
 
@@ -232,9 +240,11 @@ impl ResultHandler for CraftingHandler {
 fn crafted_recipe_from_guard(
     guard: &ContainerLockGuard,
     crafting_id: ContainerId,
+    player: &Player,
 ) -> Option<(UntypedRecipeRef, Vec<ItemStack>)> {
     let crafting = guard.get_typed::<CraftingContainer>(crafting_id)?;
-    let recipe = recipe_manager::find_recipe_ref(crafting)?;
+    let world = player.get_world();
+    let recipe = recipe_manager::find_recipe_ref(crafting, Some(world.as_ref()))?;
     let ingredients = crafting.items().to_vec();
     Some((recipe, ingredients))
 }

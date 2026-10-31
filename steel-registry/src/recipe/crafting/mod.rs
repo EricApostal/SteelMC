@@ -285,9 +285,12 @@ impl RecipeData for CraftingRecipe {
 }
 
 /// Saved-map facts needed by the vanilla map-extending matcher.
+///
+/// Vanilla `MapExtendingRecipe.matches` accepts a saved map whose `scale` is
+/// below four; the exploration-map distinction Steel previously carried is not
+/// part of the vanilla check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MapRecipeData {
-    pub exploration_map: bool,
     pub scale: u8,
 }
 

@@ -146,6 +146,12 @@ pub(crate) trait CommandArgumentSource: Send + Sync {
         Vec::new()
     }
 
+    /// Template-pool keys of the source level's structure generator, used by
+    /// vanilla's `ResourceKeyArgument` suggestions for `minecraft:worldgen/template_pool`.
+    fn template_pool_keys(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     fn scoreboard_objective_names(&self) -> Vec<String> {
         Vec::new()
     }
@@ -277,6 +283,42 @@ impl CommandAuthorizationContext {
     }
 }
 
+/// Output sink used by vanilla `CommandSource` implementations that capture command
+/// feedback instead of delivering it to a player, console, or Rcon.
+///
+/// Vanilla `BaseCommandBlock.CloseableCommandBlockSource` stores every message in the
+/// block's `LastOutput` while `TrackOutput` is enabled, accepts success only under the
+/// `sendCommandFeedback` game rule, accepts every failure, and reports admin broadcasts
+/// under the `commandBlockOutput` game rule.
+#[derive(Clone)]
+pub(crate) struct CommandOutputCapture {
+    sink: Arc<dyn Fn(&TextComponent) + Send + Sync>,
+    accepts_success: bool,
+    accepts_failure: bool,
+    informs_admins: bool,
+}
+
+impl CommandOutputCapture {
+    /// Creates a capture sink with the vanilla `CommandSource` acceptance rules.
+    pub(crate) fn new(
+        sink: impl Fn(&TextComponent) + Send + Sync + 'static,
+        accepts_success: bool,
+        accepts_failure: bool,
+        informs_admins: bool,
+    ) -> Self {
+        Self {
+            sink: Arc::new(sink),
+            accepts_success,
+            accepts_failure,
+            informs_admins,
+        }
+    }
+
+    fn send(&self, message: &TextComponent) {
+        (self.sink)(message);
+    }
+}
+
 /// Immutable Minecraft command execution source.
 #[derive(Clone)]
 pub(crate) struct CommandSource {
@@ -293,6 +335,9 @@ pub(crate) struct CommandSource {
     effective_player_residence: Option<DomainResidenceToken>,
     callback: CommandResultCallback,
     silent: bool,
+    /// Vanilla `CommandSource` output override for command blocks and command-block
+    /// minecarts; `None` sends output to `sender` exactly like before.
+    output: Option<CommandOutputCapture>,
 }
 
 impl CommandSource {
@@ -348,7 +393,34 @@ impl CommandSource {
             effective_player_residence,
             callback: CommandResultCallback::empty(),
             silent: false,
+            output: None,
         }
+    }
+
+    /// Builds the vanilla `CommandSourceStack` a command block or command-block minecart
+    /// runs its command with (`GAMEMASTER` level, block position and facing rotation, and
+    /// captured output).
+    ///
+    /// Vanilla `CommandBlockEntity`/`MinecartCommandBlock` create a `CommandSourceStack`
+    /// with `LevelBasedPermissionSet.GAMEMASTER`, the block center (or the cart's
+    /// position) and no entity for blocks. Output goes to `output` instead of a sender.
+    pub(crate) fn for_command_block(
+        server: Arc<Server>,
+        world: Arc<World>,
+        position: DVec3,
+        rotation: (f32, f32),
+        maximum_permission: PermissionLevel,
+        output: Option<CommandOutputCapture>,
+    ) -> Self {
+        let mut source = Self::new(CommandSender::Console, server);
+        source.world = world;
+        source.position = position;
+        source.rotation = normalize_rotation(rotation);
+        source.authorization = source
+            .authorization
+            .with_maximum_permission(maximum_permission);
+        source.output = output;
+        source
     }
 
     pub(crate) const fn sender(&self) -> &CommandSender {
@@ -488,6 +560,12 @@ impl CommandSource {
     /// game rule and never broadcasts to admins - it's for output the sender
     /// explicitly asked for (e.g. `/version`), not command-result feedback.
     pub(crate) fn send_system_message(&self, message: &TextComponent) {
+        if let Some(output) = &self.output {
+            if !self.silent {
+                output.send(message);
+            }
+            return;
+        }
         if !self.silent {
             self.sender.send_message(message);
         }
@@ -495,6 +573,18 @@ impl CommandSource {
 
     pub(crate) fn send_success(&self, message: &TextComponent, broadcast_to_admins: bool) {
         if self.silent {
+            return;
+        }
+
+        if let Some(output) = &self.output {
+            // Vanilla `CommandSourceStack.sendSuccess`: the source accepts success under
+            // `sendCommandFeedback`, and broadcasts to admins under `commandBlockOutput`.
+            if output.accepts_success {
+                output.send(message);
+            }
+            if broadcast_to_admins && output.informs_admins {
+                self.broadcast_to_admins(message);
+            }
             return;
         }
 
@@ -511,6 +601,13 @@ impl CommandSource {
     }
 
     pub(crate) fn send_failure(&self, message: TextComponent) {
+        if let Some(output) = &self.output {
+            // Vanilla `CommandSourceStack.sendFailure`: failures always reach the source.
+            if !self.silent && output.accepts_failure {
+                output.send(&message.color(Color::Red));
+            }
+            return;
+        }
         if !self.silent {
             self.sender.send_message(&message.color(Color::Red));
         }
@@ -645,6 +742,23 @@ impl CommandArgumentSource for CommandSource {
                     .keys()
                     .into_iter()
                     .map(|key| key.to_string())
+                    .collect()
+            })
+    }
+
+    fn template_pool_keys(&self) -> Vec<String> {
+        use crate::worldgen::generator::ChunkGenerator as _;
+
+        self.world
+            .chunk_map
+            .world_gen_context
+            .generator
+            .structure_generator()
+            .map_or_else(Vec::new, |generator| {
+                generator
+                    .template_pools()
+                    .keys()
+                    .map(ToString::to_string)
                     .collect()
             })
     }

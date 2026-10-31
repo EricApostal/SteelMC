@@ -10,8 +10,8 @@
 //!   dedicated sync packet, which does not exist yet.
 //! - No client particle emission: `ParticleTypes.CLOUD` on a mirror move and
 //!   `ParticleTypes.ENTITY_EFFECT` while casting are client-only render effects.
-//! - The hurt-flash branch of `Illusioner.aiStep` (`hurtTime == 1`) is not mirrored: Steel
-//!   has no hurt-flash counter, so only the 1200-tick refresh runs.
+//! - The `Illusioner.aiStep` hurt branch keys off `LivingEntity.hurtTime` server-side (the
+//!   client reads the same field locally), so it runs from the shared hurt bookkeeping.
 //! - `Attributes` come from the entity type's generated `default_attributes` table
 //!   (`movement_speed` 0.5, `follow_range` 18.0, `max_health` 32.0), matching vanilla
 //!   `Illusioner.createAttributes`.
@@ -254,6 +254,11 @@ impl IllusionerEntity {
     }
 
     /// Vanilla `Illusioner.aiStep` client-side mirror refresh, kept server-side.
+    ///
+    /// The two refresh branches are vanilla's: a hurt flash starting
+    /// (`hurtTime == hurtDuration - 1`) collapses the duplicates onto the
+    /// illusioner, while `hurtTime == 1` (the flash ending) or the 1200-tick
+    /// periodic refresh rerolls them.
     fn tick_mirror_offsets(&self) {
         if !self.is_invisible() {
             return;
@@ -262,12 +267,16 @@ impl IllusionerEntity {
         {
             let mut ticks = self.illusion_ticks.lock();
             *ticks = (*ticks - 1).max(0);
-            if self.tick_count() % ILLUSION_REROLL_INTERVAL != 0 {
-                return;
-            }
-            *ticks = ILLUSION_TRANSITION_TICKS;
         }
-        self.reroll_illusion_offsets();
+
+        let hurt_time = self.living_base.hurt_time();
+        if hurt_time == 1 || self.tick_count() % ILLUSION_REROLL_INTERVAL == 0 {
+            *self.illusion_ticks.lock() = ILLUSION_TRANSITION_TICKS;
+            self.reroll_illusion_offsets();
+        } else if hurt_time == self.living_base.hurt_duration() - 1 {
+            *self.illusion_ticks.lock() = ILLUSION_TRANSITION_TICKS;
+            *self.mirror_offsets.lock() = [DVec3::ZERO; NUM_ILLUSIONS];
+        }
     }
 
     fn update_dirty_mob_effect_entity_data(&self) {
@@ -511,10 +520,10 @@ mod tests {
     use std::sync::Arc;
 
     use glam::DVec3;
-    use steel_registry::{init_vanilla_registry, vanilla_entities};
+    use steel_registry::{init_vanilla_registry, vanilla_entities, vanilla_mob_effects};
 
-    use super::IllusionerEntity;
-    use crate::entity::{Mob, init_entities};
+    use super::{IllusionerEntity, NUM_ILLUSIONS};
+    use crate::entity::{Entity, Mob, init_entities};
     use crate::test_support::fresh_test_world;
 
     #[test]
@@ -539,5 +548,43 @@ mod tests {
         // the fix the `Mob::can_attack(self, ..)` fallback re-entered this override and
         // stack-overflowed whenever the entity had a level.
         assert!(illusioner.can_attack(&target));
+    }
+
+    #[test]
+    fn illusioner_hurt_flash_collapses_the_mirror_offsets() {
+        init_vanilla_registry();
+        init_entities();
+        let world = fresh_test_world("illusioner_hurt_mirror");
+        let illusioner = IllusionerEntity::new(
+            &vanilla_entities::ILLUSIONER,
+            1,
+            DVec3::ZERO,
+            Arc::downgrade(&world.world),
+        );
+        illusioner
+            .living_base
+            .set_mob_effect(vanilla_mob_effects::INVISIBILITY, 0);
+        illusioner.update_dirty_mob_effect_entity_data();
+        assert!(illusioner.is_invisible());
+
+        // Tick 0 is always a 1200-tick refresh tick; move off it so only the
+        // hurt branches can run.
+        illusioner.base().advance_tick_count();
+        *illusioner.mirror_offsets.lock() = [DVec3::splat(1.5); NUM_ILLUSIONS];
+
+        // Vanilla `LivingEntity.hurtServer` starts the flash at `hurtTime = 10`
+        // and the tick decrement runs before `aiStep`, so the first `aiStep`
+        // after a hit sees `hurtTime == hurtDuration - 1` and collapses the
+        // duplicates onto the illusioner.
+        assert!(
+            illusioner
+                .living_base
+                .apply_damage_cooldown(1.0, false)
+                .is_some()
+        );
+        illusioner.living_base.decrement_hurt_time();
+        illusioner.tick_mirror_offsets();
+
+        assert_eq!(illusioner.illusion_offsets(), [DVec3::ZERO; NUM_ILLUSIONS]);
     }
 }

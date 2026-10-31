@@ -447,6 +447,43 @@ fn fractional_feedback_accumulates_credit_until_a_whole_chunk_can_be_sent() {
 }
 
 #[test]
+fn chunk_batch_bounds_match_vanilla_player_chunk_sender() {
+    // Vanilla `PlayerChunkSender`: `MIN_CHUNKS_PER_TICK = 0.01F`,
+    // `MAX_CHUNKS_PER_TICK = 64.0F`, `START_CHUNKS_PER_TICK = 9.0F`,
+    // `MAX_UNACKNOWLEDGED_BATCHES = 10`, and a first batch window of one.
+    assert_eq!(MIN_CHUNKS_PER_TICK.to_bits(), 0.01_f32.to_bits());
+    assert_eq!(MAX_CHUNKS_PER_TICK.to_bits(), 64.0_f32.to_bits());
+    assert_eq!(START_CHUNKS_PER_TICK.to_bits(), 9.0_f32.to_bits());
+    assert_eq!(MAX_UNACKNOWLEDGED_BATCHES, 10);
+
+    let pacing = ChunkBatchPacing::default();
+    assert_eq!(
+        pacing.desired_chunks_per_tick.to_bits(),
+        START_CHUNKS_PER_TICK.to_bits()
+    );
+    assert_eq!(pacing.max_unacknowledged_batches, 1);
+    assert_eq!(pacing.batch_quota.to_bits(), 0.0_f32.to_bits());
+
+    // `PlayerChunkSender.onChunkBatchReceivedByClient` is a plain clamp into the
+    // vanilla window; nothing else widens it.
+    for (feedback, expected_rate) in [
+        (0.005_f32, MIN_CHUNKS_PER_TICK),
+        (0.42_f32, 0.42_f32),
+        (64.0_f32, MAX_CHUNKS_PER_TICK),
+        (500.0_f32, MAX_CHUNKS_PER_TICK),
+    ] {
+        let mut pacing = pacing_with_outstanding_batches(1);
+        assert!(pacing.record_feedback(feedback));
+        assert!(pacing.begin_prepare().is_some());
+        assert_eq!(
+            pacing.desired_chunks_per_tick.to_bits(),
+            expected_rate.to_bits(),
+            "feedback {feedback} must clamp into vanilla's window"
+        );
+    }
+}
+
+#[test]
 fn feedback_clamps_nonfinite_and_out_of_range_rates_before_preparing() {
     for (feedback, expected_rate) in [
         (f32::NAN, MIN_CHUNKS_PER_TICK),

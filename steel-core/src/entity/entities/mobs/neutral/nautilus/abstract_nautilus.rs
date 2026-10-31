@@ -13,9 +13,6 @@
 //!
 //! ## Deviations
 //!
-//! - Vanilla `SmoothSwimmingMoveControl`/`SmoothSwimmingLookControl` and
-//!   `WaterBoundPathNavigation` are not ported; Steel's shared move/look controls
-//!   and navigation are used with vanilla's `WATER` pathfinding malus of 0.
 //! - `Entity.getSlot(int)`/`SlotAccess` does not exist in Steel, so the
 //!   [`INVENTORY_SLOT_OFFSET`] container window is reachable only through the mount
 //!   menu; the inventory itself is persisted in full.

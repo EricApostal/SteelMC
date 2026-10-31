@@ -28,4 +28,5 @@ pub use redstone::*;
 pub use sculk::*;
 pub use special::*;
 pub(crate) use utils::multiface_face_property;
+pub(crate) use utils::next_int_bounded;
 pub use vegetation::*;

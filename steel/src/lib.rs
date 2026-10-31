@@ -152,11 +152,13 @@ impl SteelServer {
                 source,
             })?;
 
+        let server = Arc::new(server);
+        server.attach_worlds();
         Ok(Self {
             tcp_listener: Some(tcp_listener),
             cancel_token,
             client_id: 0,
-            server: Arc::new(server),
+            server,
             connection_session: Arc::new(ServerConnectionSession::default()),
             session_lock,
         })

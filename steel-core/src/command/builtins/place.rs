@@ -76,7 +76,7 @@ fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
     literal("place")
         .then(
             literal("feature").then(
-                argument("feature", SteelArgumentType::identifier_argument())
+                argument("feature", SteelArgumentType::feature())
                     .executes(|context| place_feature(context, source_block_pos(context)))
                     .then(
                         argument("pos", SteelArgumentType::block_pos()).executes(|context| {
@@ -88,7 +88,7 @@ fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
         )
         .then(
             literal("jigsaw").then(
-                argument("pool", SteelArgumentType::identifier_argument()).then(
+                argument("pool", SteelArgumentType::template_pool()).then(
                     argument("target", SteelArgumentType::identifier_argument()).then(
                         argument("max_depth", ArgumentType::integer(1, 20))
                             .executes(|context| place_jigsaw(context, source_block_pos(context)))
@@ -106,7 +106,7 @@ fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
         )
         .then(
             literal("structure").then(
-                argument("structure", SteelArgumentType::identifier_argument())
+                argument("structure", SteelArgumentType::structure())
                     .executes(|context| place_structure(context, source_block_pos(context)))
                     .then(
                         argument("pos", SteelArgumentType::block_pos()).executes(|context| {
@@ -667,7 +667,7 @@ mod tests {
             dispatcher
                 .node(feature_id)
                 .and_then(|node| node.argument_type()),
-            Some(&SteelArgumentType::identifier_argument())
+            Some(&SteelArgumentType::feature())
         );
         assert_executable(&dispatcher, feature_id);
         let feature_pos = child(&dispatcher, feature_id, "pos");
@@ -685,7 +685,7 @@ mod tests {
             dispatcher
                 .node(structure_id)
                 .and_then(|node| node.argument_type()),
-            Some(&SteelArgumentType::identifier_argument())
+            Some(&SteelArgumentType::structure())
         );
         assert_executable(&dispatcher, structure_id);
         let structure_pos = child(&dispatcher, structure_id, "pos");
@@ -701,7 +701,7 @@ mod tests {
         let pool = child(&dispatcher, jigsaw, "pool");
         assert_eq!(
             dispatcher.node(pool).and_then(|node| node.argument_type()),
-            Some(&SteelArgumentType::identifier_argument())
+            Some(&SteelArgumentType::template_pool())
         );
         assert!(
             !dispatcher

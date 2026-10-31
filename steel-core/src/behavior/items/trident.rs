@@ -161,9 +161,9 @@ fn throw_trident(world: &Arc<World>, player: &Player, stack: &mut ItemStack, sou
         },
     );
 
-    let mut sound_position = player.position();
+    let mut sound_source = (player.id(), player.position());
     if let Some(entity) = &spawned {
-        sound_position = entity.position();
+        sound_source = (entity.id(), entity.position());
         if has_infinite_materials
             && let Some(trident) = entity.downcast_ref::<ThrownTridentEntity>()
         {
@@ -173,7 +173,17 @@ fn throw_trident(world: &Arc<World>, player: &Player, stack: &mut ItemStack, sou
         }
     }
 
-    world.play_sound_at(sound, SoundSource::Players, sound_position, 1.0, 1.0, None);
+    // Vanilla: `level.playSound(null, trident, sound.value(), PLAYERS, 1.0F, 1.0F)`,
+    // the entity overload that sends `ClientboundSoundEntityPacket`.
+    world.play_sound_from_entity(
+        sound,
+        SoundSource::Players,
+        sound_source.0,
+        sound_source.1,
+        1.0,
+        1.0,
+        None,
+    );
 }
 
 /// Vanilla `TridentItem.releaseUsing`'s `Riptide` branch: launches the player
@@ -212,9 +222,11 @@ fn start_spin_attack(
         );
     }
 
-    world.play_sound_at(
+    // Vanilla: `level.playSound(null, player, sound.value(), PLAYERS, 1.0F, 1.0F)`.
+    world.play_sound_from_entity(
         sound,
         SoundSource::Players,
+        player.id(),
         player.position(),
         1.0,
         1.0,

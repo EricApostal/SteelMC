@@ -1,6 +1,8 @@
 use std::sync::{Arc, Weak};
 
 use glam::DVec3;
+use steel_registry::data_components::components::AttackRange;
+use steel_registry::data_components::vanilla_components::ATTACK_RANGE;
 use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::vanilla_entities;
@@ -530,6 +532,82 @@ fn melee_attack_range_uses_vanilla_default_reach() {
 
     assert!(mob.is_within_melee_attack_range(&close_target));
     assert!(!mob.is_within_melee_attack_range(&far_target));
+}
+
+#[test]
+fn melee_attack_range_reads_the_active_items_attack_range_component() {
+    let mob = DespawnTestMob::new(None, false);
+    let target = DespawnTestMob::with_position(2, DVec3::new(4.0, 0.0, 0.0), None, false);
+    assert!(
+        !mob.is_within_melee_attack_range(&target),
+        "the vanilla default reach must not cover four blocks"
+    );
+
+    // Vanilla `Mob.isWithinMeleeAttackRange` reads `getActiveItem()`'s
+    // `ATTACK_RANGE` component and scales it by `mob_factor`.
+    let mut weapon = ItemStack::new(&vanilla_items::IRON_SPEAR);
+    weapon.set(
+        ATTACK_RANGE,
+        AttackRange {
+            min_reach: 0.0,
+            max_reach: 4.0,
+            min_creative_reach: 0.0,
+            max_creative_reach: 4.0,
+            hitbox_margin: 0.3,
+            mob_factor: 1.0,
+        },
+    );
+    mob.living_base()
+        .equipment()
+        .lock()
+        .set(EquipmentSlot::MainHand, weapon);
+
+    assert!(mob.is_within_melee_attack_range(&target));
+}
+
+#[test]
+fn hurt_flash_starts_on_a_full_hit_and_expires_after_ten_ticks() {
+    // The damage path records the hit through the victim's own level (vanilla
+    // `Level.broadcastDamageEvent`), so the double needs a real world.
+    let fixture = fresh_test_world("hurt_flash_window");
+    let world = &fixture.world;
+    let mob =
+        DespawnTestMob::with_world_and_entity_type(1, DVec3::ZERO, &vanilla_entities::PIG, world);
+    let source = DamageSource::environment(&vanilla_damage_types::GENERIC);
+    assert!(!mob.was_hurt_recently());
+
+    assert!(mob.hurt(world, &source, 1.0));
+
+    // Vanilla `LivingEntity.hurtServer` sets `hurtDuration = hurtTime = 10` on a
+    // full hit, and `wasHurtRecently()` is `hurtTime > 0`.
+    assert_eq!(mob.hurt_duration(), 10);
+    assert_eq!(mob.hurt_time(), 10);
+    assert!(mob.was_hurt_recently());
+
+    for _ in 0..10 {
+        mob.living_base().decrement_hurt_time();
+    }
+
+    assert_eq!(mob.hurt_time(), 0);
+    assert!(!mob.was_hurt_recently());
+}
+
+#[test]
+fn reduced_damage_inside_the_cooldown_does_not_restart_the_hurt_flash() {
+    let fixture = fresh_test_world("hurt_flash_cooldown");
+    let world = &fixture.world;
+    let mob =
+        DespawnTestMob::with_world_and_entity_type(1, DVec3::ZERO, &vanilla_entities::PIG, world);
+    let source = DamageSource::environment(&vanilla_damage_types::GENERIC);
+    assert!(mob.hurt(world, &source, 1.0));
+    mob.living_base().decrement_hurt_time();
+
+    assert!(mob.hurt(world, &source, 3.0));
+
+    // Vanilla only refreshes `hurtTime` in the `else` branch of the damage
+    // cooldown check; a bigger hit inside the cooldown deals the difference
+    // without a new flash.
+    assert_eq!(mob.hurt_time(), 9);
 }
 
 #[test]

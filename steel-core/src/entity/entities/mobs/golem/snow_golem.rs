@@ -192,9 +192,12 @@ impl SnowGolemEntity {
     /// Runs vanilla `SnowGolem.shear`: plays the shear sound, removes the pumpkin and drops the
     /// shearing loot table at eye height.
     pub fn shear(&self, world: &World, tool: &ItemStack) {
-        world.play_sound_at(
+        // Vanilla's `shear` uses the entity overload of `playSound`, which sends
+        // `ClientboundSoundEntityPacket` so the sound follows the entity.
+        world.play_sound_from_entity(
             &sound_events::ENTITY_SNOW_GOLEM_SHEAR,
             SoundSource::Players,
+            self.id(),
             self.position(),
             1.0,
             1.0,

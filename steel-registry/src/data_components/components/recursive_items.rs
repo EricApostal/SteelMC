@@ -254,6 +254,101 @@ impl BundleContents {
         }
     }
 
+    /// Vanilla `BundleContents.getNumberItemsToShow`-style helpers over the live
+    /// contents.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    /// Vanilla `BundleContents.Mutable.getMaxAmountToAdd`: how many copies of
+    /// `stack` still fit in the bundle's weight budget.
+    #[must_use]
+    pub fn max_amount_to_add(&self, stack: &ItemStack) -> i32 {
+        let Ok(template) = ItemStackTemplate::from_stack(stack) else {
+            return 0;
+        };
+        let Ok(item_weight) = bundle_item_weight(&template) else {
+            return 0;
+        };
+        let Ok(weight) = self.compute_weight() else {
+            return 0;
+        };
+        let Ok(remaining) = CheckedFraction::ONE.sub(weight) else {
+            return 0;
+        };
+        remaining.div_int_value(item_weight).unwrap_or(0).max(0)
+    }
+
+    /// Vanilla `BundleContents.Mutable.tryInsert`: inserts as much of `stack` as
+    /// fits, shrinking it by the inserted amount. Returns the inserted count.
+    ///
+    /// Mirrors the mutable container: an equal stack is merged and moved to the
+    /// front, otherwise the split stack is inserted at the front.
+    pub fn try_insert(&mut self, stack: &mut ItemStack) -> i32 {
+        let amount = stack.count().min(self.max_amount_to_add(stack));
+        if amount <= 0 {
+            return 0;
+        }
+        let Ok(template) = ItemStackTemplate::from_stack(stack) else {
+            return 0;
+        };
+
+        let Some(index) = self.find_stack_index(stack) else {
+            let Ok(inserted) = ItemStackTemplate::try_with_count_and_patch(
+                template.item(),
+                amount.min(ItemStackTemplate::MAX_COUNT),
+                template.components().clone(),
+            ) else {
+                return 0;
+            };
+            self.items.insert(0, inserted);
+            stack.shrink(amount);
+            return amount;
+        };
+
+        let existing = self.items.remove(index);
+        let merged = existing.count().saturating_add(amount);
+        let Ok(inserted) = ItemStackTemplate::try_with_count_and_patch(
+            existing.item(),
+            merged.min(ItemStackTemplate::MAX_COUNT),
+            existing.components().clone(),
+        ) else {
+            self.items.insert(index, existing);
+            return 0;
+        };
+        self.items.insert(0, inserted);
+        stack.shrink(amount);
+        amount
+    }
+
+    /// Vanilla `BundleContents.Mutable.removeOne`: removes the selected stack
+    /// (falling back to the first one) and clears the selection.
+    pub fn remove_one(&mut self) -> Option<ItemStack> {
+        if self.items.is_empty() {
+            return None;
+        }
+        let index = if self.selected_item < 0 || self.selected_item as usize >= self.items.len() {
+            0
+        } else {
+            self.selected_item as usize
+        };
+        let removed = self.items.remove(index).create();
+        self.selected_item = -1;
+        Some(removed)
+    }
+
+    /// Vanilla `BundleContents.Mutable.findStackIndex` limited to stackable stacks.
+    fn find_stack_index(&self, stack: &ItemStack) -> Option<usize> {
+        if !stack.is_stackable() {
+            return None;
+        }
+        self.items.iter().position(|existing| {
+            existing.item().key == stack.item().key
+                && existing.components() == stack.components_patch()
+        })
+    }
+
     fn compute_weight(&self) -> Result<CheckedFraction> {
         let mut weight = CheckedFraction::ZERO;
         for item in &self.items {

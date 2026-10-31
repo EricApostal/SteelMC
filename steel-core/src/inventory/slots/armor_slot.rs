@@ -67,7 +67,9 @@ impl Slot for ArmorSlot {
         stack: ItemStack,
         previous: &ItemStack,
     ) {
-        // TODO: Call player.onEquipItem(equipmentSlot, previous, stack) here
+        // Vanilla `ArmorSlot.setByPlayer` calls `owner.onEquipItem`; Steel's slot
+        // API carries no player, so `Menu::clicked` diffs the armor slots and
+        // calls `Player::on_equip_item` after the action instead.
         let _ = previous;
         self.set_item(guard, stack);
     }

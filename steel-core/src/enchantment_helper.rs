@@ -6,13 +6,14 @@ use item_in_use::EnchantedItemInUse;
 
 use glam::IVec3;
 use std::any::try_as_dyn;
+use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::enchantment::EnchantmentRef;
 use steel_registry::enchantment_effect::{
-    BlockPredicateRef, DamageSourcePredicate, EnchantmentEffectComponent,
-    EnchantmentEffectRequirements, EnchantmentEntityEffect, EnchantmentEntityTarget,
-    EnchantmentTarget, EntityLocationPredicate, EntityPredicate, EntityTypePredicate,
-    EntityTypeSet, EntityTypeSpecificPredicate, EntityVehiclePredicate, LevelBasedValue,
-    MobEffectSelection,
+    BlockPredicateRef, ConditionalEnchantmentEffect, DamageSourcePredicate,
+    EnchantmentEffectComponent, EnchantmentEffectRequirements, EnchantmentEntityEffect,
+    EnchantmentEntityTarget, EnchantmentTarget, EntityLocationPredicate, EntityPredicate,
+    EntityTypePredicate, EntityTypeSet, EntityTypeSpecificPredicate, EntityVehiclePredicate,
+    LevelBasedValue, LocationCheckBlock, MobEffectSelection,
 };
 use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::feature::BlockStateData;
@@ -824,6 +825,171 @@ pub(crate) fn run_location_changed_effects<V: LivingEntity + ?Sized>(
     }
 }
 
+/// Vanilla `EnchantmentHelper.tickEffects`: runs the `minecraft:tick` effects
+/// of every worn enchantment once per entity tick.
+///
+/// Vanilla iterates `EquipmentSlot.VALUES` through
+/// `runIterationOnEquipment`, skipping empty slots and enchantments whose
+/// `slots` do not cover the occupied slot.
+pub(crate) fn tick_enchantments<V: LivingEntity + ?Sized>(entity: &V, world: &Arc<World>) {
+    let Some(entity) = try_as_dyn::<V, dyn LivingEntity>(entity) else {
+        return;
+    };
+    let weather = Some(WeatherSnapshot::from_world(world));
+
+    for slot in EquipmentSlot::ALL {
+        let mut item_ref = &*vanilla_items::AIR;
+        let mut enchantments = None;
+        entity.with_equipment_slot(slot, &mut |stack| {
+            item_ref = stack.item;
+            if !stack.is_empty() {
+                enchantments = stack.get_enchantments().cloned();
+            }
+        });
+        let Some(enchantments) = enchantments else {
+            continue;
+        };
+
+        let mut item = EnchantedItemInUse::Equipped {
+            owner: entity,
+            slot,
+        };
+        for (key, level) in enchantments.iter() {
+            if *level == 0 {
+                continue;
+            }
+            let Some(enchantment) = REGISTRY.enchantments.by_key(key) else {
+                continue;
+            };
+            if !enchantment.matching_slot(slot) {
+                continue;
+            }
+
+            let level = *level as i32;
+            if apply_tick_component(
+                world,
+                entity,
+                level,
+                enchantment.effects.tick,
+                weather,
+                &mut item,
+            ) {
+                entity.on_equipped_item_broken(item_ref, slot);
+            }
+        }
+    }
+}
+
+/// Vanilla `Enchantment.tick`'s effect loop, split out so the per-tick arm is
+/// exercised directly by the tests.
+fn apply_tick_component(
+    world: &World,
+    entity: &dyn Entity,
+    level: i32,
+    effects: &'static [ConditionalEnchantmentEffect<EnchantmentEntityEffect>],
+    weather: Option<WeatherSnapshot>,
+    item: &mut EnchantedItemInUse<'_>,
+) -> bool {
+    let mut enchanted_item_broke = false;
+    for effect in effects {
+        if !entity_requirements_match(effect.requirements, entity, level, weather) {
+            continue;
+        }
+        enchanted_item_broke |=
+            apply_entity_effect(world, &effect.effect, level, entity, None, item);
+    }
+    enchanted_item_broke
+}
+
+/// Vanilla `EnchantmentHelper.onHitBlock`: runs the `minecraft:hit_block`
+/// effects of the enchanted item when a projectile (or a player mining a block)
+/// hits a block.
+///
+/// `origin` is the hit block: vanilla `Enchantment.blockHitContext` puts the
+/// clamped hit position into `LootContextParams.ORIGIN`, which `location_check`
+/// predicates test. Returns whether a `change_item_damage` effect broke the
+/// enchanted item so the caller can run vanilla's `onBreak` callback.
+fn on_hit_block(
+    world: &World,
+    item: &mut EnchantedItemInUse<'_>,
+    entity: &dyn Entity,
+    origin: BlockPos,
+    enchanted_entity: Option<&SharedEntity>,
+) -> bool {
+    let mut enchantments = None;
+    item.with_item(&mut |stack| {
+        if !stack.is_empty() {
+            enchantments = stack.get_enchantments().cloned();
+        }
+    });
+    let Some(enchantments) = enchantments else {
+        return false;
+    };
+
+    // Vanilla's `blockHitContext` carries no tool, so `match_tool` stays
+    // unknown; the weather comes from the live level.
+    let weather = Some(WeatherSnapshot::from_world(world));
+    let mut enchanted_item_broke = false;
+    for (key, level) in enchantments.iter() {
+        if *level == 0 {
+            continue;
+        }
+        let Some(enchantment) = REGISTRY.enchantments.by_key(key) else {
+            continue;
+        };
+        // `runIterationOnItem(ItemStack, visitor)` does not filter by slot.
+        let level = *level as i32;
+        for effect in enchantment.effects.hit_block {
+            if !entity_requirements_match_at(effect.requirements, entity, origin, level, weather) {
+                continue;
+            }
+            enchanted_item_broke |=
+                apply_entity_effect(world, &effect.effect, level, entity, enchanted_entity, item);
+        }
+    }
+    enchanted_item_broke
+}
+
+/// [`on_hit_block`] for a bare weapon stack (vanilla `AbstractArrow`'s
+/// `hitBlockEnchantmentEffects` passes `getWeaponItem()`).
+pub(crate) fn on_hit_block_with_weapon(
+    world: &World,
+    weapon: &mut ItemStack,
+    entity: &dyn Entity,
+    origin: BlockPos,
+    owner: Option<&SharedEntity>,
+) -> bool {
+    on_hit_block(
+        world,
+        &mut EnchantedItemInUse::Stack(weapon),
+        entity,
+        origin,
+        owner,
+    )
+}
+
+/// [`on_hit_block`] for a worn item, used by vanilla
+/// `ServerPlayerGameMode.destroyBlock`'s main-hand hit.
+pub(crate) fn on_hit_block_with_equipment<V: LivingEntity + ?Sized>(
+    world: &World,
+    owner: &V,
+    slot: EquipmentSlot,
+    entity: &dyn Entity,
+    origin: BlockPos,
+    enchanted_entity: Option<&SharedEntity>,
+) -> bool {
+    let Some(owner) = try_as_dyn::<V, dyn LivingEntity>(owner) else {
+        return false;
+    };
+    on_hit_block(
+        world,
+        &mut EnchantedItemInUse::Equipped { owner, slot },
+        entity,
+        origin,
+        enchanted_entity,
+    )
+}
+
 pub(crate) fn do_post_piercing_attack_effects(world: &World, user: &dyn LivingEntity) {
     let mut item_stack = ItemStack::empty();
     user.with_equipment_slot(EquipmentSlot::MainHand, &mut |stack| {
@@ -1339,6 +1505,19 @@ fn requirements_state(
         EnchantmentEffectRequirements::DamageSourceProperties(predicate) => Some(
             damage_source_predicate_matches(predicate, context.damage_source),
         ),
+        EnchantmentEffectRequirements::LocationCheck {
+            offset,
+            block,
+            can_see_sky,
+        } => context.this_entity.and_then(|entity| {
+            location_check_state(
+                *offset,
+                block.as_ref(),
+                *can_see_sky,
+                entity,
+                entity.block_position(),
+            )
+        }),
         EnchantmentEffectRequirements::RandomChance { .. }
         | EnchantmentEffectRequirements::WeatherCheck { .. }
         | EnchantmentEffectRequirements::MatchTool { .. }
@@ -1393,6 +1572,19 @@ fn requirements_state_with_random(
         EnchantmentEffectRequirements::RandomChance { chance } => {
             Some(rand::random::<f32>() < chance.calculate(level))
         }
+        EnchantmentEffectRequirements::LocationCheck {
+            offset,
+            block,
+            can_see_sky,
+        } => context.this_entity.and_then(|entity| {
+            location_check_state(
+                *offset,
+                block.as_ref(),
+                *can_see_sky,
+                entity,
+                entity.block_position(),
+            )
+        }),
         EnchantmentEffectRequirements::MatchTool { .. }
         | EnchantmentEffectRequirements::Unsupported { .. } => None,
     }
@@ -1404,19 +1596,41 @@ fn entity_requirements_match(
     level: i32,
     weather: Option<WeatherSnapshot>,
 ) -> bool {
+    entity_requirements_match_at(
+        requirements,
+        entity,
+        entity.block_position(),
+        level,
+        weather,
+    )
+}
+
+/// [`entity_requirements_match`] with an explicit loot-context origin.
+///
+/// `LocationCheck` predicates test the block at that origin, so the block-hit
+/// fold passes the hit block instead of the projectile's own position
+/// (vanilla `Enchantment.blockHitContext` sets `ORIGIN` to the clamped hit).
+fn entity_requirements_match_at(
+    requirements: Option<&'static EnchantmentEffectRequirements>,
+    entity: &dyn Entity,
+    origin: BlockPos,
+    level: i32,
+    weather: Option<WeatherSnapshot>,
+) -> bool {
     let Some(requirements) = requirements else {
         return true;
     };
 
     matches!(
-        entity_requirements_state(requirements, entity, level, weather),
+        entity_requirements_state_at(requirements, entity, origin, level, weather),
         Some(true)
     )
 }
 
-fn entity_requirements_state(
+fn entity_requirements_state_at(
     requirements: &'static EnchantmentEffectRequirements,
     entity: &dyn Entity,
+    origin: BlockPos,
     level: i32,
     weather: Option<WeatherSnapshot>,
 ) -> Option<bool> {
@@ -1424,7 +1638,7 @@ fn entity_requirements_state(
         EnchantmentEffectRequirements::AllOf(terms) => {
             let mut has_unknown = false;
             for term in *terms {
-                match entity_requirements_state(term, entity, level, weather) {
+                match entity_requirements_state_at(term, entity, origin, level, weather) {
                     Some(true) => {}
                     Some(false) => return Some(false),
                     None => has_unknown = true,
@@ -1435,7 +1649,7 @@ fn entity_requirements_state(
         EnchantmentEffectRequirements::AnyOf(terms) => {
             let mut has_unknown = false;
             for term in *terms {
-                match entity_requirements_state(term, entity, level, weather) {
+                match entity_requirements_state_at(term, entity, origin, level, weather) {
                     Some(true) => return Some(true),
                     Some(false) => {}
                     None => has_unknown = true,
@@ -1444,7 +1658,8 @@ fn entity_requirements_state(
             if has_unknown { None } else { Some(false) }
         }
         EnchantmentEffectRequirements::Inverted(term) => {
-            entity_requirements_state(term, entity, level, weather).map(|matched| !matched)
+            entity_requirements_state_at(term, entity, origin, level, weather)
+                .map(|matched| !matched)
         }
         EnchantmentEffectRequirements::EntityProperties {
             entity: EnchantmentEntityTarget::This,
@@ -1457,11 +1672,40 @@ fn entity_requirements_state(
         EnchantmentEffectRequirements::RandomChance { chance } => {
             Some(rand::random::<f32>() < chance.calculate(level))
         }
+        EnchantmentEffectRequirements::LocationCheck {
+            offset,
+            block,
+            can_see_sky,
+        } => location_check_state(*offset, block.as_ref(), *can_see_sky, entity, origin),
         EnchantmentEffectRequirements::EntityProperties { .. }
         | EnchantmentEffectRequirements::DamageSourceProperties(_)
         | EnchantmentEffectRequirements::MatchTool { .. }
         | EnchantmentEffectRequirements::Unsupported { .. } => None,
     }
+}
+
+/// Vanilla `LocationCheck.test`: tests the block at `origin + offset` against
+/// the generated predicate subset. A missing world keeps the answer unknown.
+fn location_check_state(
+    offset: IVec3,
+    block: Option<&LocationCheckBlock>,
+    can_see_sky: Option<bool>,
+    entity: &dyn Entity,
+    origin: BlockPos,
+) -> Option<bool> {
+    let world = entity.level()?;
+    let pos = origin.offset(offset.x, offset.y, offset.z);
+    if let Some(block) = block
+        && !block.matches(world.get_block_state(pos).get_block())
+    {
+        return Some(false);
+    }
+    if let Some(expected) = can_see_sky
+        && world.can_see_sky(pos) != expected
+    {
+        return Some(false);
+    }
+    Some(true)
 }
 
 fn entity_predicate_matches_type(
@@ -1673,9 +1917,9 @@ mod tests {
         TestPlayerBuilder, TestWorld, enchanted_item, fresh_test_world, insert_ready_full_chunk,
         test_world,
     };
+    use steel_registry::blocks::BlockRef;
     use steel_registry::blocks::properties::BlockStateProperties;
     use steel_registry::blocks::properties::IntProperty;
-    use steel_registry::blocks::{BlockRef, block_state_ext::BlockStateExt as _};
     use steel_utils::{ChunkPos, types::UpdateFlags};
 
     /// Frost Walker's `age` property.
@@ -2472,6 +2716,124 @@ mod tests {
     /// The ground is passed as a `BlockRef`, never a `BlockStateId`: resolving a
     /// default state needs the published registry, and an argument is evaluated
     /// before this function runs `init_vanilla_registry`.
+    #[test]
+    fn tick_component_applies_its_effect_on_every_tick() {
+        // Soul Speed is the only vanilla enchantment with a `minecraft:tick`
+        // component, and its requirements use entity predicates Steel does not
+        // model (`periodic_tick`, `movement`, `movement_affected_by`), so the
+        // per-tick arm is exercised with a synthetic component instead.
+        const ONE: LevelBasedValue = LevelBasedValue::Constant(1.0);
+        const TICK_CHANGE_DAMAGE: EnchantmentEntityEffect =
+            EnchantmentEntityEffect::ChangeItemDamage { amount: &ONE };
+        static TICK_EFFECTS: &[ConditionalEnchantmentEffect<EnchantmentEntityEffect>] =
+            &[ConditionalEnchantmentEffect {
+                effect: TICK_CHANGE_DAMAGE,
+                requirements: None,
+            }];
+
+        init_vanilla_registry();
+        let world = test_world();
+        let entity = TestLivingEntity::new(91, &vanilla_entities::ZOMBIE);
+        let mut stack = ItemStack::new(&vanilla_items::DIAMOND_SWORD);
+
+        for tick in 1..=3 {
+            {
+                let mut item = EnchantedItemInUse::Stack(&mut stack);
+                assert!(
+                    !apply_tick_component(world, &entity, 1, TICK_EFFECTS, None, &mut item),
+                    "a non-breaking tick effect leaves the item intact"
+                );
+            }
+            assert_eq!(
+                stack.get_damage_value(),
+                tick,
+                "tick {tick} must run the tick component again"
+            );
+        }
+    }
+
+    #[test]
+    fn channeling_hit_block_fires_when_a_trident_hits_a_lightning_rod() {
+        use crate::entity::entities::{AbstractArrow as _, ThrownTridentEntity};
+        use crate::entity::init_entities;
+        use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
+        use crate::world::ClipHitResult;
+        use steel_registry::blocks::properties::Direction;
+        use steel_utils::WorldAabb;
+
+        init_vanilla_registry();
+        init_behaviors();
+        init_entities();
+
+        for thundering in [true, false] {
+            let world_fixture = fresh_test_world(if thundering {
+                "hit_block_thunder"
+            } else {
+                "hit_block_calm"
+            });
+            let world = &world_fixture.world;
+            insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+            if thundering {
+                let mut weather = world.weather.lock();
+                weather.rain_level = 1.0;
+                weather.thunder_level = 1.0;
+            }
+
+            let rod_pos = BlockPos::new(4, 65, 4);
+            assert!(
+                world.set_block(
+                    rod_pos,
+                    vanilla_blocks::LIGHTNING_ROD.default_state(),
+                    UpdateFlags::UPDATE_ALL,
+                ),
+                "the lightning rod is placed"
+            );
+
+            let stack = enchanted_item(
+                &vanilla_items::TRIDENT,
+                Identifier::vanilla_static("channeling"),
+                1,
+            );
+            let trident = Arc::new(ThrownTridentEntity::from_item(
+                &vanilla_entities::TRIDENT,
+                12,
+                DVec3::new(4.5, 65.5, 4.5),
+                Arc::downgrade(world),
+                stack,
+            ));
+            let shared: SharedEntity = Arc::clone(&trident) as SharedEntity;
+            world
+                .try_add_entity(shared)
+                .expect("the thrown trident joins the world");
+
+            Arc::clone(&trident).abstract_arrow_on_hit_block(&ClipHitResult {
+                location: DVec3::new(4.5, 65.5, 4.5),
+                direction: Direction::Up,
+                block_pos: rod_pos,
+                miss: false,
+                inside: false,
+                world_border_hit: false,
+            });
+
+            let bounds = WorldAabb::of_size(DVec3::new(4.0, 65.0, 4.0), 4.0, 4.0, 4.0);
+            let bolts = world.get_entities_in_aabb_matching(&bounds, |entity| {
+                entity.entity_type() == &vanilla_entities::LIGHTNING_BOLT
+            });
+            if thundering {
+                assert_eq!(
+                    bolts.len(),
+                    1,
+                    "channeling's hit_block effect strikes the lightning rod"
+                );
+            } else {
+                assert!(
+                    bolts.is_empty(),
+                    "the hit_block weather_check gate suppresses channeling without thunder"
+                );
+            }
+        }
+    }
+
     fn frost_walker_world(
         key: &'static str,
         ground: BlockRef,

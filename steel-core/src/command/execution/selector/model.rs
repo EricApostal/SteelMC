@@ -525,7 +525,17 @@ fn source_scoreboard(source: &CommandSource) -> Result<&Scoreboard, CommandSynta
 fn world_candidates(world: &World, aabb: Option<WorldAabb>) -> Vec<SharedEntity> {
     aabb.map_or_else(
         || world.entity_manager().get_accessible_entities(),
-        |aabb| world.entity_manager().get_entities_in_aabb(&aabb),
+        |aabb| {
+            // Vanilla `EntitySelector.findEntities` queries by `EntityTypeTest`,
+            // which never returns the ender dragon's hitboxes; the AABB entity
+            // query does, so drop them here.
+            let entity_manager = world.entity_manager();
+            entity_manager
+                .get_entities_in_aabb(&aabb)
+                .into_iter()
+                .filter(|entity| !entity_manager.is_dragon_part(entity.id()))
+                .collect()
+        },
     )
 }
 

@@ -10,7 +10,7 @@ use crate::entity::ai::goal::{
     ShoulderRiding, Tameable,
 };
 use crate::entity::dismount_helper::dismount_vehicle;
-use crate::entity::entities::objects::HurtingProjectile;
+use crate::entity::entities::objects::{HurtingProjectile, MinecartSync};
 use crate::entity::leash::Leashable;
 use crate::entity::npc::Npc;
 use crate::entity::npc::gossip::ReputationEventHandler;
@@ -1551,6 +1551,15 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
         try_as_dyn::<Self, dyn ItemFrame>(self)
     }
 
+    /// Returns this entity as a minecart when it rides rails.
+    ///
+    /// Vanilla's `ServerEntity.sendChanges` special-cases
+    /// `AbstractMinecart` with a `NewMinecartBehavior` to send the recorded track
+    /// steps; Steel's carts use the same accessor for `CMoveMinecartAlongTrack`.
+    fn as_minecart(&self) -> Option<&dyn MinecartSync> {
+        try_as_dyn::<Self, dyn MinecartSync>(self)
+    }
+
     /// Returns this entity as a player when it is the concrete server player.
     fn as_player(&self) -> Option<&Player> {
         self.downcast_ref::<Player>()
@@ -3088,6 +3097,10 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
     }
 
     /// Plays an entity sound at the entity's exact position.
+    ///
+    /// Vanilla `Entity.playSound(SoundEvent, float, float)` uses the positional
+    /// `Level.playSound(except, x, y, z, …)` overload, so ambient, hurt, death
+    /// and step sounds stay at the position they were triggered from.
     fn play_sound(&self, sound: SoundEventRef, volume: f32, pitch: f32) {
         if self.is_silent() {
             return;
@@ -3822,6 +3835,14 @@ pub trait Entity: EntityEventSource + ErasedType + Send + Sync + 'static {
         let view: BorrowedNbtCompoundView<'_, '_> = (&borrowed).into();
         self.apply_spawn_data(view);
         self.load_additional(view);
+        // Vanilla `Entity.load` runs the whole `readAdditionalSaveData` chain, so
+        // a living entity's health, effects and attributes are restored here too
+        // (`LivingEntity.readAdditionalSaveData`). The chunk-load path already
+        // links that layer separately in `EntityRegistry::finish_registered_load`
+        // because Steel's concrete `load_additional` only covers the subclass.
+        if let Some(living) = self.as_living_entity() {
+            living.load_living(view);
+        }
         self.sync_base_entity_data();
         Ok(())
     }

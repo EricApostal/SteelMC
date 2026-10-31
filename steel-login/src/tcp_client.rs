@@ -691,7 +691,21 @@ impl JavaTcpClient {
                 let packet = SClientIntention::read_packet(data)?;
                 let intent = match packet.intention {
                     ClientIntent::Status => ConnectionProtocol::Status,
-                    ClientIntent::Login | ClientIntent::Transfer => ConnectionProtocol::Login,
+                    ClientIntent::Login => ConnectionProtocol::Login,
+                    ClientIntent::Transfer if self.server.config.accepts_transfers => {
+                        ConnectionProtocol::Login
+                    }
+                    ClientIntent::Transfer => {
+                        // Vanilla `ServerHandshakePacketListenerImpl.handleIntention`: a
+                        // transfer intent on a server whose `accepts-transfers` property is
+                        // false gets a login-state disconnect and no login listener.
+                        self.protocol.store(ConnectionProtocol::Login);
+                        self.kick(TextComponent::translated(
+                            translations::MULTIPLAYER_DISCONNECT_TRANSFERS_DISABLED.msg(),
+                        ))
+                        .await;
+                        return Ok(());
+                    }
                 };
                 let sequence_result = self.pre_play_state.lock().select_protocol(intent);
                 if let Err(error) = sequence_result {

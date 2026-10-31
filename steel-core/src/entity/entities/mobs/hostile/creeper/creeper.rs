@@ -569,9 +569,9 @@ impl Mob for CreeperEntity {
                     .mutate_item_in_hand(hand, |stack| stack.consume(1, has_infinite_materials));
             } else {
                 // Vanilla: `itemStack.hurtAndBreak(1, player, hand.asEquipmentSlot())`.
-                // BLOCKED(item durability) — no `hurt_and_break` entry point is exposed on the
-                // player inventory yet, so the durability loss for damageable igniters is the
-                // remaining vanilla step.
+                player.inventory.lock().mutate_item_in_hand(hand, |stack| {
+                    stack.hurt_and_break(1, has_infinite_materials);
+                });
             }
         }
 
@@ -596,15 +596,20 @@ impl CreeperLike for CreeperEntity {
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
-    use std::sync::Weak;
+    use std::sync::{Arc, Weak};
 
     use glam::DVec3;
     use simdnbt::borrow::read_compound;
     use simdnbt::owned::NbtCompound;
-    use steel_registry::{init_vanilla_registry, vanilla_entities};
+    use steel_registry::item_stack::ItemStack;
+    use steel_registry::{init_vanilla_registry, vanilla_entities, vanilla_items};
+    use steel_utils::types::InteractionHand;
 
     use super::{CreeperEntity, DEFAULT_EXPLOSION_RADIUS, DEFAULT_MAX_SWELL};
+    use crate::behavior::InteractionResult;
     use crate::entity::Entity;
+    use crate::entity::Mob;
+    use crate::test_support::{TestPlayerBuilder, fresh_test_world};
 
     #[test]
     fn creeper_nbt_round_trip() {
@@ -650,5 +655,32 @@ mod tests {
 
         creeper.set_swell(DEFAULT_MAX_SWELL);
         assert!((creeper.swelling(1.0) - (DEFAULT_MAX_SWELL as f32 / 28.0)).abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn igniting_a_creeper_damages_flint_and_steel() {
+        init_vanilla_registry();
+
+        let world_fixture = fresh_test_world("creeper_igniter_durability");
+        let world = &world_fixture.world;
+        let player = TestPlayerBuilder::new(Arc::clone(world), "CreeperIgniter", 1).build();
+        player.inventory.lock().set_item_in_hand(
+            InteractionHand::MainHand,
+            ItemStack::new(&vanilla_items::FLINT_AND_STEEL),
+        );
+
+        let creeper = CreeperEntity::new(&vanilla_entities::CREEPER, 4, DVec3::ZERO, Weak::new());
+        assert_eq!(
+            creeper.mob_interact(&player, InteractionHand::MainHand),
+            InteractionResult::Success
+        );
+        assert!(creeper.is_ignited());
+
+        let igniter = player
+            .inventory
+            .lock()
+            .get_item_in_hand(InteractionHand::MainHand)
+            .clone();
+        assert_eq!(igniter.get_damage_value(), 1);
     }
 }

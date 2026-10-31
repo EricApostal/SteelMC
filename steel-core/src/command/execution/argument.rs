@@ -18,7 +18,7 @@ use super::{
     score::{parse_int_range, parse_score_holder, suggest_score_holders},
     selector::{EntitySelector, parse_entity_selector, suggest_entity_selector},
     structure::{parse_structure_or_tag_key, suggest_structures},
-    suggestions::{matches_substring_ignore_case, suggest_resources},
+    suggestions::{identifier_matches, matches_substring_ignore_case, suggest_resources},
     text::validate_component_syntax,
     world::{parse_world_argument, suggest_worlds},
 };
@@ -52,9 +52,10 @@ use steel_registry::mob_effect::MobEffectRef;
 use steel_registry::particle_type::ParticleTypeRef;
 use steel_registry::slot_source::SlotSourceEntry;
 use steel_registry::{
-    CONTEXT_FLOAT_PROVIDER_REGISTRY, CONTEXT_INT_PROVIDER_REGISTRY, DAMAGE_TYPE_REGISTRY,
-    DIALOG_REGISTRY, ENCHANTMENT_REGISTRY, ENTITY_TYPE_REGISTRY, MOB_EFFECT_REGISTRY, REGISTRY,
-    RegistryExt as _, TIMELINE_REGISTRY, WORLD_CLOCK_REGISTRY, enchantment::EnchantmentRef,
+    CONFIGURED_FEATURE_REGISTRY, CONTEXT_FLOAT_PROVIDER_REGISTRY, CONTEXT_INT_PROVIDER_REGISTRY,
+    DAMAGE_TYPE_REGISTRY, DIALOG_REGISTRY, ENCHANTMENT_REGISTRY, ENTITY_TYPE_REGISTRY,
+    MOB_EFFECT_REGISTRY, PREDICATE_REGISTRY, REGISTRY, RegistryExt as _, STRUCTURE_REGISTRY,
+    TIMELINE_REGISTRY, WORLD_CLOCK_REGISTRY, enchantment::EnchantmentRef,
     entity_type::EntityTypeRef, item_stack::ItemStack, loot_table::LootContext,
     timeline::TimelineRef, world_clock::WorldClockRef,
 };
@@ -472,10 +473,6 @@ impl SteelArgumentType {
     }
 
     /// Vanilla `RangeArgument.Floats`: a double range.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "vanilla RangeArgument.Floats API surface")
-    )]
     pub(crate) fn double_range() -> Self {
         Self::new(FloatRangeParser)
     }
@@ -498,6 +495,26 @@ impl SteelArgumentType {
     /// Vanilla `IdentifierArgument`: a generic, unvalidated resource location.
     pub(crate) fn identifier_argument() -> Self {
         Self::new(IdentifierParser)
+    }
+
+    /// Vanilla `ResourceOrIdArgument.FeatureArgument`: a configured feature id.
+    pub(crate) fn feature() -> Self {
+        Self::new(FeatureParser)
+    }
+
+    /// Vanilla `ResourceKeyArgument<Structure>`.
+    pub(crate) fn structure() -> Self {
+        Self::new(StructureParser)
+    }
+
+    /// Vanilla `ResourceKeyArgument<StructureTemplatePool>`.
+    pub(crate) fn template_pool() -> Self {
+        Self::new(TemplatePoolParser)
+    }
+
+    /// Vanilla `ResourceOrIdArgument.lootPredicate`.
+    pub(crate) fn predicate() -> Self {
+        Self::new(PredicateParser)
     }
 
     /// Vanilla `ResourceOrIdArgument.intProvider`.
@@ -985,10 +1002,6 @@ impl FloatRange {
 
     /// Returns whether `value` lies inside the inclusive bounds.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "vanilla MinMaxBounds.Doubles API surface")
-    )]
     pub(crate) fn matches(self, value: f64) -> bool {
         if let Some(minimum) = self.minimum
             && value < minimum
@@ -1890,6 +1903,116 @@ unit_argument_parser!(
     _builder | {},
     protocol(ProtocolArgumentType::ResourceLocation, None)
 );
+/// Vanilla resource-key registry ids carried by `ResourceKeyArgument` on the wire.
+const STRUCTURE_REGISTRY_PATH: &str = "minecraft:worldgen/structure";
+const TEMPLATE_POOL_REGISTRY_PATH: &str = "minecraft:worldgen/template_pool";
+
+unit_argument_parser!(
+    FeatureParser,
+    "steel:command/parser/feature",
+    IdentifierValue,
+    parse | reader,
+    _source | {
+        let key = parse_identifier(reader)?;
+        if REGISTRY.configured_features.by_key(&key).is_some() {
+            Ok(IdentifierValue(key))
+        } else {
+            Err(unknown_resource(reader, &key, &CONFIGURED_FEATURE_REGISTRY))
+        }
+    },
+    suggest | _context,
+    builder | {
+        suggest_resources(
+            REGISTRY
+                .configured_features
+                .iter()
+                .map(|(_, feature)| &feature.key),
+            builder,
+        );
+    },
+    protocol(
+        ProtocolArgumentType::Feature,
+        Some(ProtocolSuggestionType::AskServer),
+    )
+);
+unit_argument_parser!(
+    StructureParser,
+    "steel:command/parser/structure",
+    IdentifierValue,
+    parse | reader,
+    _source | {
+        let key = parse_identifier(reader)?;
+        if REGISTRY.structures.by_key(&key).is_some() {
+            Ok(IdentifierValue(key))
+        } else {
+            Err(unknown_resource(reader, &key, &STRUCTURE_REGISTRY))
+        }
+    },
+    suggest | _context,
+    builder | {
+        let prefix = builder.remaining_lowercase().to_owned();
+        for (_, structure) in REGISTRY.structures.iter() {
+            if identifier_matches(&prefix, &structure.key) {
+                builder.suggest(structure.key.to_string());
+            }
+        }
+    },
+    protocol(
+        ProtocolArgumentType::ResourceKey {
+            identifier: STRUCTURE_REGISTRY_PATH,
+        },
+        Some(ProtocolSuggestionType::AskServer),
+    )
+);
+unit_argument_parser!(
+    TemplatePoolParser,
+    "steel:command/parser/template_pool",
+    IdentifierValue,
+    parse | reader,
+    _source | { parse_identifier(reader).map(IdentifierValue) },
+    suggest | context,
+    builder | {
+        let prefix = builder.remaining_lowercase().to_owned();
+        for key in context.source().template_pool_keys() {
+            if key.starts_with(&prefix) {
+                builder.suggest(key);
+            }
+        }
+    },
+    protocol(
+        ProtocolArgumentType::ResourceKey {
+            identifier: TEMPLATE_POOL_REGISTRY_PATH,
+        },
+        Some(ProtocolSuggestionType::AskServer),
+    )
+);
+unit_argument_parser!(
+    PredicateParser,
+    "steel:command/parser/predicate",
+    IdentifierValue,
+    parse | reader,
+    _source | {
+        let key = parse_identifier(reader)?;
+        if REGISTRY.predicates.by_key(&key).is_some() {
+            Ok(IdentifierValue(key))
+        } else {
+            Err(unknown_resource(reader, &key, &PREDICATE_REGISTRY))
+        }
+    },
+    suggest | _context,
+    builder | {
+        let prefix = builder.remaining_lowercase().to_owned();
+        for (_, predicate) in REGISTRY.predicates.iter() {
+            if identifier_matches(&prefix, &predicate.key) {
+                builder.suggest(predicate.key.to_string());
+            }
+        }
+    },
+    protocol(
+        ProtocolArgumentType::LootPredicate,
+        Some(ProtocolSuggestionType::AskServer)
+    )
+);
 unit_argument_parser!(
     IntNumberProviderParser,
     "steel:command/parser/int_number_provider",
@@ -1906,7 +2029,7 @@ unit_argument_parser!(
             builder,
         );
     },
-    protocol(ProtocolArgumentType::ResourceLocation, None)
+    protocol(ProtocolArgumentType::ContextIntProvider, None)
 );
 unit_argument_parser!(
     FloatNumberProviderParser,
@@ -1924,7 +2047,7 @@ unit_argument_parser!(
             builder,
         );
     },
-    protocol(ProtocolArgumentType::ResourceLocation, None)
+    protocol(ProtocolArgumentType::ContextFloatProvider, None)
 );
 unit_argument_parser!(
     FloatRangeParser,

@@ -16,7 +16,8 @@ pub mod surface;
 pub(crate) mod template;
 
 pub use generator::context::{
-    ChunkGeneratorType, EndGenerator, NetherGenerator, OverworldGenerator, WorldGenContext,
+    AmplifiedGenerator, CavesGenerator, ChunkGeneratorType, EndGenerator, FloatingIslandsGenerator,
+    LargeBiomesGenerator, NetherGenerator, OverworldGenerator, WorldGenContext,
 };
 pub use generator::registry::{GeneratorOutput, WorldGeneratorRegistry};
 pub use generator::{

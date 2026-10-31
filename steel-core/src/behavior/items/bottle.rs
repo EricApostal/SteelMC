@@ -1,8 +1,9 @@
 //! Glass bottle item behavior (`BottleItem`).
 //!
-//! Filling from a water source produces a water potion via
-//! `ItemUtils.createFilledResult`. Dragon-breath filling is omitted until
-//! area-effect clouds exist.
+//! Mirrors vanilla `BottleItem.use`: a living dragon's area-effect cloud within
+//! two blocks of the player is milked into a dragon's-breath bottle (shrinking
+//! the cloud by half a block of radius), otherwise a water source fills the
+//! bottle with a water potion via `ItemUtils.createFilledResult`.
 
 use steel_macros::item_behavior;
 use steel_protocol::packets::game::SoundSource;
@@ -14,11 +15,14 @@ use steel_registry::stat::vanilla_stat_types;
 use steel_registry::{
     RegistryReference, sound_events, vanilla_game_events, vanilla_items, vanilla_potions,
 };
+use steel_utils::Downcast as _;
 
 use crate::behavior::context::{InteractionResult, UseItemContext};
 use crate::behavior::item::ItemBehavior;
 use crate::behavior::item_utils::{create_filled_result, get_player_pov_hit_result};
-use crate::entity::Entity;
+use crate::entity::entities::mobs::bosses::EnderDragonEntity;
+use crate::entity::entities::objects::projectiles::AreaEffectCloudEntity;
+use crate::entity::{Entity, SharedEntity};
 use crate::fluid::FluidStateExt;
 use crate::world::ClipFluid;
 use crate::world::game_event::GameEventContext;
@@ -27,10 +31,52 @@ use crate::world::game_event::GameEventContext;
 #[item_behavior(class = "BottleItem")]
 pub struct BottleItem;
 
+impl BottleItem {
+    /// Vanilla `BottleItem.use` cloud scan: the first living
+    /// `AreaEffectCloud` owned by an ender dragon that intersects the player's
+    /// bounding box inflated by two blocks.
+    fn dragon_breath_cloud(context: &UseItemContext) -> Option<SharedEntity> {
+        let aabb = context.player.bounding_box().inflate(2.0);
+        context
+            .world
+            .get_entities_in_aabb(&aabb)
+            .into_iter()
+            .find(|entity| {
+                let Some(cloud) = entity.downcast_ref::<AreaEffectCloudEntity>() else {
+                    return false;
+                };
+                cloud.is_alive()
+                    && cloud
+                        .owner()
+                        .is_some_and(|owner| owner.downcast_ref::<EnderDragonEntity>().is_some())
+            })
+    }
+}
+
 impl ItemBehavior for BottleItem {
     fn use_item(&self, context: &mut UseItemContext) -> InteractionResult {
-        // Vanilla `BottleItem.use` checks dragon-breath area-effect clouds first.
-        // Steel has no `AreaEffectCloud` yet, so water filling is the live path.
+        // Vanilla `BottleItem.use` checks living dragon clouds first.
+        if let Some(entity) = Self::dragon_breath_cloud(context) {
+            let Some(cloud) = entity.downcast_ref::<AreaEffectCloudEntity>() else {
+                return InteractionResult::Pass;
+            };
+            cloud.set_radius(cloud.radius() - 0.5);
+            context.world.play_sound_at(
+                &sound_events::ITEM_BOTTLE_FILL_DRAGONBREATH,
+                SoundSource::Neutral,
+                context.player.position(),
+                1.0,
+                1.0,
+                None,
+            );
+            context.world.game_event_at(
+                &vanilla_game_events::FLUID_PICKUP,
+                context.player.position(),
+                &GameEventContext::new(Some(context.player.as_ref()), None),
+            );
+            create_filled_result(context, ItemStack::new(&vanilla_items::DRAGON_BREATH), true);
+            return InteractionResult::Success;
+        }
 
         let hit = get_player_pov_hit_result(context.world, context.player, ClipFluid::SourceOnly);
         if hit.miss {
@@ -72,7 +118,7 @@ impl ItemBehavior for BottleItem {
     }
 }
 
-fn water_potion_stack() -> ItemStack {
+pub(crate) fn water_potion_stack() -> ItemStack {
     let mut stack = ItemStack::new(&vanilla_items::POTION);
     stack.set(
         POTION_CONTENTS,
@@ -94,13 +140,17 @@ mod tests {
     use steel_registry::blocks::block_state_ext::BlockStateExt;
     use steel_registry::data_components::vanilla_components::POTION_CONTENTS;
     use steel_registry::item_stack::ItemStack;
-    use steel_registry::{init_vanilla_registry, vanilla_blocks, vanilla_items, vanilla_potions};
+    use steel_registry::{
+        init_vanilla_registry, vanilla_blocks, vanilla_entities, vanilla_items, vanilla_potions,
+    };
     use steel_utils::types::{InteractionHand, UpdateFlags};
-    use steel_utils::{BlockPos, BlockStateId, ChunkPos};
+    use steel_utils::{BlockPos, BlockStateId, ChunkPos, Downcast as _};
 
     use crate::behavior::item::ItemBehavior;
     use crate::behavior::{InteractionResult, UseItemContext, init_behaviors};
-    use crate::entity::Entity;
+    use crate::entity::entities::mobs::bosses::EnderDragonEntity;
+    use crate::entity::entities::objects::projectiles::AreaEffectCloudEntity;
+    use crate::entity::{Entity, SharedEntity};
     use crate::player::Player;
     use crate::test_support::{TestPlayerBuilder, fresh_test_world, insert_ready_full_chunk};
     use crate::world::World;
@@ -207,5 +257,42 @@ mod tests {
             use_bottle(&air_player, air_world, 1),
             InteractionResult::Pass
         );
+    }
+
+    #[test]
+    fn fills_from_a_dragon_breath_cloud_and_shrinks_it() {
+        init_vanilla_registry();
+        init_behaviors();
+
+        let world_fixture = fresh_test_world("bottle_fill_dragon_breath");
+        let world = &world_fixture.world;
+        let pos = DVec3::new(0.5, 64.0, 0.5);
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+
+        let player = TestPlayerBuilder::new(Arc::clone(world), "BreathTester", 1).build();
+        player
+            .try_set_position(pos)
+            .expect("test player should move onto the loaded chunk");
+
+        let dragon = Arc::new(EnderDragonEntity::new(
+            &vanilla_entities::ENDER_DRAGON,
+            2,
+            pos,
+            Arc::downgrade(world),
+        ));
+        let dragon_entity: SharedEntity = dragon;
+        let cloud_entity: SharedEntity = AreaEffectCloudEntity::new_at_position(world, pos);
+        let Some(cloud) = cloud_entity.downcast_ref::<AreaEffectCloudEntity>() else {
+            panic!("spawned entity should be an area effect cloud");
+        };
+        cloud.set_owner(&dragon_entity);
+        assert!(world.try_add_entity(Arc::clone(&cloud_entity)).is_ok());
+
+        assert_eq!(use_bottle(&player, world, 1), InteractionResult::Success);
+
+        let filled = hand_item(&player);
+        assert_eq!(filled.item.key, vanilla_items::DRAGON_BREATH.key);
+        // Default cloud radius is 3.0; vanilla shrinks it by 0.5 per bottle.
+        assert!((cloud.radius() - 2.5).abs() < 1.0e-4);
     }
 }

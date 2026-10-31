@@ -79,6 +79,7 @@ fn packaged_config_matches_the_runtime_config_defaults() {
         command_spam_threshold_seconds,
         compression,
         server_links,
+        accepts_transfers,
         packet_workers,
         chunk_generation_threads,
         chunk_encoding_threads,
@@ -118,6 +119,7 @@ fn packaged_config_matches_the_runtime_config_defaults() {
         command_spam_threshold_seconds,
         defaults.command_spam_threshold_seconds
     );
+    assert_eq!(accepts_transfers, defaults.accepts_transfers);
 
     let packaged_compression = compression.expect("packaged config enables compression");
     let default_compression = defaults
@@ -433,6 +435,43 @@ fn validate_rejects_invalid_services_server_url() {
         validate(&config.server),
         Err("services_server must be an absolute URL")
     );
+}
+
+#[test]
+fn validate_rejects_invalid_server_link_url() {
+    let config_toml = DEFAULT_CONFIG.replace(
+        "https://discord.gg/suSXXNdVSf",
+        "https://discord.gg/with space",
+    );
+    let config: SteelConfig = toml::from_str(&config_toml).expect("config parses");
+
+    assert_eq!(
+        validate(&config.server),
+        Err("server_links links must be absolute http or https URLs")
+    );
+}
+
+#[test]
+fn validate_rejects_unsupported_server_link_scheme() {
+    let config_toml =
+        DEFAULT_CONFIG.replace("https://discord.gg/suSXXNdVSf", "ftp://example.com/steel");
+    let config: SteelConfig = toml::from_str(&config_toml).expect("config parses");
+
+    assert_eq!(
+        validate(&config.server),
+        Err("server_links links must be absolute http or https URLs")
+    );
+}
+
+#[test]
+fn validate_allows_http_server_link_urls() {
+    let config_toml = DEFAULT_CONFIG.replace(
+        "https://discord.gg/suSXXNdVSf",
+        "http://localhost:8080/steel",
+    );
+    let config: SteelConfig = toml::from_str(&config_toml).expect("config parses");
+
+    validate(&config.server).expect("http server link validates");
 }
 
 #[test]

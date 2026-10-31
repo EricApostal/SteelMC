@@ -8,9 +8,10 @@
 //! (`ClientboundMountScreenOpenPacket` + `mount_menu`) and trader
 //! despawn/leash behaviour.
 //!
-//! The remaining vanilla llama behaviour (caravan following, spit ranged
-//! attack, breeding offspring identity, carpet decor) is **not** implemented
-//! here and is listed as a gap in the wave report.
+//! The remaining vanilla llama behaviour (breeding offspring identity, carpet
+//! decor) is **not** implemented here and is listed as a gap in the wave report.
+//! Caravan membership (`LlamaFollowCaravanGoal` + [`CaravanLlama`]) and the
+//! spit ranged attack (`RangedAttackGoal` + `LlamaSpit`) are implemented.
 //!
 //! # Riding
 //!
@@ -40,29 +41,34 @@ use steel_registry::sound_event::SoundEventRef;
 use steel_registry::vanilla_attributes;
 use steel_registry::vanilla_entity_data::{AbstractHorseEntityData, LlamaEntityData};
 use steel_registry::vanilla_item_tags::ItemTag;
-use steel_registry::{REGISTRY, TaggedRegistryExt as _, sound_events, vanilla_items};
+use steel_registry::{
+    REGISTRY, TaggedRegistryExt as _, sound_events, vanilla_entities, vanilla_items,
+};
 use steel_utils::locks::{Shared, SyncMutex};
 use steel_utils::types::InteractionHand;
 use steel_utils::{BlockPos, BlockStateId, DowncastType, DowncastTypeKey};
 
 use crate::behavior::InteractionResult;
 use crate::entity::ai::goal::{
-    BreedGoal, FloatGoal, FollowParentGoal, LookAtPlayerGoal, PanicGoal, RandomLookAroundGoal,
-    TemptGoal, WaterAvoidingRandomStrollGoal,
+    BreedGoal, CaravanLlama, FloatGoal, FollowParentGoal, LlamaFollowCaravanGoal, LookAtPlayerGoal,
+    PanicGoal, RandomLookAroundGoal, RangedAttackGoal, RangedAttackMob, TemptGoal,
+    WaterAvoidingRandomStrollGoal,
 };
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::mobs::passive::equine::{
-    AbstractHorseParts, Equine, FLAG_TAME, MountPanicGoal, RunAroundLikeCrazyGoal,
-    abstract_horse_mob_interact, can_parent, controlling_passenger, drop_carried_items, eating,
-    equip_chest, equip_sound, is_immobile_from_state, is_tamed, load_legacy_equipment, make_mad,
+    AbstractHorseParts, Equine, FLAG_TAME, RunAroundLikeCrazyGoal, abstract_horse_mob_interact,
+    can_parent, controlling_passenger, drop_carried_items, eating, equip_chest, equip_sound,
+    is_immobile_from_state, is_tamed, load_legacy_equipment, make_mad,
     open_custom_inventory_screen, ridden_input, ridden_speed, save_legacy_equipment, set_flag,
     stand_if_possible, tame_with_name, tick_abstract_horse, tick_ridden,
 };
+use crate::entity::entities::objects::projectiles::LlamaSpitEntity;
 use crate::entity::npc::inventory_carrier::InventoryCarrier;
+use crate::entity::projectile::{Projectile, spawn_projectile};
 use crate::entity::{
     AgeableMob, AgeableMobBase, Animal, AnimalBase, Entity, EntityBase, EntityBaseLoad, EntityPose,
     EntitySpawnReason, EntitySyncedData, LivingEntity, LivingEntityBase, Mob, MobBase,
-    PathfinderMob, SharedEntity, SpawnGroupData,
+    PathfinderMob, SharedEntity, SpawnGroupData, next_entity_id,
 };
 use crate::inventory::equipment::EquipmentSlot;
 use crate::physics::MoveResult;
@@ -79,6 +85,17 @@ const LLAMA_BABY_PASSENGER_ATTACHMENTS: [EntityAttachmentPoint; 1] =
 
 /// Vanilla `Llama.createAttributes` movement speed (`AbstractChestedHorse`).
 const DEFAULT_STEP_HEIGHT: f32 = 0.6;
+
+/// Vanilla `Llama.spit`: `target.getY(0.3333F)` partial-tick interpolation.
+const SPIT_TARGET_PARTIAL_TICKS: f64 = 0.333_333_333_333_333_3;
+/// Vanilla `Llama.spit`: `sqrt(xd * xd + zd * zd) * 0.2`.
+const SPIT_TARGET_Y_SCALE: f64 = 0.2;
+/// Vanilla `Llama.spit`: `Projectile.spawnProjectileUsingShoot(..., 1.5F, ...)`.
+const SPIT_POWER: f32 = 1.5;
+/// Vanilla `Llama.rangedAttackUncertainty`.
+const SPIT_UNCERTAINTY: f32 = 10.0;
+/// Vanilla `Llama.spit` sound pitch jitter `(nextFloat - nextFloat) * 0.2F`.
+const SPIT_SOUND_PITCH_JITTER: f32 = 0.2;
 
 const LLAMA_BABY_DIMENSIONS: EntityDimensions = EntityDimensions::new_with_attachments(
     0.9 * 0.5,
@@ -100,6 +117,10 @@ pub struct LlamaEntity {
     /// Vanilla `AbstractHorse` non-synchronized state: the mount inventory
     /// (`AbstractHorse.inventory`), temper, owner and the animation counters.
     parts: AbstractHorseParts,
+    /// Vanilla `Llama.caravanHead`. Weak so a caravan never keeps a removed llama alive.
+    caravan_head: SyncMutex<Option<Weak<dyn Entity>>>,
+    /// Vanilla `Llama.caravanTail`. Weak for the same reason.
+    caravan_tail: SyncMutex<Option<Weak<dyn Entity>>>,
 }
 
 // SAFETY: This key is owned by Steel and uniquely identifies `LlamaEntity`.
@@ -136,12 +157,13 @@ impl LlamaEntity {
         living_base.initialize_synced_data(&mut entity_data);
 
         {
-            // Vanilla `Llama.registerGoals`; the caravan-follow and ranged-spit
-            // goals are the documented gaps (see module docs).
+            // Vanilla `Llama.registerGoals`; it does not call `AbstractHorse.registerGoals`,
+            // so there is no `MountPanicGoal` here.
             let mut goal_selector = mob_base.goal_selector().lock();
             goal_selector.add_goal(0, FloatGoal::new(&mob_base));
             goal_selector.add_goal(1, RunAroundLikeCrazyGoal::new(1.2));
-            goal_selector.add_goal(3, MountPanicGoal::new(1.2));
+            goal_selector.add_goal(2, LlamaFollowCaravanGoal::new(2.1));
+            goal_selector.add_goal(3, RangedAttackGoal::new(1.25, 40, 20.0));
             goal_selector.add_goal(3, PanicGoal::new(1.2));
             goal_selector.add_goal(4, BreedGoal::new(1.0));
             goal_selector.add_goal(
@@ -176,6 +198,8 @@ impl LlamaEntity {
             animal_base,
             entity_data: SyncMutex::new(entity_data),
             parts,
+            caravan_head: SyncMutex::new(None),
+            caravan_tail: SyncMutex::new(None),
         }
     }
 
@@ -852,3 +876,338 @@ impl Equine for LlamaEntity {
 }
 
 impl PathfinderMob for LlamaEntity {}
+
+impl CaravanLlama for LlamaEntity {
+    fn in_caravan(&self) -> bool {
+        self.caravan_head().is_some()
+    }
+
+    fn caravan_head(&self) -> Option<SharedEntity> {
+        self.caravan_head.lock().as_ref().and_then(Weak::upgrade)
+    }
+
+    fn has_caravan_tail(&self) -> bool {
+        self.caravan_tail
+            .lock()
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .is_some()
+    }
+
+    fn join_caravan(&self, head: &SharedEntity, self_handle: &SharedEntity) {
+        // Vanilla `joinCaravan`: `this.caravanHead = head; head.caravanTail = this`.
+        *self.caravan_head.lock() = Some(Arc::downgrade(head));
+        if let Some(head_llama) = head.as_caravan_llama() {
+            head_llama.set_caravan_tail(Some(self_handle));
+        }
+    }
+
+    fn leave_caravan(&self) {
+        // Vanilla `leaveCaravan`: clear this llama's head and that head's tail.
+        let head = self
+            .caravan_head
+            .lock()
+            .take()
+            .and_then(|head| head.upgrade());
+        if let Some(head) = head
+            && let Some(head_llama) = head.as_caravan_llama()
+        {
+            head_llama.set_caravan_tail(None);
+        }
+    }
+
+    fn set_caravan_tail(&self, tail: Option<&SharedEntity>) {
+        *self.caravan_tail.lock() = tail.map(Arc::downgrade);
+    }
+}
+
+impl RangedAttackMob for LlamaEntity {
+    /// Vanilla `Llama.performRangedAttack` -> `Llama.spit`.
+    fn perform_ranged_attack(&self, target: &SharedEntity, _power: f32) -> bool {
+        let Some(world) = self.level() else {
+            return false;
+        };
+        // The owner reference the projectile keeps is the world's handle for this llama
+        // (the trader llama shares the same id through its inner llama).
+        let Some(owner) = world.get_entity_by_id(self.id()) else {
+            return false;
+        };
+
+        let spit = LlamaSpitEntity::from_llama(
+            &vanilla_entities::LLAMA_SPIT,
+            next_entity_id(),
+            &owner,
+            Arc::downgrade(&world),
+        );
+
+        // Vanilla:
+        // `xd = target.getX() - getX()`, `yd = target.getY(0.3333) - spit.getY()`,
+        // `zd = target.getZ() - getZ()`, `yo = sqrt(xd * xd + zd * zd) * 0.2`,
+        // then `shoot(xd, yd + yo, zd, 1.5F, rangedAttackUncertainty(level))`.
+        let position = self.position();
+        let target_position = target.position();
+        let target_y = target.old_position().y
+            + (target_position.y - target.old_position().y) * SPIT_TARGET_PARTIAL_TICKS;
+        let xd = target_position.x - position.x;
+        let yd = target_y - spit.position().y;
+        let zd = target_position.z - position.z;
+        let yo = (xd * xd + zd * zd).sqrt() * SPIT_TARGET_Y_SCALE;
+
+        let mut item_stack = ItemStack::empty();
+        let uncertainty = self.ranged_attack_uncertainty(&world);
+        let spawned = spawn_projectile(&world, spit, &mut item_stack, |spit| {
+            spit.shoot(DVec3::new(xd, yd + yo, zd), SPIT_POWER, uncertainty);
+        });
+
+        if !self.is_silent() {
+            // Vanilla `playSound(SoundEvents.LLAMA_SPIT, 1.0F, 1.0F + (random - random) * 0.2F)`.
+            let pitch =
+                1.0 + (rand::random::<f32>() - rand::random::<f32>()) * SPIT_SOUND_PITCH_JITTER;
+            self.play_sound(&sound_events::ENTITY_LLAMA_SPIT, 1.0, pitch);
+        }
+
+        spawned.is_some()
+    }
+
+    /// Vanilla `Llama.rangedAttackUncertainty` is the constant `10.0F`.
+    fn ranged_attack_uncertainty(&self, _world: &World) -> f32 {
+        SPIT_UNCERTAINTY
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use glam::DVec3;
+    use steel_registry::{
+        init_vanilla_registry, vanilla_blocks, vanilla_damage_types, vanilla_entities,
+        vanilla_game_rules,
+    };
+    use steel_utils::types::UpdateFlags;
+    use steel_utils::{BlockPos, ChunkPos, WorldAabb};
+
+    use super::{LlamaEntity, TraderLlamaEntity};
+    use crate::behavior::init_behaviors;
+    use crate::entity::ai::goal::CaravanLlama;
+    use crate::entity::damage::DamageSource;
+    use crate::entity::entities::mobs::npc::wandering_trader::WanderingTraderEntity;
+    use crate::entity::entities::{PigEntity, ZombieEntity};
+    use crate::entity::leash::Leashable;
+    use crate::entity::{
+        Entity, Mob, SharedEntity, add_spawned_entity, init_entities, next_entity_id,
+    };
+    use crate::test_support::{TestWorld, fresh_test_world, insert_entity_ticking_chunks};
+    use crate::world::World;
+
+    /// A flat stone floor with the 5x5 entity-ticking neighborhood loaded, so mob AI and
+    /// projectiles run through the world entity manager.
+    fn llama_test_world(key: &'static str) -> TestWorld {
+        init_vanilla_registry();
+        init_entities();
+        init_behaviors();
+
+        let fixture = fresh_test_world(key);
+        let world = &fixture.world;
+        insert_entity_ticking_chunks(world, ChunkPos::new(0, 0), 2);
+        assert!(world.set_game_rule(&vanilla_game_rules::SPAWN_MOBS, false));
+
+        let stone = vanilla_blocks::STONE.default_state();
+        for x in -24..=32 {
+            for z in -24..=32 {
+                assert!(world.set_block(BlockPos::new(x, 63, z), stone, UpdateFlags::UPDATE_ALL));
+            }
+        }
+        fixture
+    }
+
+    fn spawn(world: &Arc<World>, entity: SharedEntity) -> SharedEntity {
+        if let Some(mob) = entity.as_mob() {
+            mob.set_persistence_required();
+        }
+        add_spawned_entity(world, Arc::clone(&entity)).expect("entity should join the world");
+        entity
+    }
+
+    fn spawn_llama(world: &Arc<World>, id: i32, position: DVec3) -> Arc<LlamaEntity> {
+        let llama = Arc::new(LlamaEntity::new(
+            &vanilla_entities::LLAMA,
+            id,
+            position,
+            Arc::downgrade(world),
+        ));
+        spawn(world, Arc::<LlamaEntity>::clone(&llama) as SharedEntity);
+        llama
+    }
+
+    fn spawn_trader_llama(world: &Arc<World>, id: i32, position: DVec3) -> Arc<TraderLlamaEntity> {
+        let llama = Arc::new(TraderLlamaEntity::new(
+            &vanilla_entities::TRADER_LLAMA,
+            id,
+            position,
+            Arc::downgrade(world),
+        ));
+        spawn(
+            world,
+            Arc::<TraderLlamaEntity>::clone(&llama) as SharedEntity,
+        );
+        llama
+    }
+
+    fn spawn_pig(world: &Arc<World>, id: i32, position: DVec3) -> Arc<PigEntity> {
+        let pig = Arc::new(PigEntity::new(
+            &vanilla_entities::PIG,
+            id,
+            position,
+            Arc::downgrade(world),
+        ));
+        spawn(world, Arc::<PigEntity>::clone(&pig) as SharedEntity);
+        pig
+    }
+
+    fn spawn_zombie(world: &Arc<World>, id: i32, position: DVec3) -> Arc<ZombieEntity> {
+        let zombie = Arc::new(ZombieEntity::new(
+            &vanilla_entities::ZOMBIE,
+            id,
+            position,
+            Arc::downgrade(world),
+        ));
+        spawn(world, Arc::<ZombieEntity>::clone(&zombie) as SharedEntity);
+        zombie
+    }
+
+    fn tick_world(world: &Arc<World>, ticks: i32) {
+        for tick in 0..ticks {
+            world.entity_manager().tick_entities(tick, true);
+        }
+    }
+
+    fn has_llama_spit(world: &World, around: DVec3) -> bool {
+        !world
+            .get_entities_in_aabb_matching(&WorldAabb::of_size(around, 32.0, 8.0, 32.0), |entity| {
+                entity.entity_type() == &vanilla_entities::LLAMA_SPIT
+            })
+            .is_empty()
+    }
+
+    #[test]
+    fn llama_spits_at_its_target_from_range() {
+        let fixture = llama_test_world("llama_spits_at_target");
+        let world = &fixture.world;
+        let llama = spawn_llama(world, next_entity_id(), DVec3::new(0.5, 64.0, 0.5));
+        let pig = spawn_pig(world, next_entity_id(), DVec3::new(0.5, 64.0, 10.5));
+        let target: SharedEntity = Arc::<PigEntity>::clone(&pig) as SharedEntity;
+
+        assert!(
+            llama.set_target(Some(&target)),
+            "the pig is a valid llama target"
+        );
+
+        let mut spit = false;
+        for _ in 0..120 {
+            tick_world(world, 1);
+            if has_llama_spit(world, llama.position()) {
+                spit = true;
+                break;
+            }
+        }
+
+        assert!(
+            spit,
+            "vanilla `RangedAttackGoal` must make the llama spit a `LlamaSpit` at its target"
+        );
+    }
+
+    #[test]
+    fn loose_llama_joins_a_passing_caravan() {
+        let fixture = llama_test_world("llama_joins_caravan");
+        let world = &fixture.world;
+        let lead = spawn_llama(world, next_entity_id(), DVec3::new(0.5, 64.0, 0.5));
+        let follower = spawn_llama(world, next_entity_id(), DVec3::new(0.5, 64.0, 8.5));
+        let holder = spawn_pig(world, next_entity_id(), DVec3::new(3.5, 64.0, 0.5));
+        let holder_entity: SharedEntity = Arc::<PigEntity>::clone(&holder) as SharedEntity;
+        assert!(
+            lead.set_leashed_to(&holder_entity),
+            "the caravan head must be leashed"
+        );
+
+        let mut joined = false;
+        let mut distance_closed = false;
+        for _ in 0..240 {
+            tick_world(world, 1);
+            joined |= follower.in_caravan();
+            distance_closed |= follower.position().distance(lead.position()) < 4.0;
+        }
+
+        assert!(
+            joined,
+            "vanilla `LlamaFollowCaravanGoal` must make a loose llama join a leashed caravan"
+        );
+        assert!(
+            lead.has_caravan_tail(),
+            "vanilla `joinCaravan` must write the follower into the head's tail slot"
+        );
+        assert!(
+            distance_closed,
+            "the caravan follower must trail within two blocks of the head"
+        );
+    }
+
+    #[test]
+    fn trader_llama_defends_the_wandering_trader() {
+        let fixture = llama_test_world("trader_llama_defends");
+        let world = &fixture.world;
+
+        let trader = Arc::new(WanderingTraderEntity::new(
+            &vanilla_entities::WANDERING_TRADER,
+            next_entity_id(),
+            DVec3::new(0.5, 64.0, 0.5),
+            Arc::downgrade(world),
+        ));
+        let trader_entity: SharedEntity = spawn(
+            world,
+            Arc::<WanderingTraderEntity>::clone(&trader) as SharedEntity,
+        );
+        trader.set_despawn_delay(47_999);
+
+        let llama = spawn_trader_llama(world, next_entity_id(), DVec3::new(2.5, 64.0, 0.5));
+        let llama_entity: SharedEntity = Arc::<TraderLlamaEntity>::clone(&llama) as SharedEntity;
+        assert!(
+            llama.set_leashed_to(&trader_entity),
+            "the trader llama must leash to the wandering trader"
+        );
+
+        let zombie = spawn_zombie(world, next_entity_id(), DVec3::new(2.5, 64.0, 8.5));
+        let attacker: SharedEntity = Arc::<ZombieEntity>::clone(&zombie) as SharedEntity;
+        assert!(
+            trader.hurt(
+                world,
+                &DamageSource::direct(&vanilla_damage_types::MOB_ATTACK, Arc::clone(&attacker)),
+                1.0,
+            ),
+            "the trader must accept the zombie's hit"
+        );
+
+        let mut defended = false;
+        let mut spit = false;
+        for _ in 0..140 {
+            tick_world(world, 1);
+            defended |= llama
+                .target()
+                .is_some_and(|target| target.id() == attacker.id());
+            spit |= has_llama_spit(world, llama_entity.position());
+            if defended && spit {
+                break;
+            }
+        }
+
+        assert!(
+            defended,
+            "vanilla `TraderLlamaDefendWanderingTraderGoal` must target the trader's attacker"
+        );
+        assert!(
+            spit,
+            "the defending trader llama must spit at the attacker through `RangedAttackGoal`"
+        );
+    }
+}

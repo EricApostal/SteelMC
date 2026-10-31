@@ -124,11 +124,11 @@ impl CrafterBlock {
         };
 
         let input = crafter.crafting_input();
-        let Some(recipe) = recipe_manager::find_recipe(&input) else {
+        let Some(recipe) = recipe_manager::find_recipe(&input, Some(world.as_ref())) else {
             world.level_event(LEVEL_EVENT_SOUND_CRAFTER_FAIL, pos, 0, None);
             return;
         };
-        let positioned = input.as_positioned_input();
+        let positioned = recipe_manager::positioned_input(&input, Some(world.as_ref()));
         let results = recipe_manager::assemble_recipe(recipe, &positioned.input);
         if results.is_empty() {
             world.level_event(LEVEL_EVENT_SOUND_CRAFTER_FAIL, pos, 0, None);
@@ -148,7 +148,9 @@ impl CrafterBlock {
         let direction = orientation_front(state.get_value(ORIENTATION));
         Self::dispense_item(world, pos, results, direction, recipe.key(), input.items());
 
-        if let Some((remainders, _)) = recipe_manager::get_remaining_items(&input) {
+        if let Some((remainders, _)) =
+            recipe_manager::get_remaining_items(&input, Some(world.as_ref()))
+        {
             for remainder in remainders {
                 if !remainder.is_empty() {
                     Self::dispense_item(

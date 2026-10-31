@@ -30,14 +30,24 @@ use crate::{
     world::World,
 };
 
-/// Minimum chunks per tick (vanilla: 0.01)
-const MIN_CHUNKS_PER_TICK: f32 = 0.1f32;
-/// Maximum chunks per tick (vanilla: 64.0, we use 500.0 for faster loading)
-const MAX_CHUNKS_PER_TICK: f32 = 500.0;
-/// Starting chunks per tick (vanilla: 9.0)
+/// Vanilla `PlayerChunkSender.MIN_CHUNKS_PER_TICK`.
+const MIN_CHUNKS_PER_TICK: f32 = 0.01f32;
+/// Vanilla `PlayerChunkSender.MAX_CHUNKS_PER_TICK`.
+const MAX_CHUNKS_PER_TICK: f32 = 64.0f32;
+/// Vanilla `PlayerChunkSender.START_CHUNKS_PER_TICK`.
 const START_CHUNKS_PER_TICK: f32 = 9.0;
-/// Maximum unacknowledged batches after first ack (vanilla: 10)
+/// Vanilla `PlayerChunkSender.MAX_UNACKNOWLEDGED_BATCHES`.
 const MAX_UNACKNOWLEDGED_BATCHES: u16 = 10;
+
+// The batch rate comes from the client's `ServerboundChunkBatchReceivedPacket`; the
+// server only clamps it. Vanilla's `ChunkBatchSizeCalculator` lives in
+// `net.minecraft.client.multiplayer` and measures how long the *client* takes to
+// process a batch (it is driven by `ClientPacketListener.handleChunkBatchStart` /
+// `handleChunkBatchFinished` and answers with `getDesiredChunksPerTick()`), so it has
+// no server-side counterpart. `ServerLevel` never measures batch timing: the server's
+// whole contract is `Mth.clamp(desiredChunksPerTick, 0.01F, 64.0F)` in
+// `PlayerChunkSender.onChunkBatchReceivedByClient`, which is exactly what
+// [`ChunkBatchPacing::drain_feedback`] does.
 
 /// Connection-wide pacing, shared across world changes and player replacements.
 ///

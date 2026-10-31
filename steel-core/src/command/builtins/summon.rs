@@ -84,13 +84,25 @@ fn create_inner(
     position: DVec3,
     nbt: Option<&NbtCompound>,
 ) -> Result<SharedEntity, CommandSyntaxError> {
+    create_entity_in_world(context.source().world(), entity_type, position, nbt)
+}
+
+/// Vanilla `SummonCommand.createEntity`, minus argument parsing.
+///
+/// `nbt: None` is the command's empty-compound branch, which passes
+/// `finalize = true`; supplying an NBT argument passes `finalize = false`.
+fn create_entity_in_world(
+    world: &Arc<World>,
+    entity_type: EntityTypeRef,
+    position: DVec3,
+    nbt: Option<&NbtCompound>,
+) -> Result<SharedEntity, CommandSyntaxError> {
     if !World::is_in_spawnable_bounds(BlockPos::from(position)) {
         return Err(command_failed(
             &translations::COMMANDS_SUMMON_INVALID_POSITION,
         ));
     }
 
-    let world = context.source().world();
     if world.difficulty() == Difficulty::Peaceful && !entity_type.allowed_in_peaceful {
         return Err(command_failed(
             &translations::COMMANDS_SUMMON_FAILED_PEACEFUL,
@@ -114,7 +126,10 @@ fn create_inner(
         // covers the same save fields as `/data modify entity`'s `setData`.
         apply_command_nbt(&entity, position, nbt)?;
     } else if let Some(mob) = entity.as_mob() {
-        // Vanilla `SummonCommand` sets `finalizeSpawn` only without NBT.
+        // Vanilla `SummonCommand` sets `finalizeSpawn` only without NBT: the
+        // `pos + nbt` executable passes `finalize = false` (bytecode
+        // `iconst_0` after `CompoundTagArgument.getCompoundTag`), while the
+        // `pos`-only and no-position executables pass `true`.
         let _ = mob.finalize_spawn(world, EntitySpawnReason::Command, None);
     }
 
@@ -158,10 +173,12 @@ mod tests {
         execution::{CommandSource, SteelArgumentType, SteelCommandRuntime},
     };
     use crate::entity::entities::PigEntity;
-    use crate::entity::next_entity_id;
-    use crate::test_support::fresh_test_world;
+    use crate::entity::{init_entities, next_entity_id};
+    use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
     use simdnbt::owned::{NbtList, NbtTag};
+    use steel_registry::equipment::EquipmentSlot;
     use steel_registry::vanilla_entities;
+    use steel_utils::ChunkPos;
     use steel_utils::text::DisplayResolutor;
     use text_components::TextComponent;
 
@@ -224,6 +241,54 @@ mod tests {
             Some(node) if node.is_executable()
         ));
         assert!(dispatcher.children(nbt).is_some_and(<[_]>::is_empty));
+    }
+
+    #[test]
+    fn summon_with_nbt_position_skips_finalize_spawn_like_vanilla() {
+        // Vanilla `SummonCommand`: the `pos`-only executable calls
+        // `spawnEntity(..., new CompoundTag(), true)`, while the `pos + nbt`
+        // executable calls `spawnEntity(..., getCompoundTag(c, "nbt"), false)`
+        // (`SummonCommand.lambda$register$2` passes `iconst_0`). An empty
+        // compound therefore does *not* finalize a mob.
+        init_globals();
+        // `init_globals` covers the registry and block behaviours; the entity
+        // factory registry is separate, and without it `ENTITIES.create` is empty
+        // and `/summon` fails with `commands.summon.failed`.
+        init_entities();
+        let fixture = fresh_test_world("summon_nbt_finalize");
+        // `/summon` adds the entity through the world, which requires the target
+        // chunk to be loaded.
+        insert_ready_full_chunk(&fixture.world, ChunkPos::new(0, 0));
+        let position = DVec3::new(0.5, 64.0, 0.5);
+
+        let finalized = create_entity_in_world(
+            &fixture.world,
+            &vanilla_entities::ILLUSIONER,
+            position,
+            None,
+        )
+        .expect("summon without NBT should succeed");
+        let has_main_hand = |entity: &SharedEntity| {
+            entity
+                .as_living_entity()
+                .is_some_and(|living| living.has_item_in_slot(EquipmentSlot::MainHand))
+        };
+        assert!(
+            has_main_hand(&finalized),
+            "`/summon illusioner <pos>` must run finalizeSpawn and equip the bow"
+        );
+
+        let with_nbt = create_entity_in_world(
+            &fixture.world,
+            &vanilla_entities::ILLUSIONER,
+            position,
+            Some(&NbtCompound::new()),
+        )
+        .expect("summon with an empty NBT compound should succeed");
+        assert!(
+            !has_main_hand(&with_nbt),
+            "`/summon illusioner <pos> {{}}` must skip finalizeSpawn in vanilla 26.3"
+        );
     }
 
     #[test]

@@ -16,8 +16,10 @@ use crate::behavior::init_behaviors;
 use crate::chunk::chunk_holder::TickingReadiness;
 use crate::chunk::chunk_ticket_manager::ChunkTicketLevel;
 use crate::entity::ai::goal::SchoolingFish;
+use crate::entity::entities::mobs::neutral::nautilus::NautilusEntity;
 use crate::entity::entities::mobs::neutral::squid::glow_squid::GlowSquidEntity;
 use crate::entity::entities::mobs::neutral::squid::squid::SquidEntity;
+use crate::entity::entities::mobs::passive::tadpole::TadpoleEntity;
 use crate::entity::{Entity, SharedEntity, init_entities};
 use crate::test_support::{TestWorld, fresh_test_world, insert_ready_full_chunk};
 use crate::world::World;
@@ -398,5 +400,83 @@ fn squid_in_air_uses_vanilla_air_drag() {
         squid.position().y < start_y && squid.position().y > f64::from(POOL_MAX_WATER_Y),
         "the squid should still be falling through air: {:?}",
         squid.position()
+    );
+}
+
+fn spawn_tadpole(world: &Arc<World>, id: i32, position: DVec3) -> Arc<TadpoleEntity> {
+    let tadpole = Arc::new(TadpoleEntity::new(
+        &vanilla_entities::TADPOLE,
+        id,
+        position,
+        Arc::downgrade(world),
+    ));
+    add_entity(world, Arc::<TadpoleEntity>::clone(&tadpole) as SharedEntity);
+    tadpole
+}
+
+fn spawn_nautilus(world: &Arc<World>, id: i32, position: DVec3) -> Arc<NautilusEntity> {
+    let nautilus = Arc::new(NautilusEntity::new(
+        &vanilla_entities::NAUTILUS,
+        id,
+        position,
+        Arc::downgrade(world),
+    ));
+    add_entity(
+        world,
+        Arc::<NautilusEntity>::clone(&nautilus) as SharedEntity,
+    );
+    nautilus
+}
+
+/// Ticks a water mob in the pool and returns the highest altitude it reached.
+fn highest_altitude(world: &Arc<World>, position: &dyn Fn() -> DVec3, ticks: i32) -> f64 {
+    let mut highest = f64::MIN;
+    for _ in 0..ticks {
+        tick_world(world, 1);
+        highest = highest.max(position().y);
+    }
+    highest
+}
+
+#[test]
+fn tadpole_swims_up_through_the_water_column() {
+    let fixture = fish_pool_world("tadpole_swims");
+    let world = &fixture.world;
+    // Spawn in the lower half so a swimming tadpole has room to rise; a mob that only
+    // moves on the ground plane sinks with `AbstractFish.travelInWater` and never gets
+    // back above its spawn height.
+    let spawn_y = f64::from(POOL_MIN_WATER_Y) + 2.0;
+    let tadpole = spawn_tadpole(world, 2, DVec3::new(SPAWN_XZ, spawn_y, SPAWN_XZ));
+
+    let highest = highest_altitude(world, &|| tadpole.position(), 600);
+
+    assert!(
+        highest > spawn_y + 1.5,
+        "a tadpole with `SmoothSwimmingMoveControl` must be able to swim up; \
+         spawned at y={spawn_y}, highest y={highest}"
+    );
+    assert!(
+        highest <= f64::from(POOL_MAX_WATER_Y) + 1.0,
+        "the tadpole left the water column: reached y={highest}"
+    );
+}
+
+#[test]
+fn nautilus_swims_up_through_the_water_column() {
+    let fixture = fish_pool_world("nautilus_swims");
+    let world = &fixture.world;
+    let spawn_y = f64::from(POOL_MIN_WATER_Y) + 2.0;
+    let nautilus = spawn_nautilus(world, 2, DVec3::new(SPAWN_XZ, spawn_y, SPAWN_XZ));
+
+    let highest = highest_altitude(world, &|| nautilus.position(), 600);
+
+    assert!(
+        highest > spawn_y + 1.5,
+        "a nautilus with `SmoothSwimmingMoveControl` must be able to swim up; \
+         spawned at y={spawn_y}, highest y={highest}"
+    );
+    assert!(
+        highest <= f64::from(POOL_MAX_WATER_Y) + 1.0,
+        "the nautilus left the water column: reached y={highest}"
     );
 }

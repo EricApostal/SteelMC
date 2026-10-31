@@ -137,7 +137,12 @@ impl Goal for LlamaFollowCaravanGoal {
             return false;
         }
 
-        self_llama.join_caravan(&closest);
+        // Vanilla hands `this.llama` to the head's tail slot; Steel needs the world's
+        // handle for the mob this goal is steering.
+        let Some(mob_handle) = world.get_entity_by_uuid(&mob.uuid()) else {
+            return false;
+        };
+        self_llama.join_caravan(&closest, &mob_handle);
         true
     }
 

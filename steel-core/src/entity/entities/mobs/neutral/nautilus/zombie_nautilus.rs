@@ -39,13 +39,17 @@ use uuid::Uuid;
 
 use crate::behavior::InteractionResult;
 use crate::entity::ai::brain::Brain;
+use crate::entity::ai::control::{
+    SmoothSwimmingLookControl, SmoothSwimmingMoveControl, tick_smooth_swimming_look_control,
+    tick_smooth_swimming_move_control,
+};
 use crate::entity::ai::goal::Tameable;
-use crate::entity::ai::path::PathType;
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::mobs::neutral::nautilus::abstract_nautilus::{
     self, AbstractNautilusParts, Nautilus,
 };
 use crate::entity::entities::mobs::neutral::nautilus::brain;
+use crate::entity::entities::mobs::water::abstract_fish;
 use crate::entity::leash::Leashable;
 use crate::entity::{
     AgeableMob, AgeableMobBase, Animal, AnimalBase, Entity, EntityBase, EntityBaseLoad, EntityPose,
@@ -62,6 +66,12 @@ const TAMABLE_SITTING_FLAG: i8 = 1;
 const TAMABLE_TAME_FLAG: i8 = 4;
 /// Vanilla `TamableAnimal.TELEPORT_WHEN_DISTANCE_IS_SQ`.
 const TELEPORT_WHEN_DISTANCE_SQ: f64 = 144.0;
+/// Vanilla `AbstractNautilus` constructor:
+/// `SmoothSwimmingMoveControl(this, 85, 10, 0.011F, 0.0F, true)`.
+const NAUTILUS_MOVE_CONTROL: SmoothSwimmingMoveControl =
+    SmoothSwimmingMoveControl::new(85, 10, 0.011, 0.0, true);
+/// Vanilla `AbstractNautilus` constructor: `SmoothSwimmingLookControl(this, 10)`.
+const NAUTILUS_LOOK_CONTROL: SmoothSwimmingLookControl = SmoothSwimmingLookControl::new(10);
 
 #[entity_behavior(class = "ZombieNautilus")]
 /// Vanilla zombie nautilus: the hostile, biome-variant nautilus.
@@ -107,11 +117,9 @@ impl ZombieNautilusEntity {
         let ageable_base = AgeableMobBase::new();
         let animal_base = AnimalBase::new();
         AnimalBase::initialize_pathfinding_malus(&mob_base);
-        // Vanilla `AbstractNautilus(AbstractFish)` sets `WATER` malus 0.
-        mob_base
-            .pathfinding_malus()
-            .lock()
-            .set(PathType::Water, 0.0);
+        // Vanilla `AbstractNautilus.createNavigation` -> `WaterBoundPathNavigation`,
+        // and the constructor sets the `WATER` malus to 0.
+        abstract_fish::initialize_water_animal_pathfinding(&mob_base);
         let mut entity_data = ZombieNautilusEntityData::new();
         living_base.initialize_synced_data(&mut entity_data);
 
@@ -700,6 +708,16 @@ impl Mob for ZombieNautilusEntity {
 
     fn tick_path_navigation(&self) {
         PathfinderMob::tick_pathfinder_path_navigation(self);
+    }
+
+    /// Vanilla `AbstractNautilus` constructor installs `SmoothSwimmingMoveControl`.
+    fn tick_move_control(&self) {
+        tick_smooth_swimming_move_control(self, NAUTILUS_MOVE_CONTROL);
+    }
+
+    /// Vanilla `AbstractNautilus` constructor installs `SmoothSwimmingLookControl`.
+    fn tick_look_control(&self) {
+        tick_smooth_swimming_look_control(self, NAUTILUS_LOOK_CONTROL);
     }
 
     fn ambient_sound(&self) -> Option<SoundEventRef> {

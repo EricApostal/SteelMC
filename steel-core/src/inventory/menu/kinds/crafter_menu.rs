@@ -23,6 +23,7 @@ use crate::inventory::menu::{Menu, MenuBehavior};
 use crate::inventory::prelude::*;
 use crate::inventory::recipe_manager;
 use crate::player::player_inventory::PlayerInventory;
+use crate::world::World;
 
 /// Builds the crafter menu.
 ///
@@ -93,7 +94,7 @@ impl CrafterKind {
     }
 
     /// Vanilla `CrafterMenu.refreshRecipeResult`.
-    fn update_result(&self, guard: &mut ContainerLockGuard) {
+    fn update_result(&self, guard: &mut ContainerLockGuard, world: Option<&World>) {
         let Some(container) = guard.get(self.container.container_id()) else {
             return;
         };
@@ -101,7 +102,8 @@ impl CrafterKind {
         for slot in 0..CRAFTER_SLOTS {
             grid.set_item(slot, container.get_item(slot).clone());
         }
-        let result = recipe_manager::assemble_for_container(&grid).unwrap_or_else(ItemStack::empty);
+        let result =
+            recipe_manager::assemble_for_container(&grid, world).unwrap_or_else(ItemStack::empty);
 
         let result_id = ContainerId::from_arc(&self.result_container);
         if let Some(result_container) = guard.get_typed_mut::<ResultContainer>(result_id) {
@@ -136,9 +138,10 @@ impl MenuKind for CrafterKind {
         &mut self,
         behavior: &mut MenuBehavior,
         guard: &mut ContainerLockGuard,
-        _player: &Player,
+        player: &Player,
     ) {
-        self.update_result(guard);
+        let world = player.get_world();
+        self.update_result(guard, Some(world.as_ref()));
         self.update_data(behavior);
     }
 
@@ -157,9 +160,10 @@ impl MenuKind for CrafterKind {
         &mut self,
         _behavior: &mut MenuBehavior,
         guard: &mut ContainerLockGuard,
-        _player: &Player,
+        player: &Player,
     ) {
-        self.update_result(guard);
+        let world = player.get_world();
+        self.update_result(guard, Some(world.as_ref()));
     }
 
     /// Vanilla `ServerGamePacketListenerImpl.handleContainerSlotStateChanged`.

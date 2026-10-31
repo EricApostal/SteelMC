@@ -76,6 +76,7 @@ pub use block_item::{BlockItem, DoubleHighBlockItem};
 pub use boat::BoatItem;
 pub use bonemeal::BoneMealItem;
 pub use bottle::BottleItem;
+pub(crate) use bottle::water_potion_stack;
 pub use bow::BowItem;
 pub use brush::BrushItem;
 pub use bucket::BucketItem;

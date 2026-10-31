@@ -625,6 +625,24 @@ impl RespawnConfigFile {
     }
 }
 
+/// Encodes a persistent player snapshot in Steel's on-disk `STLP` format.
+///
+/// Used by the Anvil world converter so imported vanilla players land in the same
+/// file format the live storage backend reads; callers must supply the standard
+/// `<players dir>/data/<uuid>` destination themselves.
+pub(crate) fn encode_persistent_player(data: &PersistentPlayerData) -> io::Result<Vec<u8>> {
+    let file = PlayerDataFile::from_persistent(data)?;
+    encode_player_file(&file)
+}
+
+/// Decodes a Steel `STLP` player snapshot for export to another format.
+pub(crate) fn decode_persistent_player(
+    bytes: &[u8],
+    source: &str,
+) -> io::Result<PersistentPlayerData> {
+    decode_player_file(bytes, source)?.into_persistent()
+}
+
 fn item_to_nbt_bytes(item: &ItemStack) -> io::Result<Vec<u8>> {
     let NbtTag::Compound(compound) = item.clone().to_nbt_tag() else {
         return Err(io::Error::new(

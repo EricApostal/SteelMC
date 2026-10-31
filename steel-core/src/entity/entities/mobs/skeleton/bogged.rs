@@ -114,9 +114,12 @@ impl BoggedEntity {
     /// Runs vanilla `Bogged.shear`: plays the shear sound, drops the shearing loot at the
     /// entity's body height, and marks the bogged sheared.
     pub fn shear(&self, world: &World, tool: &ItemStack) {
-        world.play_sound_at(
+        // Vanilla's `shear` uses the entity overload of `playSound`, which sends
+        // `ClientboundSoundEntityPacket` so the sound follows the entity.
+        world.play_sound_from_entity(
             &sound_events::ENTITY_BOGGED_SHEAR,
             SoundSource::Players,
+            self.id(),
             self.position(),
             1.0,
             1.0,

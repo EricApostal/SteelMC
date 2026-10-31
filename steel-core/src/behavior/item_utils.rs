@@ -3,8 +3,9 @@
 use crate::player::player_inventory::Prediction;
 use steel_registry::item_stack::ItemStack;
 use steel_registry::items::item::BlockHitResult;
+use steel_utils::types::InteractionHand;
 
-use crate::behavior::UseItemContext;
+use crate::behavior::{InventoryAccess, UseItemContext};
 use crate::inventory::lock::ContainerId;
 use crate::player::Player;
 use crate::player::player_inventory::PlayerInventory;
@@ -33,15 +34,32 @@ pub(crate) fn create_filled_result(
     result_stack: ItemStack,
     limit_creative_stack_size: bool,
 ) {
-    let player = context.player;
-    let overflow = context.inv.with_guard(|guard| {
+    apply_filled_result(
+        &context.inv,
+        context.player,
+        context.hand,
+        result_stack,
+        limit_creative_stack_size,
+    );
+}
+
+/// Vanilla `ItemUtils.createFilledResult` for callers that hold an
+/// [`InventoryAccess`] instead of a [`UseItemContext`].
+pub(crate) fn apply_filled_result(
+    inv: &InventoryAccess,
+    player: &Player,
+    hand: InteractionHand,
+    result_stack: ItemStack,
+    limit_creative_stack_size: bool,
+) {
+    let overflow = inv.with_guard(|guard| {
         let inv_id = ContainerId::from_arc(&player.inventory);
         let Some(inv) = guard.get_typed_mut::<PlayerInventory>(inv_id) else {
             return result_stack;
         };
 
         inv.apply_filled_result(
-            context.hand,
+            hand,
             result_stack,
             player.has_infinite_materials(),
             limit_creative_stack_size,

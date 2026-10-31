@@ -13,7 +13,7 @@ use steel_protocol::packets::game::SoundSource;
 use steel_registry::MobEffectInstance;
 use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::level_events;
-use steel_registry::particle_type::ParticleData;
+use steel_registry::particle_type::{ParticleData, PowerParticleOption};
 use steel_registry::vanilla_entity_data::DragonFireballEntityData;
 use steel_registry::{vanilla_mob_effects, vanilla_particle_types};
 use steel_utils::locks::SyncMutex;
@@ -208,8 +208,9 @@ impl DragonFireballEntity {
         {
             cloud.set_owner(&owner);
         }
-        cloud.set_custom_particle(Some(ParticleData::simple(
+        cloud.set_custom_particle(Some(ParticleData::new(
             &vanilla_particle_types::DRAGON_BREATH,
+            PowerParticleOption::new(1.0),
         )));
         cloud.set_radius(CLOUD_RADIUS);
         cloud.set_duration(CLOUD_DURATION);
@@ -254,9 +255,12 @@ impl HurtingProjectile for DragonFireballEntity {
     }
 
     /// Vanilla `DragonFireball.getTrailParticle` uses a dragon-breath power
-    /// particle; the power option is client-only, so only the type is retained.
+    /// particle.
     fn get_trail_particle(&self) -> Option<ParticleData> {
-        Some(ParticleData::simple(&vanilla_particle_types::DRAGON_BREATH))
+        Some(ParticleData::new(
+            &vanilla_particle_types::DRAGON_BREATH,
+            PowerParticleOption::new(1.0),
+        ))
     }
 }
 

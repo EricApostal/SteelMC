@@ -45,7 +45,7 @@ fn translation_arg(id: &Identifier) -> TextComponent {
 }
 
 /// Vanilla `StopwatchCommand.SUGGEST_STOPWATCHES`.
-fn suggest_stopwatches(builder: &mut SuggestionsBuilder<'_>) {
+pub(super) fn suggest_stopwatches(builder: &mut SuggestionsBuilder<'_>) {
     let prefix = builder.remaining().to_owned();
     let ids: Vec<Identifier> = STOPWATCHES
         .lock()
@@ -58,6 +58,26 @@ fn suggest_stopwatches(builder: &mut SuggestionsBuilder<'_>) {
             builder.suggest(id);
         }
     }
+}
+
+/// Vanilla `Stopwatch.elapsedSeconds`: ticks since start divided by 20.
+///
+/// `None` is vanilla's `StopwatchCommand.ERROR_DOES_NOT_EXIST` branch.
+pub(super) fn elapsed_seconds(tick: u64, id: &Identifier) -> Option<f64> {
+    let stopwatches = STOPWATCHES.lock();
+    stopwatches
+        .iter()
+        .find_map(|(existing, stopwatch)| (existing == id).then_some(*stopwatch))
+        .map(|stopwatch| (tick.saturating_sub(stopwatch.start_tick) as f64) / 20.0)
+}
+
+/// Vanilla `StopwatchCommand.ERROR_DOES_NOT_EXIST`.
+pub(super) fn does_not_exist(id: &Identifier) -> CommandSyntaxError {
+    CommandSyntaxError::dynamic(
+        translations::COMMANDS_STOPWATCH_DOES_NOT_EXIST
+            .message([translation_arg(id)])
+            .component(),
+    )
 }
 
 pub(super) fn registration() -> CommandRegistration<CommandSource> {

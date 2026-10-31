@@ -379,9 +379,22 @@ enum RequirementsJson {
     MatchTool {
         items: Option<ItemHolderSetJson>,
     },
+    LocationCheck {
+        offset: [i32; 3],
+        block: Option<LocationCheckBlockJson>,
+        can_see_sky: Option<bool>,
+    },
     Unsupported {
         condition: Identifier,
     },
+}
+
+/// The const-constructible block predicate shapes passed through to
+/// `LocationCheckBlock`.
+#[derive(Debug)]
+enum LocationCheckBlockJson {
+    Tag(Identifier),
+    Blocks(Vec<Identifier>),
 }
 
 #[derive(Debug)]
@@ -644,7 +657,8 @@ pub(crate) fn build() -> TokenStream {
             EnchantmentValueEffect, EntityFlagsPredicate, EntityLocationPredicate,
             EntityPredicate,
             EntityTypePredicate, EntityTypeSpecificPredicate, EntityVehiclePredicate,
-            EntityTypeSet, LevelBasedValue, MobEffectSelection, ParticlePositionSource,
+            EntityTypeSet, LevelBasedValue, LocationCheckBlock, MobEffectSelection,
+            ParticlePositionSource,
             ParticlePositionSourceType, ParticleVelocitySource, PlayerPredicate,
             TargetedConditionalEnchantmentEffect,
         };

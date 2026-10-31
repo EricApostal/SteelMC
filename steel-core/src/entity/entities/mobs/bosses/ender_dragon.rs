@@ -8,6 +8,14 @@
 //! Server-only paths are ported. Vanilla's client-only presentation (local flap
 //! and growl sounds, `getViewVector` interpolation on the client, phase
 //! `doClientTick` particles) is not ported because Steel has no client.
+//!
+//! # Goals
+//!
+//! Vanilla 26.3 `EnderDragon` declares no `registerGoals` override, so both the
+//! goal and target selectors stay empty; there is no death or target goal either.
+//! Flight and death are phase-driven instead (`EnderDragonPhaseManager` and
+//! `DragonDeathPhase`), so [`EnderDragonEntity`] only ticks the shared selectors
+//! like any other `Mob`.
 
 use std::f32::consts as f32_consts;
 use std::f64::consts as f64_consts;
@@ -1111,16 +1119,22 @@ impl EnderDragonEntity {
 
     /// Returns the entities inside `box` that vanilla's
     /// `EntitySelector.NO_CREATIVE_OR_SPECTATOR` accepts.
+    ///
+    /// Vanilla reaches this box through `Level.getEntities(this, …)`, which skips
+    /// the dragon and its own hitboxes; the AABB query returns the hitboxes, so
+    /// they are dropped through the dragon-part registry here.
     fn contact_targets(
         world: &Arc<World>,
         self_entity: &SharedEntity,
         bounds: WorldAabb,
     ) -> Vec<SharedEntity> {
+        let entity_manager = world.entity_manager();
         world
             .get_entities_in_aabb(&bounds)
             .into_iter()
             .filter(|entity| {
                 !Arc::ptr_eq(entity, self_entity)
+                    && entity_manager.dragon_part_parent(entity.id()) != Some(self_entity.id())
                     && !entity.is_spectator()
                     && entity
                         .as_player()
@@ -1198,6 +1212,10 @@ impl EnderDragonEntity {
 
         self.set_y_body_rot(yaw);
         self.update_parts();
+        // The hitboxes are not registered entities, so the manager does not see
+        // them move; commit their new boxes to the spatial index so projectile
+        // raycasts and entity queries can find them where vanilla would.
+        world.entity_manager().sync_dragon_parts(entity.id());
         self.update_contact_damage(&world, entity);
 
         let in_wall = self.check_walls(&world, self.head_box())
@@ -1358,7 +1376,8 @@ impl EnderDragonEntity {
 
     /// Vanilla `EnderDragon.aiStep` wing knockback and head/neck contact damage.
     fn update_contact_damage(&self, world: &Arc<World>, entity: &SharedEntity) {
-        if self.living_base.invulnerable_time() > 10 {
+        // Vanilla guards the contact damage block with `wasHurtRecently()`.
+        if self.living_base.was_hurt_recently() {
             return;
         }
 
@@ -1743,6 +1762,8 @@ impl Mob for EnderDragonEntity {
     }
 
     fn tick_goal_selectors(&self, entity: &SharedEntity) {
+        // Vanilla `EnderDragon` registers no goals; the empty selectors still tick as
+        // part of `Mob.baseTick`/AI. Death and targeting are phase-driven.
         PathfinderMob::tick_pathfinder_goal_selectors(self, entity);
     }
 

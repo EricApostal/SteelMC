@@ -37,19 +37,13 @@ impl Default for TradeWithPlayerGoal {
     }
 }
 
-/// Vanilla `LivingEntity.wasHurtRecently` (`hurtTime > 0`); Steel tracks
-/// `invulnerableTime > 10` for exactly those ticks, like the wandering trader's goal.
-fn was_hurt_recently(mob: &dyn PathfinderMob) -> bool {
-    mob.living_base().invulnerable_time() > 10
-}
-
 impl Goal for TradeWithPlayerGoal {
     fn controls(&self) -> GoalControls {
         GoalControls::JUMP | GoalControls::MOVE
     }
 
     fn can_use(&mut self, mob: &dyn PathfinderMob) -> bool {
-        if !mob.is_alive() || mob.is_in_water() || !mob.on_ground() || was_hurt_recently(mob) {
+        if !mob.is_alive() || mob.is_in_water() || !mob.on_ground() || mob.was_hurt_recently() {
             return false;
         }
 

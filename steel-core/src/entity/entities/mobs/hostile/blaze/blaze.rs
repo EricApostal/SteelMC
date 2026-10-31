@@ -472,6 +472,15 @@ impl LivingEntity for BlazeEntity {
     }
 
     fn ai_step(&self, entity: &SharedEntity) -> Option<MoveResult> {
+        // Vanilla `Blaze.aiStep`: an airborne blaze that is falling has its downward
+        // velocity scaled by 0.6 before the generic living step, which is what makes it
+        // hover instead of dropping to the ground between climb ticks.
+        if !self.on_ground() {
+            let velocity = self.velocity();
+            if velocity.y < 0.0 {
+                self.set_velocity(DVec3::new(velocity.x, velocity.y * 0.6, velocity.z));
+            }
+        }
         Monster::monster_ai_step(self, entity)
     }
 }

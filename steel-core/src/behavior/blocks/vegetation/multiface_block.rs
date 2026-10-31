@@ -177,7 +177,7 @@ impl MultifaceBlock {
         false
     }
 
-    pub(super) fn has_face(state: BlockStateId, direction: Direction) -> bool {
+    pub(crate) fn has_face(state: BlockStateId, direction: Direction) -> bool {
         state
             .try_get_value(multiface_face_property(direction))
             .unwrap_or(false)

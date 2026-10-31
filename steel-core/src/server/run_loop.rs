@@ -135,6 +135,7 @@ impl Server {
             Ok(saved) => log::info!("Saved {saved} domain command storages"),
             Err(error) => log::error!("Failed to save domain command storage: {error}"),
         }
+        self.save_scheduled_events(true).await;
         let mut total_saved = 0;
         for world in self.worlds.values() {
             world.cleanup(&mut total_saved).await;

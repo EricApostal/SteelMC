@@ -69,6 +69,14 @@ pub(crate) use context::{
 pub(crate) use context_chain::{ContextChain, ContextChainStage};
 pub(crate) use dispatcher::CommandDispatcher;
 pub(crate) use error::{CommandSyntaxError, CommandSyntaxErrorKind};
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "command graph tests inspect nodes through this re-export"
+    )
+)]
+pub(crate) use node::CommandNode;
 pub(crate) use node::{
     CommandRedirectTarget, CommandRequirement, NodeId, NodeKind, RegistrationError,
     RegistrationErrorKind,

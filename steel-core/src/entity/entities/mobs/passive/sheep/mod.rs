@@ -212,9 +212,12 @@ impl SheepEntity {
     /// Runs vanilla `Sheep.shear`: plays the shear sound, drops the shearing loot
     /// one item at a time with the vanilla jitter, and marks the sheep as sheared.
     pub fn shear(&self, world: &World, tool: &ItemStack) {
-        world.play_sound_at(
+        // Vanilla `Sheep.shear`: `level.playSound(null, this, SHEEP_SHEAR, …)`,
+        // the entity overload that sends `ClientboundSoundEntityPacket`.
+        world.play_sound_from_entity(
             &sound_events::ENTITY_SHEEP_SHEAR,
             SoundSource::Players,
+            self.id(),
             self.position(),
             1.0,
             1.0,

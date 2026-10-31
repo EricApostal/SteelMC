@@ -18,8 +18,11 @@ use crate::worldgen::{
     FlatGeneratorSettings, VanillaGenerator,
 };
 use steel_worldgen::biomes::BiomeSourceKind;
+use steel_worldgen::density::NoiseSettingsKey;
 use steel_worldgen::density_functions::{
-    end::EndNoiseSettings, nether::NetherNoiseSettings, overworld::OverworldNoiseSettings,
+    amplified::AmplifiedNoiseSettings, caves::CavesNoiseSettings, end::EndNoiseSettings,
+    floating_islands::FloatingIslandsNoiseSettings, large_biomes::LargeBiomesNoiseSettings,
+    nether::NetherNoiseSettings, overworld::OverworldNoiseSettings,
 };
 use steel_worldgen::structure::placement::load_vanilla_structure_sets;
 
@@ -256,7 +259,7 @@ struct ResolvedPresetConfig {
 enum PresetDimensionGenerator {
     Noise {
         biome_source: PresetNoiseBiomeSource,
-        settings: Identifier,
+        settings: NoiseSettingsKey,
     },
     Flat(ResolvedFlatConfig),
     Debug,
@@ -493,21 +496,10 @@ fn validate_preset_config(config: &toml::Value) -> Result<WorldGeneratorConfigDa
                 }
                 PresetBiomeSource::TheEnd => PresetNoiseBiomeSource::End,
             };
-            // Steel transpiles one noise-settings set per dimension, so only the three
-            // vanilla dimension settings can be instantiated today.
-            if settings != &Identifier::vanilla_static("overworld")
-                && settings != &Identifier::vanilla_static("nether")
-                && settings != &Identifier::vanilla_static("end")
-            {
-                return Err(format!(
-                    "noise settings {settings} in world preset {} are not supported yet \
-                     (only minecraft:overworld, minecraft:nether, minecraft:end)",
-                    parsed.preset
-                ));
-            }
+            let settings = resolve_preset_noise_settings(settings, &parsed.preset)?;
             PresetDimensionGenerator::Noise {
                 biome_source,
-                settings: settings.clone(),
+                settings,
             }
         }
         WorldPresetGenerator::Flat { settings } => {
@@ -538,6 +530,19 @@ fn validate_preset_config(config: &toml::Value) -> Result<WorldGeneratorConfigDa
         dimension_type: dimension.dimension_type.clone(),
         generator,
     }))
+}
+
+/// Resolves a preset dimension's `noise_settings` reference to a transpiled settings key.
+///
+/// Settings without transpiled density functions are rejected rather than silently
+/// falling back to the overworld's.
+fn resolve_preset_noise_settings(
+    settings: &Identifier,
+    preset: &Identifier,
+) -> Result<NoiseSettingsKey, String> {
+    NoiseSettingsKey::from_identifier(settings).ok_or_else(|| {
+        format!("noise settings {settings} in world preset {preset} are not supported")
+    })
 }
 
 fn parse_flat_config(config: &toml::Value) -> Result<FlatGeneratorConfig, String> {
@@ -727,7 +732,17 @@ fn create_preset(
         } => {
             let seed_u = seed as u64;
             let source = match biome_source {
-                PresetNoiseBiomeSource::Overworld => BiomeSourceKind::overworld(seed_u),
+                // Vanilla derives the multi-noise climate sampler from the generator's
+                // noise settings: large biomes widens biomes through the
+                // `overworld_large_biomes` climate router while keeping the overworld
+                // parameter list. `amplified` reuses the overworld climate router.
+                PresetNoiseBiomeSource::Overworld => {
+                    if *settings == NoiseSettingsKey::LargeBiomes {
+                        BiomeSourceKind::large_biomes(seed_u)
+                    } else {
+                        BiomeSourceKind::overworld(seed_u)
+                    }
+                }
                 PresetNoiseBiomeSource::Nether => BiomeSourceKind::nether(seed_u),
                 PresetNoiseBiomeSource::End => BiomeSourceKind::end(seed_u),
                 PresetNoiseBiomeSource::Fixed(biome) => {
@@ -737,34 +752,44 @@ fn create_preset(
                     BiomeSourceKind::fixed(biome)
                 }
             };
-            let generator = if settings == &Identifier::vanilla_static("overworld") {
-                ChunkGeneratorType::Overworld(VanillaGenerator::new(
+            let generator = match settings {
+                NoiseSettingsKey::Overworld => ChunkGeneratorType::Overworld(
+                    VanillaGenerator::new(world_path, source, seed_u, thread_pool),
+                ),
+                NoiseSettingsKey::Nether => ChunkGeneratorType::Nether(VanillaGenerator::new(
                     world_path,
                     source,
                     seed_u,
                     thread_pool,
-                ))
-            } else if settings == &Identifier::vanilla_static("nether") {
-                ChunkGeneratorType::Nether(VanillaGenerator::new(
+                )),
+                NoiseSettingsKey::End => ChunkGeneratorType::End(VanillaGenerator::new(
                     world_path,
                     source,
                     seed_u,
                     thread_pool,
-                ))
-            } else {
-                ChunkGeneratorType::End(VanillaGenerator::new(
+                )),
+                NoiseSettingsKey::LargeBiomes => ChunkGeneratorType::LargeBiomes(
+                    VanillaGenerator::new(world_path, source, seed_u, thread_pool),
+                ),
+                NoiseSettingsKey::Amplified => ChunkGeneratorType::Amplified(
+                    VanillaGenerator::new(world_path, source, seed_u, thread_pool),
+                ),
+                NoiseSettingsKey::Caves => ChunkGeneratorType::Caves(VanillaGenerator::new(
                     world_path,
                     source,
                     seed_u,
                     thread_pool,
-                ))
+                )),
+                NoiseSettingsKey::FloatingIslands => ChunkGeneratorType::FloatingIslands(
+                    VanillaGenerator::new(world_path, source, seed_u, thread_pool),
+                ),
             };
             Ok(GeneratorOutput {
                 dimension_type,
                 config: normalized_config,
                 generator,
                 is_flat: false,
-                sea_level: sea_level_for_dimension_type(dimension_type),
+                sea_level: sea_level_for_noise_settings(*settings),
             })
         }
         PresetDimensionGenerator::Flat(flat) => {
@@ -903,10 +928,92 @@ fn sea_level_for_dimension_type(dimension_type: DimensionTypeRef) -> i32 {
     }
 }
 
+/// Sea level of a preset's noise settings. A preset may pair a dimension type with
+/// non-default settings (`caves`, `floating_islands`), so the settings are authoritative.
+const fn sea_level_for_noise_settings(settings: NoiseSettingsKey) -> i32 {
+    match settings {
+        NoiseSettingsKey::Overworld => OverworldNoiseSettings::SEA_LEVEL,
+        NoiseSettingsKey::Nether => NetherNoiseSettings::SEA_LEVEL,
+        NoiseSettingsKey::End => EndNoiseSettings::SEA_LEVEL,
+        NoiseSettingsKey::LargeBiomes => LargeBiomesNoiseSettings::SEA_LEVEL,
+        NoiseSettingsKey::Amplified => AmplifiedNoiseSettings::SEA_LEVEL,
+        NoiseSettingsKey::Caves => CavesNoiseSettings::SEA_LEVEL,
+        NoiseSettingsKey::FloatingIslands => FloatingIslandsNoiseSettings::SEA_LEVEL,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::behavior::init_behaviors;
+    use crate::chunk::Chunk;
+    use crate::chunk::section::{ChunkSection, Sections};
+    use crate::worldgen::generator::{ChunkGenerator as _, GenerationChunk, TerrainPhase};
+    use glam::IVec3;
+    use std::sync::Weak;
     use steel_registry::init_vanilla_registry;
+    use steel_registry::{vanilla_biomes, vanilla_blocks, vanilla_dimension_types};
+    use steel_worldgen::biomes::BiomeSourceKind;
+
+    fn make_overworld_chunk() -> Chunk {
+        let dimension = &vanilla_dimension_types::OVERWORLD;
+        let sections = (0..dimension.height / 16)
+            .map(|_| ChunkSection::new_empty())
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Chunk::new(
+            Sections::from_owned(sections),
+            steel_utils::ChunkPos::new(0, 0),
+            dimension.min_y,
+            dimension.height,
+            Weak::new(),
+        )
+    }
+
+    fn self_neighbor_biome(chunk: &Chunk, quart: IVec3) -> u16 {
+        let sections = chunk.sections();
+        let min_quart_y = chunk.min_y() >> 2;
+        let quart_y =
+            (quart.y - min_quart_y).clamp(0, (sections.sections.len() * 4) as i32 - 1) as usize;
+        sections.sections[quart_y / 4].read().biomes.get(
+            (quart.x & 3) as usize,
+            quart_y % 4,
+            (quart.z & 3) as usize,
+        )
+    }
+
+    fn generated_blocks(output: &GeneratorOutput) -> Vec<steel_utils::BlockStateId> {
+        let chunk = make_overworld_chunk();
+        output.generator.create_biomes(&chunk);
+        output.generator.build_terrain(
+            GenerationChunk::<TerrainPhase>::for_test(&chunk),
+            None,
+            &|quart: IVec3| self_neighbor_biome(&chunk, quart),
+        );
+        let mut blocks = Vec::with_capacity((chunk.height() * 16 * 16) as usize);
+        for relative_y in 0..chunk.height() as usize {
+            for z in 0..16 {
+                for x in 0..16 {
+                    let Some(state) = chunk.get_relative_block(x, relative_y, z) else {
+                        panic!("test coordinates must stay inside the chunk");
+                    };
+                    blocks.push(state);
+                }
+            }
+        }
+        blocks
+    }
+
+    fn preset_output<'a>(
+        outputs: &'a [(&str, GeneratorOutput)],
+        preset: &str,
+    ) -> &'a GeneratorOutput {
+        &outputs
+            .iter()
+            .find(|(name, _)| *name == preset)
+            .unwrap_or_else(|| panic!("{preset} should have been created"))
+            .1
+    }
 
     #[test]
     fn default_flat_config_matches_vanilla_superflat() {
@@ -997,5 +1104,308 @@ mod tests {
         let error = validate_flat_config(&unknown_config)
             .expect_err("an unknown structure set should be rejected");
         assert!(error.contains("unknown structure set"), "{error}");
+    }
+
+    #[test]
+    fn vanilla_presets_select_their_noise_settings() {
+        use std::panic;
+        use std::thread;
+
+        // Larger stack to match the other generation tests — noise and carver
+        // generation recurses deeply enough to overflow the default stack.
+        let result = thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(vanilla_presets_select_their_noise_settings_inner)
+            .expect("Failed to spawn test thread")
+            .join();
+
+        if let Err(payload) = result {
+            panic::resume_unwind(payload);
+        }
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "resolves every vanilla preset and asserts each overworld noise settings entry end-to-end"
+    )]
+    fn vanilla_presets_select_their_noise_settings_inner() {
+        init_vanilla_registry();
+        init_behaviors();
+
+        let registry = WorldGeneratorRegistry::new_with_builtins()
+            .expect("built-in generator registry should initialize");
+        let thread_pool = Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .expect("Cannot create a thread pool."),
+        );
+
+        // Every vanilla preset resolves through the registry to the overworld stem.
+        let presets = [
+            "normal",
+            "large_biomes",
+            "amplified",
+            "single_biome_surface",
+            "flat",
+            "flat_all_dimensions",
+            "debug_all_block_states",
+        ];
+        let outputs: Vec<(&str, GeneratorOutput)> = presets
+            .iter()
+            .map(|preset| {
+                (
+                    *preset,
+                    create_preset_generator(&registry, preset, &thread_pool),
+                )
+            })
+            .collect();
+
+        for (preset, output) in &outputs {
+            assert_eq!(
+                output.dimension_type, &OVERWORLD,
+                "{preset} should resolve the overworld dimension type"
+            );
+        }
+
+        // Noise presets pick the transpiled settings entry from the datapack.
+        for preset in ["normal", "single_biome_surface"] {
+            assert!(
+                matches!(
+                    &preset_output(&outputs, preset).generator,
+                    ChunkGeneratorType::Overworld(_)
+                ),
+                "{preset} should use the overworld noise settings"
+            );
+        }
+        assert!(
+            matches!(
+                &preset_output(&outputs, "large_biomes").generator,
+                ChunkGeneratorType::LargeBiomes(_)
+            ),
+            "large_biomes should use the large biomes noise settings"
+        );
+        assert!(
+            matches!(
+                &preset_output(&outputs, "amplified").generator,
+                ChunkGeneratorType::Amplified(_)
+            ),
+            "amplified should use the amplified noise settings"
+        );
+
+        let ChunkGeneratorType::Overworld(normal_generator) =
+            &preset_output(&outputs, "normal").generator
+        else {
+            unreachable!("normal preset checked above")
+        };
+        let ChunkGeneratorType::LargeBiomes(large_biomes_generator) =
+            &preset_output(&outputs, "large_biomes").generator
+        else {
+            unreachable!("large_biomes preset checked above")
+        };
+        let ChunkGeneratorType::Amplified(amplified_generator) =
+            &preset_output(&outputs, "amplified").generator
+        else {
+            panic!("amplified should use the amplified noise settings")
+        };
+        let ChunkGeneratorType::Overworld(single_biome_generator) =
+            &preset_output(&outputs, "single_biome_surface").generator
+        else {
+            unreachable!("single_biome_surface checked above")
+        };
+
+        // Vanilla derives the climate sampler from the chunk generator's settings:
+        // large biomes widens biomes through the large-biomes climate router, while
+        // amplified reuses the overworld climate router and parameter list.
+        assert!(matches!(
+            normal_generator.biome_source(),
+            BiomeSourceKind::Overworld(_)
+        ));
+        assert!(matches!(
+            large_biomes_generator.biome_source(),
+            BiomeSourceKind::LargeBiomes(_)
+        ));
+        assert!(matches!(
+            amplified_generator.biome_source(),
+            BiomeSourceKind::Overworld(_)
+        ));
+        assert!(matches!(
+            single_biome_generator.biome_source(),
+            BiomeSourceKind::Fixed(_)
+        ));
+        assert_eq!(
+            single_biome_generator.noise_biome(0, 0, 0).key,
+            vanilla_biomes::PLAINS.key
+        );
+        assert_eq!(
+            preset_output(&outputs, "large_biomes").sea_level,
+            LargeBiomesNoiseSettings::SEA_LEVEL
+        );
+
+        let air = REGISTRY.blocks.get_default_state_id(&vanilla_blocks::AIR);
+        let normal_blocks = generated_blocks(preset_output(&outputs, "normal"));
+        let large_biomes_blocks = generated_blocks(preset_output(&outputs, "large_biomes"));
+        let amplified_blocks = generated_blocks(preset_output(&outputs, "amplified"));
+        for blocks in [&normal_blocks, &large_biomes_blocks, &amplified_blocks] {
+            assert!(
+                blocks.iter().any(|state| *state != air),
+                "a generated chunk should contain solid terrain"
+            );
+        }
+        assert_ne!(
+            normal_blocks, large_biomes_blocks,
+            "large biomes should shape terrain with its own density functions"
+        );
+        assert_ne!(
+            normal_blocks, amplified_blocks,
+            "amplified should shape terrain with its own density functions"
+        );
+    }
+
+    fn create_preset_generator(
+        registry: &WorldGeneratorRegistry,
+        preset: &str,
+        thread_pool: &Arc<rayon::ThreadPool>,
+    ) -> GeneratorOutput {
+        let config = toml::Value::Table(Map::from_iter([
+            (
+                "preset".to_owned(),
+                toml::Value::String(format!("minecraft:{preset}")),
+            ),
+            (
+                "dimension".to_owned(),
+                toml::Value::String("minecraft:overworld".to_owned()),
+            ),
+        ]));
+        let validated = registry
+            .validate_config(&Identifier::vanilla_static("preset"), &config)
+            .unwrap_or_else(|error| panic!("{preset} should validate: {error}"));
+        registry
+            .create(None, &validated, 0, Arc::clone(thread_pool))
+            .unwrap_or_else(|error| panic!("{preset} should create a generator: {error}"))
+    }
+
+    #[test]
+    fn unknown_noise_settings_are_rejected() {
+        let error = resolve_preset_noise_settings(
+            &Identifier::vanilla_static("not_a_noise_settings"),
+            &Identifier::vanilla_static("normal"),
+        )
+        .expect_err("unknown noise settings should be rejected");
+        assert!(
+            error.contains("noise settings minecraft:not_a_noise_settings"),
+            "{error}"
+        );
+
+        // Every transpiled settings entry still resolves to its key, including the
+        // ones only reachable through custom presets today.
+        for key in NoiseSettingsKey::ALL {
+            assert_eq!(
+                resolve_preset_noise_settings(
+                    &key.identifier(),
+                    &Identifier::vanilla_static("normal")
+                )
+                .unwrap_or_else(|error| panic!("{key:?} should resolve: {error}")),
+                key
+            );
+        }
+    }
+
+    #[test]
+    fn custom_preset_settings_select_matching_generator() {
+        use std::panic;
+        use std::thread;
+
+        // `caves` and `floating_islands` are not referenced by any vanilla world preset,
+        // so this drives the preset constructor directly to cover their dispatch arms.
+        let result = thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(custom_preset_settings_select_matching_generator_inner)
+            .expect("Failed to spawn test thread")
+            .join();
+
+        if let Err(payload) = result {
+            panic::resume_unwind(payload);
+        }
+    }
+
+    fn custom_preset_settings_select_matching_generator_inner() {
+        init_vanilla_registry();
+        init_behaviors();
+        let thread_pool = Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .expect("Cannot create a thread pool."),
+        );
+
+        let cases = [
+            (
+                NoiseSettingsKey::Caves,
+                CavesNoiseSettings::MIN_Y,
+                CavesNoiseSettings::HEIGHT,
+                CavesNoiseSettings::SEA_LEVEL,
+            ),
+            (
+                NoiseSettingsKey::FloatingIslands,
+                FloatingIslandsNoiseSettings::MIN_Y,
+                FloatingIslandsNoiseSettings::HEIGHT,
+                FloatingIslandsNoiseSettings::SEA_LEVEL,
+            ),
+        ];
+
+        let air = REGISTRY.blocks.get_default_state_id(&vanilla_blocks::AIR);
+        for (settings, min_y, height, sea_level) in cases {
+            let config = WorldGeneratorConfigData::Preset(ResolvedPresetConfig {
+                preset: Identifier::vanilla_static("custom"),
+                dimension: Identifier::vanilla_static("overworld"),
+                dimension_type: Identifier::vanilla_static("overworld"),
+                generator: PresetDimensionGenerator::Noise {
+                    biome_source: PresetNoiseBiomeSource::Fixed(Identifier::vanilla_static(
+                        "plains",
+                    )),
+                    settings,
+                },
+            });
+            let output = create_preset(None, &config, 0, &thread_pool)
+                .unwrap_or_else(|error| panic!("{settings:?} preset should create: {error}"));
+
+            match (&output.generator, settings) {
+                (ChunkGeneratorType::Caves(_), NoiseSettingsKey::Caves)
+                | (ChunkGeneratorType::FloatingIslands(_), NoiseSettingsKey::FloatingIslands) => {}
+                _ => panic!("{settings:?} selected the wrong chunk generator"),
+            }
+            assert_eq!(output.generator.min_y(), min_y, "{settings:?} min_y");
+            assert_eq!(output.generator.gen_depth(), height, "{settings:?} height");
+            assert_eq!(output.sea_level, sea_level, "{settings:?} sea level");
+
+            let sections = (0..height / 16)
+                .map(|_| ChunkSection::new_empty())
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            let chunk = Chunk::new(
+                Sections::from_owned(sections),
+                steel_utils::ChunkPos::new(0, 0),
+                min_y,
+                height,
+                Weak::new(),
+            );
+            output.generator.create_biomes(&chunk);
+            output
+                .generator
+                .fill_from_noise(GenerationChunk::<TerrainPhase>::for_test(&chunk), None);
+            assert!(
+                (0..chunk.height() as usize).any(|relative_y| {
+                    (0..16).any(|z| {
+                        (0..16).any(|x| {
+                            chunk
+                                .get_relative_block(x, relative_y, z)
+                                .is_some_and(|state| state != air)
+                        })
+                    })
+                }),
+                "{settings:?} should generate solid terrain"
+            );
+        }
     }
 }

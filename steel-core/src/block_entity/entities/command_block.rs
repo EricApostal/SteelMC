@@ -4,22 +4,37 @@
 //! shared `BaseCommandBlock`, plus the `powered`/`auto`/`conditionMet` flags on the entity. The
 //! three command-block kinds differ only by `Mode` (`REDSTONE`, `AUTO`, `SEQUENCE`).
 
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Weak};
 
+use chrono::Local;
+use glam::DVec3;
 use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
 use simdnbt::owned::NbtCompound;
 use simdnbt::{FromNbtTag as _, ToNbtTag as _};
 use steel_registry::blocks::BlockRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
-use steel_registry::blocks::properties::BlockStateProperties;
+use steel_registry::blocks::properties::{BlockStateProperties, Direction};
+use steel_registry::vanilla_game_rules::{
+    COMMAND_BLOCK_OUTPUT, MAX_COMMAND_SEQUENCE_LENGTH, SEND_COMMAND_FEEDBACK,
+};
 use steel_registry::{vanilla_block_entity_types, vanilla_blocks};
 use steel_utils::{
     BlockPos, BlockStateId, Downcast as _, DowncastType, DowncastTypeKey, locks::SyncMutex,
 };
-use text_components::TextComponent;
+use text_components::{Modifier as _, TextComponent};
 
 use crate::block_entity::{BlockEntity, BlockEntityBase};
+use crate::command::execution::{
+    CommandOutputCapture, CommandResultCallback, CommandSource, perform_prefixed_command,
+};
+use crate::permission::PermissionLevel;
 use crate::world::World;
+
+/// Vanilla `BaseCommandBlock` easter egg command (`Searge`).
+const SEARGE_COMMAND: &str = "Searge";
+/// Vanilla `BaseCommandBlock` easter egg output.
+const SEARGE_OUTPUT: &str = "#itzlipofutzli";
 
 /// Vanilla `CommandBlockEntity.Mode`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -292,24 +307,18 @@ impl CommandBlockEntity {
     }
 
     /// Vanilla `CommandBlock.tick`: mode-dependent execution.
-    ///
-    /// The command dispatch itself needs an `Arc<Server>` handle that `World` does not expose, so
-    /// the execute calls are the one missing foundation (see the TODOs below).
     pub fn server_tick(&self, world: &Arc<World>, pos: BlockPos, block: BlockRef) {
         let (mode, was_condition_met, powered, auto) = {
             let state = self.state.lock();
             (state.mode, state.condition_met, state.powered, state.auto)
         };
+        let command_set = !self.command().is_empty();
 
         match mode {
             CommandBlockMode::Auto => {
                 self.mark_condition_met();
                 if was_condition_met {
-                    // TODO(Foundations): `execute` — dispatch `self.command()` through
-                    // `Server::submit_command` and accumulate the callback's success count. A
-                    // block entity has no `Arc<Server>` handle (`World` exposes none), so the
-                    // dispatcher call needs a world→server accessor (owner: Main /
-                    // ServerFoundations).
+                    self.execute(world, pos, command_set);
                 } else if self.is_conditional() {
                     self.set_success_count(0);
                 }
@@ -320,17 +329,191 @@ impl CommandBlockEntity {
             }
             CommandBlockMode::Redstone => {
                 if was_condition_met {
-                    // TODO(Foundations): same dispatcher dependency as the `Auto` branch.
+                    self.execute(world, pos, command_set);
                 } else if self.is_conditional() {
                     self.set_success_count(0);
                 }
             }
+            // Vanilla `CommandBlock.tick` never executes a chain block directly; its
+            // predecessor's `executeChain` drives it.
             CommandBlockMode::Sequence => {}
         }
 
         // Vanilla `CommandBlock.tick` ends with `updateNeighbourForOutputSignal`, not a full
         // neighbor update.
         world.update_neighbor_for_output_signal(pos, block);
+    }
+
+    /// Vanilla `CommandBlock.execute`: run the command, then hand off to the chain.
+    fn execute(&self, world: &Arc<World>, pos: BlockPos, command_set: bool) {
+        if command_set {
+            self.perform_command(world);
+        } else {
+            self.set_success_count(0);
+        }
+
+        let facing = self
+            .get_block_state()
+            .get_value(&BlockStateProperties::FACING);
+        Self::execute_chain(world, pos, facing);
+    }
+
+    /// Vanilla `CommandBlock.executeChain`: walk the chain blocks in the facing direction
+    /// and execute every powered or automatic one, stopping at the first block that does
+    /// not run.
+    fn execute_chain(world: &Arc<World>, pos: BlockPos, direction: Direction) {
+        let limit = world.get_game_rule(&MAX_COMMAND_SEQUENCE_LENGTH);
+        let mut remaining = limit;
+        let mut cursor = pos;
+        let mut direction = direction;
+
+        while remaining > 0 {
+            remaining -= 1;
+            cursor = cursor.relative(direction);
+            let state = world.get_block_state(cursor);
+            let block = state.get_block();
+            if block != &vanilla_blocks::CHAIN_COMMAND_BLOCK {
+                break;
+            }
+            let Some(entity) = world.get_block_entity(cursor) else {
+                break;
+            };
+            let Some(chain) = entity.downcast_ref::<CommandBlockEntity>() else {
+                break;
+            };
+            if chain.mode() != CommandBlockMode::Sequence {
+                break;
+            }
+
+            if chain.is_powered() || chain.is_automatic() {
+                if chain.mark_condition_met() {
+                    if !chain.perform_command(world) {
+                        break;
+                    }
+                    world.update_neighbor_for_output_signal(cursor, block);
+                } else if chain.is_conditional() {
+                    chain.set_success_count(0);
+                }
+            }
+
+            direction = state.get_value(&BlockStateProperties::FACING);
+        }
+
+        if remaining <= 0 {
+            // Vanilla logs the same warning when the gamerule limit is exhausted.
+            tracing::warn!("Command Block chain tried to execute more than {limit} steps!");
+        }
+    }
+
+    /// Vanilla `BaseCommandBlock.performCommand`.
+    ///
+    /// Executes the stored command right here, on the tick that scheduled the block,
+    /// because the success count gates the chain in the same tick. Returns `false` when
+    /// the same game tick already ran this block, which stops a chain at that block.
+    fn perform_command(&self, world: &Arc<World>) -> bool {
+        let game_time = world.game_time();
+        if game_time == self.state.lock().last_execution {
+            return false;
+        }
+
+        let command = self.command();
+        if command.eq_ignore_ascii_case(SEARGE_COMMAND) {
+            // Vanilla assigns `lastOutput` directly: `onUpdated` is deliberately not
+            // refreshed, and the execution bookkeeping below is skipped.
+            let mut state = self.state.lock();
+            state.last_output = Some(TextComponent::plain(SEARGE_OUTPUT));
+            state.success_count = 1;
+            return true;
+        }
+
+        let track_output = self.state.lock().track_output;
+        self.set_success_count(0);
+        // Vanilla `BaseCommandBlock.performCommand`: a disabled command block never runs
+        // the command, and `StringUtil.isNullOrEmpty` only rejects the empty string.
+        if world.is_command_block_enabled() && !command.is_empty() {
+            // Vanilla clears the previous output before dispatch.
+            self.set_last_output(None);
+            self.dispatch(world, &command, track_output);
+        }
+
+        let update_last_execution = self.state.lock().update_last_execution;
+        self.state.lock().last_execution = if update_last_execution { game_time } else { -1 };
+        true
+    }
+
+    /// Builds the vanilla `GAMEMASTER` command source at the block center and runs the
+    /// command, accumulating the callback's successes like
+    /// `BaseCommandBlock.performCommand`'s `withCallback`.
+    fn dispatch(&self, world: &Arc<World>, command: &str, track_output: bool) {
+        let Some(server) = world.server() else {
+            return;
+        };
+        let pos = self.get_block_pos();
+        let facing = self
+            .get_block_state()
+            .get_value(&BlockStateProperties::FACING);
+        let captured = Arc::new(SyncMutex::new(None::<TextComponent>));
+        let output = track_output.then(|| {
+            let captured = Arc::clone(&captured);
+            let accepts_success = world.get_game_rule(&SEND_COMMAND_FEEDBACK);
+            let informs_admins = world.get_game_rule(&COMMAND_BLOCK_OUTPUT);
+            CommandOutputCapture::new(
+                move |message| {
+                    // Vanilla `CloseableCommandBlockSource.sendSystemMessage`: prefix the
+                    // local time of day and keep the latest message as the last output.
+                    *captured.lock() = Some(
+                        TextComponent::plain(format!("[{}] ", Local::now().format("%H:%M:%S")))
+                            .add_child(message.clone()),
+                    );
+                },
+                accepts_success,
+                true,
+                informs_admins,
+            )
+        });
+
+        let source = Arc::new(CommandSource::for_command_block(
+            server,
+            Arc::clone(world),
+            DVec3::new(
+                f64::from(pos.0.x) + 0.5,
+                f64::from(pos.0.y) + 0.5,
+                f64::from(pos.0.z) + 0.5,
+            ),
+            (facing.to_yaw(), 0.0),
+            PermissionLevel::Gamemasters,
+            output,
+        ));
+        let successes = Arc::new(AtomicI32::new(0));
+        let callback = CommandResultCallback::new({
+            let successes = Arc::clone(&successes);
+            move |success, _result| {
+                if success {
+                    successes.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        });
+        perform_prefixed_command(&source, command, callback);
+        self.set_success_count(successes.load(Ordering::Relaxed));
+
+        if track_output {
+            // Vanilla's source refreshes `LastOutput` and the block update only when the
+            // command actually emitted a message.
+            let captured = captured.lock().clone();
+            match captured {
+                Some(output) => {
+                    self.set_last_output(Some(output));
+                    self.on_updated(world);
+                }
+                None => self.state.lock().last_output = None,
+            }
+        }
+    }
+
+    /// Vanilla `BaseCommandBlock.getLastOutput`.
+    #[must_use]
+    pub fn last_output(&self) -> Option<TextComponent> {
+        self.state.lock().last_output.clone()
     }
 }
 
@@ -404,5 +587,296 @@ impl BlockEntity for CommandBlockEntity {
     fn on_block_state_changed(&self, state: BlockStateId) {
         // Vanilla `CommandBlockEntity.getMode` derives the mode from the block kind.
         self.state.lock().mode = Self::mode_for_block(state.get_block());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::slice;
+
+    use steel_registry::vanilla_game_rules::MAX_ENTITY_CRAMMING;
+    use steel_registry::{init_vanilla_registry, vanilla_entities};
+    use steel_utils::ChunkPos;
+    use steel_utils::types::UpdateFlags;
+    use text_components::content::Content;
+    use tokio::runtime::Builder;
+
+    use crate::behavior::init_behaviors;
+    use crate::block_entity::{SharedBlockEntity, init_block_entities};
+    use crate::config::ResolvedDomainConfig;
+    use crate::entity::Entity as _;
+    use crate::entity::entities::objects::CommandBlockMinecartEntity;
+    use crate::entity::next_entity_id;
+    use crate::permission::PermissionSubjectIndex;
+    use crate::server::{Server, test_server_with_worlds_and_config};
+    use crate::test_support::{
+        TestWorld, fresh_test_world, insert_entity_ticking_chunks, settle_entity_ticking_chunk,
+        test_runtime_config, tick_test_world,
+    };
+
+    use super::*;
+
+    const POS: BlockPos = BlockPos::new(8, 64, 8);
+
+    /// A fresh test world with its 5x5 entity-ticking neighbourhood and the server that
+    /// owns it, so a block tick can reach the command dispatcher.
+    fn ticking_setup(name: &'static str) -> (TestWorld, Arc<World>, Arc<Server>) {
+        init_vanilla_registry();
+        init_behaviors();
+        init_block_entities();
+
+        let fixture = fresh_test_world(name);
+        let world = Arc::clone(&fixture.world);
+        let center = ChunkPos::new(POS.0.x >> 4, POS.0.z >> 4);
+        insert_entity_ticking_chunks(&world, center, 2);
+        settle_entity_ticking_chunk(&world, center);
+
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should initialize");
+        let server = runtime.block_on(async {
+            let domain = ResolvedDomainConfig {
+                name: world.domain().to_owned(),
+                default_world: world.key.clone(),
+                worlds: vec![world.key.clone()],
+            };
+            test_server_with_worlds_and_config(
+                domain.name.clone(),
+                slice::from_ref(&domain),
+                slice::from_ref(&world),
+                PermissionSubjectIndex::new(),
+                test_runtime_config(1),
+            )
+            .await
+            .expect("test server should initialize")
+        });
+
+        (fixture, world, server)
+    }
+
+    fn place_command_block(
+        world: &Arc<World>,
+        pos: BlockPos,
+        block: BlockRef,
+        facing: Direction,
+        conditional: bool,
+        command: &str,
+    ) -> SharedBlockEntity {
+        let state = block
+            .default_state()
+            .set_value(&BlockStateProperties::FACING, facing)
+            .set_value(&BlockStateProperties::CONDITIONAL, conditional);
+        assert!(
+            world.set_block(pos, state, UpdateFlags::UPDATE_ALL),
+            "the command block must be placed in a loaded chunk"
+        );
+        let entity = world
+            .get_block_entity(pos)
+            .expect("the command block creates its block entity");
+        entity
+            .downcast_ref::<CommandBlockEntity>()
+            .expect("the block entity is a command block entity")
+            .set_command(command);
+        entity
+    }
+
+    fn power_with_redstone_block(world: &Arc<World>, pos: BlockPos) {
+        assert!(
+            world.set_block(
+                pos,
+                vanilla_blocks::REDSTONE_BLOCK.default_state(),
+                UpdateFlags::UPDATE_ALL,
+            ),
+            "the power source must be placed in a loaded chunk"
+        );
+    }
+
+    fn command_block(entity: &SharedBlockEntity) -> &CommandBlockEntity {
+        entity
+            .downcast_ref::<CommandBlockEntity>()
+            .expect("shared block entity is a command block entity")
+    }
+
+    /// Returns whether the captured output mentions `needle` in any text or translation
+    /// argument.
+    ///
+    /// `TextComponent`'s `Display` resolves translations through the global display
+    /// resolutor, which tests never install, so it renders `[Translation: key]` and hides
+    /// the arguments. Walking the component tree asserts the real message content.
+    fn mentions(component: &TextComponent, needle: &str) -> bool {
+        let in_content = match &component.content {
+            Content::Text { text } => text.contains(needle),
+            Content::Translate(message) => {
+                message.key.contains(needle)
+                    || message
+                        .args
+                        .as_ref()
+                        .is_some_and(|args| args.iter().any(|arg| mentions(arg, needle)))
+            }
+            _ => false,
+        };
+        in_content
+            || component
+                .children
+                .iter()
+                .any(|child| mentions(child, needle))
+    }
+
+    fn last_output(entity: &SharedBlockEntity) -> TextComponent {
+        command_block(entity)
+            .last_output()
+            .expect("the executed command must capture its last output")
+    }
+
+    #[test]
+    fn powered_impulse_command_block_runs_its_command_once() {
+        let (_fixture, world, _server) = ticking_setup("command_block_impulse");
+        let entity = place_command_block(
+            &world,
+            POS,
+            &vanilla_blocks::COMMAND_BLOCK,
+            Direction::East,
+            false,
+            "gamerule max_entity_cramming 5",
+        );
+        assert_eq!(world.get_game_rule(&MAX_ENTITY_CRAMMING), 24);
+
+        power_with_redstone_block(&world, POS.west());
+        // Powering schedules the block's `server_tick` for the next tick (vanilla
+        // `CommandBlock.setPoweredAndUpdate` schedules with delay 1).
+        tick_test_world(&world, 2, true);
+
+        assert_eq!(world.get_game_rule(&MAX_ENTITY_CRAMMING), 5);
+        assert_eq!(command_block(&entity).success_count(), 1);
+        assert!(
+            mentions(&last_output(&entity), "max_entity_cramming"),
+            "unexpected last output: {:?}",
+            last_output(&entity)
+        );
+
+        // Vanilla `BaseCommandBlock.performCommand` refuses a second run in the same tick.
+        assert!(!command_block(&entity).perform_command(&world));
+        assert_eq!(command_block(&entity).success_count(), 1);
+    }
+
+    #[test]
+    fn powered_repeating_command_block_runs_every_scheduled_tick() {
+        let (_fixture, world, _server) = ticking_setup("command_block_repeating");
+        let entity = place_command_block(
+            &world,
+            POS,
+            &vanilla_blocks::REPEATING_COMMAND_BLOCK,
+            Direction::East,
+            false,
+            "gamerule max_entity_cramming 7",
+        );
+
+        power_with_redstone_block(&world, POS.west());
+        tick_test_world(&world, 1, true);
+        assert_eq!(world.get_game_rule(&MAX_ENTITY_CRAMMING), 7);
+        assert_eq!(command_block(&entity).success_count(), 1);
+
+        // The repeating block re-schedules itself while powered, so the next tick still
+        // runs exactly one command execution.
+        tick_test_world(&world, 2, true);
+        assert_eq!(world.get_game_rule(&MAX_ENTITY_CRAMMING), 7);
+        assert_eq!(command_block(&entity).success_count(), 1);
+        assert!(
+            mentions(&last_output(&entity), "max_entity_cramming"),
+            "unexpected last output: {:?}",
+            last_output(&entity)
+        );
+    }
+
+    #[test]
+    fn conditional_chain_block_runs_after_its_predecessor_succeeds() {
+        let (_fixture, world, _server) = ticking_setup("command_block_chain_success");
+        let impulse = place_command_block(
+            &world,
+            POS,
+            &vanilla_blocks::COMMAND_BLOCK,
+            Direction::East,
+            false,
+            "gamerule max_entity_cramming 5",
+        );
+        let chain = place_command_block(
+            &world,
+            POS.east(),
+            &vanilla_blocks::CHAIN_COMMAND_BLOCK,
+            Direction::East,
+            true,
+            "gamerule max_entity_cramming 9",
+        );
+
+        power_with_redstone_block(&world, POS.west());
+        tick_test_world(&world, 1, true);
+
+        assert_eq!(command_block(&impulse).success_count(), 1);
+        assert_eq!(command_block(&chain).success_count(), 1);
+        assert_eq!(world.get_game_rule(&MAX_ENTITY_CRAMMING), 9);
+        assert!(command_block(&chain).was_condition_met());
+        assert!(
+            mentions(&last_output(&chain), "max_entity_cramming"),
+            "unexpected chain last output: {:?}",
+            last_output(&chain)
+        );
+    }
+
+    #[test]
+    fn conditional_chain_block_stays_idle_when_its_predecessor_fails() {
+        let (_fixture, world, _server) = ticking_setup("command_block_chain_failure");
+        let impulse = place_command_block(
+            &world,
+            POS,
+            &vanilla_blocks::COMMAND_BLOCK,
+            Direction::East,
+            false,
+            "this_command_does_not_exist",
+        );
+        let chain = place_command_block(
+            &world,
+            POS.east(),
+            &vanilla_blocks::CHAIN_COMMAND_BLOCK,
+            Direction::East,
+            true,
+            "gamerule max_entity_cramming 9",
+        );
+
+        power_with_redstone_block(&world, POS.west());
+        tick_test_world(&world, 1, true);
+
+        assert_eq!(command_block(&impulse).success_count(), 0);
+        assert_eq!(command_block(&chain).success_count(), 0);
+        assert!(!command_block(&chain).was_condition_met());
+        assert_eq!(world.get_game_rule(&MAX_ENTITY_CRAMMING), 24);
+    }
+
+    #[test]
+    fn command_block_minecart_runs_its_command_on_activation() {
+        let (_fixture, world, _server) = ticking_setup("command_block_minecart_run");
+        let cart = Arc::new(CommandBlockMinecartEntity::new(
+            &vanilla_entities::COMMAND_BLOCK_MINECART,
+            next_entity_id(),
+            DVec3::new(8.5, 64.0, 8.5),
+            Arc::downgrade(&world),
+        ));
+        cart.set_command("gamerule max_entity_cramming 5".to_owned());
+        // Vanilla `MinecartCommandBlock.activateMinecart` waits four ticks between runs.
+        for _ in 0..4 {
+            cart.base().advance_tick_count();
+        }
+
+        cart.activate_minecart_for_test(&world, true);
+
+        assert_eq!(world.get_game_rule(&MAX_ENTITY_CRAMMING), 5);
+        assert_eq!(cart.success_count(), 1);
+        let output = cart
+            .last_output()
+            .expect("activation must capture the output");
+        assert!(
+            mentions(&output, "max_entity_cramming"),
+            "unexpected minecart last output: {output:?}"
+        );
     }
 }

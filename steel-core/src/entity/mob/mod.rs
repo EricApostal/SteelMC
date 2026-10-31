@@ -18,7 +18,7 @@ use steel_protocol::packets::game::CTakeItemEntity;
 use steel_registry::attribute::AttributeRef;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::data_components::components::ItemEnchantments;
-use steel_registry::data_components::vanilla_components::CUSTOM_NAME;
+use steel_registry::data_components::vanilla_components::{ATTACK_RANGE, CUSTOM_NAME};
 use steel_registry::enchantment_effect::EnchantmentEffectComponent;
 use steel_registry::entity_type::EntityTypeRef;
 use steel_registry::item_stack::ItemStack;
@@ -1497,10 +1497,18 @@ pub trait Mob: LivingEntity + Leashable {
     fn play_attack_sound(&self) {}
 
     /// Returns whether `target` is within this mob's melee attack range.
+    ///
+    /// Vanilla `Mob.isWithinMeleeAttackRange` reads the active item's
+    /// `ATTACK_RANGE` component and scales it by `mob_factor` for non-player
+    /// attackers, falling back to `DEFAULT_ATTACK_REACH` without the component.
     fn is_within_melee_attack_range(&self, target: &dyn LivingEntity) -> bool {
-        // TODO: Use the held item's ATTACK_RANGE component once it has typed component data.
-        let max_range = default_attack_reach();
-        let min_range = 0.0;
+        let (max_range, min_range) = match self.get_active_item().get(ATTACK_RANGE) {
+            Some(range) => (
+                f64::from(range.max_reach) * f64::from(range.mob_factor),
+                f64::from(range.min_reach) * f64::from(range.mob_factor),
+            ),
+            None => (default_attack_reach(), 0.0),
+        };
         let target_hitbox = target.bounding_box();
         self.attack_bounding_box(max_range)
             .intersects(target_hitbox)

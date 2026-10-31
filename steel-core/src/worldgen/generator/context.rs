@@ -4,7 +4,9 @@ use std::sync::{Arc, Weak};
 
 use enum_dispatch::enum_dispatch;
 use steel_worldgen::density_functions::{
-    end::EndNoises, nether::NetherNoises, overworld::OverworldNoises,
+    amplified::AmplifiedNoises, caves::CavesNoises, end::EndNoises,
+    floating_islands::FloatingIslandsNoises, large_biomes::LargeBiomesNoises, nether::NetherNoises,
+    overworld::OverworldNoises,
 };
 
 use crate::world::World;
@@ -21,6 +23,18 @@ pub type NetherGenerator = VanillaGenerator<NetherNoises>;
 /// Type alias for end generator.
 pub type EndGenerator = VanillaGenerator<EndNoises>;
 
+/// Type alias for the `minecraft:large_biomes` noise settings generator.
+pub type LargeBiomesGenerator = VanillaGenerator<LargeBiomesNoises>;
+
+/// Type alias for the `minecraft:amplified` noise settings generator.
+pub type AmplifiedGenerator = VanillaGenerator<AmplifiedNoises>;
+
+/// Type alias for the `minecraft:caves` noise settings generator.
+pub type CavesGenerator = VanillaGenerator<CavesNoises>;
+
+/// Type alias for the `minecraft:floating_islands` noise settings generator.
+pub type FloatingIslandsGenerator = VanillaGenerator<FloatingIslandsNoises>;
+
 #[expect(
     missing_docs,
     reason = "variants are named after their dimension; self-explanatory"
@@ -32,6 +46,10 @@ pub enum ChunkGeneratorType {
     Overworld(OverworldGenerator),
     Nether(NetherGenerator),
     End(EndGenerator),
+    LargeBiomes(LargeBiomesGenerator),
+    Amplified(AmplifiedGenerator),
+    Caves(CavesGenerator),
+    FloatingIslands(FloatingIslandsGenerator),
     Debug(DebugChunkGenerator),
     //Custom(Box<dyn ChunkGenerator>),
 }

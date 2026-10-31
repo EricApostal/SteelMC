@@ -1289,5 +1289,6 @@ mod fall_and_fluids;
 mod living_state;
 mod movement;
 mod portals;
+mod protocol_sync;
 mod riding_and_leashes;
 mod travel;

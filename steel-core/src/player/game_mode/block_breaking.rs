@@ -22,7 +22,8 @@ use steel_utils::{
 
 use crate::behavior::{BLOCK_BEHAVIORS, BlockLootContext};
 use crate::block_entity::BlockEntity;
-use crate::entity::{Entity, LivingEntity};
+use crate::enchantment_helper;
+use crate::entity::{Entity, LivingEntity, SharedEntity};
 use crate::fluid::fluid_state_to_block;
 use crate::player::Player;
 use crate::player::food_data::food_constants;
@@ -262,6 +263,10 @@ impl BlockBreakingManager {
     ///
     /// Note: The caller (packet handler) is responsible for calling `ack_block_changes_up_to`
     /// after this method returns, matching vanilla behavior.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "mirrors the vanilla ServerPlayerGameMode.handleBlockBreakAction step order"
+    )]
     pub fn handle_block_break_action(
         &mut self,
         player: &Player,
@@ -321,7 +326,26 @@ impl BlockBreakingManager {
                 let block_state = world.get_block_state(pos);
 
                 if !is_air(block_state) {
-                    // TODO: Call EnchantmentHelper.onHitBlock before blockState.attack.
+                    // Vanilla `ServerPlayerGameMode.handleBlockBreakAction`:
+                    // `EnchantmentHelper.onHitBlock` runs the main-hand
+                    // `minecraft:hit_block` effects before `BlockState.attack`.
+                    let main_hand_item = {
+                        let inv = player.inventory.lock();
+                        inv.get_item_in_hand(InteractionHand::MainHand).item
+                    };
+                    let owner: Option<SharedEntity> =
+                        world.players.get_by_entity_id(player.id()).map(|p| p as _);
+                    if enchantment_helper::on_hit_block_with_equipment(
+                        world,
+                        player,
+                        EquipmentSlot::MainHand,
+                        player,
+                        pos,
+                        owner.as_ref(),
+                    ) {
+                        player.on_equipped_item_broken(main_hand_item, EquipmentSlot::MainHand);
+                    }
+
                     BLOCK_BEHAVIORS
                         .get_behavior(block_state.get_block())
                         .attack(block_state, world, pos, player);

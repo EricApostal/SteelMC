@@ -126,7 +126,7 @@ use crate::entity::{
     apply_entity_look_at, get_kill_credit, start_riding_entities,
 };
 use crate::fluid::get_fluid_state;
-use crate::inventory::equipment::{EntityEquipment, EquipmentSlot};
+use crate::inventory::equipment::{EntityEquipment, EquipmentSlot, EquipmentSlotType};
 use crate::inventory::lock::{ContainerLockGuard, ContainerRef};
 use crate::inventory::menu::Menu;
 use crate::inventory::menu::kinds::inventory_menu;
@@ -2895,6 +2895,44 @@ impl LivingEntity for Player {
         self.broadcast_entity_event(slot.into());
         self.refresh_equipment_attribute_modifiers(slot);
         self.award_stat(&vanilla_stat_types::ITEM_BROKEN, item);
+    }
+}
+
+impl Player {
+    /// Vanilla `LivingEntity.onEquipItem`: plays the equippable's equip sound
+    /// and emits the `equip`/`unequip` game event for humanoid armor slots.
+    pub fn on_equip_item(&self, slot: EquipmentSlot, previous: &ItemStack, stack: &ItemStack) {
+        // Vanilla skips spectator and first-tick equipment writes, and writes
+        // that do not actually change the stack.
+        if self.is_spectator() || self.is_first_tick() || ItemStack::matches(previous, stack) {
+            return;
+        }
+
+        let equippable = stack.get_equippable();
+        let equipped_in_slot = equippable
+            .as_ref()
+            .is_some_and(|equippable| equippable.slot == slot);
+
+        if equipped_in_slot
+            && !self.is_silent()
+            && let Some(sound) = equippable
+                .as_ref()
+                .and_then(|equippable| equippable.equip_sound.registry_ref())
+            && let Some(world) = self.level()
+        {
+            // Vanilla `Level.playSeededSound` is passed a null source entity, so
+            // nobody is excluded from the broadcast.
+            world.play_sound_at(sound, self.sound_source(), self.position(), 1.0, 1.0, None);
+        }
+
+        if slot.slot_type() == EquipmentSlotType::HumanoidArmor {
+            let event = if equipped_in_slot {
+                &vanilla_game_events::EQUIP
+            } else {
+                &vanilla_game_events::UNEQUIP
+            };
+            self.game_event(event);
+        }
     }
 }
 

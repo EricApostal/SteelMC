@@ -4,8 +4,9 @@ use super::{
     EntityFlagsPredicateJson, EntityLocationPredicateJson, EntityPredicateJson, EntityTargetJson,
     EntityTypePredicateJson, EntityTypeSetJson, EntityTypeSpecificPredicateJson,
     EntityVehiclePredicateJson, FloatProviderJson, GameType, Ident, Identifier, ItemHolderSetJson,
-    LevelBasedValueJson, MobEffectSelectionJson, ParticlePositionSourceJson,
-    ParticleVelocitySourceJson, PlayerPredicateJson, RequirementsJson, Span, TokenStream, quote,
+    LevelBasedValueJson, LocationCheckBlockJson, MobEffectSelectionJson,
+    ParticlePositionSourceJson, ParticleVelocitySourceJson, PlayerPredicateJson, RequirementsJson,
+    Span, TokenStream, quote,
 };
 
 pub(super) fn slot_to_tokens(slot: &str) -> TokenStream {
@@ -591,6 +592,52 @@ pub(super) fn parse_block_predicate_json(
     }
 }
 
+/// Parses the inline block predicate of a `location_check` requirement.
+///
+/// Loot `LocationPredicate.block` uses `StateTestingPredicate`'s inline form
+/// (`{"blocks": "#minecraft:lightning_rods"}`), which omits the `type`
+/// discriminator. Returns `None` for a predicate shape the generated
+/// `LocationCheckBlock` cannot represent, so the caller keeps the requirement
+/// `Unsupported`.
+fn parse_location_check_block_json(
+    value: &serde_json::Value,
+) -> Result<Option<LocationCheckBlockJson>, String> {
+    let Some(object) = value.as_object() else {
+        return Err("location_check block predicate must be an object".to_owned());
+    };
+
+    if object.contains_key("type") {
+        return Ok(match parse_block_predicate_json(value)? {
+            BlockPredicateJson::MatchingBlockTag {
+                tag,
+                offset: [0, 0, 0],
+            } => Some(LocationCheckBlockJson::Tag(tag)),
+            BlockPredicateJson::MatchingBlocks {
+                blocks,
+                offset: [0, 0, 0],
+            } => Some(LocationCheckBlockJson::Blocks(blocks)),
+            _ => None,
+        });
+    }
+
+    for key in object.keys() {
+        if key != "blocks" {
+            return Ok(None);
+        }
+    }
+    let Some(blocks) = object.get("blocks") else {
+        return Ok(None);
+    };
+    if let Some(raw) = blocks.as_str() {
+        return Ok(Some(match raw.strip_prefix('#') {
+            Some(tag) => LocationCheckBlockJson::Tag(parse_identifier(tag)?),
+            None => LocationCheckBlockJson::Blocks(vec![parse_identifier(raw)?]),
+        }));
+    }
+    let blocks = parse_identifier_list_json(blocks, "blocks")?;
+    Ok(Some(LocationCheckBlockJson::Blocks(blocks)))
+}
+
 /// Reads a state-testing predicate `offset`, defaulting to zero like vanilla's
 /// `stateTestingCodec` (`Vec3i.CODEC.optionalFieldOf("offset", Vec3i.ZERO)`).
 fn parse_block_predicate_offset(
@@ -990,6 +1037,46 @@ pub(super) fn parse_requirements_json(
                 .map(parse_item_holder_set_json)
                 .transpose()?;
             Ok(RequirementsJson::MatchTool { items })
+        }
+        "minecraft:location_check" => {
+            // Vanilla's `LocationCheck` carries a full `LocationPredicate`.
+            // Only the subset used by shipped enchantment data is modelled;
+            // anything else stays `Unsupported` so the fold stays fail-closed.
+            let unsupported = |condition: &str| {
+                Ok(RequirementsJson::Unsupported {
+                    condition: parse_identifier(condition)?,
+                })
+            };
+            for key in object.keys() {
+                if key != "type" && key != "predicate" && key != "offset" {
+                    return unsupported(&condition);
+                }
+            }
+            let Some(predicate) = object.get("predicate").and_then(|v| v.as_object()) else {
+                return unsupported(&condition);
+            };
+            for key in predicate.keys() {
+                if key != "block" && key != "can_see_sky" {
+                    return unsupported(&condition);
+                }
+            }
+            let offset = match object.get("offset") {
+                Some(value) => parse_vec3i_json(value)?,
+                None => [0, 0, 0],
+            };
+            let can_see_sky = optional_bool_field(predicate, "can_see_sky")?;
+            let block = match predicate.get("block") {
+                None => None,
+                Some(value) => match parse_location_check_block_json(value)? {
+                    Some(block) => Some(block),
+                    None => return unsupported(&condition),
+                },
+            };
+            Ok(RequirementsJson::LocationCheck {
+                offset,
+                block,
+                can_see_sky,
+            })
         }
         _ => Ok(RequirementsJson::Unsupported {
             condition: parse_identifier(&condition)?,

@@ -31,9 +31,12 @@ impl ItemBehavior for EmptyMapItem {
                 .player
                 .award_stat(&vanilla_stat_types::ITEM_USED, item.item());
         });
-        context.world.play_sound_at(
+        // Vanilla `EmptyMapItem.use`: `playSound(null, player, …)` — the entity
+        // overload, so the sound follows the player.
+        context.world.play_sound_from_entity(
             &sound_events::UI_CARTOGRAPHY_TABLE_TAKE_RESULT,
             SoundSource::Players,
+            context.player.id(),
             context.player.position(),
             1.0,
             1.0,

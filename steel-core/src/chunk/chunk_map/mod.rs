@@ -649,6 +649,16 @@ impl ChunkMap {
         self.scheduling.add_or_refresh_portal_ticket(center);
     }
 
+    /// Adds or refreshes vanilla's dragon arena ticket.
+    pub(crate) fn place_dragon_arena_ticket(&self) {
+        self.scheduling.add_or_refresh_dragon_arena_ticket();
+    }
+
+    /// Removes vanilla's dragon arena ticket.
+    pub(crate) fn remove_dragon_arena_ticket(&self) {
+        self.scheduling.remove_dragon_arena_ticket();
+    }
+
     /// Advances eligible timed chunk tickets by one server tick.
     pub(crate) fn tick_timed_tickets(&self) {
         let expirations = self.eligible_timed_ticket_expirations();

@@ -763,4 +763,83 @@ mod tests {
             2
         );
     }
+
+    /// Vanilla `HopperBlockEntity.suckInItems` reads the source container
+    /// through `Container.getItem`, which unpacks a pending structure loot
+    /// table. A hopper pulling from an unopened chest must therefore get real
+    /// loot instead of an empty slot.
+    #[test]
+    fn hopper_pull_unpacks_a_structure_chests_loot_table() {
+        use steel_utils::ChunkPos;
+        use steel_utils::types::UpdateFlags;
+
+        use crate::behavior::init_behaviors;
+        use crate::block_entity::init_block_entities;
+        use crate::test_support::{fresh_test_world, insert_ready_full_chunk};
+
+        init_vanilla_registry();
+        init_behaviors();
+        init_block_entities();
+        let world_fixture = fresh_test_world("hopper_structure_loot");
+        let world = &world_fixture.world;
+        let hopper_pos = BlockPos::new(8, 64, 8);
+        let chest_pos = hopper_pos.above();
+        insert_ready_full_chunk(world, ChunkPos::from_block_pos(hopper_pos));
+
+        assert!(world.set_block(
+            chest_pos,
+            vanilla_blocks::CHEST.default_state(),
+            UpdateFlags::UPDATE_NONE,
+        ));
+        assert!(world.set_block(
+            hopper_pos,
+            vanilla_blocks::HOPPER.default_state(),
+            UpdateFlags::UPDATE_NONE,
+        ));
+
+        let chest = world
+            .get_block_entity(chest_pos)
+            .expect("the chest should create its block entity");
+        let mut nbt = NbtCompound::new();
+        nbt.insert("LootTable", "minecraft:chests/simple_dungeon");
+        nbt.insert("LootTableSeed", 42_i64);
+        chest
+            .load_with_owned_components(&nbt)
+            .expect("the pending loot table should load");
+        assert!(
+            chest.save_custom_only().string("LootTable").is_some(),
+            "the chest starts with a pending loot table"
+        );
+
+        let hopper = world
+            .get_block_entity(hopper_pos)
+            .expect("the hopper should create its block entity");
+        hopper.tick(world);
+
+        let hopper_container = hopper.container_ref().expect("hopper container");
+        {
+            let guard = ContainerLockGuard::lock_all(&[&hopper_container]);
+            let container = guard
+                .get(hopper_container.container_id())
+                .expect("locked hopper container");
+            assert!(
+                container.items().iter().any(|stack| !stack.is_empty()),
+                "a hopper pulling from an unopened structure chest must receive its loot"
+            );
+        }
+
+        assert!(
+            chest.save_custom_only().string("LootTable").is_none(),
+            "the hopper's read must consume the chest's pending loot table"
+        );
+        let chest_container = chest.container_ref().expect("chest container");
+        let guard = ContainerLockGuard::lock_all(&[&chest_container]);
+        let container = guard
+            .get(chest_container.container_id())
+            .expect("locked chest container");
+        assert!(
+            container.items().iter().any(|stack| !stack.is_empty()),
+            "the remaining rolled loot stays in the chest"
+        );
+    }
 }

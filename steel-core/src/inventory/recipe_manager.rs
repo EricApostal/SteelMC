@@ -2,7 +2,8 @@
 
 use steel_registry::data_components::vanilla_components::{
     BANNER_PATTERNS, BASE_COLOR, DYE, DYED_COLOR, ENCHANTMENTS, FIREWORK_EXPLOSION, FIREWORKS,
-    MAP_POST_PROCESSING, MAX_DAMAGE, POT_DECORATIONS, POTION_CONTENTS, WRITTEN_BOOK_CONTENT,
+    MAP_ID, MAP_POST_PROCESSING, MAX_DAMAGE, POT_DECORATIONS, POTION_CONTENTS,
+    WRITTEN_BOOK_CONTENT,
 };
 use steel_registry::data_components::vanilla_components::{
     DyedItemColor, FireworkExplosion, FireworkExplosionShape, Fireworks, ItemEnchantments,
@@ -10,8 +11,8 @@ use steel_registry::data_components::vanilla_components::{
 };
 use steel_registry::recipe::{
     BookCloningRecipe, CraftingInput, CraftingRecipe, DyeRecipe, FireworkRocketRecipe,
-    FireworkStarFadeRecipe, FireworkStarRecipe, PositionedCraftingInput, ShieldDecorationRecipe,
-    TypedRecipeRef, UntypedRecipeRef, vanilla_recipe_types,
+    FireworkStarFadeRecipe, FireworkStarRecipe, MapRecipeData, PositionedCraftingInput,
+    ShieldDecorationRecipe, TypedRecipeRef, UntypedRecipeRef, vanilla_recipe_types,
 };
 use steel_registry::{
     DyeColor, ItemStackTemplate, REGISTRY, RegistryExt as _, TaggedRegistryExt as _,
@@ -19,24 +20,55 @@ use steel_registry::{
 };
 
 use crate::inventory::container::CraftingContainer;
-
-use super::container::Container;
+use crate::world::World;
 
 /// Typed reference to one registered crafting recipe.
 pub type CraftingRecipeRef = TypedRecipeRef<CraftingRecipe, CraftingInput>;
 
-/// Updates a result container from the first matching crafting recipe.
-pub fn slot_changed_crafting_grid<R: Container>(crafting: &CraftingContainer, result: &mut R) {
-    result.set_item(
-        0,
-        assemble_for_container(crafting).unwrap_or_else(ItemStack::empty),
-    );
+/// Snapshots the crafting grid, attaching saved-map facts for filled maps.
+///
+/// Vanilla `CraftingInput` arguments carry the level so `MapExtendingRecipe`
+/// can read `MapItem.getSavedData`; Steel keeps the recipe matcher free of the
+/// world, so the caller passes the acting player's world here and the required
+/// facts are stored on the input.
+#[must_use]
+pub fn positioned_input(
+    crafting: &CraftingContainer,
+    world: Option<&World>,
+) -> PositionedCraftingInput {
+    let mut positioned = crafting.as_positioned_input();
+    let Some(world) = world else {
+        return positioned;
+    };
+    let map_data: Vec<(usize, MapRecipeData)> = positioned
+        .input
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, stack)| {
+            let map_id = stack.get(MAP_ID)?;
+            let snapshot = world.get_map_data(map_id.id())?;
+            Some((
+                index,
+                MapRecipeData {
+                    scale: snapshot.scale,
+                },
+            ))
+        })
+        .collect();
+    for (index, data) in map_data {
+        positioned.input = positioned.input.with_map_data(index, data);
+    }
+    positioned
 }
 
 /// Finds the first crafting recipe in deterministic registry order.
 #[must_use]
-pub fn find_recipe(crafting: &CraftingContainer) -> Option<CraftingRecipeRef> {
-    let positioned = crafting.as_positioned_input();
+pub fn find_recipe(
+    crafting: &CraftingContainer,
+    world: Option<&World>,
+) -> Option<CraftingRecipeRef> {
+    let positioned = positioned_input(crafting, world);
     REGISTRY
         .recipes
         .find_match(&vanilla_recipe_types::CRAFTING, &positioned.input)
@@ -47,16 +79,22 @@ pub fn find_recipe(crafting: &CraftingContainer) -> Option<CraftingRecipeRef> {
 /// Used by the recipe book and the crafting take path, which need the recipe's
 /// persistent key rather than its typed data.
 #[must_use]
-pub fn find_recipe_ref(crafting: &CraftingContainer) -> Option<UntypedRecipeRef> {
-    let recipe = find_recipe(crafting)?;
+pub fn find_recipe_ref(
+    crafting: &CraftingContainer,
+    world: Option<&World>,
+) -> Option<UntypedRecipeRef> {
+    let recipe = find_recipe(crafting, world)?;
     REGISTRY.recipes.by_key(recipe.key())
 }
 
 /// Finds and interprets the output for the current crafting container.
 #[must_use]
-pub fn assemble_for_container(crafting: &CraftingContainer) -> Option<ItemStack> {
-    let positioned = crafting.as_positioned_input();
-    let recipe = find_recipe(crafting)?;
+pub fn assemble_for_container(
+    crafting: &CraftingContainer,
+    world: Option<&World>,
+) -> Option<ItemStack> {
+    let positioned = positioned_input(crafting, world);
+    let recipe = find_recipe(crafting, world)?;
     Some(assemble_recipe(recipe, &positioned.input))
 }
 
@@ -149,9 +187,10 @@ pub fn assemble_recipe(recipe: CraftingRecipeRef, input: &CraftingInput) -> Item
 #[must_use]
 pub fn get_remaining_items(
     crafting: &CraftingContainer,
+    world: Option<&World>,
 ) -> Option<(Vec<ItemStack>, PositionedCraftingInput)> {
-    let positioned = crafting.as_positioned_input();
-    let recipe = find_recipe(crafting)?;
+    let positioned = positioned_input(crafting, world);
+    let recipe = find_recipe(crafting, world)?;
     let mut remainders: Vec<_> = positioned
         .input
         .items
@@ -425,6 +464,7 @@ mod tests {
     use steel_registry::{DyeColor, REGISTRY, init_vanilla_registry, vanilla_items};
 
     use super::assemble_recipe;
+    use crate::test_support::fresh_test_world;
     use steel_registry::item_stack::ItemStack;
 
     #[test]
@@ -449,5 +489,49 @@ mod tests {
 
         assert!(result.is(&vanilla_items::PURPLE_DYE));
         assert_eq!(result.get(DYE), Some(&DyeColor::Purple));
+    }
+
+    #[test]
+    fn map_extending_matches_with_the_worlds_saved_map_data() {
+        use steel_registry::data_components::components::MapId;
+        use steel_registry::data_components::vanilla_components::{
+            MAP_ID, MAP_POST_PROCESSING, MapPostProcessing,
+        };
+
+        use crate::inventory::container::{Container as _, CraftingContainer};
+        use crate::map::MapItemSavedData;
+
+        init_vanilla_registry();
+        let world_fixture = fresh_test_world("map_extending_recipe");
+        let world = &world_fixture.world;
+        let map_id = world.get_free_map_id();
+        world.set_map_data(
+            map_id,
+            MapItemSavedData::create_fresh(0.0, 0.0, 1, false, false, world.key.clone()),
+        );
+
+        let mut map = ItemStack::new(&vanilla_items::FILLED_MAP);
+        map.set(MAP_ID, MapId::new(map_id));
+
+        let mut grid = CraftingContainer::new(3, 3);
+        for slot in [0, 1, 2, 3, 5, 6, 7, 8] {
+            grid.set_item(slot, ItemStack::new(&vanilla_items::PAPER));
+        }
+        grid.set_item(4, map);
+
+        // Without the level the saved data is missing, exactly like vanilla's
+        // null `MapItem.getSavedData`.
+        assert!(super::find_recipe(&grid, None).is_none());
+
+        let positioned = super::positioned_input(&grid, Some(world));
+        assert!(positioned.input.map_data(4).is_some());
+
+        let result = super::assemble_for_container(&grid, Some(world))
+            .expect("map extending should match with saved map data");
+        assert!(result.is(&vanilla_items::FILLED_MAP));
+        assert_eq!(
+            result.get(MAP_POST_PROCESSING),
+            Some(&MapPostProcessing::Scale)
+        );
     }
 }

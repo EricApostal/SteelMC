@@ -1,19 +1,23 @@
 //! `/schedule` bookkeeping, mirroring vanilla
-//! `net.minecraft.server.ServerFunctionManager` and `net.minecraft.util.TimerQueue`.
+//! `net.minecraft.server.ServerFunctionManager` and `net.minecraft.world.level.timers.TimerQueue`.
 //!
 //! Functions are scheduled onto absolute game ticks and popped when the tick
 //! advances past them, exactly like vanilla's `TimerQueue`. Steel keeps the queue
 //! free of world types so `/schedule` and the reload path can share it.
 //!
-//! Deliberate difference: vanilla persists the queue as a `SavedData` entry in
-//! `level.dat`; Steel keeps it in memory, so pending schedules end with the server
-//! process.
+//! Vanilla stores its queue in the overworld's `SavedData` as
+//! `data/scheduled_events.dat` (`TimerQueue.TYPE`, id `minecraft:scheduled_events`).
+//! Steel persists the same queue through [`SavedDataManager`] as
+//! `data/scheduled_events.toml`; the payload keeps vanilla's `trigger_time` field
+//! and one tagged `callback` per event, while the redundant string `id` is derived
+//! from the callback ([`ScheduledCallback::key`]).
 
 use std::{
     cmp::{Ordering, Reverse},
     collections::BinaryHeap,
 };
 
+use serde::{Deserialize, Serialize};
 use steel_utils::Identifier;
 
 /// Vanilla `ScheduleCommand.ScheduleMode`: what to do with an existing entry.
@@ -41,6 +45,48 @@ impl ScheduledCallback {
         match self {
             Self::Function(id) => id.to_string(),
             Self::Tag(id) => format!("#{id}"),
+        }
+    }
+}
+
+/// Vanilla `TimerQueue.Packed`: the `SavedData` payload for `scheduled_events`.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub(crate) struct ScheduledEventsData {
+    #[serde(default)]
+    events: Vec<ScheduledEventData>,
+}
+
+/// One `TimerQueue.Event.Packed`, minus vanilla's redundant string `id`.
+#[derive(Debug, Serialize, Deserialize)]
+struct ScheduledEventData {
+    /// Vanilla `trigger_time`: the absolute game tick the event fires on.
+    trigger_time: i64,
+    /// Vanilla `callback`.
+    callback: ScheduledCallbackData,
+}
+
+/// Vanilla `TimerCallbacks.SERVER_CALLBACKS` entries Steel registers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ScheduledCallbackData {
+    /// `minecraft:function` (`FunctionCallback`).
+    Function { id: Identifier },
+    /// `minecraft:function_tag` (`FunctionTagCallback`).
+    FunctionTag { id: Identifier },
+}
+
+impl ScheduledCallbackData {
+    fn from_callback(callback: &ScheduledCallback) -> Self {
+        match callback {
+            ScheduledCallback::Function(id) => Self::Function { id: id.clone() },
+            ScheduledCallback::Tag(id) => Self::FunctionTag { id: id.clone() },
+        }
+    }
+
+    fn into_callback(self) -> ScheduledCallback {
+        match self {
+            Self::Function { id } => ScheduledCallback::Function(id),
+            Self::FunctionTag { id } => ScheduledCallback::Tag(id),
         }
     }
 }
@@ -146,6 +192,42 @@ impl ScheduleRegistry {
     #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.queue.is_empty()
+    }
+
+    /// Vanilla `TimerQueue.pack`: every pending event in fire order.
+    ///
+    /// Vanilla sorts by `(triggerTime, sequentialId)` before writing, so a reload
+    /// preserves the order that same-tick entries would have run in.
+    #[must_use]
+    pub(crate) fn to_saved(&self) -> ScheduledEventsData {
+        let mut entries: Vec<&ScheduledEntry> = self.queue.iter().map(|entry| &entry.0).collect();
+        entries.sort_by_key(|entry| (entry.tick, entry.sequential_id));
+        ScheduledEventsData {
+            events: entries
+                .into_iter()
+                .map(|entry| ScheduledEventData {
+                    trigger_time: entry.tick,
+                    callback: ScheduledCallbackData::from_callback(&entry.callback),
+                })
+                .collect(),
+        }
+    }
+
+    /// Vanilla `TimerQueue(TimerQueue.Packed)` constructor.
+    ///
+    /// Re-scheduling in packed order keeps vanilla's `Append` duplicate rule:
+    /// a saved `(callback, tick)` pair appears at most once.
+    #[must_use]
+    pub(crate) fn from_saved(data: ScheduledEventsData) -> Self {
+        let mut registry = Self::default();
+        for event in data.events {
+            registry.schedule(
+                event.callback.into_callback(),
+                event.trigger_time,
+                ScheduleMode::Append,
+            );
+        }
+        registry
     }
 }
 
@@ -289,5 +371,48 @@ mod tests {
         assert_eq!(parse_delay("1d").unwrap(), 24_000);
         assert!(parse_delay("-1t").is_err());
         assert!(parse_delay("abc").is_err());
+    }
+
+    #[tokio::test]
+    async fn scheduled_functions_survive_a_saved_data_round_trip() {
+        use std::env;
+        use std::fs;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        use steel_utils::saved_data::{SavedDataManager, names as saved_data_names};
+
+        use super::ScheduledEventsData;
+
+        let root = env::temp_dir().join(format!(
+            "steel-scheduled-events-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let saved_data = SavedDataManager::new(Some(&root));
+
+        let mut registry = ScheduleRegistry::default();
+        registry.schedule(function("a"), 40, ScheduleMode::Append);
+        registry.schedule(tag("load"), 20, ScheduleMode::Append);
+        registry.schedule(function("a"), 10, ScheduleMode::Append);
+
+        saved_data
+            .save(saved_data_names::SCHEDULED_EVENTS, &registry.to_saved())
+            .await
+            .expect("scheduled events should save");
+        let stored: ScheduledEventsData = saved_data
+            .load_or_default(saved_data_names::SCHEDULED_EVENTS)
+            .await
+            .expect("scheduled events should load");
+        let mut loaded = ScheduleRegistry::from_saved(stored);
+
+        assert_eq!(loaded.pending(), registry.pending());
+        assert_eq!(
+            loaded.take_due(40),
+            vec![function("a"), tag("load"), function("a")]
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

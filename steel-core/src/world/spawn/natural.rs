@@ -780,6 +780,10 @@ impl NaturalSpawner {
             ChunkGeneratorType::Overworld(_)
                 | ChunkGeneratorType::Nether(_)
                 | ChunkGeneratorType::End(_)
+                | ChunkGeneratorType::LargeBiomes(_)
+                | ChunkGeneratorType::Amplified(_)
+                | ChunkGeneratorType::Caves(_)
+                | ChunkGeneratorType::FloatingIslands(_)
         ) {
             return;
         }

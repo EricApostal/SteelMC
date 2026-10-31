@@ -101,6 +101,7 @@ pub(crate) use illager_spells::{
 pub(crate) use interact::InteractGoal;
 pub(crate) use jump_goal::DolphinJumpGoal;
 pub(crate) use leap_at_target::LeapAtTargetGoal;
+pub(crate) use llama_follow_caravan::LlamaFollowCaravanGoal;
 pub(crate) use look_at_player::LookAtPlayerGoal;
 pub(crate) use melee_attack::MeleeAttackGoal;
 pub(crate) use move_back_to_village::MoveBackToVillageGoal;

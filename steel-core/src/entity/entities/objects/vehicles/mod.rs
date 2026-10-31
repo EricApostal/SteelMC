@@ -18,5 +18,6 @@ pub use command_block_minecart::CommandBlockMinecartEntity;
 pub use furnace_minecart::FurnaceMinecartEntity;
 pub use hopper_minecart::HopperMinecartEntity;
 pub use minecart::MinecartEntity;
+pub use minecart_base::{MinecartSync, NEW_MINECART_BEHAVIOR_IMPLEMENTED};
 pub use spawner_minecart::SpawnerMinecartEntity;
 pub use tnt_minecart::TntMinecartEntity;

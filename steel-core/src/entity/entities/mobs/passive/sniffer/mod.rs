@@ -744,7 +744,19 @@ impl Animal for SnifferEntity {
 
     fn play_eating_sound(&self) {
         let pitch = 0.8 + rand::random::<f32>() * 0.4;
-        self.play_sound(&sound_events::ENTITY_SNIFFER_EAT, 1.0, pitch);
+        // Vanilla `Sniffer.playEatingSound`: `level.playSound(null, this, SNIFFER_EAT, …)`,
+        // the entity overload that sends `ClientboundSoundEntityPacket`.
+        if let Some(world) = self.level() {
+            world.play_sound_from_entity(
+                &sound_events::ENTITY_SNIFFER_EAT,
+                SoundSource::Neutral,
+                self.id(),
+                self.position(),
+                1.0,
+                pitch,
+                None,
+            );
+        }
     }
 }
 

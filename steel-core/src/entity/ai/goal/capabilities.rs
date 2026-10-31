@@ -165,11 +165,18 @@ pub trait CaravanLlama: Send + Sync + 'static {
     /// Vanilla `Llama.hasCaravanTail`.
     fn has_caravan_tail(&self) -> bool;
 
-    /// Vanilla `Llama.joinCaravan`.
-    fn join_caravan(&self, head: &SharedEntity);
+    /// Vanilla `Llama.joinCaravan`: stores `head` as this llama's caravan head and
+    /// writes this llama into the head's `caravanTail`.
+    ///
+    /// Vanilla reaches this with two live object references; Steel needs the joining
+    /// llama's own [`SharedEntity`] to downgrade into the head's tail slot.
+    fn join_caravan(&self, head: &SharedEntity, self_handle: &SharedEntity);
 
     /// Vanilla `Llama.leaveCaravan`.
     fn leave_caravan(&self);
+
+    /// Vanilla `Llama.caravanTail` field write (`joinCaravan`/`leaveCaravan`).
+    fn set_caravan_tail(&self, tail: Option<&SharedEntity>);
 }
 
 /// Vanilla `ShoulderRidingEntity`: parrots perching on their owner's shoulder.

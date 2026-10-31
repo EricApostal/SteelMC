@@ -125,6 +125,7 @@ mod tests {
             },
             3.5,
             48.0,
+            2,
             TextComponent::plain("Custom horn"),
         )
         .expect("inline instrument should be valid");
@@ -159,6 +160,9 @@ mod tests {
             .write(&mut network)
             .expect("duration should encode");
         16.0_f32.write(&mut network).expect("range should encode");
+        VarInt(0)
+            .write(&mut network)
+            .expect("durability damage should encode");
         TextComponent::plain("Invalid horn")
             .write(&mut network)
             .expect("description should encode");

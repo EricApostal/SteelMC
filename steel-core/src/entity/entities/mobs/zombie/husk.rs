@@ -253,8 +253,8 @@ impl LivingEntity for HuskEntity {
         self.zombie.death_sound()
     }
 
-    fn before_actually_hurt(&self, _source: &DamageSource, _amount: f32) {
-        self.zombie.on_about_to_be_hurt();
+    fn before_actually_hurt(&self, source: &DamageSource, _amount: f32) {
+        self.zombie.on_about_to_be_hurt(source);
     }
 
     fn should_drop_experience(&self) -> bool {

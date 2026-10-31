@@ -15,7 +15,9 @@ use steel_utils::random::{
 use steel_utils::{BlockPos, BlockStateId, ChunkPos, DowncastType, DowncastTypeKey, Identifier};
 use steel_worldgen::density::{ColumnCache, DimensionNoises, NoiseSettings};
 use steel_worldgen::density_functions::{
-    end::EndNoises, nether::NetherNoises, overworld::OverworldNoises,
+    amplified::AmplifiedNoises, caves::CavesNoises, end::EndNoises,
+    floating_islands::FloatingIslandsNoises, large_biomes::LargeBiomesNoises, nether::NetherNoises,
+    overworld::OverworldNoises,
 };
 use steel_worldgen::noise_parameters::get_noise_parameters;
 use steel_worldgen::surface::{
@@ -78,25 +80,13 @@ pub struct SteelPostNoiseState<N: DimensionNoises> {
     material_ore_vein_values: Arc<[f32]>,
 }
 
-// SAFETY: Each key uniquely identifies this exact Steel-owned specialization.
-unsafe impl DowncastType for SteelPostNoiseState<OverworldNoises> {
-    const TYPE_KEY: DowncastTypeKey =
-        DowncastTypeKey::new("steel:worldgen_state/post_noise_overworld");
-}
+macro_rules! impl_post_noise_state {
+    ($noises:ty, $key:literal) => {
+        // SAFETY: Each key uniquely identifies this exact Steel-owned specialization.
+        unsafe impl DowncastType for SteelPostNoiseState<$noises> {
+            const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new($key);
+        }
 
-// SAFETY: Each key uniquely identifies this exact Steel-owned specialization.
-unsafe impl DowncastType for SteelPostNoiseState<NetherNoises> {
-    const TYPE_KEY: DowncastTypeKey =
-        DowncastTypeKey::new("steel:worldgen_state/post_noise_nether");
-}
-
-// SAFETY: Each key uniquely identifies this exact Steel-owned specialization.
-unsafe impl DowncastType for SteelPostNoiseState<EndNoises> {
-    const TYPE_KEY: DowncastTypeKey = DowncastTypeKey::new("steel:worldgen_state/post_noise_end");
-}
-
-macro_rules! impl_post_noise_state_type {
-    ($noises:ty) => {
         impl VanillaPostNoiseStateType for $noises {
             type State = SteelPostNoiseState<Self>;
 
@@ -121,9 +111,19 @@ macro_rules! impl_post_noise_state_type {
     };
 }
 
-impl_post_noise_state_type!(OverworldNoises);
-impl_post_noise_state_type!(NetherNoises);
-impl_post_noise_state_type!(EndNoises);
+impl_post_noise_state!(OverworldNoises, "steel:worldgen_state/post_noise_overworld");
+impl_post_noise_state!(NetherNoises, "steel:worldgen_state/post_noise_nether");
+impl_post_noise_state!(EndNoises, "steel:worldgen_state/post_noise_end");
+impl_post_noise_state!(
+    LargeBiomesNoises,
+    "steel:worldgen_state/post_noise_large_biomes"
+);
+impl_post_noise_state!(AmplifiedNoises, "steel:worldgen_state/post_noise_amplified");
+impl_post_noise_state!(CavesNoises, "steel:worldgen_state/post_noise_caves");
+impl_post_noise_state!(
+    FloatingIslandsNoises,
+    "steel:worldgen_state/post_noise_floating_islands"
+);
 
 /// A chunk generator for vanilla (normal) world generation.
 ///
@@ -290,6 +290,12 @@ impl<N: DimensionNoises> VanillaGenerator<N> {
             feature_runner,
             _phantom: PhantomData,
         }
+    }
+
+    /// The biome source this generator samples biomes from.
+    #[must_use]
+    pub const fn biome_source(&self) -> &BiomeSourceKind {
+        &self.biome_source
     }
 
     fn uniform_carver_biome(possible_biomes: &FxHashSet<Identifier>) -> Option<BiomeRef> {

@@ -938,8 +938,8 @@ impl LivingEntity for DrownedEntity {
             .travel_in_water(entity, input, base_gravity, is_falling, old_y)
     }
 
-    fn before_actually_hurt(&self, _source: &DamageSource, _amount: f32) {
-        self.zombie.on_about_to_be_hurt();
+    fn before_actually_hurt(&self, source: &DamageSource, _amount: f32) {
+        self.zombie.on_about_to_be_hurt(source);
     }
 
     fn should_drop_experience(&self) -> bool {

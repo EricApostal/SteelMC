@@ -70,6 +70,11 @@ impl BlockBehavior for BarrelBlock {
             return InteractionResult::Pass;
         };
 
+        // Vanilla `RandomizableContainerBlockEntity.createMenu` unpacks the
+        // pending loot table with the opening player before the menu reads the
+        // slots, so a structure barrel already holds its loot when opened.
+        block_entity.unpack_loot_table(Some(player));
+
         // Create a container reference from the block entity
         let Some(container_ref) = ContainerRef::from_block_entity(block_entity) else {
             return InteractionResult::Pass;

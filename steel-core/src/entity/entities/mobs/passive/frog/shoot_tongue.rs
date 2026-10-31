@@ -130,9 +130,11 @@ impl ShootTongue {
 
     /// Vanilla `ShootTongue.playEatingSound` + `eatEntity`.
     fn eat_entity(&self, ctx: &mut BehaviorContext<'_>, body: &SharedEntity) {
-        ctx.level.play_sound_at(
+        // Vanilla `ShootTongue.eatEntity`: `playSound(null, body, eatSound, …)`.
+        ctx.level.play_sound_from_entity(
             self.eat_sound,
             SoundSource::Neutral,
+            body.id(),
             body.position(),
             TONGUE_SOUND_VOLUME,
             TONGUE_SOUND_PITCH,
@@ -202,9 +204,11 @@ impl Behavior for ShootTongue {
             State::MoveToTarget => {
                 let distance = target.position().distance(frog.position());
                 if distance < EATING_DISTANCE {
-                    ctx.level.play_sound_at(
+                    // Vanilla `ShootTongue.playSound` on the frog body.
+                    ctx.level.play_sound_from_entity(
                         self.tongue_sound,
                         SoundSource::Neutral,
+                        frog.id(),
                         frog.position(),
                         TONGUE_SOUND_VOLUME,
                         TONGUE_SOUND_PITCH,

@@ -19,7 +19,9 @@ use steel_utils::{Downcast as _, DowncastType, DowncastTypeKey};
 
 use super::LlamaEntity;
 use crate::behavior::InteractionResult;
-use crate::entity::ai::goal::{Goal, GoalControls, NearestAttackableTargetGoal, PanicGoal};
+use crate::entity::ai::goal::{
+    CaravanLlama, Goal, GoalControls, NearestAttackableTargetGoal, PanicGoal, RangedAttackMob,
+};
 use crate::entity::damage::DamageSource;
 use crate::entity::entities::mobs::npc::wandering_trader::WanderingTraderEntity;
 use crate::entity::entities::mobs::passive::equine::Equine;
@@ -386,6 +388,42 @@ impl Mob for TraderLlamaEntity {
 }
 
 impl PathfinderMob for TraderLlamaEntity {}
+
+impl CaravanLlama for TraderLlamaEntity {
+    fn in_caravan(&self) -> bool {
+        self.llama.in_caravan()
+    }
+
+    fn caravan_head(&self) -> Option<SharedEntity> {
+        self.llama.caravan_head()
+    }
+
+    fn has_caravan_tail(&self) -> bool {
+        self.llama.has_caravan_tail()
+    }
+
+    fn join_caravan(&self, head: &SharedEntity, self_handle: &SharedEntity) {
+        self.llama.join_caravan(head, self_handle);
+    }
+
+    fn leave_caravan(&self) {
+        self.llama.leave_caravan();
+    }
+
+    fn set_caravan_tail(&self, tail: Option<&SharedEntity>) {
+        self.llama.set_caravan_tail(tail);
+    }
+}
+
+impl RangedAttackMob for TraderLlamaEntity {
+    fn perform_ranged_attack(&self, target: &SharedEntity, power: f32) -> bool {
+        self.llama.perform_ranged_attack(target, power)
+    }
+
+    fn ranged_attack_uncertainty(&self, world: &World) -> f32 {
+        self.llama.ranged_attack_uncertainty(world)
+    }
+}
 
 /// Vanilla `TraderLlama.TraderLlamaDefendWanderingTraderGoal`.
 ///

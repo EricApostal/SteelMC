@@ -51,6 +51,43 @@ pub fn spawn_target_fitness(
     fitness
 }
 
+/// One generated `spawn_target` entry.
+///
+/// Each transpiled noise-settings module emits its own `SpawnTarget` struct, so this
+/// trait gives the dimension-agnostic spawn search a uniform fitness entry point.
+pub trait SpawnTargetEntry {
+    /// Vanilla `SpawnTargetPoint.sampleFitness` for this entry.
+    fn fitness(&self, target: &TargetPoint) -> i64;
+}
+
+macro_rules! impl_spawn_target_entry {
+    ($($module:ident),* $(,)?) => {$(
+        impl SpawnTargetEntry for steel_worldgen::density_functions::$module::SpawnTarget {
+            fn fitness(&self, target: &TargetPoint) -> i64 {
+                spawn_target_fitness(
+                    self.temperature,
+                    self.vegetation,
+                    self.continents,
+                    self.erosion,
+                    self.depth,
+                    self.ridges,
+                    target,
+                )
+            }
+        }
+    )*};
+}
+
+impl_spawn_target_entry!(
+    overworld,
+    nether,
+    end,
+    large_biomes,
+    amplified,
+    caves,
+    floating_islands
+);
+
 /// Vanilla `NoiseSpawnFinder.Result`.
 #[derive(Debug, Clone, Copy)]
 struct SpawnSearchResult {

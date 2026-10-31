@@ -14,12 +14,14 @@
 //!   Steel does not model yet; the push/pickup filter here uses vanilla's
 //!   pickable/pushable/spectator test instead.
 
+use std::mem;
 use std::sync::Arc;
 
 use glam::{DVec3, IVec3};
 use simdnbt::borrow::NbtCompound as BorrowedNbtCompoundView;
 use simdnbt::owned::{NbtCompound, NbtTag};
 use steel_math::{RAD_TO_DEG_F64, wrap_degrees};
+use steel_protocol::packets::game::MinecartStep;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::{BlockStateProperties, RailShape};
 use steel_registry::data_components::vanilla_components;
@@ -84,14 +86,17 @@ const LAVA_IGNITE_TICKS: i32 = 300;
 /// Vanilla `VehicleEntity.hurtServer` damage threshold for destroying a vehicle.
 const DESTROY_DAMAGE_THRESHOLD: f32 = 40.0;
 
-/// Rail contact and rotation state shared by every vanilla minecart.
+/// Rail contact, rotation and pending interpolation state shared by every minecart.
 ///
 /// Mirrors vanilla `AbstractMinecart.onRails`/`flipped`, which are plain fields
-/// rather than synchronized entity data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// rather than synchronized entity data, plus the `lerpSteps` buffer that
+/// `NewMinecartBehavior.moveAlongTrack` fills and `ServerEntity` drains.
+#[derive(Debug, Clone)]
 pub(super) struct MinecartState {
     on_rails: bool,
     flipped: bool,
+    /// Track steps recorded since the last movement sync, oldest first.
+    lerp_steps: Vec<MinecartStep>,
 }
 
 impl MinecartState {
@@ -100,6 +105,7 @@ impl MinecartState {
         Self {
             on_rails: false,
             flipped: false,
+            lerp_steps: Vec::new(),
         }
     }
 }
@@ -224,6 +230,42 @@ pub(super) fn base_natural_slowdown(cart: &impl Minecart, movement: DVec3) -> DV
     }
 }
 
+/// Gates the experimental `NewMinecartBehavior` interpolation path.
+///
+/// Vanilla sends `ClientboundMoveMinecartPacket` only for carts whose behaviour is
+/// `NewMinecartBehavior` (`ServerEntity.sendChanges`, `handleMinecartPosRot`), which
+/// `AbstractMinecart.useExperimentalMovement` enables only when the off-by-default
+/// `minecart_improvements` feature flag is present. Steel implements only the stable
+/// `OldMinecartBehavior` (see the module docs), and a vanilla client also ignores the
+/// packet for old-behaviour carts (`ClientPacketListener.handleMinecartAlongTrack`),
+/// so Steel must not send it today. The recording and send plumbing stays in place,
+/// gated by this constant, for the day the experimental behaviour lands.
+pub const NEW_MINECART_BEHAVIOR_IMPLEMENTED: bool = false;
+
+/// Records one vanilla `NewMinecartBehavior.MinecartStep` for `cart`.
+///
+/// Mirrors the step record built at the end of `NewMinecartBehavior.moveAlongTrack`:
+/// the post-move position and movement, the updated yaw/pitch, and a weight of
+/// `min(stepLength, getMaxSpeed(level))`. When the cart did not move this tick but
+/// started with horizontal movement, vanilla records a weight of `1.0` instead.
+fn record_track_step(cart: &impl Minecart, world: &World, initial_movement: DVec3) {
+    let position = cart.position();
+    let step_length = (position - cart.old_position()).length();
+    let (y_rot, x_rot) = cart.rotation();
+    let movement = cart.velocity();
+    let weight = if step_length > f64::from(1.0e-5_f32) {
+        (step_length.min(cart.max_speed(world))) as f32
+    } else if initial_movement.x * initial_movement.x + initial_movement.z * initial_movement.z
+        > 0.0
+    {
+        1.0
+    } else {
+        return;
+    };
+
+    cart.record_lerp_step(MinecartStep::new(position, movement, y_rot, x_rot, weight));
+}
+
 /// Vanilla `AbstractMinecart`/`VehicleEntity` state and behavior shared by all carts.
 ///
 /// Implementors only supply their synchronized-data plumbing and the handful of
@@ -236,6 +278,20 @@ pub(super) fn base_natural_slowdown(cart: &impl Minecart, movement: DVec3) -> DV
 pub(super) trait Minecart: Entity + Sized {
     /// Per-cart rail contact and rotation state.
     fn cart_state(&self) -> &SyncMutex<MinecartState>;
+
+    /// Records one track interpolation step for the next movement sync.
+    ///
+    /// Mirrors vanilla `NewMinecartBehavior.moveAlongTrack` appending to
+    /// `lerpSteps`, which `ServerEntity.sendChanges` drains into a
+    /// `ClientboundMoveMinecartPacket`.
+    fn record_lerp_step(&self, step: MinecartStep) {
+        self.cart_state().lock().lerp_steps.push(step);
+    }
+
+    /// Drains the recorded interpolation steps, oldest first.
+    fn take_lerp_steps(&self) -> Vec<MinecartStep> {
+        mem::take(&mut self.cart_state().lock().lerp_steps)
+    }
 
     /// Runs `f` against the shared `AbstractMinecart` synchronized-data layer.
     fn with_minecart_data<R>(&self, f: impl FnOnce(&AbstractMinecartEntityData) -> R) -> R;
@@ -595,6 +651,9 @@ pub(super) trait Minecart: Entity + Sized {
         let state = world.get_block_state(rail_pos);
         let on_rails = is_rail_state(state);
         self.set_on_minecart_rails(on_rails);
+        // Vanilla `NewMinecartBehavior.moveAlongTrack` snapshots the movement at the
+        // top of the iteration to decide the fallback step weight below.
+        let initial_movement = self.velocity();
 
         if on_rails {
             Arc::clone(&self).move_along_track(world);
@@ -632,6 +691,15 @@ pub(super) trait Minecart: Entity + Sized {
         }
 
         self.set_rotation((new_yaw % 360.0, 0.0));
+        if NEW_MINECART_BEHAVIOR_IMPLEMENTED {
+            // Vanilla `NewMinecartBehavior.moveAlongTrack` ends by appending this
+            // tick's step to `lerpSteps`; `ServerEntity.sendChanges` then ships the
+            // whole list as `ClientboundMoveMinecartPacket` so the client lerps
+            // along the track. Both halves are gated on the const above: an
+            // old-behaviour client ignores the packet, and an undrained buffer
+            // would grow without bound.
+            record_track_step(self.as_ref(), world, initial_movement);
+        }
         Arc::clone(&self).push_and_pickup_entities();
     }
 
@@ -956,6 +1024,38 @@ pub(super) trait Minecart: Entity + Sized {
         self.on_minecart_destroyed(world);
     }
 }
+
+/// Object-safe view of a minecart's pending track interpolation steps.
+///
+/// [`Minecart`] is not dyn-compatible (it has generic synchronized-data
+/// helpers), so movement sync upcasts through this narrow trait, exactly like
+/// `as_projectile` does for vanilla's projectile hierarchy.
+pub trait MinecartSync {
+    /// Drains vanilla `NewMinecartBehavior.lerpSteps`, oldest step first.
+    fn take_minecart_lerp_steps(&self) -> Vec<MinecartStep>;
+}
+
+macro_rules! impl_minecart_sync {
+    ($($cart:ty),+ $(,)?) => {
+        $(
+            impl MinecartSync for $cart {
+                fn take_minecart_lerp_steps(&self) -> Vec<MinecartStep> {
+                    Minecart::take_lerp_steps(self)
+                }
+            }
+        )+
+    };
+}
+
+impl_minecart_sync!(
+    MinecartEntity,
+    ChestMinecartEntity,
+    FurnaceMinecartEntity,
+    HopperMinecartEntity,
+    TntMinecartEntity,
+    SpawnerMinecartEntity,
+    CommandBlockMinecartEntity,
+);
 
 /// Vanilla `AbstractMinecart.getRelativePortalPosition` for carts.
 pub(super) fn minecart_relative_portal_position(

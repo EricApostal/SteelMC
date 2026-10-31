@@ -335,6 +335,9 @@ impl World {
             EntityMovementSyncPacket::PositionSync(packet) => {
                 EncodedPacket::from_bare(packet, self.compression, ConnectionProtocol::Play)
             }
+            EntityMovementSyncPacket::Minecart(packet) => {
+                EncodedPacket::from_bare(packet, self.compression, ConnectionProtocol::Play)
+            }
             EntityMovementSyncPacket::Velocity(packet) => {
                 EncodedPacket::from_bare(packet, self.compression, ConnectionProtocol::Play)
             }

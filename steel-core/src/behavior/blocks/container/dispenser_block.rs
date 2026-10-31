@@ -1043,6 +1043,10 @@ fn open_dispenser_menu(
     let Some(block_entity) = world.get_block_entity(pos) else {
         return InteractionResult::Success;
     };
+    // Vanilla `RandomizableContainerBlockEntity.createMenu` unpacks the pending
+    // loot table with the opening player before the menu is built, so a
+    // structure dispenser/dropper already holds its loot when opened.
+    block_entity.unpack_loot_table(Some(player));
     let Some(container) = ContainerRef::from_block_entity(block_entity) else {
         return InteractionResult::Success;
     };

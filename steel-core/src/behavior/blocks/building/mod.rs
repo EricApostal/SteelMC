@@ -7,6 +7,7 @@ mod brushable_block;
 mod budding_amethyst;
 mod campfire_block;
 mod cauldron_block;
+pub(crate) mod cauldron_interactions;
 mod composter_block;
 mod conduit_block;
 mod door_block;

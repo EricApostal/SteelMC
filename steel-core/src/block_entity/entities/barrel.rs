@@ -10,6 +10,8 @@ use std::{
 };
 
 use glam::DVec3;
+use rand::SeedableRng as _;
+use rand::rngs::StdRng;
 use simdnbt::ToNbtTag;
 use simdnbt::borrow::{BaseNbtCompound as BorrowedNbtCompound, NbtCompound as NbtCompoundView};
 use simdnbt::owned::{NbtCompound, NbtList, NbtTag};
@@ -17,19 +19,23 @@ use steel_protocol::packets::game::SoundSource;
 use steel_registry::blocks::block_state_ext::BlockStateExt as _;
 use steel_registry::blocks::properties::BlockStateProperties;
 use steel_registry::item_stack::ItemStack;
+use steel_registry::loot_table::{LootContext, LootTableRef};
 use steel_registry::sound_event::SoundEventRef;
-use steel_registry::{sound_events, vanilla_block_entity_types};
+use steel_registry::{REGISTRY, RegistryExt as _, sound_events, vanilla_block_entity_types};
 use steel_utils::types::{GameType, UpdateFlags};
 use steel_utils::{
     BlockPos, BlockStateId, DowncastType, DowncastTypeKey, Identifier, locks::SyncMutex,
 };
 
+use crate::behavior::advancement_hooks::raise_generate_loot;
 use crate::block_entity::entities::openers_counter::{
     ContainerOpenersCounter, ContainerViewers, count_viewers,
 };
+use crate::block_entity::entities::{shuffle, shuffle_and_split_items};
 use crate::block_entity::{
     BlockEntity, BlockEntityBase, BlockEntityLifecycleExt as _, ContainerOpenersHost,
 };
+use crate::entity::{LivingEntity as _, entity_loot_ref, living_loot_equipment};
 use crate::inventory::container::Container;
 use crate::inventory::lock::{ContainerRef, SharedContainer};
 use crate::player::Player;
@@ -92,6 +98,108 @@ impl BarrelBlockEntity {
             openers: SyncMutex::new(ContainerOpenersCounter::new()),
         }
     }
+
+    /// Vanilla `RandomizableContainer.unpackLootTable`.
+    ///
+    /// Rolls a pending `LootTable` into the barrel's empty slots and clears the
+    /// table, so an unopened structure container generates its loot exactly
+    /// once, on the first read. Vanilla runs this from every container read and
+    /// from `RandomizableContainerBlockEntity.createMenu`; Steel's
+    /// [`ContainerRef`] boundary and the menu open path invoke it explicitly.
+    ///
+    /// `player` is the opener for the menu path (vanilla passes the opening
+    /// player, firing `GENERATE_LOOT` and applying luck); reads no player
+    /// drives (a hopper, `/item`, a comparator, breaking the barrel) pass
+    /// `None`.
+    pub fn unpack_loot_table(&self, player: Option<&Player>) {
+        let Some(world) = self.get_level() else {
+            return;
+        };
+        // Vanilla clears the table before rolling it, so it unpacks only once.
+        let (loot_table_key, seed) = {
+            let mut container = self.container.lock();
+            let Some(loot_table_key) = container.loot_table.take() else {
+                return;
+            };
+            (loot_table_key, container.loot_table_seed)
+        };
+        // Vanilla resolves the key through the reloadable registries, which
+        // always yield a table (the empty one for an unknown key).
+        let Some(loot_table) = REGISTRY.loot_tables.by_key(&loot_table_key) else {
+            log::warn!("Barrel has unknown loot table {loot_table_key}");
+            return;
+        };
+        // Vanilla fires `GENERATE_LOOT` before the loot is rolled.
+        if let Some(player) = player {
+            raise_generate_loot(player, &world, &loot_table_key);
+        }
+
+        let pos = self.get_block_pos();
+        // Vanilla `Vec3.atCenterOf(this.worldPosition)`.
+        let origin = (
+            f64::from(pos.x()) + 0.5,
+            f64::from(pos.y()) + 0.5,
+            f64::from(pos.z()) + 0.5,
+        );
+        // Vanilla `LootTable.fill` seeds the context with `lootTableSeed` when
+        // it is non-zero and falls back to the level's random source otherwise.
+        if seed == 0 {
+            self.fill_from_loot_table(loot_table, origin, player, &mut rand::rng());
+        } else {
+            self.fill_from_loot_table(
+                loot_table,
+                origin,
+                player,
+                &mut StdRng::seed_from_u64(seed as u64),
+            );
+        }
+    }
+
+    /// Vanilla `LootTable.fill` against the barrel's empty slots.
+    ///
+    /// The loot context carries what vanilla's chest parameter set carries: the
+    /// block centre as `ORIGIN` and, when a player opened the container, luck
+    /// and `THIS_ENTITY`. The slot distribution shares the dispenser family's
+    /// `Util.shuffle` + `LootTable.shuffleAndSplitItems`.
+    fn fill_from_loot_table<R: rand::Rng>(
+        &self,
+        loot_table: LootTableRef,
+        origin: (f64, f64, f64),
+        player: Option<&Player>,
+        rng: &mut R,
+    ) {
+        let equipment = player.map(living_loot_equipment);
+        let items = {
+            let mut context = LootContext::new(rng).with_origin(origin.0, origin.1, origin.2);
+            if let (Some(player), Some(equipment)) = (player, equipment.as_ref()) {
+                context = context
+                    .with_luck(player.get_luck())
+                    .with_this_entity(entity_loot_ref(player, Some(equipment)));
+            }
+            loot_table.get_random_items(&mut context)
+        };
+
+        let mut container = self.container.lock();
+        let mut available_slots: Vec<usize> = (0..BARREL_SLOTS)
+            .filter(|&slot| container.items[slot].is_empty())
+            .collect();
+        shuffle(&mut available_slots, rng);
+        let items = shuffle_and_split_items(items, available_slots.len(), rng);
+        let placed = !items.is_empty();
+        for item in items {
+            let Some(slot) = available_slots.pop() else {
+                log::warn!("Tried to over-fill a barrel");
+                break;
+            };
+            container.set_item(slot, item);
+        }
+        drop(container);
+        // Vanilla `setItem` marks the container changed; nothing placed leaves
+        // the barrel untouched.
+        if placed {
+            BlockEntity::set_changed(self);
+        }
+    }
 }
 
 impl BlockEntity for BarrelBlockEntity {
@@ -99,7 +207,16 @@ impl BlockEntity for BarrelBlockEntity {
         &self.base
     }
 
+    fn unpack_loot_table(&self, player: Option<&Player>) {
+        BarrelBlockEntity::unpack_loot_table(self, player);
+    }
+
     fn pre_remove_side_effects(&self, pos: BlockPos, _state: BlockStateId) {
+        // Vanilla `Containers.dropContents` reads the container through
+        // `RandomizableContainerBlockEntity.getItem`, which unpacks a pending
+        // loot table first. Dropping the contents does not fire `GENERATE_LOOT`
+        // because no player drives the read.
+        BarrelBlockEntity::unpack_loot_table(self, None);
         let items = {
             let mut container = self.container.lock();
             mem::replace(&mut container.items, vec![ItemStack::empty(); BARREL_SLOTS])

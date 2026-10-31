@@ -469,10 +469,13 @@ impl Animal for FrogEntity {
     }
 
     fn play_eating_sound(&self) {
+        // Vanilla `Frog.playEatingSound`: `level.playSound(null, this, FROG_EAT, …)`,
+        // the entity overload that sends `ClientboundSoundEntityPacket`.
         if let Some(world) = self.level() {
-            world.play_sound_at(
+            world.play_sound_from_entity(
                 &sound_events::ENTITY_FROG_EAT,
                 SoundSource::Neutral,
+                self.id(),
                 self.position(),
                 EAT_SOUND_VOLUME,
                 EAT_SOUND_PITCH,

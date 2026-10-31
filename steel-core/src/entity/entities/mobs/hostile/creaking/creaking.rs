@@ -511,7 +511,11 @@ impl Entity for CreakingEntity {
             && let Some(heart) = heart_entity.downcast_ref::<CreakingHeartBlockEntity>()
             && heart.creaking() == Some(self.uuid())
         {
-            // Vanilla `CreakingHeartBlockEntity.creakingHurt`.
+            // Vanilla `CreakingHeartBlockEntity.creakingHurt`. It takes the `Arc<World>`
+            // because spreading resin re-enters the world, so resolve it from the entity.
+            if let Some(world_arc) = self.level() {
+                heart.creaking_hurt(&world_arc);
+            }
             if responsible_player.is_some() {
                 world.play_block_sound(
                     &sound_events::BLOCK_CREAKING_HEART_HURT,

@@ -97,6 +97,9 @@ pub struct ServerConfig {
     pub compression: Option<CompressionInfo>,
     /// All settings and configurations for server links.
     pub server_links: Option<ServerLinks>,
+    /// Vanilla `accepts-transfers`: whether a `transfer` handshake may log in.
+    #[serde(default)]
+    pub accepts_transfers: bool,
     /// Thread counts for server thread pools.
     #[serde(default)]
     pub threads: ThreadConfig,
@@ -150,6 +153,7 @@ impl ServerConfig {
             command_spam_threshold_seconds: self.command_spam_threshold_seconds,
             compression: self.compression,
             server_links: self.server_links,
+            accepts_transfers: self.accepts_transfers,
             packet_workers: self.threads.packet_workers,
             chunk_generation_threads: self.threads.chunk_generation,
             chunk_encoding_threads: self.threads.chunk_encoding,
@@ -212,6 +216,9 @@ pub(super) fn validate(config: &ServerConfig) -> Result<(), &'static str> {
         if !matches!(url.scheme(), "http" | "https") {
             return Err("services_server must use http or https");
         }
+    }
+    if let Some(server_links) = &config.server_links {
+        server_links.validate()?;
     }
     if config.simulation_distance > config.view_distance {
         return Err("Simulation distance must be less than or equal to view distance");

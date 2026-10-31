@@ -12,6 +12,7 @@
 //!   payloads.
 //! * [`storage`] — [`AnvilStorage`], the `ChunkStorage` backend selected by the `steel:anvil`
 //!   world-storage factory.
+//! * [`player_data`] — vanilla `playerdata/<uuid>.dat` ⇄ Steel's persistent player snapshot.
 //! * [`convert`] — whole-world import/export between Steel's `.srg` format and Anvil.
 //!
 //! `level.dat` lives in [`crate::level_data::anvil`] because it belongs to the level-data owner.
@@ -25,6 +26,7 @@ mod compression;
 mod convert;
 mod entities;
 mod nbt;
+mod player_data;
 mod poi;
 mod region;
 pub(crate) mod saved_data;

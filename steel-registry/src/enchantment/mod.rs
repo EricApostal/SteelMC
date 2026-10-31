@@ -545,6 +545,7 @@ mod tests {
             | EnchantmentEffectRequirements::DamageSourceProperties(_)
             | EnchantmentEffectRequirements::WeatherCheck { .. }
             | EnchantmentEffectRequirements::MatchTool { .. }
+            | EnchantmentEffectRequirements::LocationCheck { .. }
             | EnchantmentEffectRequirements::Unsupported { .. } => false,
         }
     }
