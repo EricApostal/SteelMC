@@ -8,6 +8,8 @@ authors.workspace = true
 [dependencies]
 # Internal crates
 steel-core.workspace = true
+steel-plugin-host.workspace = true
+steel-registry.workspace = true
 steel-login.workspace = true
 steel-utils.workspace = true
 

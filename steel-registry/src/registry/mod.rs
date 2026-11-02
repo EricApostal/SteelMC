@@ -132,15 +132,37 @@ impl RegistryLock {
     pub fn init(&self, value: Registry) -> Result<(), Registry> {
         self.0.set(value)
     }
+
+    /// Returns the published registry, if initialization has completed.
+    #[must_use]
+    pub fn try_get(&self) -> Option<&Registry> {
+        self.0.get()
+    }
 }
 
 /// Returns `false` if the registry was already published.
 pub fn init_vanilla_registry() -> bool {
+    init_vanilla_registry_with(|_| {})
+}
+
+/// Builds the vanilla registry, runs `extend` before the registry is frozen,
+/// then publishes it.
+///
+/// Extensions must register their entries here; the registry is immutable after
+/// this function returns. `extend` is skipped when the registry was already
+/// published by an earlier call.
+///
+/// Returns `false` if the registry was already published.
+pub fn init_vanilla_registry_with<F>(extend: F) -> bool
+where
+    F: FnOnce(&mut Registry),
+{
     static INIT: Once = Once::new();
 
     let mut published = false;
     INIT.call_once(|| {
         let mut registry = Registry::new_vanilla();
+        extend(&mut registry);
         registry.freeze();
         published = REGISTRY.init(registry).is_ok();
     });

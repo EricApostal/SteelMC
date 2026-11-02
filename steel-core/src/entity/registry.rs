@@ -261,9 +261,19 @@ pub static ENTITIES: EntityRegistryLock = EntityRegistryLock(OnceLock::new());
 
 /// Initializes the global entity registry, once the main registry is frozen.
 pub fn init_entities() {
+    init_entities_with(|_| {});
+}
+
+/// Initializes entity factories and lets an embedder add extension factories
+/// before the registry is published.
+pub fn init_entities_with<F>(extend: F)
+where
+    F: FnOnce(&mut EntityRegistry),
+{
     ENTITIES.get_or_init(|| {
         let mut registry = EntityRegistry::new();
         register_entity_factories(&mut registry);
+        extend(&mut registry);
         registry
     });
 }

@@ -1,0 +1,1778 @@
+{
+  "api_version": 1,
+  "source": "steel-abi/src/lib.rs",
+  "constants": [
+    {
+      "name": "STEEL_ABI_VERSION",
+      "value": 1
+    },
+    {
+      "name": "STEEL_LEVEL_CONTENT",
+      "value": 0
+    },
+    {
+      "name": "STEEL_LEVEL_BEHAVIOR",
+      "value": 1
+    },
+    {
+      "name": "STEEL_LEVEL_RUNTIME",
+      "value": 2
+    },
+    {
+      "name": "STEEL_OK",
+      "value": 0
+    },
+    {
+      "name": "STEEL_ERR_INVALID_ARGUMENT",
+      "value": 1
+    },
+    {
+      "name": "STEEL_ERR_WRONG_PHASE",
+      "value": 2
+    },
+    {
+      "name": "STEEL_ERR_NOT_FOUND",
+      "value": 3
+    },
+    {
+      "name": "STEEL_ERR_ALREADY_EXISTS",
+      "value": 4
+    },
+    {
+      "name": "STEEL_ERR_UNSUPPORTED",
+      "value": 5
+    },
+    {
+      "name": "STEEL_ERR_INTERNAL",
+      "value": 6
+    },
+    {
+      "name": "STEEL_REF_NONE",
+      "value": 0
+    },
+    {
+      "name": "STEEL_REF_BLOCK",
+      "value": 1
+    },
+    {
+      "name": "STEEL_REF_ITEM",
+      "value": 2
+    },
+    {
+      "name": "STEEL_REF_FLUID",
+      "value": 3
+    },
+    {
+      "name": "STEEL_REF_ENTITY_TYPE",
+      "value": 4
+    },
+    {
+      "name": "STEEL_REF_BLOCK_ENTITY_TYPE",
+      "value": 5
+    },
+    {
+      "name": "STEEL_REF_ITEM_STACK",
+      "value": 6
+    },
+    {
+      "name": "STEEL_REF_NBT",
+      "value": 7
+    },
+    {
+      "name": "STEEL_REF_TEXT",
+      "value": 8
+    },
+    {
+      "name": "STEEL_PROPERTY_BOOL",
+      "value": 0
+    },
+    {
+      "name": "STEEL_PROPERTY_INT",
+      "value": 1
+    },
+    {
+      "name": "STEEL_PROPERTY_ENUM",
+      "value": 2
+    },
+    {
+      "name": "STEEL_BLOCK_HAS_COLLISION",
+      "value": 1
+    },
+    {
+      "name": "STEEL_BLOCK_CAN_OCCLUDE",
+      "value": 2
+    },
+    {
+      "name": "STEEL_BLOCK_IS_AIR",
+      "value": 4
+    },
+    {
+      "name": "STEEL_BLOCK_REPLACEABLE",
+      "value": 8
+    },
+    {
+      "name": "STEEL_BLOCK_RANDOMLY_TICKING",
+      "value": 16
+    },
+    {
+      "name": "STEEL_BLOCK_LIQUID",
+      "value": 32
+    },
+    {
+      "name": "STEEL_BLOCK_REQUIRES_CORRECT_TOOL",
+      "value": 64
+    },
+    {
+      "name": "STEEL_BLOCK_FORCE_SOLID_OFF",
+      "value": 128
+    },
+    {
+      "name": "STEEL_BLOCK_FORCE_SOLID_ON",
+      "value": 256
+    },
+    {
+      "name": "STEEL_BLOCK_IGNITED_BY_LAVA",
+      "value": 512
+    },
+    {
+      "name": "STEEL_PUSH_NORMAL",
+      "value": 0
+    },
+    {
+      "name": "STEEL_PUSH_DESTROY",
+      "value": 1
+    },
+    {
+      "name": "STEEL_PUSH_BLOCK",
+      "value": 2
+    },
+    {
+      "name": "STEEL_PUSH_IGNORE",
+      "value": 3
+    },
+    {
+      "name": "STEEL_PUSH_POPPED",
+      "value": 4
+    },
+    {
+      "name": "STEEL_ENTITY_FIRE_IMMUNE",
+      "value": 1
+    },
+    {
+      "name": "STEEL_ENTITY_SUMMONABLE",
+      "value": 2
+    },
+    {
+      "name": "STEEL_ENTITY_CAN_SERIALIZE",
+      "value": 4
+    },
+    {
+      "name": "STEEL_ENTITY_ALLOWED_IN_PEACEFUL",
+      "value": 8
+    },
+    {
+      "name": "STEEL_ENTITY_CAN_SPAWN_FAR_FROM_PLAYER",
+      "value": 16
+    },
+    {
+      "name": "STEEL_ENTITY_TRACK_DELTAS",
+      "value": 32
+    },
+    {
+      "name": "STEEL_MOB_CATEGORY_MONSTER",
+      "value": 0
+    },
+    {
+      "name": "STEEL_MOB_CATEGORY_CREATURE",
+      "value": 1
+    },
+    {
+      "name": "STEEL_MOB_CATEGORY_AMBIENT",
+      "value": 2
+    },
+    {
+      "name": "STEEL_MOB_CATEGORY_AXOLOTLS",
+      "value": 3
+    },
+    {
+      "name": "STEEL_MOB_CATEGORY_UNDERGROUND_WATER_CREATURE",
+      "value": 4
+    },
+    {
+      "name": "STEEL_MOB_CATEGORY_WATER_CREATURE",
+      "value": 5
+    },
+    {
+      "name": "STEEL_MOB_CATEGORY_WATER_AMBIENT",
+      "value": 6
+    },
+    {
+      "name": "STEEL_MOB_CATEGORY_MISC",
+      "value": 7
+    },
+    {
+      "name": "STEEL_HAND_MAIN",
+      "value": 0
+    },
+    {
+      "name": "STEEL_HAND_OFF",
+      "value": 1
+    },
+    {
+      "name": "STEEL_INTERACTION_NOT_HANDLED",
+      "value": 4294967295
+    },
+    {
+      "name": "STEEL_INTERACTION_SUCCESS",
+      "value": 0
+    },
+    {
+      "name": "STEEL_INTERACTION_SUCCESS_WITHOUT_ITEM",
+      "value": 1
+    },
+    {
+      "name": "STEEL_INTERACTION_SUCCESS_SERVER",
+      "value": 2
+    },
+    {
+      "name": "STEEL_INTERACTION_CONSUME",
+      "value": 3
+    },
+    {
+      "name": "STEEL_INTERACTION_FAIL",
+      "value": 4
+    },
+    {
+      "name": "STEEL_INTERACTION_PASS",
+      "value": 5
+    },
+    {
+      "name": "STEEL_INTERACTION_TRY_EMPTY_HAND",
+      "value": 6
+    },
+    {
+      "name": "STEEL_EVENT_BLOCK_BREAK",
+      "value": 1
+    },
+    {
+      "name": "STEEL_EVENT_BLOCK_PLACE",
+      "value": 2
+    },
+    {
+      "name": "STEEL_EVENT_PLAYER_JOIN",
+      "value": 3
+    },
+    {
+      "name": "STEEL_EVENT_PLAYER_LEAVE",
+      "value": 4
+    },
+    {
+      "name": "STEEL_EVENT_CHAT",
+      "value": 5
+    },
+    {
+      "name": "STEEL_EVENT_CANCELLED",
+      "value": 1
+    }
+  ],
+  "structs": [
+    {
+      "name": "SteelStrView",
+      "fields": [
+        {
+          "name": "ptr",
+          "rust_type": "*const u8"
+        },
+        {
+          "name": "len",
+          "rust_type": "usize"
+        }
+      ]
+    },
+    {
+      "name": "SteelRef",
+      "fields": [
+        {
+          "name": "kind",
+          "rust_type": "u32"
+        },
+        {
+          "name": "index",
+          "rust_type": "u32"
+        },
+        {
+          "name": "generation",
+          "rust_type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "SteelWorldRef",
+      "fields": [
+        {
+          "name": "0",
+          "rust_type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "SteelEntityRef",
+      "fields": [
+        {
+          "name": "world",
+          "rust_type": "SteelWorldRef"
+        },
+        {
+          "name": "entity",
+          "rust_type": "i32"
+        }
+      ]
+    },
+    {
+      "name": "SteelBlockEntityRef",
+      "fields": [
+        {
+          "name": "world",
+          "rust_type": "SteelWorldRef"
+        },
+        {
+          "name": "x",
+          "rust_type": "i32"
+        },
+        {
+          "name": "y",
+          "rust_type": "i32"
+        },
+        {
+          "name": "z",
+          "rust_type": "i32"
+        }
+      ]
+    },
+    {
+      "name": "SteelOptEntityRef",
+      "fields": [
+        {
+          "name": "present",
+          "rust_type": "u8"
+        },
+        {
+          "name": "value",
+          "rust_type": "SteelEntityRef"
+        }
+      ]
+    },
+    {
+      "name": "SteelOptBlockEntityRef",
+      "fields": [
+        {
+          "name": "present",
+          "rust_type": "u8"
+        },
+        {
+          "name": "value",
+          "rust_type": "SteelBlockEntityRef"
+        }
+      ]
+    },
+    {
+      "name": "SteelBlockState",
+      "fields": [
+        {
+          "name": "0",
+          "rust_type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "SteelAabb",
+      "fields": [
+        {
+          "name": "min_x",
+          "rust_type": "f32"
+        },
+        {
+          "name": "min_y",
+          "rust_type": "f32"
+        },
+        {
+          "name": "min_z",
+          "rust_type": "f32"
+        },
+        {
+          "name": "max_x",
+          "rust_type": "f32"
+        },
+        {
+          "name": "max_y",
+          "rust_type": "f32"
+        },
+        {
+          "name": "max_z",
+          "rust_type": "f32"
+        }
+      ]
+    },
+    {
+      "name": "SteelVec3",
+      "fields": [
+        {
+          "name": "x",
+          "rust_type": "f64"
+        },
+        {
+          "name": "y",
+          "rust_type": "f64"
+        },
+        {
+          "name": "z",
+          "rust_type": "f64"
+        }
+      ]
+    },
+    {
+      "name": "SteelPropertyDesc",
+      "fields": [
+        {
+          "name": "kind",
+          "rust_type": "u32"
+        },
+        {
+          "name": "name",
+          "rust_type": "SteelStrView"
+        },
+        {
+          "name": "min",
+          "rust_type": "i32"
+        },
+        {
+          "name": "max",
+          "rust_type": "i32"
+        },
+        {
+          "name": "values",
+          "rust_type": "*const SteelStrView"
+        },
+        {
+          "name": "value_count",
+          "rust_type": "usize"
+        }
+      ]
+    },
+    {
+      "name": "SteelShapeOverride",
+      "fields": [
+        {
+          "name": "state_offset",
+          "rust_type": "u32"
+        },
+        {
+          "name": "boxes",
+          "rust_type": "*const SteelAabb"
+        },
+        {
+          "name": "box_count",
+          "rust_type": "usize"
+        }
+      ]
+    },
+    {
+      "name": "SteelShapeTable",
+      "fields": [
+        {
+          "name": "boxes",
+          "rust_type": "*const SteelAabb"
+        },
+        {
+          "name": "box_count",
+          "rust_type": "usize"
+        },
+        {
+          "name": "overrides",
+          "rust_type": "*const SteelShapeOverride"
+        },
+        {
+          "name": "override_count",
+          "rust_type": "usize"
+        }
+      ]
+    },
+    {
+      "name": "SteelLight",
+      "fields": [
+        {
+          "name": "emission",
+          "rust_type": "u8"
+        },
+        {
+          "name": "dampening",
+          "rust_type": "u8"
+        },
+        {
+          "name": "use_shape_for_occlusion",
+          "rust_type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "SteelBlockDesc",
+      "fields": [
+        {
+          "name": "struct_size",
+          "rust_type": "u32"
+        },
+        {
+          "name": "key",
+          "rust_type": "SteelStrView"
+        },
+        {
+          "name": "flags",
+          "rust_type": "u32"
+        },
+        {
+          "name": "push_reaction",
+          "rust_type": "u32"
+        },
+        {
+          "name": "destroy_time",
+          "rust_type": "f32"
+        },
+        {
+          "name": "explosion_resistance",
+          "rust_type": "f32"
+        },
+        {
+          "name": "friction",
+          "rust_type": "f32"
+        },
+        {
+          "name": "speed_factor",
+          "rust_type": "f32"
+        },
+        {
+          "name": "jump_factor",
+          "rust_type": "f32"
+        },
+        {
+          "name": "bounce_restitution",
+          "rust_type": "f32"
+        },
+        {
+          "name": "fall_distance_reduction",
+          "rust_type": "f32"
+        },
+        {
+          "name": "max_horizontal_offset",
+          "rust_type": "f32"
+        },
+        {
+          "name": "max_vertical_offset",
+          "rust_type": "f32"
+        },
+        {
+          "name": "properties",
+          "rust_type": "*const SteelPropertyDesc"
+        },
+        {
+          "name": "property_count",
+          "rust_type": "usize"
+        },
+        {
+          "name": "collision",
+          "rust_type": "SteelShapeTable"
+        },
+        {
+          "name": "support",
+          "rust_type": "SteelShapeTable"
+        },
+        {
+          "name": "outline",
+          "rust_type": "SteelShapeTable"
+        },
+        {
+          "name": "occlusion",
+          "rust_type": "SteelShapeTable"
+        },
+        {
+          "name": "interaction",
+          "rust_type": "SteelShapeTable"
+        },
+        {
+          "name": "visual",
+          "rust_type": "SteelShapeTable"
+        },
+        {
+          "name": "light",
+          "rust_type": "SteelLight"
+        },
+        {
+          "name": "suffocating",
+          "rust_type": "u8"
+        },
+        {
+          "name": "redstone_conductor",
+          "rust_type": "u8"
+        },
+        {
+          "name": "randomly_ticking",
+          "rust_type": "u8"
+        },
+        {
+          "name": "default_state_offset",
+          "rust_type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "SteelItemDesc",
+      "fields": [
+        {
+          "name": "struct_size",
+          "rust_type": "u32"
+        },
+        {
+          "name": "key",
+          "rust_type": "SteelStrView"
+        },
+        {
+          "name": "block",
+          "rust_type": "SteelRef"
+        },
+        {
+          "name": "max_stack_size",
+          "rust_type": "i32"
+        }
+      ]
+    },
+    {
+      "name": "SteelBlockEntityDesc",
+      "fields": [
+        {
+          "name": "struct_size",
+          "rust_type": "u32"
+        },
+        {
+          "name": "key",
+          "rust_type": "SteelStrView"
+        },
+        {
+          "name": "valid_blocks",
+          "rust_type": "*const SteelRef"
+        },
+        {
+          "name": "valid_block_count",
+          "rust_type": "usize"
+        }
+      ]
+    },
+    {
+      "name": "SteelEntityDesc",
+      "fields": [
+        {
+          "name": "struct_size",
+          "rust_type": "u32"
+        },
+        {
+          "name": "key",
+          "rust_type": "SteelStrView"
+        },
+        {
+          "name": "width",
+          "rust_type": "f32"
+        },
+        {
+          "name": "height",
+          "rust_type": "f32"
+        },
+        {
+          "name": "eye_height",
+          "rust_type": "f32"
+        },
+        {
+          "name": "client_tracking_range",
+          "rust_type": "i32"
+        },
+        {
+          "name": "update_interval",
+          "rust_type": "i32"
+        },
+        {
+          "name": "mob_category",
+          "rust_type": "u32"
+        },
+        {
+          "name": "flags",
+          "rust_type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "SteelPlaceContext",
+      "fields": [
+        {
+          "name": "world",
+          "rust_type": "SteelWorldRef"
+        },
+        {
+          "name": "hit_x",
+          "rust_type": "i32"
+        },
+        {
+          "name": "hit_y",
+          "rust_type": "i32"
+        },
+        {
+          "name": "hit_z",
+          "rust_type": "i32"
+        },
+        {
+          "name": "place_x",
+          "rust_type": "i32"
+        },
+        {
+          "name": "place_y",
+          "rust_type": "i32"
+        },
+        {
+          "name": "place_z",
+          "rust_type": "i32"
+        },
+        {
+          "name": "clicked_face",
+          "rust_type": "u32"
+        },
+        {
+          "name": "inside",
+          "rust_type": "u8"
+        },
+        {
+          "name": "replaces_clicked_block",
+          "rust_type": "u8"
+        },
+        {
+          "name": "player",
+          "rust_type": "SteelEntityRef"
+        },
+        {
+          "name": "player_present",
+          "rust_type": "u8"
+        },
+        {
+          "name": "item_stack",
+          "rust_type": "SteelRef"
+        }
+      ]
+    },
+    {
+      "name": "SteelInteractionResult",
+      "fields": [
+        {
+          "name": "kind",
+          "rust_type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "SteelBlockHooks",
+      "fields": [
+        {
+          "name": "struct_size",
+          "rust_type": "u32"
+        },
+        {
+          "name": "user_data",
+          "rust_type": "*mut c_void"
+        },
+        {
+          "name": "get_state_for_placement",
+          "rust_type": "Option<SteelBlockGetStateForPlacementFn>"
+        },
+        {
+          "name": "on_place",
+          "rust_type": "Option<SteelBlockOnPlaceFn>"
+        },
+        {
+          "name": "use_item_on",
+          "rust_type": "Option<SteelBlockUseItemOnFn>"
+        },
+        {
+          "name": "player_destroy",
+          "rust_type": "Option<SteelBlockPlayerDestroyFn>"
+        },
+        {
+          "name": "random_tick",
+          "rust_type": "Option<SteelBlockRandomTickFn>"
+        },
+        {
+          "name": "scheduled_tick",
+          "rust_type": "Option<SteelBlockScheduledTickFn>"
+        },
+        {
+          "name": "neighbor_changed",
+          "rust_type": "Option<SteelBlockNeighborChangedFn>"
+        },
+        {
+          "name": "can_be_replaced",
+          "rust_type": "Option<SteelBlockCanBeReplacedFn>"
+        }
+      ]
+    },
+    {
+      "name": "SteelItemHooks",
+      "fields": [
+        {
+          "name": "struct_size",
+          "rust_type": "u32"
+        },
+        {
+          "name": "user_data",
+          "rust_type": "*mut c_void"
+        },
+        {
+          "name": "use_item",
+          "rust_type": "Option<SteelItemUseFn>"
+        },
+        {
+          "name": "use_item_on",
+          "rust_type": "Option<SteelItemUseOnFn>"
+        }
+      ]
+    },
+    {
+      "name": "SteelEntityHooks",
+      "fields": [
+        {
+          "name": "struct_size",
+          "rust_type": "u32"
+        },
+        {
+          "name": "user_data",
+          "rust_type": "*mut c_void"
+        },
+        {
+          "name": "tick",
+          "rust_type": "Option<SteelEntityTickFn>"
+        },
+        {
+          "name": "save",
+          "rust_type": "Option<SteelEntitySaveFn>"
+        },
+        {
+          "name": "load",
+          "rust_type": "Option<SteelEntityLoadFn>"
+        }
+      ]
+    },
+    {
+      "name": "SteelBlockEntityHooks",
+      "fields": [
+        {
+          "name": "struct_size",
+          "rust_type": "u32"
+        },
+        {
+          "name": "user_data",
+          "rust_type": "*mut c_void"
+        },
+        {
+          "name": "tick",
+          "rust_type": "Option<SteelBlockEntityTickFn>"
+        },
+        {
+          "name": "save",
+          "rust_type": "Option<SteelBlockEntitySaveFn>"
+        },
+        {
+          "name": "load",
+          "rust_type": "Option<SteelBlockEntityLoadFn>"
+        },
+        {
+          "name": "state_changed",
+          "rust_type": "Option<SteelBlockEntityStateChangedFn>"
+        }
+      ]
+    },
+    {
+      "name": "SteelEvent",
+      "fields": [
+        {
+          "name": "kind",
+          "rust_type": "u32"
+        },
+        {
+          "name": "flags",
+          "rust_type": "u32"
+        },
+        {
+          "name": "world",
+          "rust_type": "SteelWorldRef"
+        },
+        {
+          "name": "x",
+          "rust_type": "i32"
+        },
+        {
+          "name": "y",
+          "rust_type": "i32"
+        },
+        {
+          "name": "z",
+          "rust_type": "i32"
+        },
+        {
+          "name": "block_state",
+          "rust_type": "SteelBlockState"
+        },
+        {
+          "name": "entity",
+          "rust_type": "SteelEntityRef"
+        },
+        {
+          "name": "text",
+          "rust_type": "SteelStrView"
+        }
+      ]
+    },
+    {
+      "name": "SteelInterface",
+      "fields": [
+        {
+          "name": "struct_size",
+          "rust_type": "u32"
+        },
+        {
+          "name": "api_version",
+          "rust_type": "u32"
+        },
+        {
+          "name": "log",
+          "rust_type": "Option<SteelLogFn>"
+        },
+        {
+          "name": "last_error",
+          "rust_type": "Option<SteelLastErrorFn>"
+        },
+        {
+          "name": "block_by_key",
+          "rust_type": "Option<SteelBlockByKeyFn>"
+        },
+        {
+          "name": "item_by_key",
+          "rust_type": "Option<SteelItemByKeyFn>"
+        },
+        {
+          "name": "block_default_state",
+          "rust_type": "Option<SteelBlockDefaultStateFn>"
+        },
+        {
+          "name": "state_block",
+          "rust_type": "Option<SteelStateBlockFn>"
+        },
+        {
+          "name": "state_with_bool",
+          "rust_type": "Option<SteelStateWithBoolFn>"
+        },
+        {
+          "name": "state_with_int",
+          "rust_type": "Option<SteelStateWithIntFn>"
+        },
+        {
+          "name": "state_with_enum",
+          "rust_type": "Option<SteelStateWithEnumFn>"
+        },
+        {
+          "name": "state_get_bool",
+          "rust_type": "Option<SteelStateGetBoolFn>"
+        },
+        {
+          "name": "state_get_int",
+          "rust_type": "Option<SteelStateGetIntFn>"
+        },
+        {
+          "name": "state_get_enum",
+          "rust_type": "Option<SteelStateGetEnumFn>"
+        },
+        {
+          "name": "world_get_block",
+          "rust_type": "Option<SteelWorldGetBlockFn>"
+        },
+        {
+          "name": "world_set_block",
+          "rust_type": "Option<SteelWorldSetBlockFn>"
+        },
+        {
+          "name": "world_destroy_block",
+          "rust_type": "Option<SteelWorldDestroyBlockFn>"
+        },
+        {
+          "name": "world_get_entity",
+          "rust_type": "Option<SteelWorldGetEntityFn>"
+        },
+        {
+          "name": "world_get_block_entity",
+          "rust_type": "Option<SteelWorldGetBlockEntityFn>"
+        },
+        {
+          "name": "world_spawn_entity",
+          "rust_type": "Option<SteelWorldSpawnEntityFn>"
+        },
+        {
+          "name": "world_play_sound",
+          "rust_type": "Option<SteelWorldPlaySoundFn>"
+        },
+        {
+          "name": "world_broadcast_payload",
+          "rust_type": "Option<SteelWorldBroadcastPayloadFn>"
+        },
+        {
+          "name": "player_send_payload",
+          "rust_type": "Option<SteelPlayerSendPayloadFn>"
+        },
+        {
+          "name": "entity_get_position",
+          "rust_type": "Option<SteelEntityGetPositionFn>"
+        },
+        {
+          "name": "entity_teleport",
+          "rust_type": "Option<SteelEntityTeleportFn>"
+        },
+        {
+          "name": "item_stack_new",
+          "rust_type": "Option<SteelItemStackNewFn>"
+        },
+        {
+          "name": "item_stack_clone",
+          "rust_type": "Option<SteelItemStackCloneFn>"
+        },
+        {
+          "name": "item_stack_free",
+          "rust_type": "Option<SteelItemStackFreeFn>"
+        },
+        {
+          "name": "item_stack_count",
+          "rust_type": "Option<SteelItemStackCountFn>"
+        },
+        {
+          "name": "item_stack_set_count",
+          "rust_type": "Option<SteelItemStackSetCountFn>"
+        },
+        {
+          "name": "item_stack_item",
+          "rust_type": "Option<SteelItemStackItemFn>"
+        },
+        {
+          "name": "nbt_new",
+          "rust_type": "Option<SteelNbtNewFn>"
+        },
+        {
+          "name": "nbt_clone",
+          "rust_type": "Option<SteelNbtCloneFn>"
+        },
+        {
+          "name": "nbt_free",
+          "rust_type": "Option<SteelNbtFreeFn>"
+        },
+        {
+          "name": "nbt_set_int",
+          "rust_type": "Option<SteelNbtSetIntFn>"
+        },
+        {
+          "name": "nbt_get_int",
+          "rust_type": "Option<SteelNbtGetIntFn>"
+        },
+        {
+          "name": "nbt_set_string",
+          "rust_type": "Option<SteelNbtSetStringFn>"
+        },
+        {
+          "name": "nbt_get_string",
+          "rust_type": "Option<SteelNbtGetStringFn>"
+        },
+        {
+          "name": "nbt_contains",
+          "rust_type": "Option<SteelNbtContainsFn>"
+        },
+        {
+          "name": "nbt_remove",
+          "rust_type": "Option<SteelNbtRemoveFn>"
+        },
+        {
+          "name": "register_block",
+          "rust_type": "Option<SteelRegisterBlockFn>"
+        },
+        {
+          "name": "register_item",
+          "rust_type": "Option<SteelRegisterItemFn>"
+        },
+        {
+          "name": "register_block_entity_type",
+          "rust_type": "Option<SteelRegisterBlockEntityTypeFn>"
+        },
+        {
+          "name": "register_entity_type",
+          "rust_type": "Option<SteelRegisterEntityTypeFn>"
+        },
+        {
+          "name": "register_event_listener",
+          "rust_type": "Option<SteelRegisterEventListenerFn>"
+        }
+      ]
+    },
+    {
+      "name": "SteelExtension",
+      "fields": [
+        {
+          "name": "struct_size",
+          "rust_type": "u32"
+        },
+        {
+          "name": "api_version",
+          "rust_type": "u32"
+        },
+        {
+          "name": "id",
+          "rust_type": "SteelStrView"
+        },
+        {
+          "name": "version",
+          "rust_type": "SteelStrView"
+        },
+        {
+          "name": "api_min",
+          "rust_type": "u32"
+        },
+        {
+          "name": "api_max",
+          "rust_type": "u32"
+        },
+        {
+          "name": "initialize",
+          "rust_type": "Option<SteelInitializeFn>"
+        },
+        {
+          "name": "deinitialize",
+          "rust_type": "Option<SteelDeinitializeFn>"
+        },
+        {
+          "name": "user_data",
+          "rust_type": "*mut c_void"
+        }
+      ]
+    }
+  ],
+  "function_types": [
+    {
+      "name": "SteelBlockGetStateForPlacementFn",
+      "args": [
+        "*mut c_void",
+        "*const SteelPlaceContext",
+        "*mut SteelBlockState"
+      ],
+      "return": "u8"
+    },
+    {
+      "name": "SteelBlockOnPlaceFn",
+      "args": [
+        "*mut c_void",
+        "SteelWorldRef",
+        "i32",
+        "i32",
+        "i32",
+        "SteelBlockState",
+        "SteelBlockState",
+        "u8"
+      ],
+      "return": "()"
+    },
+    {
+      "name": "SteelBlockUseItemOnFn",
+      "args": [
+        "*mut c_void",
+        "SteelWorldRef",
+        "i32",
+        "i32",
+        "i32",
+        "SteelBlockState",
+        "SteelEntityRef",
+        "u32",
+        "u32"
+      ],
+      "return": "SteelInteractionResult"
+    },
+    {
+      "name": "SteelBlockPlayerDestroyFn",
+      "args": [
+        "*mut c_void",
+        "SteelWorldRef",
+        "SteelEntityRef",
+        "i32",
+        "i32",
+        "i32",
+        "SteelBlockState",
+        "SteelRef"
+      ],
+      "return": "()"
+    },
+    {
+      "name": "SteelBlockRandomTickFn",
+      "args": [
+        "*mut c_void",
+        "SteelWorldRef",
+        "i32",
+        "i32",
+        "i32",
+        "SteelBlockState"
+      ],
+      "return": "()"
+    },
+    {
+      "name": "SteelBlockScheduledTickFn",
+      "args": [
+        "*mut c_void",
+        "SteelWorldRef",
+        "i32",
+        "i32",
+        "i32",
+        "SteelBlockState"
+      ],
+      "return": "()"
+    },
+    {
+      "name": "SteelBlockNeighborChangedFn",
+      "args": [
+        "*mut c_void",
+        "SteelWorldRef",
+        "i32",
+        "i32",
+        "i32",
+        "SteelBlockState",
+        "SteelRef",
+        "u8"
+      ],
+      "return": "()"
+    },
+    {
+      "name": "SteelBlockCanBeReplacedFn",
+      "args": [
+        "*mut c_void",
+        "SteelWorldRef",
+        "i32",
+        "i32",
+        "i32",
+        "SteelBlockState",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "return": "u8"
+    },
+    {
+      "name": "SteelItemUseFn",
+      "args": [
+        "*mut c_void",
+        "SteelWorldRef",
+        "SteelEntityRef",
+        "u32",
+        "SteelRef"
+      ],
+      "return": "SteelInteractionResult"
+    },
+    {
+      "name": "SteelItemUseOnFn",
+      "args": [
+        "*mut c_void",
+        "SteelWorldRef",
+        "SteelEntityRef",
+        "u32",
+        "i32",
+        "i32",
+        "i32",
+        "SteelBlockState",
+        "SteelRef"
+      ],
+      "return": "SteelInteractionResult"
+    },
+    {
+      "name": "SteelEntityTickFn",
+      "args": [
+        "*mut c_void",
+        "SteelEntityRef"
+      ],
+      "return": "()"
+    },
+    {
+      "name": "SteelEntitySaveFn",
+      "args": [
+        "*mut c_void",
+        "SteelEntityRef",
+        "SteelRef"
+      ],
+      "return": "()"
+    },
+    {
+      "name": "SteelEntityLoadFn",
+      "args": [
+        "*mut c_void",
+        "SteelEntityRef",
+        "SteelRef"
+      ],
+      "return": "()"
+    },
+    {
+      "name": "SteelBlockEntityTickFn",
+      "args": [
+        "*mut c_void",
+        "SteelWorldRef",
+        "i32",
+        "i32",
+        "i32",
+        "SteelBlockState"
+      ],
+      "return": "()"
+    },
+    {
+      "name": "SteelBlockEntitySaveFn",
+      "args": [
+        "*mut c_void",
+        "SteelWorldRef",
+        "i32",
+        "i32",
+        "i32",
+        "SteelRef"
+      ],
+      "return": "()"
+    },
+    {
+      "name": "SteelBlockEntityLoadFn",
+      "args": [
+        "*mut c_void",
+        "SteelWorldRef",
+        "i32",
+        "i32",
+        "i32",
+        "SteelRef"
+      ],
+      "return": "()"
+    },
+    {
+      "name": "SteelBlockEntityStateChangedFn",
+      "args": [
+        "*mut c_void",
+        "SteelWorldRef",
+        "i32",
+        "i32",
+        "i32",
+        "SteelBlockState"
+      ],
+      "return": "()"
+    },
+    {
+      "name": "SteelEventListenerFn",
+      "args": [
+        "*mut SteelEvent",
+        "*mut c_void"
+      ],
+      "return": "u32"
+    },
+    {
+      "name": "SteelApiVersionFn",
+      "args": [],
+      "return": "u32"
+    },
+    {
+      "name": "SteelLogFn",
+      "args": [
+        "u32",
+        "SteelStrView"
+      ],
+      "return": "()"
+    },
+    {
+      "name": "SteelLastErrorFn",
+      "args": [],
+      "return": "SteelStrView"
+    },
+    {
+      "name": "SteelBlockByKeyFn",
+      "args": [
+        "SteelStrView"
+      ],
+      "return": "SteelRef"
+    },
+    {
+      "name": "SteelItemByKeyFn",
+      "args": [
+        "SteelStrView"
+      ],
+      "return": "SteelRef"
+    },
+    {
+      "name": "SteelBlockDefaultStateFn",
+      "args": [
+        "SteelRef"
+      ],
+      "return": "SteelBlockState"
+    },
+    {
+      "name": "SteelStateBlockFn",
+      "args": [
+        "SteelBlockState"
+      ],
+      "return": "SteelRef"
+    },
+    {
+      "name": "SteelStateWithBoolFn",
+      "args": [
+        "SteelBlockState",
+        "SteelStrView",
+        "u8"
+      ],
+      "return": "SteelBlockState"
+    },
+    {
+      "name": "SteelStateWithIntFn",
+      "args": [
+        "SteelBlockState",
+        "SteelStrView",
+        "i32"
+      ],
+      "return": "SteelBlockState"
+    },
+    {
+      "name": "SteelStateWithEnumFn",
+      "args": [
+        "SteelBlockState",
+        "SteelStrView",
+        "SteelStrView"
+      ],
+      "return": "SteelBlockState"
+    },
+    {
+      "name": "SteelStateGetBoolFn",
+      "args": [
+        "SteelBlockState",
+        "SteelStrView",
+        "*mut u8"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelStateGetIntFn",
+      "args": [
+        "SteelBlockState",
+        "SteelStrView",
+        "*mut i32"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelStateGetEnumFn",
+      "args": [
+        "SteelBlockState",
+        "SteelStrView",
+        "*mut SteelStrView"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelWorldGetBlockFn",
+      "args": [
+        "SteelWorldRef",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "return": "SteelBlockState"
+    },
+    {
+      "name": "SteelWorldSetBlockFn",
+      "args": [
+        "SteelWorldRef",
+        "i32",
+        "i32",
+        "i32",
+        "SteelBlockState",
+        "u32"
+      ],
+      "return": "u8"
+    },
+    {
+      "name": "SteelWorldDestroyBlockFn",
+      "args": [
+        "SteelWorldRef",
+        "i32",
+        "i32",
+        "i32",
+        "u8"
+      ],
+      "return": "u8"
+    },
+    {
+      "name": "SteelWorldGetEntityFn",
+      "args": [
+        "SteelWorldRef",
+        "i32"
+      ],
+      "return": "SteelOptEntityRef"
+    },
+    {
+      "name": "SteelWorldGetBlockEntityFn",
+      "args": [
+        "SteelWorldRef",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "return": "SteelOptBlockEntityRef"
+    },
+    {
+      "name": "SteelWorldSpawnEntityFn",
+      "args": [
+        "SteelWorldRef",
+        "SteelRef",
+        "SteelVec3",
+        "f32",
+        "f32",
+        "*mut SteelOptEntityRef"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelWorldPlaySoundFn",
+      "args": [
+        "SteelWorldRef",
+        "SteelStrView",
+        "f64",
+        "f64",
+        "f64",
+        "f32",
+        "f32"
+      ],
+      "return": "()"
+    },
+    {
+      "name": "SteelWorldBroadcastPayloadFn",
+      "args": [
+        "SteelWorldRef",
+        "SteelStrView",
+        "*const u8",
+        "usize"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelPlayerSendPayloadFn",
+      "args": [
+        "SteelEntityRef",
+        "SteelStrView",
+        "*const u8",
+        "usize"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelEntityGetPositionFn",
+      "args": [
+        "SteelEntityRef",
+        "*mut SteelVec3"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelEntityTeleportFn",
+      "args": [
+        "SteelEntityRef",
+        "SteelVec3",
+        "f32",
+        "f32"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelItemStackNewFn",
+      "args": [
+        "SteelRef",
+        "i32"
+      ],
+      "return": "SteelRef"
+    },
+    {
+      "name": "SteelItemStackCloneFn",
+      "args": [
+        "SteelRef"
+      ],
+      "return": "SteelRef"
+    },
+    {
+      "name": "SteelItemStackFreeFn",
+      "args": [
+        "SteelRef"
+      ],
+      "return": "()"
+    },
+    {
+      "name": "SteelItemStackCountFn",
+      "args": [
+        "SteelRef"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelItemStackSetCountFn",
+      "args": [
+        "SteelRef",
+        "i32"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelItemStackItemFn",
+      "args": [
+        "SteelRef"
+      ],
+      "return": "SteelRef"
+    },
+    {
+      "name": "SteelNbtNewFn",
+      "args": [],
+      "return": "SteelRef"
+    },
+    {
+      "name": "SteelNbtCloneFn",
+      "args": [
+        "SteelRef"
+      ],
+      "return": "SteelRef"
+    },
+    {
+      "name": "SteelNbtFreeFn",
+      "args": [
+        "SteelRef"
+      ],
+      "return": "()"
+    },
+    {
+      "name": "SteelNbtSetIntFn",
+      "args": [
+        "SteelRef",
+        "SteelStrView",
+        "i64"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelNbtGetIntFn",
+      "args": [
+        "SteelRef",
+        "SteelStrView",
+        "i64"
+      ],
+      "return": "i64"
+    },
+    {
+      "name": "SteelNbtSetStringFn",
+      "args": [
+        "SteelRef",
+        "SteelStrView",
+        "SteelStrView"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelNbtGetStringFn",
+      "args": [
+        "SteelRef",
+        "SteelStrView"
+      ],
+      "return": "SteelStrView"
+    },
+    {
+      "name": "SteelNbtContainsFn",
+      "args": [
+        "SteelRef",
+        "SteelStrView"
+      ],
+      "return": "u8"
+    },
+    {
+      "name": "SteelNbtRemoveFn",
+      "args": [
+        "SteelRef",
+        "SteelStrView"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelRegisterBlockFn",
+      "args": [
+        "*const SteelBlockDesc",
+        "*const SteelBlockHooks"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelRegisterItemFn",
+      "args": [
+        "*const SteelItemDesc",
+        "*const SteelItemHooks"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelRegisterBlockEntityTypeFn",
+      "args": [
+        "*const SteelBlockEntityDesc",
+        "*const SteelBlockEntityHooks"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelRegisterEntityTypeFn",
+      "args": [
+        "*const SteelEntityDesc",
+        "*const SteelEntityHooks"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelRegisterEventListenerFn",
+      "args": [
+        "u32",
+        "i32",
+        "Option<SteelEventListenerFn>",
+        "*mut c_void"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelInitializeFn",
+      "args": [
+        "u32",
+        "*mut c_void"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelDeinitializeFn",
+      "args": [
+        "u32",
+        "*mut c_void"
+      ],
+      "return": "()"
+    },
+    {
+      "name": "SteelExtensionEntryFn",
+      "args": [
+        "*const SteelInterface"
+      ],
+      "return": "*const SteelExtension"
+    }
+  ],
+  "host_interface": "SteelInterface",
+  "hook_tables": [
+    "SteelBlockHooks",
+    "SteelItemHooks",
+    "SteelEntityHooks",
+    "SteelBlockEntityHooks"
+  ]
+}

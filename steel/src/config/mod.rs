@@ -50,6 +50,30 @@ pub struct SteelConfig {
     /// Path to the loaded `groups.toml`.
     #[serde(skip, default)]
     pub groups_path: Option<PathBuf>,
+    /// Native extension configuration (`[extensions]` section).
+    #[serde(default)]
+    pub extensions: ExtensionsConfig,
+}
+
+/// Native extension loading configuration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExtensionsConfig {
+    /// Directory scanned for `.so`/`.dylib`/`.dll` extensions.
+    #[serde(default = "default_extensions_directory")]
+    pub directory: PathBuf,
+}
+
+impl Default for ExtensionsConfig {
+    fn default() -> Self {
+        Self {
+            directory: default_extensions_directory(),
+        }
+    }
+}
+
+fn default_extensions_directory() -> PathBuf {
+    PathBuf::from("plugins")
 }
 
 impl SteelConfig {

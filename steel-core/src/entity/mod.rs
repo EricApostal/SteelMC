@@ -879,7 +879,9 @@ pub use projectile::{
     compute_margin, get_hit_result_on_view_vector, spawn_throwable_item_projectile,
 };
 pub use reference::EntityReference;
-pub use registry::{ENTITIES, EntityLoadRequest, EntityRegistry, init_entities};
+pub use registry::{
+    ENTITIES, EntityLoadRequest, EntityRegistry, init_entities, init_entities_with,
+};
 pub(crate) use spawn::{
     AgeableMobGroupData, EntitySpawnPlacement, EntitySpawnReason, EntitySpawnRequest,
     SpawnGroupData, add_spawned_entity, apply_implicit_item_stack_components,

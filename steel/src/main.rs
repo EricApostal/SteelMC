@@ -387,6 +387,23 @@ async fn run_server(
         });
     }
 
+    let extensions = steel_plugin_host::ExtensionManager::new();
+    if let Err(error) = extensions.load_dir(&steel_config.extensions.directory) {
+        log::error!("Failed to load extensions: {error}");
+        return Err(format!("failed to load extensions: {error}"));
+    }
+    steel_registry::init_vanilla_registry_with(|registry| extensions.content_phase(registry));
+    steel_core::behavior::init_behaviors_with(|blocks, items| {
+        extensions.behavior_phase(blocks, items);
+    });
+    steel_core::block_entity::init_block_entities_with(|registry| {
+        extensions.block_entity_phase(registry);
+    });
+    steel_core::entity::init_entities_with(|registry| {
+        extensions.entity_phase(registry);
+    });
+    extensions.runtime_phase();
+
     let mut steel = SteelServer::new(
         Arc::clone(&chunk_runtime),
         cancel_token.clone(),

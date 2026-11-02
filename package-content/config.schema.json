@@ -401,6 +401,18 @@
         }
       },
       "additionalProperties": false
+    },
+    "extensions": {
+      "type": "object",
+      "description": "Native extension loading configuration",
+      "properties": {
+        "directory": {
+          "type": "string",
+          "description": "Directory scanned for extension shared libraries (.so/.dylib/.dll)",
+          "default": "plugins"
+        }
+      },
+      "additionalProperties": false
     }
   },
   "required": ["server"],

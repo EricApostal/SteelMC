@@ -56,7 +56,10 @@ use steel_utils::{
 pub use entities::openers_counter::{
     ContainerOpenersCounter, ContainerOpenersHost, ContainerViewers,
 };
-pub use registry::{BLOCK_ENTITIES, BlockEntityFactory, BlockEntityRegistry, init_block_entities};
+pub use registry::{
+    BLOCK_ENTITIES, BlockEntityFactory, BlockEntityRegistry, init_block_entities,
+    init_block_entities_with,
+};
 pub(crate) use storage::{
     BlockEntityInsert, BlockEntityLookup, BlockEntityStorage, ClearedBlockEntities,
     DetachedBlockEntity, LifecycleDispatchers,

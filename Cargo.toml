@@ -2,8 +2,12 @@
 resolver = "2"
 members = [
     "steel",
+    "steel-abi",
     "steel-login",
     "steel-macros",
+    "steel-plugin-gen",
+    "steel-plugin-host",
+    "steel-plugin-test",
     "steel-protocol",
     "steel-registry",
     "steel-worldgen",
@@ -21,7 +25,9 @@ license = "AGPL-3.0-or-later"
 
 [workspace.dependencies]
 # Internal crates
+steel-abi = { path = "steel-abi" }
 steel-core = { path = "steel-core" }
+steel-plugin-host = { path = "steel-plugin-host" }
 steel-crypto = { path = "steel-crypto" }
 steel-login = { path = "steel-login" }
 steel-macros = { path = "steel-macros" }

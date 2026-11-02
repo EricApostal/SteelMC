@@ -322,6 +322,7 @@ impl Server {
             // saved state instead of only the counters touched after joining.
             player.mark_all_stats_dirty();
         }
+        crate::events::fire_player_join(&player.get_world(), player.id());
         self.schedule_domain_restores(&player, residence_token, restores);
         if player.connection.closed() {
             self.queue_player_disconnect(player);
@@ -613,6 +614,8 @@ impl Server {
             self.release_player_admission(uuid, PlayerAdmissionState::Disconnecting);
             return None;
         };
+
+        crate::events::fire_player_leave(&world, player.id());
 
         Some(PendingPlayerDisconnect {
             player,

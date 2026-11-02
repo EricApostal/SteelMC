@@ -1392,6 +1392,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
 
 [[package]]
+name = "libloading"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
+dependencies = [
+ "cfg-if",
+ "windows-link",
+]
+
+[[package]]
 name = "libmimalloc-sys"
 version = "0.1.49"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2710,6 +2720,8 @@ dependencies = [
  "serde_json",
  "steel-core",
  "steel-login",
+ "steel-plugin-host",
+ "steel-registry",
  "steel-utils",
  "strip-ansi-escapes",
  "text_components",
@@ -2720,6 +2732,10 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
 ]
+
+[[package]]
+name = "steel-abi"
+version = "0.16.0+mc26.3"
 
 [[package]]
 name = "steel-core"
@@ -2822,6 +2838,41 @@ dependencies = [
 [[package]]
 name = "steel-math"
 version = "0.16.0+mc26.3"
+
+[[package]]
+name = "steel-plugin-gen"
+version = "0.16.0+mc26.3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "syn 3.0.9",
+]
+
+[[package]]
+name = "steel-plugin-host"
+version = "0.16.0+mc26.3"
+dependencies = [
+ "glam",
+ "libloading",
+ "log",
+ "rustc-hash 2.1.3",
+ "simdnbt",
+ "steel-abi",
+ "steel-core",
+ "steel-protocol",
+ "steel-registry",
+ "steel-utils",
+ "text_components",
+]
+
+[[package]]
+name = "steel-plugin-test"
+version = "0.16.0+mc26.3"
+dependencies = [
+ "steel-abi",
+]
 
 [[package]]
 name = "steel-protocol"

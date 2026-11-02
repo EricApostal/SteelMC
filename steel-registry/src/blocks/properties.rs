@@ -1374,3 +1374,83 @@ impl BlockStateProperties {
     pub const OMINOUS: BoolProperty = BoolProperty::new("ominous");
     pub const MAP: BoolProperty = BoolProperty::new("map");
 }
+
+/// Enum property with string values owned by the registry entry.
+///
+/// Used by extension-registered blocks, which cannot name a Rust enum type at
+/// compile time. Ordering follows the declared value order.
+#[derive(Debug, Clone)]
+pub struct StringEnumProperty {
+    pub name: &'static str,
+    pub values: &'static [&'static str],
+    pub comparison_values: &'static [&'static str],
+}
+
+impl StringEnumProperty {
+    #[must_use]
+    pub const fn new(
+        name: &'static str,
+        values: &'static [&'static str],
+        comparison_values: &'static [&'static str],
+    ) -> Self {
+        Self {
+            name,
+            values,
+            comparison_values,
+        }
+    }
+}
+
+impl Property for StringEnumProperty {
+    type Value = &'static str;
+
+    fn value_count(&self) -> usize {
+        self.values.len()
+    }
+
+    fn value_name_from_index(&self, index: usize) -> &str {
+        self.values[index]
+    }
+
+    fn get_possible_value_names(&self) -> Box<[&str]> {
+        self.values.into()
+    }
+
+    fn get_name(&self) -> &'static str {
+        self.name
+    }
+
+    fn compare_value_names(&self, left: &str, right: &str) -> Option<Ordering> {
+        let left = self
+            .comparison_values
+            .iter()
+            .position(|value| *value == left)?;
+        let right = self
+            .comparison_values
+            .iter()
+            .position(|value| *value == right)?;
+        Some(left.cmp(&right))
+    }
+
+    fn get_value(&self, value: &str) -> Option<Self::Value> {
+        self.values
+            .iter()
+            .copied()
+            .find(|candidate| *candidate == value)
+    }
+
+    fn get_possible_values(&self) -> Box<[Self::Value]> {
+        self.values.into()
+    }
+
+    fn get_internal_index(&self, value: &Self::Value) -> usize {
+        self.values
+            .iter()
+            .position(|candidate| candidate == value)
+            .unwrap_or(0)
+    }
+
+    fn value_from_index(&self, index: usize) -> Self::Value {
+        self.values[index]
+    }
+}

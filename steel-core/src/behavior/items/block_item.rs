@@ -97,6 +97,15 @@ impl BlockItem {
             return InteractionResult::Fail;
         };
 
+        if !crate::events::fire_block_place(
+            context.world,
+            place_pos,
+            new_state,
+            context.player().map(Entity::id),
+        ) {
+            return InteractionResult::Fail;
+        }
+
         let behavior = BLOCK_BEHAVIORS.get_behavior(new_state.get_block());
         if matches!(survival_check, SurvivalCheck::Required)
             && !behavior.can_survive(new_state, context.world.as_ref(), place_pos)

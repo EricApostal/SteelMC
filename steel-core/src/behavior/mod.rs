@@ -213,11 +213,28 @@ pub static ITEM_BEHAVIORS: ItemBehaviorLock = ItemBehaviorLock(OnceLock::new());
 ///
 /// This should be called after the main registry is frozen. Repeated calls are a no-op.
 pub fn init_behaviors() {
-    BLOCK_BEHAVIORS.0.get_or_init(|| {
-        let mut block_behaviors = BlockBehaviorRegistry::new();
-        register_block_behaviors(&mut block_behaviors);
-        block_behaviors
-    });
+    init_behaviors_with(|_, _| {});
+}
+
+/// Initializes the global behavior registries, then lets an embedder attach
+/// extension-provided behaviors before the registries are published.
+///
+/// `extend` runs before the block and item registries are published. Repeated
+/// calls keep the first published registries.
+pub fn init_behaviors_with<F>(mut extend: F)
+where
+    F: FnMut(&mut BlockBehaviorRegistry, &mut ItemBehaviorRegistry),
+{
+    if BLOCK_BEHAVIORS.0.get().is_some() && ITEM_BEHAVIORS.0.get().is_some() {
+        return;
+    }
+    let mut block_behaviors = BlockBehaviorRegistry::new();
+    register_block_behaviors(&mut block_behaviors);
+    let mut item_behaviors = ItemBehaviorRegistry::new();
+    register_item_behaviors(&mut item_behaviors);
+    extend(&mut block_behaviors, &mut item_behaviors);
+    let _ = BLOCK_BEHAVIORS.0.set(block_behaviors);
+    let _ = ITEM_BEHAVIORS.0.set(item_behaviors);
 
     FLUID_BEHAVIORS.0.get_or_init(|| {
         let mut fluid_behaviors = FluidBehaviorRegistry::new();
@@ -234,12 +251,6 @@ pub fn init_behaviors() {
         fluid_behaviors.set_behavior(&vanilla_fluids::FLOWING_LAVA, Box::new(LavaFluid));
 
         fluid_behaviors
-    });
-
-    ITEM_BEHAVIORS.0.get_or_init(|| {
-        let mut item_behaviors = ItemBehaviorRegistry::new();
-        register_item_behaviors(&mut item_behaviors);
-        item_behaviors
     });
 
     CONSUME_EFFECT_BEHAVIORS.0.get_or_init(|| {

@@ -118,3 +118,8 @@ log_file = true
 rotation_time = "daily"
 # Amount of console commands saved
 max_history = 50
+
+# Native extension configuration
+[extensions]
+# Directory scanned for extension shared libraries (.so/.dylib/.dll)
+directory = "plugins"

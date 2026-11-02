@@ -1,0 +1,22 @@
+[package]
+name = "steel-plugin-host"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+steel-abi = { workspace = true }
+steel-core = { workspace = true }
+steel-registry = { workspace = true }
+steel-protocol = { workspace = true }
+glam = { workspace = true }
+steel-utils = { workspace = true }
+rustc-hash = { workspace = true }
+libloading = "0.9"
+log = { workspace = true }
+simdnbt = { workspace = true }
+text_components = { workspace = true }
+
+[lints]
+workspace = true

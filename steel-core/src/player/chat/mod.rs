@@ -327,6 +327,10 @@ impl Player {
         self.reset_last_action_time();
         let chat_message = packet.message.clone();
 
+        if !crate::events::fire_chat(&self.get_world(), self.id(), &chat_message) {
+            return;
+        }
+
         let verification_result = if let Some(_signature) = &packet.signature {
             match self.verify_chat_signature(&packet) {
                 Ok((link, last_seen)) => Some(Ok((link, last_seen))),

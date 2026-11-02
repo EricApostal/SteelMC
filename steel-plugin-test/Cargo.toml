@@ -1,0 +1,15 @@
+[package]
+name = "steel-plugin-test"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+steel-abi = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,12 @@
+name: steel_extension
+description: Dart bindings for the Steel extension C ABI.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.4.0
+
+dependencies: {}
+
+dev_dependencies:
+  test: ^1.25.0

@@ -215,6 +215,15 @@ pub static BLOCK_ENTITIES: BlockEntityRegistryLock = BlockEntityRegistryLock(Onc
     reason = "flat list mirroring vanilla registration order"
 )]
 pub fn init_block_entities() {
+    init_block_entities_with(|_| {});
+}
+
+/// Initializes block-entity factories and lets an embedder add extension
+/// factories before the registry is published.
+pub fn init_block_entities_with<F>(extend: F)
+where
+    F: FnOnce(&mut BlockEntityRegistry),
+{
     BLOCK_ENTITIES.get_or_init(|| {
         let mut registry = BlockEntityRegistry::new();
 
@@ -453,6 +462,8 @@ pub fn init_block_entities() {
         registry.register(&vanilla_block_entity_types::SKULL, |level, pos, state| {
             Arc::new(SkullBlockEntity::new(level, pos, state))
         });
+
+        extend(&mut registry);
 
         registry
     });

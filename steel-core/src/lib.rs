@@ -20,6 +20,7 @@ pub mod datafixer;
 pub mod datapack;
 pub(crate) mod enchantment_helper;
 pub mod entity;
+pub mod events;
 pub mod fluid;
 pub mod inventory;
 pub mod level_data;

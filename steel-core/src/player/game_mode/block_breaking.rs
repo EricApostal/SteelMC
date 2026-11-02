@@ -460,6 +460,10 @@ impl BlockBreakingManager {
             return false;
         }
 
+        if !crate::events::fire_block_break(world, pos, state, Some(player.id())) {
+            return false;
+        }
+
         let behavior = BLOCK_BEHAVIORS.get_behavior(state.get_block());
         let adjusted_state = behavior.player_will_destroy(state, world, pos, player);
         world.game_event(
