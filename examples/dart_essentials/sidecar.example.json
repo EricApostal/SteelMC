@@ -1,0 +1,7 @@
+{
+  "id": "essentials",
+  "version": "0.1.0",
+  "entry": "bin/essentials.dart",
+  "cwd": ".",
+  "dart": "dart"
+}

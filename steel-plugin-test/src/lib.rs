@@ -8,8 +8,9 @@
     reason = "the conformance extension intentionally exercises the whole ABI surface with static inputs"
 )]
 
+use std::cell::UnsafeCell;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 
 use steel_abi::*;
 
@@ -17,6 +18,20 @@ static INTERFACE: AtomicPtr<SteelInterface> = AtomicPtr::new(std::ptr::null_mut(
 static PLACE_HOOK_CALLS: AtomicU64 = AtomicU64::new(0);
 static PLACE_EVENTS: AtomicU64 = AtomicU64::new(0);
 static LAST_WORLD: AtomicU64 = AtomicU64::new(u64::MAX);
+static COMMAND_CALLS: AtomicU64 = AtomicU64::new(0);
+static EXTENSION_PATH_LEN: AtomicUsize = AtomicUsize::new(0);
+
+const LAST_COMMAND_ARGS_CAPACITY: usize = 256;
+
+struct CommandArgsBuffer(UnsafeCell<[u8; LAST_COMMAND_ARGS_CAPACITY]>);
+
+// SAFETY: the conformance extension only writes this buffer from the command
+// handler and publishes the written length through `LAST_COMMAND_ARGS_LEN`.
+unsafe impl Sync for CommandArgsBuffer {}
+
+static LAST_COMMAND_ARGS: CommandArgsBuffer =
+    CommandArgsBuffer(UnsafeCell::new([0; LAST_COMMAND_ARGS_CAPACITY]));
+static LAST_COMMAND_ARGS_LEN: AtomicUsize = AtomicUsize::new(0);
 
 #[must_use]
 fn interface() -> Option<&'static SteelInterface> {
@@ -69,10 +84,34 @@ unsafe extern "C" fn on_place_event(_event: *mut SteelEvent, _user_data: *mut c_
     0
 }
 
+unsafe extern "C" fn on_command(
+    _user_data: *mut c_void,
+    _player: SteelEntityRef,
+    _has_player: u8,
+    _command: SteelStrView,
+    args: SteelStrView,
+) -> i32 {
+    COMMAND_CALLS.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: the host supplies a view valid for this call.
+    let args = unsafe { args.as_str() }.unwrap_or("");
+    let len = args.len().min(LAST_COMMAND_ARGS_CAPACITY);
+    // SAFETY: the destination is the extension's static buffer with room for
+    // `LAST_COMMAND_ARGS_CAPACITY` bytes.
+    unsafe {
+        std::ptr::copy_nonoverlapping(args.as_ptr(), LAST_COMMAND_ARGS.0.get().cast::<u8>(), len);
+    }
+    LAST_COMMAND_ARGS_LEN.store(len, Ordering::Release);
+    1
+}
+
 unsafe extern "C" fn initialize(level: u32, _user_data: *mut c_void) -> i32 {
     let Some(interface) = interface() else {
         return STEEL_ERR_INTERNAL;
     };
+    if let Some(extension_path) = interface.extension_path {
+        // SAFETY: the host keeps the path valid for the duration of this call.
+        EXTENSION_PATH_LEN.store(unsafe { extension_path() }.len, Ordering::Release);
+    }
     match level {
         STEEL_LEVEL_CONTENT => {
             let name = SteelStrView::from_str("lit");
@@ -143,11 +182,28 @@ unsafe extern "C" fn initialize(level: u32, _user_data: *mut c_void) -> i32 {
                 return STEEL_ERR_UNSUPPORTED;
             };
             // SAFETY: the callback and user data live for the process lifetime.
-            unsafe {
+            let status = unsafe {
                 register_listener(
                     STEEL_EVENT_BLOCK_PLACE,
                     0,
                     Some(on_place_event),
+                    std::ptr::null_mut(),
+                )
+            };
+            if status != STEEL_OK {
+                return status;
+            }
+            let Some(register_command) = interface.register_command else {
+                return STEEL_ERR_UNSUPPORTED;
+            };
+            // SAFETY: name, description, and permission are static views and the
+            // handler lives for the process lifetime.
+            unsafe {
+                register_command(
+                    SteelStrView::from_str("rubytest"),
+                    SteelStrView::from_str("Steel ABI conformance command"),
+                    SteelStrView::from_str(""),
+                    Some(on_command),
                     std::ptr::null_mut(),
                 )
             }
@@ -240,4 +296,39 @@ pub extern "C" fn steel_test_place_events() -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn steel_test_last_world() -> u64 {
     LAST_WORLD.load(Ordering::Relaxed)
+}
+
+/// Number of `rubytest` command-handler invocations.
+#[unsafe(no_mangle)]
+pub extern "C" fn steel_test_command_calls() -> u64 {
+    COMMAND_CALLS.load(Ordering::Relaxed)
+}
+
+/// Arguments passed to the last `rubytest` invocation, borrowed from the
+/// extension's own static buffer.
+#[unsafe(no_mangle)]
+pub extern "C" fn steel_test_last_command_args() -> SteelStrView {
+    let len = LAST_COMMAND_ARGS_LEN.load(Ordering::Acquire);
+    SteelStrView {
+        ptr: LAST_COMMAND_ARGS.0.get().cast::<u8>(),
+        len,
+    }
+}
+
+/// Length of the extension library path reported by `extension_path`.
+///
+/// Outside the host's entry/`initialize` calls the host clears the path, so the
+/// length observed during initialization is returned instead.
+#[unsafe(no_mangle)]
+pub extern "C" fn steel_test_extension_path_len() -> usize {
+    if let Some(interface) = interface() {
+        if let Some(extension_path) = interface.extension_path {
+            // SAFETY: the host keeps the path valid for the duration of the call.
+            let live = unsafe { extension_path() }.len;
+            if live != 0 {
+                return live;
+            }
+        }
+    }
+    EXTENSION_PATH_LEN.load(Ordering::Acquire)
 }

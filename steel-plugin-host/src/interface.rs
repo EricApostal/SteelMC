@@ -12,15 +12,21 @@ use std::sync::Arc;
 
 use simdnbt::owned::NbtCompound;
 use steel_abi::*;
-use steel_core::entity::{ENTITIES, next_entity_id};
+use steel_core::command::{
+    CommandArgument, CommandContext, CommandError, CommandRegistration, argument, literal,
+    register_plugin_command,
+};
+use steel_core::entity::{ENTITIES, Entity, next_entity_id};
 use steel_core::events::{self, Event, EventKind, EventOutcome};
+use steel_core::permission::{PermissionExpr, PermissionKey};
 use steel_core::world::World;
 use steel_protocol::packets::common::CCustomPayload;
 use steel_protocol::packets::game::SoundSource;
 use steel_registry::blocks::BlockRef;
 use steel_registry::{Registry, RegistryEntry, RegistryExt};
 use steel_utils::types::UpdateFlags;
-use steel_utils::{BlockPos, BlockStateId};
+use steel_utils::{BlockPos, BlockStateId, Identifier};
+use text_components::TextComponent;
 
 use crate::convert;
 use crate::state::{HOST, OwnedObject, last_error_view, scratch_view, set_last_error, world_id};
@@ -955,6 +961,354 @@ unsafe extern "C" fn host_register_event_listener(
     STEEL_OK
 }
 
+/// A command callback registered by an extension plus its opaque user data.
+struct CommandHandler {
+    callback: SteelCommandHandlerFn,
+    user_data: *mut c_void,
+}
+
+impl CommandHandler {
+    fn execute(&self, context: &CommandContext<'_>, command: &str) -> Result<i32, CommandError> {
+        let source = context.source();
+        let player = source.player();
+        let entity = player.map_or(SteelEntityRef::INVALID, |player| SteelEntityRef {
+            world: SteelWorldRef(world_id(source.world())),
+            entity: player.id(),
+        });
+        let args = context.string("args").unwrap_or("");
+        // SAFETY: the callback and its user data stay valid for the lifetime of
+        // the loaded extension library, and both views are valid for this call.
+        let status = unsafe {
+            (self.callback)(
+                self.user_data,
+                entity,
+                u8::from(player.is_some()),
+                SteelStrView::from_str(command),
+                SteelStrView::from_str(args),
+            )
+        };
+        Ok(i32::from(status != 0))
+    }
+}
+
+// SAFETY: extension command handlers are registered once and the extension
+// contract requires `user_data` to remain valid and thread-safe for the
+// lifetime of the loaded library.
+unsafe impl Send for CommandHandler {}
+
+// SAFETY: see the `Send` implementation above.
+unsafe impl Sync for CommandHandler {}
+
+/// Namespace used for extension commands when the extension manifest id cannot
+/// be resolved.
+const FALLBACK_PLUGIN_NAMESPACE: &str = "steel_plugin";
+
+/// Derives an identifier namespace from the currently initializing extension.
+fn plugin_namespace() -> String {
+    let id = HOST.extension_id.read();
+    let Some(id) = id.as_deref() else {
+        return FALLBACK_PLUGIN_NAMESPACE.to_owned();
+    };
+    let namespace: String = id
+        .chars()
+        .map(|character| {
+            let character = character.to_ascii_lowercase();
+            if character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if namespace.is_empty() {
+        FALLBACK_PLUGIN_NAMESPACE.to_owned()
+    } else {
+        namespace
+    }
+}
+
+unsafe extern "C" fn host_extension_path() -> SteelStrView {
+    let path = HOST.extension_path.read();
+    path.as_deref()
+        .map_or(SteelStrView::EMPTY, |path| scratch_view(path))
+}
+
+unsafe extern "C" fn host_register_command(
+    name: SteelStrView,
+    description: SteelStrView,
+    permission: SteelStrView,
+    handler: Option<SteelCommandHandlerFn>,
+    user_data: *mut c_void,
+) -> i32 {
+    if HOST.phase() == STEEL_LEVEL_CONTENT {
+        return STEEL_ERR_WRONG_PHASE;
+    }
+    let Ok(name) = convert::string(name) else {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    };
+    let name = name.trim_start_matches('/').to_owned();
+    if name.is_empty() || name.contains(char::is_whitespace) || name.contains(':') {
+        set_last_error(format!("invalid plugin command name `{name}`"));
+        return STEEL_ERR_INVALID_ARGUMENT;
+    }
+    // Descriptions are accepted for ABI parity; the command API has no
+    // description field, so the value is validated and dropped.
+    if convert::string(description).is_err() {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    }
+    let Ok(permission) = convert::string(permission) else {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    };
+    let permission = if permission.is_empty() {
+        None
+    } else {
+        match PermissionKey::parse(permission) {
+            Ok(key) => Some(PermissionExpr::key(key)),
+            Err(error) => {
+                set_last_error(format!("invalid command permission: {error}"));
+                return STEEL_ERR_INVALID_ARGUMENT;
+            }
+        }
+    };
+    let Some(callback) = handler else {
+        set_last_error(format!("command `{name}` has no handler"));
+        return STEEL_ERR_INVALID_ARGUMENT;
+    };
+
+    let mut registration =
+        CommandRegistration::new(Identifier::new(plugin_namespace(), name.clone()), {
+            let handler = Arc::new(CommandHandler {
+                callback,
+                user_data,
+            });
+            let command: Arc<str> = Arc::from(name.as_str());
+            move || {
+                let literal_name: Box<str> = Box::from(command.as_ref());
+                let root_handler = Arc::clone(&handler);
+                let root_command = Arc::clone(&command);
+                let argument_handler = Arc::clone(&handler);
+                let argument_command = Arc::clone(&command);
+                literal(literal_name)
+                    .executes(move |context| root_handler.execute(context, root_command.as_ref()))
+                    .then(argument("args", CommandArgument::greedy_string()).executes(
+                        move |context| argument_handler.execute(context, argument_command.as_ref()),
+                    ))
+            }
+        });
+    registration = if let Some(permission) = permission {
+        registration.permission(permission)
+    } else {
+        registration.default_access()
+    };
+
+    {
+        let mut commands = HOST.commands.lock();
+        if commands.iter().any(|registered| registered == &name) {
+            set_last_error(format!("command `{name}` is already registered"));
+            return STEEL_ERR_ALREADY_EXISTS;
+        }
+        commands.push(name);
+    }
+    register_plugin_command(registration);
+    STEEL_OK
+}
+
+unsafe extern "C" fn host_entity_get_name(entity: SteelEntityRef, out: *mut SteelStrView) -> i32 {
+    if out.is_null() {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    }
+    let Some(world) = world(entity.world) else {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    };
+    let Some(shared) = world.get_entity_by_id(entity.entity) else {
+        return STEEL_ERR_NOT_FOUND;
+    };
+    let Some(player) = shared.as_player() else {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    };
+    // SAFETY: the extension supplied a writable out-pointer.
+    unsafe { *out = scratch_view(player.gameprofile.name()) };
+    STEEL_OK
+}
+
+unsafe extern "C" fn host_entity_get_uuid(entity: SteelEntityRef, out: *mut SteelStrView) -> i32 {
+    if out.is_null() {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    }
+    let Some(world) = world(entity.world) else {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    };
+    let Some(shared) = world.get_entity_by_id(entity.entity) else {
+        return STEEL_ERR_NOT_FOUND;
+    };
+    let Some(player) = shared.as_player() else {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    };
+    let uuid = player.gameprofile.id().to_string();
+    // SAFETY: the extension supplied a writable out-pointer.
+    unsafe { *out = scratch_view(&uuid) };
+    STEEL_OK
+}
+
+unsafe extern "C" fn host_player_send_message(
+    entity: SteelEntityRef,
+    message: SteelStrView,
+) -> i32 {
+    let Some(world) = world(entity.world) else {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    };
+    let Some(shared) = world.get_entity_by_id(entity.entity) else {
+        return STEEL_ERR_NOT_FOUND;
+    };
+    let Some(player) = shared.as_player() else {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    };
+    let Ok(message) = convert::string(message) else {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    };
+    player.send_message(&TextComponent::plain(message));
+    STEEL_OK
+}
+
+unsafe extern "C" fn host_entity_get_health(entity: SteelEntityRef, out: *mut f32) -> i32 {
+    if out.is_null() {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    }
+    let Some(world) = world(entity.world) else {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    };
+    let Some(shared) = world.get_entity_by_id(entity.entity) else {
+        return STEEL_ERR_NOT_FOUND;
+    };
+    let Some(living) = shared.as_living_entity() else {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    };
+    // SAFETY: the extension supplied a writable out-pointer.
+    unsafe { *out = living.get_health() };
+    STEEL_OK
+}
+
+unsafe extern "C" fn host_entity_set_health(entity: SteelEntityRef, health: f32) -> i32 {
+    let Some(world) = world(entity.world) else {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    };
+    let Some(shared) = world.get_entity_by_id(entity.entity) else {
+        return STEEL_ERR_NOT_FOUND;
+    };
+    let Some(living) = shared.as_living_entity() else {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    };
+    living.set_health(health);
+    STEEL_OK
+}
+
+unsafe extern "C" fn host_world_get_spawn(world_ref: SteelWorldRef, out: *mut SteelVec3) -> i32 {
+    let Some(world) = world(world_ref) else {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    };
+    if out.is_null() {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    }
+    let spawn = world.level_data.read().data().spawn_pos();
+    // SAFETY: the extension supplied a writable out-pointer.
+    unsafe {
+        *out = SteelVec3 {
+            x: f64::from(spawn.x()) + 0.5,
+            y: f64::from(spawn.y()),
+            z: f64::from(spawn.z()) + 0.5,
+        }
+    };
+    STEEL_OK
+}
+
+unsafe extern "C" fn host_world_player_count(world_ref: SteelWorldRef) -> u32 {
+    world(world_ref).map_or(0, |world| {
+        u32::try_from(world.players.len()).unwrap_or(u32::MAX)
+    })
+}
+
+fn player_at_index(world_ref: SteelWorldRef, index: u32) -> Option<SteelEntityRef> {
+    let world = world(world_ref)?;
+    let mut current = 0u32;
+    let mut found = None;
+    world.players.iter_players(|_uuid, player| {
+        if current == index {
+            found = Some(SteelEntityRef {
+                world: world_ref,
+                entity: player.id(),
+            });
+            false
+        } else {
+            current += 1;
+            true
+        }
+    });
+    found
+}
+
+unsafe extern "C" fn host_world_player_at(
+    world_ref: SteelWorldRef,
+    index: u32,
+    out: *mut SteelOptEntityRef,
+) -> i32 {
+    if out.is_null() {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    }
+    let found = player_at_index(world_ref, index);
+    // SAFETY: the extension supplied a writable out-pointer.
+    unsafe {
+        *out = found.map_or(SteelOptEntityRef::default(), |value| SteelOptEntityRef {
+            present: 1,
+            value,
+        })
+    };
+    if found.is_some() {
+        STEEL_OK
+    } else {
+        STEEL_ERR_NOT_FOUND
+    }
+}
+
+unsafe extern "C" fn host_world_find_player(
+    world_ref: SteelWorldRef,
+    name: SteelStrView,
+    out: *mut SteelOptEntityRef,
+) -> i32 {
+    let Ok(name) = convert::string(name) else {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    };
+    let Some(world) = world(world_ref) else {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    };
+    if out.is_null() {
+        return STEEL_ERR_INVALID_ARGUMENT;
+    }
+    let mut found = None;
+    world.players.iter_players(|_uuid, player| {
+        if player.gameprofile.name() == name.as_str() {
+            found = Some(SteelEntityRef {
+                world: world_ref,
+                entity: player.id(),
+            });
+            false
+        } else {
+            true
+        }
+    });
+    // SAFETY: the extension supplied a writable out-pointer.
+    unsafe {
+        *out = found.map_or(SteelOptEntityRef::default(), |value| SteelOptEntityRef {
+            present: 1,
+            value,
+        })
+    };
+    if found.is_some() {
+        STEEL_OK
+    } else {
+        STEEL_ERR_NOT_FOUND
+    }
+}
+
 /// Host function table published to every extension.
 pub static INTERFACE: SteelInterface = SteelInterface {
     struct_size: std::mem::size_of::<SteelInterface>() as u32,
@@ -1002,4 +1356,15 @@ pub static INTERFACE: SteelInterface = SteelInterface {
     register_block_entity_type: Some(host_register_block_entity_type),
     register_entity_type: Some(host_register_entity_type),
     register_event_listener: Some(host_register_event_listener),
+    extension_path: Some(host_extension_path),
+    register_command: Some(host_register_command),
+    entity_get_name: Some(host_entity_get_name),
+    entity_get_uuid: Some(host_entity_get_uuid),
+    player_send_message: Some(host_player_send_message),
+    entity_get_health: Some(host_entity_get_health),
+    entity_set_health: Some(host_entity_set_health),
+    world_get_spawn: Some(host_world_get_spawn),
+    world_player_count: Some(host_world_player_count),
+    world_player_at: Some(host_world_player_at),
+    world_find_player: Some(host_world_find_player),
 };

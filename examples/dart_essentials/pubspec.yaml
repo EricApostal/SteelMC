@@ -1,0 +1,14 @@
+name: steel_essentials
+description: An Essentials-style example plugin for the Steel Dart plugin API.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.4.0
+
+dependencies:
+  steel_extension:
+    path: ../../clients/dart
+
+dev_dependencies:
+  test: ^1.25.0

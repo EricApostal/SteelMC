@@ -31,7 +31,7 @@ use crate::command::{
     COMMAND_REQUESTS_PER_TICK, COMMAND_RESUMPTIONS_PER_TICK, CommandCompletion, CommandDispatcher,
     CommandQueueFull, CommandRegistry, CommandRequest, CommandRequestQueue,
     PendingCommandExecutionQueue, client_permission_event, command_suggestions_packet,
-    command_tree_packet, create_registered_dispatcher,
+    command_tree_packet, create_registered_dispatcher, drain_plugin_commands,
 };
 #[cfg(any(test, feature = "test-framework"))]
 use crate::config::ResolvedDomainConfig;
@@ -655,7 +655,7 @@ impl Server {
         config: RuntimeConfig,
         worlds_config: WorldsConfig,
         permission_groups: PermissionGroupManager,
-        command_registry: CommandRegistry,
+        mut command_registry: CommandRegistry,
     ) -> Result<Self, String> {
         validate_login_security(config.online_mode, config.encryption).map_err(str::to_owned)?;
         let config = Arc::new(config);
@@ -847,6 +847,8 @@ impl Server {
         let command_storage = DomainCommandStorage::load(&worlds)
             .await
             .map_err(|error| format!("failed to load domain command storage: {error}"))?;
+        drain_plugin_commands(&mut command_registry)
+            .map_err(|error| format!("failed to register commands: {error}"))?;
         let registered_commands = create_registered_dispatcher(command_registry)
             .map_err(|error| format!("failed to register commands: {error}"))?;
         let command_permission_keys = registered_commands

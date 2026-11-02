@@ -28,7 +28,10 @@ pub(crate) use queue::{
     PendingCommandExecutionQueue,
 };
 
+use std::sync::LazyLock;
+
 use steel_utils::entity_events::EntityStatus;
+use steel_utils::locks::SyncMutex;
 
 use self::{
     brigadier::CommandDispatcher as BrigadierCommandDispatcher,
@@ -36,6 +39,31 @@ use self::{
 };
 use crate::command::brigadier::CommandSyntaxError;
 use crate::{player::Player, world::World};
+
+/// Command declarations queued by extensions before the server builds its
+/// dispatcher. The server drains this queue during startup.
+static PLUGIN_COMMANDS: LazyLock<SyncMutex<Vec<CommandRegistration>>> =
+    LazyLock::new(|| SyncMutex::new(Vec::new()));
+
+/// Queues a command declaration registered by an extension.
+///
+/// The server drains the queue when it builds its dispatcher, so commands
+/// registered while a server is running take effect on the next start. Call
+/// this from the extension behaviour phase.
+pub fn register_plugin_command(registration: CommandRegistration) {
+    PLUGIN_COMMANDS.lock().push(registration);
+}
+
+/// Merges every queued extension command into `registry`.
+pub(crate) fn drain_plugin_commands(
+    registry: &mut CommandRegistry,
+) -> Result<(), CommandRegistrationError> {
+    let queued = std::mem::take(&mut *PLUGIN_COMMANDS.lock());
+    for registration in queued {
+        registry.register(registration)?;
+    }
+    Ok(())
+}
 
 pub(crate) type CommandDispatcher =
     BrigadierCommandDispatcher<InternalCommandSource, SteelCommandRuntime>;

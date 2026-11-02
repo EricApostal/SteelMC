@@ -51,3 +51,46 @@ print(steelStrViewToString(view));
 struct classes (`SteelInterface`, `SteelExtension`, the hook tables, and their
 supporting types) can be used directly with `Pointer<T>` and
 `NativeFunction<T>`.
+
+## Plugin API
+
+`lib/steel_plugin.dart` is the out-of-process authoring API. Unlike `steel.dart`
+(FFI bindings), it speaks newline-delimited JSON to the Rust bridge over stdio,
+so a plugin is an ordinary Dart program:
+
+```dart
+import 'package:steel_extension/steel_plugin.dart';
+
+final class Greeter implements SteelPlugin {
+  @override
+  void onEnable(PluginContext context) {
+    context
+        .command('hello')
+        .description('Say hello.')
+        .executes((command) {
+      command.player?.sendMessage('Hello, ${command.player?.name}!');
+      return null;
+    });
+    context.onChat((event) {
+      if (event.text.contains('bad')) {
+        event.cancel();
+      }
+    });
+  }
+}
+
+void main() => runSteelPlugin(Greeter());
+```
+
+Player operations, host queries and registration all go through `PluginHost`.
+The runtime implements it over `RpcClient`; tests implement it with canned
+replies, so command logic runs without stdin, a subprocess, or the Rust bridge.
+
+- `LineTransport` / `StdioTransport` — newline-delimited JSON framing.
+- `RpcClient` — `host_call`/`host_result` routing, including nested calls made
+  while a handler waits for a reply.
+- `PluginContext` — command/event registration plus `onlinePlayers`,
+  `findPlayer`, `spawn`, and `log`.
+- `Player`, `Vec3`, `ChatEvent`, `BlockEvent`, `CommandContext` — typed values.
+
+See `examples/dart_essentials` for a complete Essentials-style plugin.

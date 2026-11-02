@@ -1,5 +1,5 @@
 name: steel_extension
-description: Dart bindings for the Steel extension C ABI.
+description: Dart bindings and out-of-process plugin API for Steel extensions.
 version: 0.1.0
 publish_to: none
 

@@ -8,7 +8,7 @@ use steel_core::behavior::init_behaviors_with;
 use steel_core::block_entity::init_block_entities_with;
 use steel_core::entity::init_entities_with;
 use steel_core::events::{self, EventKind};
-use steel_plugin_host::{ExtensionManager, attached_block_identifiers};
+use steel_plugin_host::{ExtensionManager, attached_block_identifiers, registered_command_names};
 use steel_registry::{RegistryExt, init_vanilla_registry_with};
 use steel_utils::Identifier;
 
@@ -106,4 +106,20 @@ fn extension_registers_content_behaviour_and_listener() {
         "extension block behaviour should be attached"
     );
     assert_eq!(events::listener_count(EventKind::BlockPlace), 1);
+    assert!(
+        registered_command_names().contains(&"rubytest".to_owned()),
+        "extension command should be queued for the dispatcher"
+    );
+
+    // SAFETY: the extension was loaded above and the symbol is stable.
+    unsafe {
+        let library = libloading::Library::new(&library_path).expect("reopen extension");
+        let path_len: libloading::Symbol<'_, extern "C" fn() -> usize> = library
+            .get(b"steel_test_extension_path_len\0")
+            .expect("steel_test_extension_path_len symbol");
+        assert!(
+            path_len() > 0,
+            "extension_path should report the loaded library path"
+        );
+    }
 }

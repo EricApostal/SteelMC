@@ -1115,6 +1115,50 @@
         {
           "name": "register_event_listener",
           "rust_type": "Option<SteelRegisterEventListenerFn>"
+        },
+        {
+          "name": "extension_path",
+          "rust_type": "Option<SteelExtensionPathFn>"
+        },
+        {
+          "name": "register_command",
+          "rust_type": "Option<SteelRegisterCommandFn>"
+        },
+        {
+          "name": "entity_get_name",
+          "rust_type": "Option<SteelEntityGetNameFn>"
+        },
+        {
+          "name": "entity_get_uuid",
+          "rust_type": "Option<SteelEntityGetUuidFn>"
+        },
+        {
+          "name": "player_send_message",
+          "rust_type": "Option<SteelPlayerSendMessageFn>"
+        },
+        {
+          "name": "entity_get_health",
+          "rust_type": "Option<SteelEntityGetHealthFn>"
+        },
+        {
+          "name": "entity_set_health",
+          "rust_type": "Option<SteelEntitySetHealthFn>"
+        },
+        {
+          "name": "world_get_spawn",
+          "rust_type": "Option<SteelWorldGetSpawnFn>"
+        },
+        {
+          "name": "world_player_count",
+          "rust_type": "Option<SteelWorldPlayerCountFn>"
+        },
+        {
+          "name": "world_player_at",
+          "rust_type": "Option<SteelWorldPlayerAtFn>"
+        },
+        {
+          "name": "world_find_player",
+          "rust_type": "Option<SteelWorldFindPlayerFn>"
         }
       ]
     },
@@ -1741,6 +1785,106 @@
         "i32",
         "Option<SteelEventListenerFn>",
         "*mut c_void"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelCommandHandlerFn",
+      "args": [
+        "*mut c_void",
+        "SteelEntityRef",
+        "u8",
+        "SteelStrView",
+        "SteelStrView"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelExtensionPathFn",
+      "args": [],
+      "return": "SteelStrView"
+    },
+    {
+      "name": "SteelRegisterCommandFn",
+      "args": [
+        "SteelStrView",
+        "SteelStrView",
+        "SteelStrView",
+        "Option<SteelCommandHandlerFn>",
+        "*mut c_void"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelEntityGetNameFn",
+      "args": [
+        "SteelEntityRef",
+        "*mut SteelStrView"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelEntityGetUuidFn",
+      "args": [
+        "SteelEntityRef",
+        "*mut SteelStrView"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelPlayerSendMessageFn",
+      "args": [
+        "SteelEntityRef",
+        "SteelStrView"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelEntityGetHealthFn",
+      "args": [
+        "SteelEntityRef",
+        "*mut f32"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelEntitySetHealthFn",
+      "args": [
+        "SteelEntityRef",
+        "f32"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelWorldGetSpawnFn",
+      "args": [
+        "SteelWorldRef",
+        "*mut SteelVec3"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelWorldPlayerCountFn",
+      "args": [
+        "SteelWorldRef"
+      ],
+      "return": "u32"
+    },
+    {
+      "name": "SteelWorldPlayerAtFn",
+      "args": [
+        "SteelWorldRef",
+        "u32",
+        "*mut SteelOptEntityRef"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelWorldFindPlayerFn",
+      "args": [
+        "SteelWorldRef",
+        "SteelStrView",
+        "*mut SteelOptEntityRef"
       ],
       "return": "i32"
     },

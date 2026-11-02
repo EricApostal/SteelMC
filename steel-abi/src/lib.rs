@@ -934,6 +934,66 @@ pub type SteelRegisterEventListenerFn = unsafe extern "C" fn(
     user_data: *mut c_void,
 ) -> i32;
 
+/// Signature of a command handler registered through
+/// [`SteelInterface::register_command`].
+///
+/// `player` is meaningful only when `has_player` is nonzero. `command` is the
+/// registered command name without its leading slash and `args` is the raw
+/// trailing input, empty when the command was invoked without arguments.
+/// A nonzero return value counts as a successful execution.
+pub type SteelCommandHandlerFn = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    player: SteelEntityRef,
+    has_player: u8,
+    command: SteelStrView,
+    args: SteelStrView,
+) -> i32;
+
+/// Returns the path of the extension library whose entry point or `initialize`
+/// call is currently running. The view is valid for the call and empty when no
+/// extension is being initialized on this thread.
+pub type SteelExtensionPathFn = unsafe extern "C" fn() -> SteelStrView;
+/// Registers a command with the server. `name` is the unqualified literal, the
+/// `permission` is optional (empty means default access), and the handler
+/// receives the invoking player when `has_player` is nonzero. Commands are
+/// queued and become available on the next server start.
+pub type SteelRegisterCommandFn = unsafe extern "C" fn(
+    name: SteelStrView,
+    description: SteelStrView,
+    permission: SteelStrView,
+    handler: Option<SteelCommandHandlerFn>,
+    user_data: *mut c_void,
+) -> i32;
+/// Writes the player name; the view is valid until the next host call on the
+/// calling thread. Returns [`STEEL_ERR_INVALID_ARGUMENT`] for non-players.
+pub type SteelEntityGetNameFn =
+    unsafe extern "C" fn(entity: SteelEntityRef, out: *mut SteelStrView) -> i32;
+/// Writes the player UUID in hyphenated form, with the same lifetime and
+/// player-only rules as [`SteelEntityGetNameFn`].
+pub type SteelEntityGetUuidFn = SteelEntityGetNameFn;
+/// Sends a plain chat message to a player.
+pub type SteelPlayerSendMessageFn =
+    unsafe extern "C" fn(entity: SteelEntityRef, message: SteelStrView) -> i32;
+/// Writes the current health of a living entity.
+pub type SteelEntityGetHealthFn =
+    unsafe extern "C" fn(entity: SteelEntityRef, out: *mut f32) -> i32;
+/// Sets the health of a living entity, clamped by the entity's maximum health.
+pub type SteelEntitySetHealthFn = unsafe extern "C" fn(entity: SteelEntityRef, health: f32) -> i32;
+/// Writes the world spawn position at the centre of its spawn block.
+pub type SteelWorldGetSpawnFn =
+    unsafe extern "C" fn(world: SteelWorldRef, out: *mut SteelVec3) -> i32;
+/// Returns the number of players in a world.
+pub type SteelWorldPlayerCountFn = unsafe extern "C" fn(world: SteelWorldRef) -> u32;
+/// Writes the player at `index` in world iteration order.
+pub type SteelWorldPlayerAtFn =
+    unsafe extern "C" fn(world: SteelWorldRef, index: u32, out: *mut SteelOptEntityRef) -> i32;
+/// Writes the first player in `world` whose profile name matches `name`.
+pub type SteelWorldFindPlayerFn = unsafe extern "C" fn(
+    world: SteelWorldRef,
+    name: SteelStrView,
+    out: *mut SteelOptEntityRef,
+) -> i32;
+
 /// Host function table passed to an extension's entry point.
 ///
 /// Callers must check [`Self::api_version`] and may only read fields covered by
@@ -986,6 +1046,17 @@ pub struct SteelInterface {
     pub register_block_entity_type: Option<SteelRegisterBlockEntityTypeFn>,
     pub register_entity_type: Option<SteelRegisterEntityTypeFn>,
     pub register_event_listener: Option<SteelRegisterEventListenerFn>,
+    pub extension_path: Option<SteelExtensionPathFn>,
+    pub register_command: Option<SteelRegisterCommandFn>,
+    pub entity_get_name: Option<SteelEntityGetNameFn>,
+    pub entity_get_uuid: Option<SteelEntityGetUuidFn>,
+    pub player_send_message: Option<SteelPlayerSendMessageFn>,
+    pub entity_get_health: Option<SteelEntityGetHealthFn>,
+    pub entity_set_health: Option<SteelEntitySetHealthFn>,
+    pub world_get_spawn: Option<SteelWorldGetSpawnFn>,
+    pub world_player_count: Option<SteelWorldPlayerCountFn>,
+    pub world_player_at: Option<SteelWorldPlayerAtFn>,
+    pub world_find_player: Option<SteelWorldFindPlayerFn>,
 }
 
 impl Default for SteelInterface {
@@ -1036,6 +1107,17 @@ impl Default for SteelInterface {
             register_block_entity_type: None,
             register_entity_type: None,
             register_event_listener: None,
+            extension_path: None,
+            register_command: None,
+            entity_get_name: None,
+            entity_get_uuid: None,
+            player_send_message: None,
+            entity_get_health: None,
+            entity_set_health: None,
+            world_get_spawn: None,
+            world_player_count: None,
+            world_player_at: None,
+            world_find_player: None,
         }
     }
 }

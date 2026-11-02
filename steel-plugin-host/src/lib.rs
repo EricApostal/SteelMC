@@ -23,7 +23,7 @@ mod interface;
 mod state;
 
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use steel_abi::{STEEL_ABI_VERSION, SteelExtension, SteelExtensionEntryFn};
 use steel_core::behavior::{BlockBehaviorRegistry, ItemBehaviorRegistry};
@@ -41,6 +41,7 @@ struct LoadedExtension {
     _library: libloading::Library,
     extension: *const SteelExtension,
     id: String,
+    path: Arc<str>,
 }
 
 // SAFETY: `extension` points at a static manifest owned by the loaded library.
@@ -138,6 +139,18 @@ fn manifest_string(view: steel_abi::SteelStrView, field: &str) -> Result<String,
     Ok(value.to_owned())
 }
 
+/// Runs `f` with the host extension context pointing at `loaded`, so ABI calls
+/// such as `extension_path` and `register_command` can identify their caller.
+fn with_extension_context<R>(loaded: &LoadedExtension, f: impl FnOnce() -> R) -> R {
+    HOST.set_extension_context(
+        Arc::clone(&loaded.path),
+        Some(Arc::from(loaded.id.as_str())),
+    );
+    let result = f();
+    HOST.clear_extension_context();
+    result
+}
+
 /// Handle used by the server to load extensions and drive the init phases.
 #[derive(Default)]
 pub struct ExtensionManager;
@@ -153,6 +166,7 @@ impl ExtensionManager {
     /// `&'static` and event listeners cannot be revoked safely.
     pub fn load(&self, path: impl AsRef<Path>) -> Result<(), ExtensionError> {
         let path = path.as_ref();
+        let path_text: Arc<str> = Arc::from(path.to_string_lossy().as_ref());
         // SAFETY: loading arbitrary native code is inherently unsafe; callers
         // are responsible for trusting the extension.
         unsafe {
@@ -160,7 +174,9 @@ impl ExtensionManager {
             let entry: libloading::Symbol<'_, SteelExtensionEntryFn> = library
                 .get(b"steel_extension_entry\0")
                 .map_err(|_| ExtensionError::MissingEntry(path.to_path_buf()))?;
+            HOST.set_extension_context(Arc::clone(&path_text), None);
             let manifest = entry(std::ptr::from_ref(&INTERFACE));
+            HOST.clear_extension_context();
             if manifest.is_null() {
                 return Err(ExtensionError::NullManifest(path.to_path_buf()));
             }
@@ -183,6 +199,7 @@ impl ExtensionManager {
                 _library: library,
                 extension: manifest,
                 id,
+                path: path_text,
             });
         }
         Ok(())
@@ -223,12 +240,12 @@ impl ExtensionManager {
             if let Some(initialize) = unsafe { &*loaded.extension }.initialize {
                 interface::with_registry(registry, || {
                     // SAFETY: the extension owns its initialization state.
-                    let status = unsafe {
+                    let status = with_extension_context(loaded, || unsafe {
                         initialize(
                             steel_abi::STEEL_LEVEL_CONTENT,
                             (*loaded.extension).user_data,
                         )
-                    };
+                    });
                     if status != steel_abi::STEEL_OK {
                         state::set_last_error(format!(
                             "extension `{}` failed content initialization with status {status}",
@@ -251,12 +268,12 @@ impl ExtensionManager {
             // SAFETY: see `content_phase`.
             if let Some(initialize) = unsafe { &*loaded.extension }.initialize {
                 // SAFETY: the extension owns its initialization state.
-                let status = unsafe {
+                let status = with_extension_context(loaded, || unsafe {
                     initialize(
                         steel_abi::STEEL_LEVEL_BEHAVIOR,
                         (*loaded.extension).user_data,
                     )
-                };
+                });
                 if status != steel_abi::STEEL_OK {
                     state::set_last_error(format!(
                         "extension `{}` failed behavior initialization with status {status}",
@@ -342,12 +359,12 @@ impl ExtensionManager {
             // SAFETY: see `content_phase`.
             if let Some(initialize) = unsafe { &*loaded.extension }.initialize {
                 // SAFETY: the extension owns its initialization state.
-                let status = unsafe {
+                let status = with_extension_context(loaded, || unsafe {
                     initialize(
                         steel_abi::STEEL_LEVEL_RUNTIME,
                         (*loaded.extension).user_data,
                     )
-                };
+                });
                 if status != steel_abi::STEEL_OK {
                     state::set_last_error(format!(
                         "extension `{}` failed runtime initialization with status {status}",
@@ -391,4 +408,10 @@ pub fn loaded_extension_count() -> usize {
 #[must_use]
 pub fn attached_block_identifiers() -> Vec<steel_utils::Identifier> {
     ATTACHED_BLOCKS.lock().clone()
+}
+
+/// Names of commands registered by extensions through the ABI.
+#[must_use]
+pub fn registered_command_names() -> Vec<String> {
+    HOST.commands.lock().clone()
 }

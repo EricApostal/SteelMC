@@ -138,6 +138,18 @@ typedef SteelRegisterItemFn = Int32 Function(Pointer<SteelItemDesc>, Pointer<Ste
 typedef SteelRegisterBlockEntityTypeFn = Int32 Function(Pointer<SteelBlockEntityDesc>, Pointer<SteelBlockEntityHooks>);
 typedef SteelRegisterEntityTypeFn = Int32 Function(Pointer<SteelEntityDesc>, Pointer<SteelEntityHooks>);
 typedef SteelRegisterEventListenerFn = Int32 Function(Uint32, Int32, Pointer<NativeFunction<SteelEventListenerFn>>, Pointer<Void>);
+typedef SteelCommandHandlerFn = Int32 Function(Pointer<Void>, SteelEntityRef, Uint8, SteelStrView, SteelStrView);
+typedef SteelExtensionPathFn = SteelStrView Function();
+typedef SteelRegisterCommandFn = Int32 Function(SteelStrView, SteelStrView, SteelStrView, Pointer<NativeFunction<SteelCommandHandlerFn>>, Pointer<Void>);
+typedef SteelEntityGetNameFn = Int32 Function(SteelEntityRef, Pointer<SteelStrView>);
+typedef SteelEntityGetUuidFn = SteelEntityGetNameFn;
+typedef SteelPlayerSendMessageFn = Int32 Function(SteelEntityRef, SteelStrView);
+typedef SteelEntityGetHealthFn = Int32 Function(SteelEntityRef, Pointer<Float>);
+typedef SteelEntitySetHealthFn = Int32 Function(SteelEntityRef, Float);
+typedef SteelWorldGetSpawnFn = Int32 Function(SteelWorldRef, Pointer<SteelVec3>);
+typedef SteelWorldPlayerCountFn = Uint32 Function(SteelWorldRef);
+typedef SteelWorldPlayerAtFn = Int32 Function(SteelWorldRef, Uint32, Pointer<SteelOptEntityRef>);
+typedef SteelWorldFindPlayerFn = Int32 Function(SteelWorldRef, SteelStrView, Pointer<SteelOptEntityRef>);
 typedef SteelInitializeFn = Int32 Function(Uint32, Pointer<Void>);
 typedef SteelDeinitializeFn = Void Function(Uint32, Pointer<Void>);
 typedef SteelExtensionEntryFn = Pointer<SteelExtension> Function(Pointer<SteelInterface>);
@@ -485,6 +497,17 @@ final class SteelInterface extends Struct {
   external Pointer<NativeFunction<SteelRegisterBlockEntityTypeFn>> register_block_entity_type;
   external Pointer<NativeFunction<SteelRegisterEntityTypeFn>> register_entity_type;
   external Pointer<NativeFunction<SteelRegisterEventListenerFn>> register_event_listener;
+  external Pointer<NativeFunction<SteelExtensionPathFn>> extension_path;
+  external Pointer<NativeFunction<SteelRegisterCommandFn>> register_command;
+  external Pointer<NativeFunction<SteelEntityGetNameFn>> entity_get_name;
+  external Pointer<NativeFunction<SteelEntityGetUuidFn>> entity_get_uuid;
+  external Pointer<NativeFunction<SteelPlayerSendMessageFn>> player_send_message;
+  external Pointer<NativeFunction<SteelEntityGetHealthFn>> entity_get_health;
+  external Pointer<NativeFunction<SteelEntitySetHealthFn>> entity_set_health;
+  external Pointer<NativeFunction<SteelWorldGetSpawnFn>> world_get_spawn;
+  external Pointer<NativeFunction<SteelWorldPlayerCountFn>> world_player_count;
+  external Pointer<NativeFunction<SteelWorldPlayerAtFn>> world_player_at;
+  external Pointer<NativeFunction<SteelWorldFindPlayerFn>> world_find_player;
 }
 
 final class SteelExtension extends Struct {

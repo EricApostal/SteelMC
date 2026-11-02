@@ -2802,6 +2802,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "steel-dart-bridge"
+version = "0.16.0+mc26.3"
+dependencies = [
+ "serde_json",
+ "steel-abi",
+]
+
+[[package]]
 name = "steel-login"
 version = "0.16.0+mc26.3"
 dependencies = [
@@ -2858,6 +2866,7 @@ dependencies = [
  "libloading",
  "log",
  "rustc-hash 2.1.3",
+ "serde_json",
  "simdnbt",
  "steel-abi",
  "steel-core",

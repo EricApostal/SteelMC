@@ -99,6 +99,18 @@ typedef int32_t (*SteelRegisterItemFn)(const SteelItemDesc*, const SteelItemHook
 typedef int32_t (*SteelRegisterBlockEntityTypeFn)(const SteelBlockEntityDesc*, const SteelBlockEntityHooks*);
 typedef int32_t (*SteelRegisterEntityTypeFn)(const SteelEntityDesc*, const SteelEntityHooks*);
 typedef int32_t (*SteelRegisterEventListenerFn)(uint32_t, int32_t, SteelEventListenerFn, void*);
+typedef int32_t (*SteelCommandHandlerFn)(void*, SteelEntityRef, uint8_t, SteelStrView, SteelStrView);
+typedef SteelStrView (*SteelExtensionPathFn)(void);
+typedef int32_t (*SteelRegisterCommandFn)(SteelStrView, SteelStrView, SteelStrView, SteelCommandHandlerFn, void*);
+typedef int32_t (*SteelEntityGetNameFn)(SteelEntityRef, SteelStrView*);
+typedef SteelEntityGetNameFn SteelEntityGetUuidFn;
+typedef int32_t (*SteelPlayerSendMessageFn)(SteelEntityRef, SteelStrView);
+typedef int32_t (*SteelEntityGetHealthFn)(SteelEntityRef, float*);
+typedef int32_t (*SteelEntitySetHealthFn)(SteelEntityRef, float);
+typedef int32_t (*SteelWorldGetSpawnFn)(SteelWorldRef, SteelVec3*);
+typedef uint32_t (*SteelWorldPlayerCountFn)(SteelWorldRef);
+typedef int32_t (*SteelWorldPlayerAtFn)(SteelWorldRef, uint32_t, SteelOptEntityRef*);
+typedef int32_t (*SteelWorldFindPlayerFn)(SteelWorldRef, SteelStrView, SteelOptEntityRef*);
 typedef int32_t (*SteelInitializeFn)(uint32_t, void*);
 typedef void (*SteelDeinitializeFn)(uint32_t, void*);
 typedef const SteelExtension* (*SteelExtensionEntryFn)(const SteelInterface*);
@@ -428,6 +440,17 @@ struct SteelInterface {
     SteelRegisterBlockEntityTypeFn register_block_entity_type;
     SteelRegisterEntityTypeFn register_entity_type;
     SteelRegisterEventListenerFn register_event_listener;
+    SteelExtensionPathFn extension_path;
+    SteelRegisterCommandFn register_command;
+    SteelEntityGetNameFn entity_get_name;
+    SteelEntityGetUuidFn entity_get_uuid;
+    SteelPlayerSendMessageFn player_send_message;
+    SteelEntityGetHealthFn entity_get_health;
+    SteelEntitySetHealthFn entity_set_health;
+    SteelWorldGetSpawnFn world_get_spawn;
+    SteelWorldPlayerCountFn world_player_count;
+    SteelWorldPlayerAtFn world_player_at;
+    SteelWorldFindPlayerFn world_find_player;
 };
 
 struct SteelExtension {

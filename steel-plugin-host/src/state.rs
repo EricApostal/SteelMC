@@ -224,6 +224,14 @@ pub struct HostState {
     pub worlds: SyncRwLock<WorldTable>,
     pub owned: SyncMutex<OwnedTable>,
     pub registrations: SyncMutex<Registrations>,
+    /// Names of commands registered through the ABI, kept for diagnostics and
+    /// duplicate detection.
+    pub commands: SyncMutex<Vec<String>>,
+    /// Path of the extension library whose entry point or `initialize` call is
+    /// currently running.
+    pub extension_path: SyncRwLock<Option<Arc<str>>>,
+    /// Manifest id of the extension whose `initialize` call is currently running.
+    pub extension_id: SyncRwLock<Option<Arc<str>>>,
     phase: AtomicU32,
 }
 
@@ -233,8 +241,25 @@ impl HostState {
             worlds: SyncRwLock::new(WorldTable::default()),
             owned: SyncMutex::new(OwnedTable::default()),
             registrations: SyncMutex::new(Registrations::default()),
+            commands: SyncMutex::new(Vec::new()),
+            extension_path: SyncRwLock::new(None),
+            extension_id: SyncRwLock::new(None),
             phase: AtomicU32::new(steel_abi::STEEL_LEVEL_CONTENT),
         }
+    }
+
+    /// Marks the extension library whose entry point or `initialize` call is about
+    /// to run. `id` is unknown while the entry point resolves the manifest.
+    pub fn set_extension_context(&self, path: Arc<str>, id: Option<Arc<str>>) {
+        *self.extension_path.write() = Some(path);
+        *self.extension_id.write() = id;
+    }
+
+    /// Clears the extension context after the host is done calling into the
+    /// extension.
+    pub fn clear_extension_context(&self) {
+        *self.extension_path.write() = None;
+        *self.extension_id.write() = None;
     }
 
     pub fn set_phase(&self, phase: u32) {
