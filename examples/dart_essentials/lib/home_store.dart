@@ -75,7 +75,7 @@ final class HomeStore {
       final homes = _homes[uuid]!;
       final names = homes.keys.toList()..sort();
       encoded[uuid] = <String, Object?>{
-        for (final name in names) name: homes[name]!.toJson(),
+        for (final name in names) name: homes[name]!.toMap(),
       };
     }
     const encoder = JsonEncoder.withIndent('  ');

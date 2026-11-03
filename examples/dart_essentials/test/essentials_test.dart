@@ -40,11 +40,11 @@ final class FakePluginHost implements PluginHost {
     calls.add(HostCall(method, params));
     switch (method) {
       case 'player.position':
-        return position.toJson();
+        return position.toMap();
       case 'player.health':
         return health;
       case 'world.spawn':
-        return spawnPoint.toJson();
+        return spawnPoint.toMap();
       case 'world.players':
         return players.values.toList();
       case 'server.find_player':

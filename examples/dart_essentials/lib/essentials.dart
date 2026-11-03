@@ -88,138 +88,135 @@ final class Essentials {
   }
 
   /// `/spawn`: teleports the player to the spawn of their current world.
-  Object? spawn(CommandContext context) {
+  void spawn(CommandContext context) {
     final player = _requirePlayer(context);
     if (player == null) {
-      return null;
+      return;
     }
-    final position = Vec3.fromResult(
-      _host.call('world.spawn', <String, Object?>{'world': player.world}),
-      context: 'world.spawn',
-    );
+    final position = World(_host, player.world).spawn();
     player.teleport(position);
     player.sendMessage('Teleported to spawn at $position.');
-    return null;
+    return;
   }
 
   /// `/sethome [name]`: stores the player's current position as a home.
-  Object? setHome(CommandContext context) {
+  void setHome(CommandContext context) {
     final player = _requirePlayer(context);
     if (player == null) {
-      return null;
+      return;
     }
     final name = _parseHomeName(context.args);
     if (name == null) {
       player.sendMessage(
         'Usage: /sethome [name] (letters, digits, - and _ only).',
       );
-      return null;
+      return;
     }
     final position = player.position();
     _homes.set(player.uuid, name, position);
     player.sendMessage('Home "$name" set at $position.');
-    return null;
+    return;
   }
 
   /// `/home [name]`: teleports the player to a stored home.
-  Object? home(CommandContext context) {
+  void home(CommandContext context) {
     final player = _requirePlayer(context);
     if (player == null) {
-      return null;
+      return;
     }
     final name = _parseHomeName(context.args);
     if (name == null) {
       player.sendMessage(
         'Usage: /home [name] (letters, digits, - and _ only).',
       );
-      return null;
+      return;
     }
     final position = _homes.get(player.uuid, name);
     if (position == null) {
       player.sendMessage(
         'Home "$name" not found. Create it with /sethome $name.',
       );
-      return null;
+      return;
     }
     player.teleport(position);
     player.sendMessage('Welcome home, ${player.name}.');
-    return null;
+    return;
   }
 
   /// `/delhome [name]`: deletes a stored home.
-  Object? deleteHome(CommandContext context) {
+  void deleteHome(CommandContext context) {
     final player = _requirePlayer(context);
     if (player == null) {
-      return null;
+      return;
     }
     final name = _parseHomeName(context.args);
     if (name == null) {
       player.sendMessage(
         'Usage: /delhome [name] (letters, digits, - and _ only).',
       );
-      return null;
+      return;
     }
     if (!_homes.remove(player.uuid, name)) {
       player.sendMessage('Home "$name" not found.');
-      return null;
+      return;
     }
     player.sendMessage('Home "$name" deleted.');
-    return null;
+    return;
   }
 
   /// `/homes`: lists the player's homes.
-  Object? listHomes(CommandContext context) {
+  void listHomes(CommandContext context) {
     final player = _requirePlayer(context);
     if (player == null) {
-      return null;
+      return;
     }
     final names = _homes.namesOf(player.uuid);
     if (names.isEmpty) {
       player.sendMessage('You have no homes. Create one with /sethome [name].');
-      return null;
+      return;
     }
     player.sendMessage('Homes (${names.length}): ${names.join(', ')}');
-    return null;
+    return;
   }
 
   /// `/tpa <player>`: asks [player] to accept a teleport.
-  Object? tpa(CommandContext context) {
+  void tpa(CommandContext context) {
     final player = _requirePlayer(context);
     if (player == null) {
-      return null;
+      return;
     }
     final name = context.args.trim();
     if (name.isEmpty) {
       player.sendMessage('Usage: /tpa <player>.');
-      return null;
+      return;
     }
     final target = _findPlayer(context, name);
     if (target == null) {
       player.sendMessage('Player "$name" is not online.');
-      return null;
+      return;
     }
     if (target.uuid == player.uuid) {
       player.sendMessage('You cannot teleport to yourself.');
-      return null;
+      return;
     }
     _teleportRequests[target.uuid] = _TeleportRequest(player);
     target.sendMessage(
       '${player.name} wants to teleport to you. Use /tpaccept or /tpdeny.',
     );
     player.sendMessage('Teleport request sent to ${target.name}.');
-    return null;
+    return;
   }
 
   /// `/tpaccept`: teleports the waiting requester to the player.
-  Object? acceptTeleport(CommandContext context) {
+  void acceptTeleport(CommandContext context) {
     final player = _requirePlayer(context);
     if (player == null) {
-      return null;
+      return;
     }
     final request = _teleportRequests.remove(player.uuid);
     if (request == null) {
       player.sendMessage('No pending teleport requests.');
-      return null;
+      return;
     }
     final destination = player.position();
     request.requester.teleport(destination);
@@ -227,79 +224,72 @@ final class Essentials {
       '${player.name} accepted your teleport request.',
     );
     player.sendMessage('Teleported ${request.requester.name} to you.');
-    return null;
+    return;
   }
 
   /// `/tpdeny`: discards the pending request.
-  Object? denyTeleport(CommandContext context) {
+  void denyTeleport(CommandContext context) {
     final player = _requirePlayer(context);
     if (player == null) {
-      return null;
+      return;
     }
     final request = _teleportRequests.remove(player.uuid);
     if (request == null) {
       player.sendMessage('No pending teleport requests.');
-      return null;
+      return;
     }
     request.requester.sendMessage(
       '${player.name} denied your teleport request.',
     );
     player.sendMessage('Denied ${request.requester.name}\'s teleport request.');
-    return null;
+    return;
   }
 
   /// `/msg <player> <message>`: sends a private message.
-  Object? messagePlayer(CommandContext context) {
+  void messagePlayer(CommandContext context) {
     final player = _requirePlayer(context);
     if (player == null) {
-      return null;
+      return;
     }
     final match = _messagePattern.firstMatch(context.args.trim());
     if (match == null) {
       player.sendMessage('Usage: /msg <player> <message>.');
-      return null;
+      return;
     }
     final name = match.group(1)!;
     final text = match.group(2)!.trim();
     final target = _findPlayer(context, name);
     if (target == null) {
       player.sendMessage('Player "$name" is not online.');
-      return null;
+      return;
     }
     target.sendMessage('[${player.name} -> you] $text');
     player.sendMessage('[you -> ${target.name}] $text');
-    return null;
+    return;
   }
 
   /// `/who`: lists the players in the command sender's world.
-  Object? who(CommandContext context) {
+  void who(CommandContext context) {
     final world = context.player?.world ?? _defaultWorld;
-    final result =
-        _host.call('world.players', <String, Object?>{'world': world});
-    final entries =
-        result is List ? List<Object?>.of(result) : const <Object?>[];
-    final players = <Player>[
-      for (final entry in entries)
-        Player.fromResult(entry, _host, context: 'world.players entry'),
-    ];
+    final players = World(_host, world).players();
     if (players.isEmpty) {
       _tell(context, 'No players are online.');
-      return null;
+      return;
     }
     final names = players.map((player) => player.name).join(', ');
     _tell(context, 'Online (${players.length}): $names');
-    return null;
+    return;
   }
 
   /// `/heal`: restores the player to full health.
-  Object? heal(CommandContext context) {
+  void heal(CommandContext context) {
     final player = _requirePlayer(context);
     if (player == null) {
-      return null;
+      return;
     }
     player.setHealth(maxHealth);
     player.sendMessage('You have been healed.');
-    return null;
+    return;
   }
 
   Player? _requirePlayer(CommandContext context) {
@@ -315,14 +305,7 @@ final class Essentials {
 
   Player? _findPlayer(CommandContext context, String name) {
     final world = context.player?.world ?? _defaultWorld;
-    final result = _host.call(
-      'server.find_player',
-      <String, Object?>{'world': world, 'name': name},
-    );
-    if (result == null) {
-      return null;
-    }
-    return Player.fromResult(result, _host, context: 'server.find_player');
+    return Server(_host).findPlayer(name, world: world);
   }
 
   void _tell(CommandContext context, String message) {

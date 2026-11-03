@@ -7,6 +7,7 @@ use crate::c::emit_header;
 use crate::dart::emit_bindings;
 use crate::model::Api;
 use crate::parser::parse_source;
+use crate::plugin_api::{PLUGIN_API_PATH, emit_plugin_api};
 
 /// Workspace-relative path of the generated JSON schema.
 pub const JSON_PATH: &str = "steel-abi/steel_api.json";
@@ -51,6 +52,10 @@ pub fn render_artifacts(api: &Api) -> Result<Vec<Artifact>, String> {
         Artifact {
             relative_path: DART_PATH,
             contents: emit_bindings(api),
+        },
+        Artifact {
+            relative_path: PLUGIN_API_PATH,
+            contents: emit_plugin_api(),
         },
     ])
 }

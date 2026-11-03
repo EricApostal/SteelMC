@@ -37,7 +37,7 @@ final class RegistrationPlugin implements SteelPlugin {
         .command('pos')
         .description('Show your position')
         .permission('test.pos')
-        .executes((command) => null);
+        .executes((command) {});
     context.onPlayerJoin((player) {});
   }
 }
@@ -49,7 +49,6 @@ final class CommandPlugin implements SteelPlugin {
   void onEnable(PluginContext context) {
     context.command('pos').executes((command) {
       seen = command.player!.position();
-      return command.player!.name;
     });
   }
 }
@@ -136,7 +135,6 @@ void main() {
           't': 'response',
           'id': 7,
           'cancel': false,
-          'result': 'Steve',
         },
       ]);
     });
@@ -148,9 +146,9 @@ void main() {
       final transport = ScriptedTransport(<String>[
         '{"t":"init","level":1}',
         '{"t":"event","id":8,"event":"chat","player":$_playerJson,'
-            '"world":0,"x":1,"y":2,"z":3,"text":"bad"}',
+            '"world":0,"x":1,"y":2,"z":3,"block_state":0,"text":"bad"}',
         '{"t":"event","id":9,"event":"block_place","player":$_playerJson,'
-            '"world":0,"x":4,"y":5,"z":6,"block_state":5}',
+            '"world":0,"x":4,"y":5,"z":6,"block_state":5,"text":""}',
         '{"t":"shutdown"}',
       ]);
 
@@ -169,13 +167,11 @@ void main() {
           't': 'response',
           'id': 8,
           'cancel': true,
-          'result': null,
         },
         <String, Object?>{
           't': 'response',
           'id': 9,
           'cancel': false,
-          'result': null,
         },
       ]);
     });
@@ -188,10 +184,11 @@ void main() {
       ]);
       final rpc = RpcClient(transport);
 
-      final result = rpc.request(<String, Object?>{
-        'method': 'player.name',
-        'params': <String, Object?>{'entity': 1, 'world': 0},
-      });
+      final result = rpc.request(HostCallMessage(
+        id: 1,
+        method: 'player.name',
+        params: const <String, Object?>{'entity': 1, 'world': 0},
+      ));
 
       expect(result, 'Steve');
       expect(transport.written.single, <String, Object?>{
@@ -202,25 +199,6 @@ void main() {
       });
     });
 
-    test('handles a nested host_call while waiting for its result', () {
-      final transport = ScriptedTransport(<String>[
-        '{"t":"host_call","id":99,"method":"log",'
-            '"params":{"message":"nested"}}',
-        '{"t":"host_result","id":1,"ok":true,"result":42}',
-      ]);
-      final nested = <Map<String, Object?>>[];
-      final rpc = RpcClient(transport, onHostCall: nested.add);
-
-      final result = rpc.request(<String, Object?>{
-        'method': 'player.health',
-        'params': <String, Object?>{'entity': 1, 'world': 0},
-      });
-
-      expect(result, 42);
-      expect(nested, hasLength(1));
-      expect(nested.single['method'], 'log');
-    });
-
     test('throws HostCallException for host_error', () {
       final transport = ScriptedTransport(<String>[
         '{"t":"host_error","id":1,"error":"no such player"}',
@@ -228,7 +206,7 @@ void main() {
       final rpc = RpcClient(transport);
 
       expect(
-        () => rpc.request(<String, Object?>{'method': 'player.teleport'}),
+        () => rpc.request(HostCallMessage(id: 1, method: 'player.teleport')),
         throwsA(
           isA<HostCallException>().having(
             (error) => error.error,

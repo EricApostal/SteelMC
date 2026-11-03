@@ -11,12 +11,14 @@ mod dart;
 mod generate;
 mod model;
 mod parser;
+mod plugin_api;
 
 pub use c::emit_header as render_header;
 pub use dart::emit_bindings as render_dart;
 pub use generate::{Artifact, check_artifacts, generate, render_artifacts, write_artifacts};
 pub use model::Api;
 pub use parser::parse_source;
+pub use plugin_api::{PLUGIN_API_PATH, emit_plugin_api};
 
 #[cfg(test)]
 mod tests {

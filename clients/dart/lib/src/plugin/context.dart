@@ -1,4 +1,3 @@
-import 'json.dart';
 import 'model.dart';
 
 /// The entry point of a Dart plugin.
@@ -14,10 +13,7 @@ abstract interface class SteelPlugin {
 }
 
 /// Handles one invocation of a command.
-///
-/// The value returned becomes the command response's `result` and must be
-/// JSON-encodable.
-typedef CommandHandler = Object? Function(CommandContext context);
+typedef CommandHandler = void Function(CommandContext context);
 
 /// Fluent builder for a command registration.
 ///
@@ -122,32 +118,21 @@ final class PluginContext implements PluginHost {
     registerEvent('block_break');
   }
 
+  /// Returns a typed handle for [world] (id `0` by default).
+  World world([int id = 0]) => World(this, id);
+
+  /// Server-wide queries.
+  Server get server => Server(this);
+
   /// Returns every player in [world].
-  List<Player> onlinePlayers({int world = 0}) {
-    final result = call('world.players', <String, Object?>{'world': world});
-    return <Player>[
-      for (final entry in asJsonList(result, context: 'world.players'))
-        Player.fromResult(entry, this, context: 'world.players entry'),
-    ];
-  }
+  List<Player> onlinePlayers({int world = 0}) => this.world(world).players();
 
   /// Finds an online player by name in [world], or returns `null`.
-  Player? findPlayer(String name, {int world = 0}) {
-    final result = call(
-      'server.find_player',
-      <String, Object?>{'world': world, 'name': name},
-    );
-    if (result == null) {
-      return null;
-    }
-    return Player.fromResult(result, this, context: 'server.find_player');
-  }
+  Player? findPlayer(String name, {int world = 0}) =>
+      server.findPlayer(name, world: world);
 
   /// Returns the spawn position of [world].
-  Vec3 spawn({int world = 0}) => Vec3.fromResult(
-        call('world.spawn', <String, Object?>{'world': world}),
-        context: 'world.spawn',
-      );
+  Vec3 spawn({int world = 0}) => this.world(world).spawn();
 
   @override
   Object? call(
@@ -177,13 +162,13 @@ final class PluginContext implements PluginHost {
   ///
   /// Called by the runtime. Unknown commands are logged and answered with a
   /// `null` result.
-  Object? executeCommand(CommandContext context) {
+  void executeCommand(CommandContext context) {
     final handler = _commands[_normalize(context.command)];
     if (handler == null) {
       log('Unknown command: /${context.command}', level: LogLevel.warn);
-      return null;
+      return;
     }
-    return handler(context);
+    handler(context);
   }
 
   /// Delivers [player] to the `player_join` handlers.

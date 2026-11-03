@@ -1,11 +1,9 @@
 import 'dart:convert';
 
 import 'json.dart';
+import 'model.dart';
+import 'protocol.dart';
 import 'transport.dart';
-
-/// Receives a `host_call` from the host while the Dart side is waiting for a
-/// reply of its own.
-typedef HostCallHandler = void Function(Map<String, Object?> call);
 
 /// Thrown when the host connection closes while a reply is outstanding.
 final class RpcClosedException implements Exception {
@@ -38,29 +36,25 @@ final class HostCallException implements Exception {
 /// a `host_call` and pumps inbound messages until the matching reply arrives;
 /// anything unrelated is queued for the next [receive].
 final class RpcClient {
-  RpcClient(this._transport, {this.onHostCall});
+  RpcClient(this._transport);
 
   final LineTransport _transport;
-
-  /// Called for a nested `host_call` received while waiting for a reply.
-  final HostCallHandler? onHostCall;
-
-  final List<Map<String, Object?>> _deferred = <Map<String, Object?>>[];
+  final List<HostMessage> _deferred = <HostMessage>[];
   int _nextId = 1;
 
   /// Allocates an id for an outbound request.
   int allocateId() => _nextId++;
 
   /// Encodes [message] and writes it to the transport.
-  void send(Map<String, Object?> message) {
-    _transport.writeLine(jsonEncode(message));
+  void send(ClientMessage message) {
+    _transport.writeLine(jsonEncode(encodeClientMessage(message)));
   }
 
   /// Returns the next inbound message, or `null` at end of input.
   ///
   /// Messages skipped while waiting for a host reply are returned first, so no
   /// command or event is lost when a handler makes a host call.
-  Map<String, Object?>? receive() {
+  HostMessage? receive() {
     if (_deferred.isNotEmpty) {
       return _deferred.removeAt(0);
     }
@@ -68,58 +62,31 @@ final class RpcClient {
     if (line == null) {
       return null;
     }
-    return asJsonObject(jsonDecode(line), context: 'host message');
+    final map = asJsonObject(jsonDecode(line), context: 'host message');
+    return HostMessageMapper.fromMap(map.cast<String, dynamic>());
   }
 
   /// Sends a `host_call` and blocks until the host answers.
   ///
-  /// [message] must contain `method`; `params` defaults to an empty map and an
-  /// `id` is allocated when omitted. While waiting, unrelated inbound messages
-  /// are queued for [receive] and nested `host_call` messages are handed to
-  /// [onHostCall].
-  ///
   /// Returns the decoded `result` of a `host_result`. Throws
   /// [HostCallException] for `host_error` and [RpcClosedException] if the
   /// transport closes first.
-  Object? request(Map<String, Object?> message) {
-    final id = _int(message['id']) ?? allocateId();
-    final method = message['method'];
-    if (method is! String) {
-      throw ArgumentError.value(message, 'message', 'missing "method"');
-    }
-    send(<String, Object?>{
-      ...message,
-      't': 'host_call',
-      'id': id,
-      'params': message['params'] ?? const <String, Object?>{},
-    });
-
+  Object? request(HostCallMessage message) {
+    send(message);
     while (true) {
       final reply = receive();
       if (reply == null) {
         throw RpcClosedException(
-            'connection closed while waiting for "$method"');
+            'connection closed while waiting for "${message.method}"');
       }
-      final type = reply['t'];
-      if (_int(reply['id']) == id) {
-        if (type == 'host_result') {
-          return reply['result'];
-        }
-        if (type == 'host_error') {
-          throw HostCallException(
-            method: method,
-            error: reply['error']?.toString() ?? 'unknown host error',
-          );
-        }
+      switch (reply) {
+        case HostResultMessage(:final id, :final result) when id == message.id:
+          return result;
+        case HostErrorMessage(:final id, :final error) when id == message.id:
+          throw HostCallException(method: message.method, error: error);
+        default:
+          _deferred.add(reply);
       }
-      if (type == 'host_call') {
-        final handler = onHostCall;
-        if (handler != null) {
-          handler(reply);
-          continue;
-        }
-      }
-      _deferred.add(reply);
     }
   }
 
@@ -128,25 +95,36 @@ final class RpcClient {
     String method, [
     Map<String, Object?> params = const <String, Object?>{},
   ]) =>
-      request(<String, Object?>{'method': method, 'params': params});
+      request(HostCallMessage(
+        id: allocateId(),
+        method: method,
+        params: params,
+      ));
 
   /// Replies to the command or event with [id].
-  void respond(int id, {bool cancel = false, Object? result}) {
-    send(<String, Object?>{
-      't': 'response',
-      'id': id,
-      'cancel': cancel,
-      'result': result,
-    });
+  void respond(int id, {bool cancel = false}) {
+    send(ResponseMessage(id: id, cancel: cancel));
   }
 
   /// Writes a log line to the host.
   void log(String message, {String level = 'info'}) {
-    send(<String, Object?>{'t': 'log', 'level': level, 'message': message});
+    send(LogMessage(level: level, message: message));
   }
 
   /// Reports that plugin registration finished.
-  void ready() => send(const <String, Object?>{'t': 'ready'});
+  void ready() => send(const ReadyMessage());
 
-  static int? _int(Object? value) => value is num ? value.toInt() : null;
+  /// Announces a command to the host.
+  void registerCommand(CommandRegistration command) {
+    send(RegisterCommandMessage(
+      name: command.name,
+      description: command.description,
+      permission: command.permission,
+    ));
+  }
+
+  /// Subscribes to an event by its wire name.
+  void registerEvent(String event) {
+    send(RegisterEventMessage(event: event));
+  }
 }

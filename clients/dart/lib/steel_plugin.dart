@@ -28,6 +28,7 @@ library;
 
 export 'src/plugin/context.dart';
 export 'src/plugin/model.dart';
+export 'src/plugin/protocol.dart';
 export 'src/plugin/rpc.dart';
 export 'src/plugin/run.dart';
 export 'src/plugin/transport.dart';

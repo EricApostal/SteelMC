@@ -1,5 +1,6 @@
 import 'context.dart';
 import 'model.dart';
+import 'protocol.dart';
 import 'rpc.dart';
 import 'transport.dart';
 
@@ -23,33 +24,24 @@ void runSteelPlugin(SteelPlugin plugin, {LineTransport? transport}) {
     if (message == null) {
       return;
     }
-    switch (message['t']) {
-      case 'init':
-        final level = _int(message, 'level') ?? 0;
+    switch (message) {
+      case InitMessage(:final level):
         if (!enabled && level >= 1) {
           plugin.onEnable(context);
           rpc.ready();
           enabled = true;
         }
-        break;
-      case 'command':
+      case CommandMessage():
         _handleCommand(rpc, context, host, message);
-        break;
-      case 'event':
+      case EventMessage():
         _handleEvent(rpc, context, host, message);
-        break;
-      case 'host_result':
-      case 'host_error':
+      case HostResultMessage():
+      case HostErrorMessage():
         // Replies are matched by RpcClient.request. A reply nobody asked for
         // has no handler, so it is ignored.
         break;
-      case 'shutdown':
+      case ShutdownMessage():
         return;
-      default:
-        host.log(
-          'Ignoring unknown host message type: ${message['t']}',
-          level: LogLevel.warn,
-        );
     }
   }
 }
@@ -58,118 +50,88 @@ void _handleCommand(
   RpcClient rpc,
   PluginContext context,
   PluginHost host,
-  Map<String, Object?> message,
+  CommandMessage message,
 ) {
-  final id = _int(message, 'id') ?? 0;
-  final name = _normalize(_string(message, 'command') ?? '');
-  final playerJson = message['player'];
-  final player = playerJson == null
-      ? null
-      : Player.fromResult(playerJson, host, context: 'command.player');
+  final name = _normalize(message.command);
+  final data = message.player;
+  final player = data == null ? null : Player.fromData(data, host);
   final commandContext = CommandContext(
-    id: id,
+    id: message.id,
     command: name,
-    args: _string(message, 'args') ?? '',
+    args: message.args,
     player: player,
     host: host,
   );
 
-  Object? result;
   try {
-    result = context.executeCommand(commandContext);
+    context.executeCommand(commandContext);
   } catch (error, stackTrace) {
     host.log(
       'Command "/$name" failed: $error\n$stackTrace',
       level: LogLevel.error,
     );
-    result = null;
   }
-  rpc.respond(id, result: result);
+  rpc.respond(message.id);
 }
 
 void _handleEvent(
   RpcClient rpc,
   PluginContext context,
   PluginHost host,
-  Map<String, Object?> message,
+  EventMessage message,
 ) {
-  final id = _int(message, 'id') ?? 0;
-  final world = _int(message, 'world') ?? 0;
-  final playerJson = message['player'];
-  final player = playerJson == null
-      ? null
-      : Player.fromResult(playerJson, host, context: 'event.player');
-  final position = Vec3(
-    _double(message, 'x'),
-    _double(message, 'y'),
-    _double(message, 'z'),
-  );
-  final eventName = _string(message, 'event') ?? '';
+  final data = message.player;
+  final player = data == null ? null : Player.fromData(data, host);
+  final position = Vec3(message.x, message.y, message.z);
   var cancel = false;
 
-  switch (eventName) {
+  switch (message.event) {
     case 'player_join':
       if (player != null) {
         context.dispatchPlayerJoin(player);
       }
-      break;
     case 'player_leave':
       if (player != null) {
         context.dispatchPlayerLeave(player);
       }
-      break;
     case 'chat':
       final event = ChatEvent(
-        id: id,
-        world: world,
+        id: message.id,
+        world: message.world,
         position: position,
         player: player,
-        text: _string(message, 'text') ?? '',
+        text: message.text,
       );
       context.dispatchChat(event);
       cancel = event.isCancelled;
-      break;
     case 'block_place':
     case 'block_break':
       final event = BlockEvent(
-        id: id,
-        world: world,
+        id: message.id,
+        world: message.world,
         position: position,
         player: player,
-        blockState: _int(message, 'block_state') ?? 0,
+        blockState: message.blockState,
       );
-      if (eventName == 'block_place') {
+      if (message.event == 'block_place') {
         context.dispatchBlockPlace(event);
       } else {
         context.dispatchBlockBreak(event);
       }
       cancel = event.isCancelled;
-      break;
     default:
-      host.log('Ignoring unknown event "$eventName"', level: LogLevel.warn);
+      host.log(
+        'Ignoring unknown event "${message.event}"',
+        level: LogLevel.warn,
+      );
   }
 
-  rpc.respond(id, cancel: cancel);
+  rpc.respond(message.id, cancel: cancel);
 }
 
 String _normalize(String name) {
   final trimmed = name.trim();
   return trimmed.startsWith('/') ? trimmed.substring(1) : trimmed;
-}
-
-String? _string(Map<String, Object?> message, String key) {
-  final value = message[key];
-  return value is String ? value : null;
-}
-
-int? _int(Map<String, Object?> message, String key) {
-  final value = message[key];
-  return value is num ? value.toInt() : null;
-}
-
-double _double(Map<String, Object?> message, String key) {
-  final value = message[key];
-  return value is num ? value.toDouble() : 0;
 }
 
 /// [PluginHost] backed by a [RpcClient].
@@ -192,11 +154,11 @@ final class _RpcPluginHost implements PluginHost {
 
   @override
   void registerCommand(CommandRegistration command) {
-    _rpc.send(command.toJson());
+    _rpc.registerCommand(command);
   }
 
   @override
   void registerEvent(String event) {
-    _rpc.send(<String, Object?>{'t': 'register_event', 'event': event});
+    _rpc.registerEvent(event);
   }
 }

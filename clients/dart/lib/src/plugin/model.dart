@@ -1,4 +1,11 @@
+import 'package:dart_mappable/dart_mappable.dart';
+
+import 'generated_api.dart';
 import 'json.dart';
+
+export 'generated_api.dart';
+
+part 'model.mapper.dart';
 
 /// Severity of a message written to the host log.
 enum LogLevel {
@@ -16,7 +23,8 @@ enum LogLevel {
 }
 
 /// A position in a world.
-final class Vec3 {
+@MappableClass()
+final class Vec3 with Vec3Mappable {
   const Vec3(this.x, this.y, this.z);
 
   /// Decodes a position from a JSON object.
@@ -26,11 +34,7 @@ final class Vec3 {
     Map<String, Object?> json, {
     String context = 'position',
   }) =>
-      Vec3(
-        _number(json, 'x', context),
-        _number(json, 'y', context),
-        _number(json, 'z', context),
-      );
+      Vec3Mapper.fromMap(json.cast<String, dynamic>());
 
   /// Decodes a position from a decoded host reply.
   factory Vec3.fromResult(Object? result, {String context = 'position'}) =>
@@ -39,9 +43,6 @@ final class Vec3 {
   final double x;
   final double y;
   final double z;
-
-  /// Encodes this position as a JSON object.
-  Map<String, Object?> toJson() => <String, Object?>{'x': x, 'y': y, 'z': z};
 
   @override
   bool operator ==(Object other) =>
@@ -104,115 +105,6 @@ abstract interface class PluginHost {
 
   /// Subscribes to an event by its wire name, for example `player_join`.
   void registerEvent(String event);
-}
-
-/// A player as described by the host.
-///
-/// The descriptor fields are a snapshot. Every operation is performed through
-/// the host, so a [Player] stays useful for as long as the player is online.
-final class Player {
-  Player({
-    required this.entity,
-    required this.world,
-    required this.name,
-    required this.uuid,
-    required PluginHost host,
-  }) : _host = host;
-
-  /// Decodes a player from a JSON object.
-  factory Player.fromJson(Map<String, Object?> json, PluginHost host) => Player(
-        entity: _integer(json, 'entity', 'player'),
-        world: _integer(json, 'world', 'player'),
-        name: _string(json, 'name', 'player'),
-        uuid: _string(json, 'uuid', 'player'),
-        host: host,
-      );
-
-  /// Decodes a player from a decoded host reply.
-  factory Player.fromResult(
-    Object? result,
-    PluginHost host, {
-    String context = 'player',
-  }) =>
-      Player.fromJson(asJsonObject(result, context: context), host);
-
-  /// Entity id within [world].
-  final int entity;
-
-  /// World id the player is currently in.
-  final int world;
-
-  /// Display name.
-  final String name;
-
-  /// Persistent UUID, used for storage such as player homes.
-  final String uuid;
-
-  final PluginHost _host;
-
-  Map<String, Object?> get _target =>
-      <String, Object?>{'entity': entity, 'world': world};
-
-  /// Sends a chat message to this player.
-  void sendMessage(String message) {
-    _host.call('player.send_message', <String, Object?>{
-      ..._target,
-      'message': message,
-    });
-  }
-
-  /// Teleports this player to [position].
-  void teleport(Vec3 position, {double yaw = 0, double pitch = 0}) {
-    _host.call('player.teleport', <String, Object?>{
-      ..._target,
-      ...position.toJson(),
-      'yaw': yaw,
-      'pitch': pitch,
-    });
-  }
-
-  /// Returns the player's current position.
-  Vec3 position() => Vec3.fromResult(
-        _host.call('player.position', _target),
-        context: 'player.position',
-      );
-
-  /// Returns the player's current health.
-  double health() {
-    final result = _host.call('player.health', _target);
-    if (result is num) {
-      return result.toDouble();
-    }
-    final json = asJsonObject(result, context: 'player.health');
-    final health = json['health'];
-    if (health is num) {
-      return health.toDouble();
-    }
-    throw FormatException(
-      'Expected player.health to return a number, got ${result.runtimeType}',
-    );
-  }
-
-  /// Sets the player's health.
-  void setHealth(double health) {
-    _host.call('player.set_health', <String, Object?>{
-      ..._target,
-      'health': health,
-    });
-  }
-
-  @override
-  bool operator ==(Object other) =>
-      other is Player &&
-      other.entity == entity &&
-      other.world == world &&
-      other.uuid == uuid;
-
-  @override
-  int get hashCode => Object.hash(entity, world, uuid);
-
-  @override
-  String toString() => 'Player($name, entity: $entity, world: $world)';
 }
 
 /// Base class for server events delivered to a plugin.
@@ -326,34 +218,4 @@ final class CommandContext {
 
   @override
   String toString() => 'CommandContext($command, args: "$args")';
-}
-
-double _number(Map<String, Object?> json, String key, String context) {
-  final value = json[key];
-  if (value is num) {
-    return value.toDouble();
-  }
-  throw FormatException(
-    '$context.$key must be a number, got ${value.runtimeType}',
-  );
-}
-
-int _integer(Map<String, Object?> json, String key, String context) {
-  final value = json[key];
-  if (value is num) {
-    return value.toInt();
-  }
-  throw FormatException(
-    '$context.$key must be an integer, got ${value.runtimeType}',
-  );
-}
-
-String _string(Map<String, Object?> json, String key, String context) {
-  final value = json[key];
-  if (value is String) {
-    return value;
-  }
-  throw FormatException(
-    '$context.$key must be a string, got ${value.runtimeType}',
-  );
 }
