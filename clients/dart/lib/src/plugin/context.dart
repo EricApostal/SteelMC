@@ -1,14 +1,11 @@
 import 'model.dart';
 
 /// The entry point of a Dart plugin.
-///
-/// Implement this and pass an instance to `runSteelPlugin`.
 abstract interface class SteelPlugin {
-  /// Called once, after the host sends `init` with level 1 or higher.
+  /// Called once when the embedded runtime starts.
   ///
-  /// Register commands and events here. The runtime sends `ready` after this
-  /// method returns, so all `register_command` and `register_event` messages
-  /// are guaranteed to reach the host before it dispatches anything.
+  /// Register commands and events here. The native shim collects the
+  /// registrations and forwards them to the host after this returns.
   void onEnable(PluginContext context);
 }
 
@@ -16,14 +13,6 @@ abstract interface class SteelPlugin {
 typedef CommandHandler = void Function(CommandContext context);
 
 /// Fluent builder for a command registration.
-///
-/// ```dart
-/// context
-///     .command('home')
-///     .description('Teleport to your home.')
-///     .permission('essentials.home')
-///     .executes(handleHome);
-/// ```
 final class CommandBuilder {
   CommandBuilder(this._context, this._name);
 
@@ -39,16 +28,12 @@ final class CommandBuilder {
   }
 
   /// Sets the permission required to run the command.
-  ///
-  /// Pass `null` (the default) to allow everyone.
   CommandBuilder permission(String? permission) {
     _permission = permission;
     return this;
   }
 
   /// Registers the command with the given [handler].
-  ///
-  /// The registration message is written to the host immediately.
   void executes(CommandHandler handler) {
     _context._addCommand(
       CommandRegistration(
@@ -62,15 +47,12 @@ final class CommandBuilder {
 }
 
 /// The plugin's view of the host while it is enabled.
-///
-/// A context both provides host operations (it implements [PluginHost]) and
-/// collects the plugin's registrations. The runtime constructs exactly one per
-/// plugin process and passes it to [SteelPlugin.onEnable].
 final class PluginContext implements PluginHost {
   PluginContext(this._host);
 
   final PluginHost _host;
-  final Map<String, CommandHandler> _commands = <String, CommandHandler>{};
+  final Map<int, CommandHandler> _commands = <int, CommandHandler>{};
+  final Map<String, CommandHandler> _commandsByName = <String, CommandHandler>{};
   final List<void Function(Player player)> _playerJoinHandlers =
       <void Function(Player player)>[];
   final List<void Function(Player player)> _playerLeaveHandlers =
@@ -81,89 +63,115 @@ final class PluginContext implements PluginHost {
       <void Function(BlockEvent event)>[];
   final List<void Function(BlockEvent event)> _blockBreakHandlers =
       <void Function(BlockEvent event)>[];
-  final Set<String> _registeredEvents = <String>{};
+  final Set<int> _registeredEvents = <int>{};
+  int _nextCommandId = 1;
 
-  /// Starts building a command named [name] (with or without a leading slash).
+  /// Starts building a command named [name].
   CommandBuilder command(String name) => CommandBuilder(this, name);
 
-  /// Registers [handler] for players joining the server.
   void onPlayerJoin(void Function(Player player) handler) {
     _playerJoinHandlers.add(handler);
-    registerEvent('player_join');
+    registerEvent(EventKind.playerJoin);
   }
 
-  /// Registers [handler] for players leaving the server.
   void onPlayerLeave(void Function(Player player) handler) {
     _playerLeaveHandlers.add(handler);
-    registerEvent('player_leave');
+    registerEvent(EventKind.playerLeave);
   }
 
-  /// Registers [handler] for chat messages.
-  ///
-  /// Call [PluginEvent.cancel] on the event to suppress the message.
   void onChat(void Function(ChatEvent event) handler) {
     _chatHandlers.add(handler);
-    registerEvent('chat');
+    registerEvent(EventKind.chat);
   }
 
-  /// Registers [handler] for block placement.
   void onBlockPlace(void Function(BlockEvent event) handler) {
     _blockPlaceHandlers.add(handler);
-    registerEvent('block_place');
+    registerEvent(EventKind.blockPlace);
   }
 
-  /// Registers [handler] for block breaking.
   void onBlockBreak(void Function(BlockEvent event) handler) {
     _blockBreakHandlers.add(handler);
-    registerEvent('block_break');
+    registerEvent(EventKind.blockBreak);
   }
 
-  /// Returns a typed handle for [world] (id `0` by default).
+  /// Returns a typed handle for [id] (world `0` by default).
   World world([int id = 0]) => World(this, id);
 
   /// Server-wide queries.
   Server get server => Server(this);
 
-  /// Returns every player in [world].
   List<Player> onlinePlayers({int world = 0}) => this.world(world).players();
 
-  /// Finds an online player by name in [world], or returns `null`.
   Player? findPlayer(String name, {int world = 0}) =>
       server.findPlayer(name, world: world);
 
-  /// Returns the spawn position of [world].
   Vec3 spawn({int world = 0}) => this.world(world).spawn();
 
   @override
-  Object? call(
-    String method, [
-    Map<String, Object?> params = const <String, Object?>{},
-  ]) =>
-      _host.call(method, params);
+  Player? playerData(int world, int entity) => _host.playerData(world, entity);
 
   @override
-  void log(String message, {LogLevel level = LogLevel.info}) {
-    _host.log(message, level: level);
-  }
+  Vec3 entityPosition(int world, int entity) =>
+      _host.entityPosition(world, entity);
 
   @override
-  void registerCommand(CommandRegistration command) {
-    _host.registerCommand(command);
-  }
+  void entityTeleport(
+    int world,
+    int entity,
+    Vec3 position, {
+    double yaw = 0,
+    double pitch = 0,
+  }) =>
+      _host.entityTeleport(world, entity, position, yaw: yaw, pitch: pitch);
 
   @override
-  void registerEvent(String event) {
-    if (_registeredEvents.add(event)) {
-      _host.registerEvent(event);
+  void playerSendMessage(int world, int entity, String message) =>
+      _host.playerSendMessage(world, entity, message);
+
+  @override
+  double entityHealth(int world, int entity) =>
+      _host.entityHealth(world, entity);
+
+  @override
+  void entitySetHealth(int world, int entity, double health) =>
+      _host.entitySetHealth(world, entity, health);
+
+  @override
+  Vec3 worldSpawn(int world) => _host.worldSpawn(world);
+
+  @override
+  List<Player> worldPlayers(int world) => _host.worldPlayers(world);
+
+  @override
+  Player? findPlayerInWorld(int world, String name) =>
+      _host.findPlayerInWorld(world, name);
+
+  @override
+  void log(String message, {LogLevel level = LogLevel.info}) =>
+      _host.log(message, level: level);
+
+  @override
+  void registerCommand(int id, CommandRegistration command) =>
+      _host.registerCommand(id, command);
+
+  @override
+  void registerEvent(int kind) {
+    if (_registeredEvents.add(kind)) {
+      _host.registerEvent(kind);
     }
   }
 
-  /// Runs the handler registered for `context.command`.
-  ///
-  /// Called by the runtime. Unknown commands are logged and answered with a
-  /// `null` result.
+  void _addCommand(CommandRegistration command, CommandHandler handler) {
+    final id = _nextCommandId++;
+    _commands[id] = handler;
+    _commandsByName[_normalize(command.name)] = handler;
+    _host.registerCommand(id, command);
+  }
+
+  /// Runs the handler for [context], if any.
   void executeCommand(CommandContext context) {
-    final handler = _commands[_normalize(context.command)];
+    final handler = _commandsByName[_normalize(context.command)] ??
+        _commands[context.id];
     if (handler == null) {
       log('Unknown command: /${context.command}', level: LogLevel.warn);
       return;
@@ -171,18 +179,12 @@ final class PluginContext implements PluginHost {
     handler(context);
   }
 
-  /// Delivers [player] to the `player_join` handlers.
-  ///
-  /// Called by the runtime.
   void dispatchPlayerJoin(Player player) {
     for (final handler in List<void Function(Player)>.of(_playerJoinHandlers)) {
       handler(player);
     }
   }
 
-  /// Delivers [player] to the `player_leave` handlers.
-  ///
-  /// Called by the runtime.
   void dispatchPlayerLeave(Player player) {
     for (final handler
         in List<void Function(Player)>.of(_playerLeaveHandlers)) {
@@ -190,18 +192,12 @@ final class PluginContext implements PluginHost {
     }
   }
 
-  /// Delivers [event] to the `chat` handlers.
-  ///
-  /// Called by the runtime.
   void dispatchChat(ChatEvent event) {
     for (final handler in List<void Function(ChatEvent)>.of(_chatHandlers)) {
       handler(event);
     }
   }
 
-  /// Delivers [event] to the `block_place` handlers.
-  ///
-  /// Called by the runtime.
   void dispatchBlockPlace(BlockEvent event) {
     for (final handler
         in List<void Function(BlockEvent)>.of(_blockPlaceHandlers)) {
@@ -209,30 +205,15 @@ final class PluginContext implements PluginHost {
     }
   }
 
-  /// Delivers [event] to the `block_break` handlers.
-  ///
-  /// Called by the runtime.
   void dispatchBlockBreak(BlockEvent event) {
     for (final handler
         in List<void Function(BlockEvent)>.of(_blockBreakHandlers)) {
       handler(event);
     }
   }
+}
 
-  void _addCommand(CommandRegistration command, CommandHandler handler) {
-    final name = _normalize(command.name);
-    _commands[name] = handler;
-    _host.registerCommand(
-      CommandRegistration(
-        name: name,
-        description: command.description,
-        permission: command.permission,
-      ),
-    );
-  }
-
-  static String _normalize(String name) {
-    final trimmed = name.trim();
-    return trimmed.startsWith('/') ? trimmed.substring(1) : trimmed;
-  }
+String _normalize(String name) {
+  final trimmed = name.trim();
+  return trimmed.startsWith('/') ? trimmed.substring(1) : trimmed;
 }

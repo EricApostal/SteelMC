@@ -166,11 +166,12 @@ impl ExtensionManager {
     /// `&'static` and event listeners cannot be revoked safely.
     pub fn load(&self, path: impl AsRef<Path>) -> Result<(), ExtensionError> {
         let path = path.as_ref();
-        let path_text: Arc<str> = Arc::from(path.to_string_lossy().as_ref());
+        let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let path_text: Arc<str> = Arc::from(canonical.to_string_lossy().as_ref());
         // SAFETY: loading arbitrary native code is inherently unsafe; callers
         // are responsible for trusting the extension.
         unsafe {
-            let library = libloading::Library::new(path)?;
+            let library = libloading::Library::new(&canonical)?;
             let entry: libloading::Symbol<'_, SteelExtensionEntryFn> = library
                 .get(b"steel_extension_entry\0")
                 .map_err(|_| ExtensionError::MissingEntry(path.to_path_buf()))?;

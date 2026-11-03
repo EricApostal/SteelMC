@@ -1,33 +1,81 @@
-import 'dart:convert';
-
 import 'package:steel_extension/steel_plugin.dart';
 import 'package:test/test.dart';
 
-/// [LineTransport] that replays scripted inbound messages and records what the
-/// plugin writes. No process or stdin is involved.
-final class ScriptedTransport implements LineTransport {
-  ScriptedTransport([Iterable<String> inbound = const <String>[]])
-      : _inbound = List<String>.of(inbound);
+/// In-memory [PluginHost] used to exercise the public plugin API without the
+/// embedded Dart VM.
+final class FakePluginHost implements PluginHost {
+  final List<CommandRegistration> commands = <CommandRegistration>[];
+  final List<int> commandIds = <int>[];
+  final List<int> events = <int>[];
+  final List<String> messages = <String>[];
+  final List<(int, int, String)> logs = <(int, int, String)>[];
+  final Map<int, Player> players = <int, Player>{};
 
-  final List<String> _inbound;
-  final List<Map<String, Object?>> written = <Map<String, Object?>>[];
-  int _readIndex = 0;
+  Vec3 position = const Vec3(0, 64, 0);
+  Vec3 spawn = const Vec3(0, 64, 0);
+  double health = 20;
 
   @override
-  String? readLine() =>
-      _readIndex < _inbound.length ? _inbound[_readIndex++] : null;
+  Player? playerData(int world, int entity) => players[entity];
 
   @override
-  void writeLine(String line) {
-    final decoded = jsonDecode(line);
-    written.add(Map<String, Object?>.from(decoded as Map));
+  Vec3 entityPosition(int world, int entity) => position;
+
+  @override
+  void entityTeleport(
+    int world,
+    int entity,
+    Vec3 position, {
+    double yaw = 0,
+    double pitch = 0,
+  }) {
+    this.position = position;
   }
 
-  /// Messages written by the plugin with type [type], in order.
-  List<Map<String, Object?>> ofType(String type) => <Map<String, Object?>>[
-        for (final message in written)
-          if (message['t'] == type) message,
-      ];
+  @override
+  void playerSendMessage(int world, int entity, String message) {
+    messages.add(message);
+  }
+
+  @override
+  double entityHealth(int world, int entity) => health;
+
+  @override
+  void entitySetHealth(int world, int entity, double health) {
+    this.health = health;
+  }
+
+  @override
+  Vec3 worldSpawn(int world) => spawn;
+
+  @override
+  List<Player> worldPlayers(int world) => players.values.toList();
+
+  @override
+  Player? findPlayerInWorld(int world, String name) {
+    for (final player in players.values) {
+      if (player.name == name) {
+        return player;
+      }
+    }
+    return null;
+  }
+
+  @override
+  void log(String message, {LogLevel level = LogLevel.info}) {
+    logs.add((level.index, 0, message));
+  }
+
+  @override
+  void registerCommand(int id, CommandRegistration command) {
+    commandIds.add(id);
+    commands.add(command);
+  }
+
+  @override
+  void registerEvent(int kind) {
+    events.add(kind);
+  }
 }
 
 final class RegistrationPlugin implements SteelPlugin {
@@ -37,184 +85,85 @@ final class RegistrationPlugin implements SteelPlugin {
         .command('pos')
         .description('Show your position')
         .permission('test.pos')
-        .executes((command) {});
-    context.onPlayerJoin((player) {});
-  }
-}
-
-final class CommandPlugin implements SteelPlugin {
-  Vec3? seen;
-
-  @override
-  void onEnable(PluginContext context) {
-    context.command('pos').executes((command) {
-      seen = command.player!.position();
+        .executes((command) {
+      command.player?.sendMessage('${command.player?.position()}');
     });
-  }
-}
-
-final class ChatPlugin implements SteelPlugin {
-  String? lastText;
-
-  @override
-  void onEnable(PluginContext context) {
+    context.onPlayerJoin((player) {});
     context.onChat((event) {
-      lastText = event.text;
       if (event.text == 'bad') {
         event.cancel();
       }
     });
-    context.onBlockPlace((event) {});
   }
 }
 
-const String _playerJson = '{"entity":42,"world":0,"name":"Steve",'
-    '"uuid":"uuid-steve"}';
-
 void main() {
-  group('registration', () {
-    test('registers commands and events before announcing ready', () {
-      final transport = ScriptedTransport(<String>[
-        '{"t":"init","level":1}',
-        '{"t":"shutdown"}',
-      ]);
+  late FakePluginHost host;
+  late PluginContext context;
 
-      runSteelPlugin(RegistrationPlugin(), transport: transport);
-
-      expect(transport.written, <Map<String, Object?>>[
-        <String, Object?>{
-          't': 'register_command',
-          'name': 'pos',
-          'description': 'Show your position',
-          'permission': 'test.pos',
-        },
-        <String, Object?>{'t': 'register_event', 'event': 'player_join'},
-        <String, Object?>{'t': 'ready'},
-      ]);
-    });
-
-    test('does not enable the plugin before init level 1', () {
-      final transport = ScriptedTransport(<String>[
-        '{"t":"init","level":0}',
-        '{"t":"shutdown"}',
-      ]);
-
-      runSteelPlugin(RegistrationPlugin(), transport: transport);
-
-      expect(transport.written, isEmpty);
-    });
+  setUp(() {
+    host = FakePluginHost();
+    host.players[1] = Player(
+      entity: 1,
+      world: 0,
+      name: 'Steve',
+      uuid: 'uuid-steve',
+      host: host,
+    );
+    context = PluginContext(host);
   });
 
-  group('commands', () {
-    test('invokes the handler, calls the host and answers', () {
-      final plugin = CommandPlugin();
-      final transport = ScriptedTransport(<String>[
-        '{"t":"init","level":1}',
-        '{"t":"command","id":7,"player":$_playerJson,'
-            '"command":"pos","args":""}',
-        '{"t":"host_result","id":1,"ok":true,'
-            '"result":{"x":10,"y":64,"z":-3}}',
-        '{"t":"shutdown"}',
-      ]);
+  test('registers commands and events', () {
+    RegistrationPlugin().onEnable(context);
 
-      runSteelPlugin(plugin, transport: transport);
-
-      expect(plugin.seen, const Vec3(10, 64, -3));
-
-      final hostCalls = transport.ofType('host_call');
-      expect(hostCalls, hasLength(1));
-      expect(hostCalls.single, <String, Object?>{
-        't': 'host_call',
-        'id': 1,
-        'method': 'player.position',
-        'params': <String, Object?>{'entity': 42, 'world': 0},
-      });
-
-      expect(transport.ofType('response'), <Map<String, Object?>>[
-        <String, Object?>{
-          't': 'response',
-          'id': 7,
-          'cancel': false,
-        },
-      ]);
-    });
+    expect(host.commands.single.name, 'pos');
+    expect(host.commands.single.description, 'Show your position');
+    expect(host.commands.single.permission, 'test.pos');
+    expect(
+      host.events,
+      containsAll(<int>[
+        EventKind.playerJoin,
+        EventKind.chat,
+      ]),
+    );
   });
 
-  group('events', () {
-    test('cancels chat but not block placement', () {
-      final plugin = ChatPlugin();
-      final transport = ScriptedTransport(<String>[
-        '{"t":"init","level":1}',
-        '{"t":"event","id":8,"event":"chat","player":$_playerJson,'
-            '"world":0,"x":1,"y":2,"z":3,"block_state":0,"text":"bad"}',
-        '{"t":"event","id":9,"event":"block_place","player":$_playerJson,'
-            '"world":0,"x":4,"y":5,"z":6,"block_state":5,"text":""}',
-        '{"t":"shutdown"}',
-      ]);
+  test('dispatches a command through the typed player API', () {
+    RegistrationPlugin().onEnable(context);
+    final player = host.players[1]!;
 
-      runSteelPlugin(plugin, transport: transport);
+    context.executeCommand(
+      CommandContext(
+        id: host.commandIds.single,
+        command: 'pos',
+        args: '',
+        player: player,
+        host: host,
+      ),
+    );
 
-      expect(plugin.lastText, 'bad');
-      expect(
-        transport.ofType('register_event'),
-        <Map<String, Object?>>[
-          <String, Object?>{'t': 'register_event', 'event': 'chat'},
-          <String, Object?>{'t': 'register_event', 'event': 'block_place'},
-        ],
-      );
-      expect(transport.ofType('response'), <Map<String, Object?>>[
-        <String, Object?>{
-          't': 'response',
-          'id': 8,
-          'cancel': true,
-        },
-        <String, Object?>{
-          't': 'response',
-          'id': 9,
-          'cancel': false,
-        },
-      ]);
-    });
+    expect(host.messages, <String>['Vec3(0.0, 64.0, 0.0)']);
   });
 
-  group('RpcClient', () {
-    test('returns the result of the matching host_result', () {
-      final transport = ScriptedTransport(<String>[
-        '{"t":"host_result","id":1,"ok":true,"result":"Steve"}',
-      ]);
-      final rpc = RpcClient(transport);
+  test('events can be cancelled', () {
+    RegistrationPlugin().onEnable(context);
+    final event = ChatEvent(
+      id: 1,
+      world: 0,
+      position: const Vec3(0, 64, 0),
+      player: host.players[1],
+      text: 'bad',
+    );
 
-      final result = rpc.request(HostCallMessage(
-        id: 1,
-        method: 'player.name',
-        params: const <String, Object?>{'entity': 1, 'world': 0},
-      ));
+    context.dispatchChat(event);
 
-      expect(result, 'Steve');
-      expect(transport.written.single, <String, Object?>{
-        't': 'host_call',
-        'id': 1,
-        'method': 'player.name',
-        'params': <String, Object?>{'entity': 1, 'world': 0},
-      });
-    });
+    expect(event.isCancelled, isTrue);
+  });
 
-    test('throws HostCallException for host_error', () {
-      final transport = ScriptedTransport(<String>[
-        '{"t":"host_error","id":1,"error":"no such player"}',
-      ]);
-      final rpc = RpcClient(transport);
-
-      expect(
-        () => rpc.request(HostCallMessage(id: 1, method: 'player.teleport')),
-        throwsA(
-          isA<HostCallException>().having(
-            (error) => error.error,
-            'error',
-            'no such player',
-          ),
-        ),
-      );
-    });
+  test('typed world and server helpers use the host', () {
+    host.spawn = const Vec3(1, 2, 3);
+    expect(context.spawn(), const Vec3(1, 2, 3));
+    expect(context.findPlayer('Steve')?.uuid, 'uuid-steve');
+    expect(context.onlinePlayers(), hasLength(1));
   });
 }

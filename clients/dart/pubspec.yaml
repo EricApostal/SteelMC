@@ -1,14 +1,12 @@
 name: steel_extension
-description: Dart bindings and out-of-process plugin API for Steel extensions.
+description: Dart bindings and in-process plugin API for Steel extensions.
 version: 0.1.0
 publish_to: none
 
 environment:
   sdk: ^3.4.0
 
-dependencies: {dart_mappable: ^4.10.0}
+dependencies: {ffi: ^2.1.0}
 
 dev_dependencies:
-  build_runner: ^2.16.2
-  dart_mappable_builder: ^4.10.0
   test: ^1.25.0

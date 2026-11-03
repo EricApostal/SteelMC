@@ -1,8 +1,8 @@
 # Dart Essentials example
 
-An Essentials-style Steel plugin built on the high-level Dart plugin API in
-[`clients/dart`](../../clients/dart). It runs out of process and speaks
-newline-delimited JSON to the Rust bridge; there is no FFI involved.
+An Essentials-style Steel plugin written in Dart. It runs inside the server
+process in an embedded Dart VM; host calls go directly through the
+`SteelInterface` C function table.
 
 ## Commands
 
@@ -20,23 +20,10 @@ newline-delimited JSON to the Rust bridge; there is no FFI involved.
 | `/who` | List online players in your world. |
 | `/heal` | Restore full health. |
 
-Homes are persisted in `homes.json`, keyed by player UUID and home name, next
-to the process working directory.
+Homes persist in `homes.json` next to the server working directory, or at
+`STEEL_ESSENTIALS_HOMES` if set.
 
-The example registers commands without permissions so they work out of the box.
-Add `.permission('essentials.home')` in `register` when you want the host to
-enforce a permission; the Dart API and bridge support it.
-
-## Layout
-
-```
-lib/home_store.dart    JSON persistence for player homes
-lib/essentials.dart    Essentials service, plugin, and command handlers
-bin/essentials.dart    entry point started by the Rust bridge
-test/essentials_test.dart
-```
-
-## Running
+## Build and test
 
 ```sh
 dart pub get
@@ -44,63 +31,42 @@ dart analyze
 dart test
 ```
 
-The plugin process is normally started by the Rust host. It reads protocol
-messages from stdin and writes responses to stdout, so it can also be exercised
-by hand:
+## Build the kernel
+
+The embedded runtime loads a Dart kernel, not source. Use the matching Dart SDK
+source build (the one that produced `libdart_engine_jit_shared.so`):
 
 ```sh
-printf '%s\n' \
-  '{"t":"init","level":1}' \
-  '{"t":"command","id":1,"player":{"entity":7,"world":0,"name":"Steve","uuid":"..."},"command":"homes","args":""}' \
-  '{"t":"shutdown"}' | dart run bin/essentials.dart
+STEEL_DART_SDK=/path/to/dart-sdk/out/ReleaseX64 ./build_kernel.sh
 ```
 
-`dart run bin/essentials.dart` prints the protocol's JSON replies and log lines
-on stdout.
+This writes `essentials.dill`.
 
-To ship a standalone executable instead of requiring the Dart SDK at runtime:
+## Load into Steel
 
 ```sh
-dart compile exe bin/essentials.dart -o essentials
+cargo build -p steel-dart-embed
+cp target/debug/libsteel_dart_embed.so examples/dart_essentials/essentials.so
+cp examples/dart_essentials/sidecar.example.json \
+  examples/dart_essentials/essentials.so.json
 ```
 
-Then point the sidecar `entry` at `essentials`.
+Edit the sidecar's `vm` path, then point `[extensions] directory` at
+`examples/dart_essentials` (or copy the three files into `plugins/`).
 
-## Loading it into Steel
+## Layout
 
-```sh
-cargo build -p steel-dart-bridge
-cp target/debug/libsteel_dart_bridge.so examples/dart_essentials/essentials.so
-cp examples/dart_essentials/sidecar.example.json examples/dart_essentials/essentials.so.json
+```
+lib/home_store.dart    JSON persistence for player homes
+lib/essentials.dart    Essentials service, plugin, and command handlers
+bin/essentials.dart    main() -> runSteelPlugin(...)
+test/essentials_test.dart
+build_kernel.sh        kernel build using bootstrap_gen_kernel
+sidecar.example.json   runtime manifest template
 ```
 
-Point `[extensions] directory` at `examples/dart_essentials` (or copy the two
-files into `plugins/` and adjust `cwd`). The bridge reads
-`<library>.so.json`, starts `dart run bin/essentials.dart`, and registers the
-commands during the behavior phase. Requires the Dart SDK unless `entry` points
-at a `dart compile exe` binary.
-
-## Sidecar manifest
-
-The Rust bridge discovers the plugin through a small JSON descriptor:
-
-```json
-{"id":"essentials","version":"0.1.0","entry":"bin/essentials.dart","cwd":"."}
-```
-
-`entry` is relative to `cwd`, so a compiled binary would use
-`{"entry":"essentials"}` instead. The working directory also determines where
-`homes.json` is written.
-
-## Testing without a process
+## Testing without the VM
 
 Command handlers take a `CommandContext` and perform everything through the
-`PluginHost` interface. `test/essentials_test.dart` supplies a
-`FakePluginHost` with canned replies, so the full command logic runs in memory:
-
-```dart
-final host = FakePluginHost();
-final store = HomeStore(path: '${tempDir.path}/homes.json')..load();
-final essentials = Essentials(host: host, homes: store);
-essentials.setHome(contextForPlayer('/sethome'));
-```
+typed `PluginHost` interface. `test/essentials_test.dart` supplies a fake host,
+so the full command logic runs in memory.

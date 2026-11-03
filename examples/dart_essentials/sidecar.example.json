@@ -1,7 +1,7 @@
 {
   "id": "essentials",
   "version": "0.1.0",
-  "entry": "bin/essentials.dart",
-  "cwd": ".",
-  "dart": "dart"
+  "kernel": "essentials.dill",
+  "vm": "/absolute/path/to/libdart_engine_jit_shared.so",
+  "entry": "main"
 }

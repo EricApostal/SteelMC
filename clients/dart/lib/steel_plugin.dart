@@ -1,8 +1,8 @@
 /// A high-level Dart API for authoring Steel plugins.
 ///
-/// Plugins run in a separate Dart process and speak newline-delimited JSON to
-/// the Rust bridge. Implement [SteelPlugin], register commands and events in
-/// [SteelPlugin.onEnable], and start the process with [runSteelPlugin]:
+/// Plugins run inside the server process in an embedded Dart VM. Implement
+/// [SteelPlugin], register commands and events in [SteelPlugin.onEnable], and
+/// start the runtime with [runSteelPlugin] from the plugin's `main`:
 ///
 /// ```dart
 /// import 'package:steel_extension/steel_plugin.dart';
@@ -22,13 +22,11 @@
 /// void main() => runSteelPlugin(Greeter());
 /// ```
 ///
-/// This layer has no `dart:ffi` dependency; it is the out-of-process transport
-/// counterpart to the generated bindings in `steel.dart`.
+/// Host calls go directly through the `SteelInterface` C function table; there
+/// is no JSON or subprocess boundary.
 library;
 
 export 'src/plugin/context.dart';
+export 'src/plugin/native.dart';
 export 'src/plugin/model.dart';
-export 'src/plugin/protocol.dart';
-export 'src/plugin/rpc.dart';
-export 'src/plugin/run.dart';
-export 'src/plugin/transport.dart';
+export 'src/plugin/runtime.dart';

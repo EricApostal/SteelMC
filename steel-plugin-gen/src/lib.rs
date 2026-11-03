@@ -5,6 +5,7 @@
 //! * `steel-abi/steel_api.json`
 //! * `steel-abi/include/steel_extension.h`
 //! * `clients/dart/lib/src/bindings.g.dart`
+//! * `clients/dart/lib/src/plugin/generated_api.dart`
 
 mod c;
 mod dart;
@@ -148,7 +149,7 @@ mod tests {
         let api = parse_source(&real_source()).expect("steel-abi should parse");
         let first = render_artifacts(&api).expect("artifacts should render");
         let second = render_artifacts(&api).expect("artifacts should render again");
-        assert_eq!(first.len(), 3);
+        assert_eq!(first.len(), 4);
         for (left, right) in first.iter().zip(second.iter()) {
             assert_eq!(left.relative_path, right.relative_path);
             assert_eq!(left.contents, right.contents);
@@ -171,5 +172,10 @@ mod tests {
         ));
         assert!(dart.contains("factory SteelBindings.open(DynamicLibrary lib)"));
         assert!(dart.contains("steelApiVersion"));
+
+        let plugin_api = &first[3].contents;
+        assert!(plugin_api.contains("final class Player"));
+        assert!(plugin_api.contains("playerSendMessage"));
+        assert!(plugin_api.contains("findPlayerInWorld"));
     }
 }

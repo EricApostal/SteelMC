@@ -1,8 +1,13 @@
-# Steel extension bindings for Dart
+# Steel extension API for Dart
 
-`steel_extension` exposes the generated `dart:ffi` bindings for the Steel
-extension C ABI. The bindings are produced from `steel-abi/src/lib.rs` by
-`steel-plugin-gen`; do not edit `lib/src/bindings.g.dart` by hand.
+`steel_extension` provides two layers:
+
+- `lib/steel.dart` — generated `dart:ffi` structs/function types for the
+  `SteelInterface` C ABI (`lib/src/bindings.g.dart`).
+- `lib/steel_plugin.dart` — the in-process plugin authoring API. Plugins run
+  inside the server process in an embedded Dart VM and call host functions
+  directly through the C function table. There is no JSON or subprocess
+  boundary.
 
 ## Generating the bindings
 
@@ -11,52 +16,37 @@ cargo run -p steel-plugin-gen
 cargo run -p steel-plugin-gen -- --check   # fail if generated files are stale
 ```
 
-This also refreshes `steel-abi/steel_api.json` and
-`steel-abi/include/steel_extension.h`.
+This refreshes `steel-abi/steel_api.json`, `steel-abi/include/steel_extension.h`,
+`clients/dart/lib/src/bindings.g.dart`, and
+`clients/dart/lib/src/plugin/generated_api.dart`.
 
-## Running the ABI conformance tests
+## Embedded runtime
 
-Build the ABI library first so the test can locate it:
+The `steel-dart-embed` crate loads a Dart VM runtime
+(`libdart_engine_jit_shared.so`), starts a kernel, and exposes
+`SteelInterface` to Dart through `dart:ffi`. Host callbacks acquire the Dart
+isolate, invoke `steelDispatchCommand`/`steelDispatchEvent`, and return the
+result synchronously.
 
-```sh
-cargo build -p steel-abi
-dart test
-```
-
-The tests look for `target/debug/libsteel_abi.so` (or the platform-specific
-name under `target/release`). Set `STEEL_ABI_LIB` to an explicit library path if
-it was built elsewhere:
+Build a plugin kernel with the matching Dart SDK source build:
 
 ```sh
-STEEL_ABI_LIB=/path/to/libsteel_abi.so dart test
+STEEL_DART_SDK=/path/to/dart-sdk/out/ReleaseX64 \
+  ./examples/dart_essentials/build_kernel.sh
 ```
 
-When no compiled library is available the ABI tests are skipped.
+The runtime shim is `target/debug/libsteel_dart_embed.so`. Next to it, a
+sidecar describes the plugin:
 
-## Usage
-
-```dart
-import 'dart:ffi';
-import 'package:steel_extension/steel.dart';
-
-final bindings = SteelBindings.open(DynamicLibrary.open('libsteel_abi.so'));
-print(bindings.apiVersion());
-
-// `view` is a SteelStrView received from a native callback.
-final SteelStrView view = ...;
-print(steelStrViewToString(view));
+```json
+{"id":"essentials","version":"0.1.0","kernel":"essentials.dill",
+ "vm":"/path/libdart_engine_jit_shared.so","entry":"main"}
 ```
 
-`SteelConstants` mirrors the numeric constants from the ABI, and the generated
-struct classes (`SteelInterface`, `SteelExtension`, the hook tables, and their
-supporting types) can be used directly with `Pointer<T>` and
-`NativeFunction<T>`.
+Copy the shim as `<name>.so`, write `<name>.so.json`, and point
+`[extensions] directory` in `config.toml` at that directory.
 
 ## Plugin API
-
-`lib/steel_plugin.dart` is the out-of-process authoring API. Unlike `steel.dart`
-(FFI bindings), it speaks newline-delimited JSON to the Rust bridge over stdio,
-so a plugin is an ordinary Dart program:
 
 ```dart
 import 'package:steel_extension/steel_plugin.dart';
@@ -64,17 +54,13 @@ import 'package:steel_extension/steel_plugin.dart';
 final class Greeter implements SteelPlugin {
   @override
   void onEnable(PluginContext context) {
-    context
-        .command('hello')
-        .description('Say hello.')
-        .executes((command) {
-      command.player?.sendMessage('Hello, ${command.player?.name}!');
-      return null;
-    });
+    context.command('hello')
+      .description('Say hello.')
+      .executes((command) {
+        command.player?.sendMessage('Hello, ${command.player?.name}!');
+      });
     context.onChat((event) {
-      if (event.text.contains('bad')) {
-        event.cancel();
-      }
+      if (event.text.contains('bad')) event.cancel();
     });
   }
 }
@@ -82,15 +68,18 @@ final class Greeter implements SteelPlugin {
 void main() => runSteelPlugin(Greeter());
 ```
 
-Player operations, host queries and registration all go through `PluginHost`.
-The runtime implements it over `RpcClient`; tests implement it with canned
-replies, so command logic runs without stdin, a subprocess, or the Rust bridge.
+`Player`, `World`, and `Server` are generated from `steel-plugin-gen` and call
+the `PluginHost` interface, which `NativePluginHost` implements directly over
+`SteelInterface`. Tests implement `PluginHost` with canned values.
 
-- `LineTransport` / `StdioTransport` — newline-delimited JSON framing.
-- `RpcClient` — `host_call`/`host_result` routing, including nested calls made
-  while a handler waits for a reply.
-- `PluginContext` — command/event registration plus `onlinePlayers`,
-  `findPlayer`, `spawn`, and `log`.
-- `Player`, `Vec3`, `ChatEvent`, `BlockEvent`, `CommandContext` — typed values.
+## Tests
+
+```sh
+cargo build -p steel-abi
+dart test
+```
+
+The FFI conformance tests look for `target/debug/libsteel_abi.so` (or set
+`STEEL_ABI_LIB`). The plugin tests use an in-memory `PluginHost`.
 
 See `examples/dart_essentials` for a complete Essentials-style plugin.

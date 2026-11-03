@@ -23,42 +23,100 @@ final class HostCall {
 final class FakePluginHost implements PluginHost {
   final List<HostCall> calls = <HostCall>[];
   final List<CommandRegistration> commands = <CommandRegistration>[];
-  final List<String> events = <String>[];
+  final List<int> events = <int>[];
   final List<String> logs = <String>[];
-  final Map<String, Map<String, Object?>> players =
-      <String, Map<String, Object?>>{};
+  final Map<String, Player> players = <String, Player>{};
 
   Vec3 position = const Vec3(0, 64, 0);
   Vec3 spawnPoint = const Vec3(0, 64, 0);
   double health = 20;
 
   @override
-  Object? call(
-    String method, [
-    Map<String, Object?> params = const <String, Object?>{},
-  ]) {
-    calls.add(HostCall(method, params));
-    switch (method) {
-      case 'player.position':
-        return position.toMap();
-      case 'player.health':
-        return health;
-      case 'world.spawn':
-        return spawnPoint.toMap();
-      case 'world.players':
-        return players.values.toList();
-      case 'server.find_player':
-        final name = params['name'];
-        return name is String ? players[name] : null;
-      case 'player.set_health':
-        final value = params['health'];
-        if (value is num) {
-          health = value.toDouble();
-        }
-        return null;
-      default:
-        return null;
+  Player? playerData(int world, int entity) {
+    for (final player in players.values) {
+      if (player.entity == entity) {
+        return player;
+      }
     }
+    return null;
+  }
+
+  @override
+  Vec3 entityPosition(int world, int entity) {
+    calls.add(HostCall('player.position', <String, Object?>{
+      'entity': entity,
+      'world': world,
+    }));
+    return position;
+  }
+
+  @override
+  void entityTeleport(
+    int world,
+    int entity,
+    Vec3 position, {
+    double yaw = 0,
+    double pitch = 0,
+  }) {
+    calls.add(HostCall('player.teleport', <String, Object?>{
+      'entity': entity,
+      'world': world,
+      'x': position.x,
+      'y': position.y,
+      'z': position.z,
+      'yaw': yaw,
+      'pitch': pitch,
+    }));
+    this.position = position;
+  }
+
+  @override
+  void playerSendMessage(int world, int entity, String message) {
+    calls.add(HostCall('player.send_message', <String, Object?>{
+      'entity': entity,
+      'world': world,
+      'message': message,
+    }));
+  }
+
+  @override
+  double entityHealth(int world, int entity) {
+    calls.add(HostCall('player.health', <String, Object?>{
+      'entity': entity,
+      'world': world,
+    }));
+    return health;
+  }
+
+  @override
+  void entitySetHealth(int world, int entity, double health) {
+    calls.add(HostCall('player.set_health', <String, Object?>{
+      'entity': entity,
+      'world': world,
+      'health': health,
+    }));
+    this.health = health;
+  }
+
+  @override
+  Vec3 worldSpawn(int world) {
+    calls.add(HostCall('world.spawn', <String, Object?>{'world': world}));
+    return spawnPoint;
+  }
+
+  @override
+  List<Player> worldPlayers(int world) {
+    calls.add(HostCall('world.players', <String, Object?>{'world': world}));
+    return players.values.toList();
+  }
+
+  @override
+  Player? findPlayerInWorld(int world, String name) {
+    calls.add(HostCall('server.find_player', <String, Object?>{
+      'world': world,
+      'name': name,
+    }));
+    return players[name];
   }
 
   @override
@@ -67,14 +125,14 @@ final class FakePluginHost implements PluginHost {
   }
 
   @override
-  void registerCommand(CommandRegistration command) {
+  void registerCommand(int id, CommandRegistration command) {
     commands.add(command);
   }
 
   @override
-  void registerEvent(String event) {
-    if (!events.contains(event)) {
-      events.add(event);
+  void registerEvent(int kind) {
+    if (!events.contains(kind)) {
+      events.add(kind);
     }
   }
 
@@ -134,12 +192,13 @@ void main() {
       );
 
   Player alex() {
-    host.players['Alex'] = <String, Object?>{
-      'entity': 2,
-      'world': 0,
-      'name': 'Alex',
-      'uuid': 'uuid-alex',
-    };
+    host.players['Alex'] = Player(
+      entity: 2,
+      world: 0,
+      name: 'Alex',
+      uuid: 'uuid-alex',
+      host: host,
+    );
     return Player(
       entity: 2,
       world: 0,
@@ -314,12 +373,7 @@ void main() {
 
     test('/who lists online players', () {
       alex();
-      host.players['Steve'] = <String, Object?>{
-        'entity': 1,
-        'world': 0,
-        'name': 'Steve',
-        'uuid': 'uuid-steve',
-      };
+      host.players['Steve'] = steve;
 
       essentials.who(command('who', '', player: steve));
 
@@ -348,7 +402,7 @@ void main() {
           'heal',
         ]),
       );
-      expect(host.events, contains('player_leave'));
+      expect(host.events, contains(EventKind.playerLeave));
 
       context.executeCommand(command('heal', '', player: steve));
 

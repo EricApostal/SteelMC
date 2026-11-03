@@ -53,10 +53,13 @@ final class HomeStore {
         if (rawPosition is! Map) {
           continue;
         }
-        homes[rawHome.key.toString()] = Vec3.fromResult(
-          rawPosition,
-          context: '$path home "${rawHome.key}"',
-        );
+        final x = rawPosition['x'];
+        final y = rawPosition['y'];
+        final z = rawPosition['z'];
+        if (x is num && y is num && z is num) {
+          homes[rawHome.key.toString()] =
+              Vec3(x.toDouble(), y.toDouble(), z.toDouble());
+        }
       }
       _homes[entry.key] = homes;
     }
@@ -75,7 +78,12 @@ final class HomeStore {
       final homes = _homes[uuid]!;
       final names = homes.keys.toList()..sort();
       encoded[uuid] = <String, Object?>{
-        for (final name in names) name: homes[name]!.toMap(),
+        for (final name in names)
+          name: <String, Object?>{
+            'x': homes[name]!.x,
+            'y': homes[name]!.y,
+            'z': homes[name]!.z,
+          },
       };
     }
     const encoder = JsonEncoder.withIndent('  ');

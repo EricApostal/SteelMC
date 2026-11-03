@@ -71,7 +71,7 @@ SteelMC is not ready to replace an established server:
 - Survival gameplay is incomplete.
 - Only a small number of entities have meaningful behavior.
 - Full vanilla and protocol parity have not been reached.
-- Native extensions use a GDExtension-style C ABI (`steel-abi`); generated Dart bindings live in `clients/dart`.
+- Native extensions use a GDExtension-style C ABI (`steel-abi`); Dart plugins run in-process in an embedded VM (`steel-dart-embed`).
 - Paper, Bukkit, Fabric, Forge, and NeoForge extensions are not compatible.
 
 Follow the [implementation tracker](https://steelmc.dev/tracker) for a more detailed
