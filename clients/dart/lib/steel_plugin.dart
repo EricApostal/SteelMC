@@ -14,7 +14,7 @@
 ///         .command('hello')
 ///         .description('Greet the player.')
 ///         .executes((command) {
-///       command.player?.sendMessage('Hello, ${command.player?.name}!');
+///       command.player?.sendMessage('Hello, ${command.player?.name()}!');
 ///     });
 ///   }
 /// }
@@ -22,11 +22,16 @@
 /// void main() => runSteelPlugin(Greeter());
 /// ```
 ///
-/// Host calls go directly through the `SteelInterface` C function table; there
-/// is no JSON or subprocess boundary.
+/// Host calls go through ClassDB MethodBinds; the generated classes in
+/// `src/steel/generated.dart` carry the typed signatures and the transport in
+/// `src/steel/binding.dart` performs the marshalling.
 library;
 
+export 'annotations.dart';
 export 'src/plugin/context.dart';
-export 'src/plugin/native.dart';
-export 'src/plugin/model.dart';
 export 'src/plugin/runtime.dart';
+export 'src/steel/binding.dart';
+export 'src/steel/extension.dart';
+export 'src/steel/generated.dart';
+export 'src/steel/model.dart';
+export 'src/steel/native_shim.dart';

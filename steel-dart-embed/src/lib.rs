@@ -15,20 +15,73 @@
     reason = "the embedding internals are documented by the module comment"
 )]
 
+use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard, OnceLock};
 
 use steel_abi::*;
 
 type DartHandle = *mut c_void;
 
+/// Value type codes exchanged with
+/// `clients/dart/lib/src/steel/extension.dart`. The Dart `SteelValueType`
+/// ordinals must match these constants.
+const STEEL_VALUE_I32: u8 = 0;
+const STEEL_VALUE_U32: u8 = 1;
+const STEEL_VALUE_F32: u8 = 2;
+const STEEL_VALUE_F64: u8 = 3;
+const STEEL_VALUE_BOOLEAN: u8 = 4;
+const STEEL_VALUE_STRING: u8 = 5;
+const STEEL_VALUE_REF: u8 = 6;
+const STEEL_VALUE_VOID: u8 = 7;
+
+/// Library that hosts the Dart-side extension registry entry points.
+const EXTENSION_LIBRARY: &str = "package:steel_extension/src/steel/extension.dart";
+
 static INTERFACE: AtomicPtr<SteelInterface> = AtomicPtr::new(std::ptr::null_mut());
 static CONFIG: OnceLock<Config> = OnceLock::new();
 static MANIFEST: OnceLock<SteelExtension> = OnceLock::new();
 static ENGINE: LazyLock<Mutex<Option<Engine>>> = LazyLock::new(|| Mutex::new(None));
 static REGISTRATIONS: LazyLock<Mutex<Vec<Registration>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+
+/// Extension classes declared by the Dart side, in registration order.
+///
+/// The classes are appended by `steel_shim_register_class` and never removed,
+/// so the strings and method metadata stay valid for the process lifetime and
+/// may be referenced by the descriptors handed to the host.
+static EXTENSION_CLASSES: LazyLock<Mutex<Vec<ExtensionClass>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+
+/// Next globally unique method id handed out to `steel_shim_register_class`.
+static NEXT_EXTENSION_METHOD_ID: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    /// Backing storage for string results written by the method thunk.
+    ///
+    /// A `SteelStrView` return borrowed from Dart memory is only valid until
+    /// `Dart_ExitScope`, so the shim copies the bytes here; the view remains
+    /// readable until the next extension method call on the same thread.
+    static RETURN_STRING: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+/// One method declared by a Dart extension class.
+struct ExtensionMethod {
+    name: String,
+    hash: u32,
+    arg_types: Vec<u8>,
+    return_type: u8,
+}
+
+/// One Dart extension class declared through `steel_shim_register_class`.
+struct ExtensionClass {
+    name: String,
+    inherits: String,
+    /// Id of the first method; `user_data` of method `i` is `method_base + i`.
+    method_base: usize,
+    methods: Vec<ExtensionMethod>,
+}
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
@@ -111,8 +164,16 @@ struct DartApi {
     lookup_library: unsafe extern "C" fn(DartHandle) -> DartHandle,
     new_string: unsafe extern "C" fn(*const c_char) -> DartHandle,
     new_integer: unsafe extern "C" fn(i64) -> DartHandle,
+    new_double: unsafe extern "C" fn(f64) -> DartHandle,
+    new_boolean: unsafe extern "C" fn(bool) -> DartHandle,
+    new_list: unsafe extern "C" fn(i64) -> DartHandle,
+    list_set_at: unsafe extern "C" fn(DartHandle, i64, DartHandle) -> DartHandle,
+    list_get_at: unsafe extern "C" fn(DartHandle, i64) -> DartHandle,
     invoke: unsafe extern "C" fn(DartHandle, DartHandle, i32, *mut DartHandle) -> DartHandle,
     integer_to_i64: unsafe extern "C" fn(DartHandle, *mut i64) -> DartHandle,
+    double_value: unsafe extern "C" fn(DartHandle, *mut f64) -> DartHandle,
+    boolean_value: unsafe extern "C" fn(DartHandle, *mut bool) -> DartHandle,
+    string_to_utf8: unsafe extern "C" fn(DartHandle, *mut *mut u8, *mut i64) -> DartHandle,
     is_error: unsafe extern "C" fn(DartHandle) -> bool,
     is_null: unsafe extern "C" fn(DartHandle) -> bool,
     get_error: unsafe extern "C" fn(DartHandle) -> *const c_char,
@@ -171,6 +232,17 @@ fn load_api(library: &libloading::Library) -> Result<DartApi, String> {
                 unsafe extern "C" fn(*const c_char) -> DartHandle
             ),
             new_integer: symbol!("Dart_NewInteger", unsafe extern "C" fn(i64) -> DartHandle),
+            new_double: symbol!("Dart_NewDouble", unsafe extern "C" fn(f64) -> DartHandle),
+            new_boolean: symbol!("Dart_NewBoolean", unsafe extern "C" fn(bool) -> DartHandle),
+            new_list: symbol!("Dart_NewList", unsafe extern "C" fn(i64) -> DartHandle),
+            list_set_at: symbol!(
+                "Dart_ListSetAt",
+                unsafe extern "C" fn(DartHandle, i64, DartHandle) -> DartHandle
+            ),
+            list_get_at: symbol!(
+                "Dart_ListGetAt",
+                unsafe extern "C" fn(DartHandle, i64) -> DartHandle
+            ),
             invoke: symbol!(
                 "Dart_Invoke",
                 unsafe extern "C" fn(DartHandle, DartHandle, i32, *mut DartHandle) -> DartHandle
@@ -178,6 +250,18 @@ fn load_api(library: &libloading::Library) -> Result<DartApi, String> {
             integer_to_i64: symbol!(
                 "Dart_IntegerToInt64",
                 unsafe extern "C" fn(DartHandle, *mut i64) -> DartHandle
+            ),
+            double_value: symbol!(
+                "Dart_DoubleValue",
+                unsafe extern "C" fn(DartHandle, *mut f64) -> DartHandle
+            ),
+            boolean_value: symbol!(
+                "Dart_BooleanValue",
+                unsafe extern "C" fn(DartHandle, *mut bool) -> DartHandle
+            ),
+            string_to_utf8: symbol!(
+                "Dart_StringToUTF8",
+                unsafe extern "C" fn(DartHandle, *mut *mut u8, *mut i64) -> DartHandle
             ),
             is_error: symbol!("Dart_IsError", unsafe extern "C" fn(DartHandle) -> bool),
             is_null: symbol!("Dart_IsNull", unsafe extern "C" fn(DartHandle) -> bool),

@@ -1,0 +1,15 @@
+[package]
+name = "steel-api-codegen"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+syn = { workspace = true, features = ["full", "extra-traits"] }
+quote = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

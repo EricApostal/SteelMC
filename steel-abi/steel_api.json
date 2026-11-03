@@ -273,6 +273,22 @@
     {
       "name": "STEEL_EVENT_CANCELLED",
       "value": 1
+    },
+    {
+      "name": "STEEL_REF_WORLD",
+      "value": 9
+    },
+    {
+      "name": "STEEL_REF_BLOCK_STATE",
+      "value": 10
+    },
+    {
+      "name": "STEEL_REF_EXTENSION",
+      "value": 11
+    },
+    {
+      "name": "STEEL_REF_ENTITY",
+      "value": 12
     }
   ],
   "structs": [
@@ -934,6 +950,94 @@
       ]
     },
     {
+      "name": "SteelMethodBind",
+      "fields": [
+        {
+          "name": "_unused",
+          "rust_type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "SteelMethodBindDesc",
+      "fields": [
+        {
+          "name": "class_name",
+          "rust_type": "SteelStrView"
+        },
+        {
+          "name": "method_name",
+          "rust_type": "SteelStrView"
+        },
+        {
+          "name": "hash",
+          "rust_type": "u32"
+        },
+        {
+          "name": "thunk",
+          "rust_type": "Option<SteelMethodThunk>"
+        },
+        {
+          "name": "user_data",
+          "rust_type": "*mut c_void"
+        }
+      ]
+    },
+    {
+      "name": "SteelExtensionMethodDesc",
+      "fields": [
+        {
+          "name": "method_name",
+          "rust_type": "SteelStrView"
+        },
+        {
+          "name": "hash",
+          "rust_type": "u32"
+        },
+        {
+          "name": "thunk",
+          "rust_type": "Option<SteelMethodThunk>"
+        },
+        {
+          "name": "user_data",
+          "rust_type": "*mut c_void"
+        }
+      ]
+    },
+    {
+      "name": "SteelExtensionClassDesc",
+      "fields": [
+        {
+          "name": "struct_size",
+          "rust_type": "u32"
+        },
+        {
+          "name": "class_name",
+          "rust_type": "SteelStrView"
+        },
+        {
+          "name": "inherits",
+          "rust_type": "SteelStrView"
+        },
+        {
+          "name": "construct",
+          "rust_type": "Option<SteelClassConstructFn>"
+        },
+        {
+          "name": "construct_user_data",
+          "rust_type": "*mut c_void"
+        },
+        {
+          "name": "methods",
+          "rust_type": "*const SteelExtensionMethodDesc"
+        },
+        {
+          "name": "method_count",
+          "rust_type": "usize"
+        }
+      ]
+    },
+    {
       "name": "SteelInterface",
       "fields": [
         {
@@ -1159,6 +1263,22 @@
         {
           "name": "world_find_player",
           "rust_type": "Option<SteelWorldFindPlayerFn>"
+        },
+        {
+          "name": "classdb_get_method_bind",
+          "rust_type": "Option<SteelClassdbGetMethodBindFn>"
+        },
+        {
+          "name": "method_bind_ptrcall",
+          "rust_type": "Option<SteelMethodBindPtrcallFn>"
+        },
+        {
+          "name": "register_extension_class",
+          "rust_type": "Option<SteelRegisterExtensionClassFn>"
+        },
+        {
+          "name": "classdb_construct",
+          "rust_type": "Option<SteelClassdbConstructFn>"
         }
       ]
     },
@@ -1885,6 +2005,60 @@
         "SteelWorldRef",
         "SteelStrView",
         "*mut SteelOptEntityRef"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelMethodThunk",
+      "args": [
+        "*mut c_void",
+        "SteelRef",
+        "*const *const c_void",
+        "*mut c_void"
+      ],
+      "return": "()"
+    },
+    {
+      "name": "SteelClassdbGetMethodBindFn",
+      "args": [
+        "SteelStrView",
+        "SteelStrView",
+        "u32"
+      ],
+      "return": "*const SteelMethodBind"
+    },
+    {
+      "name": "SteelMethodBindPtrcallFn",
+      "args": [
+        "*const SteelMethodBind",
+        "SteelRef",
+        "*const *const c_void",
+        "*mut c_void"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelClassConstructFn",
+      "args": [
+        "*mut c_void",
+        "*const *const c_void",
+        "*mut SteelRef"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelRegisterExtensionClassFn",
+      "args": [
+        "*const SteelExtensionClassDesc"
+      ],
+      "return": "i32"
+    },
+    {
+      "name": "SteelClassdbConstructFn",
+      "args": [
+        "SteelStrView",
+        "*const *const c_void",
+        "*mut SteelRef"
       ],
       "return": "i32"
     },

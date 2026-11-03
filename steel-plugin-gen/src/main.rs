@@ -10,10 +10,13 @@ use steel_plugin_gen::{check_artifacts, generate, write_artifacts};
 const USAGE: &str = "\
 Usage: cargo run -p steel-plugin-gen [-- --check]
 
-Writes the generated ABI artifacts:
+Writes the generated artifacts:
   steel-abi/steel_api.json
   steel-abi/include/steel_extension.h
   clients/dart/lib/src/bindings.g.dart
+  clients/dart/lib/src/steel/ffi_api.dart
+  steel-api/steel_api.json
+  clients/dart/lib/src/steel/generated.dart
 
 Options:
   --check   Verify the generated files are up to date without writing them.

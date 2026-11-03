@@ -3,6 +3,9 @@ resolver = "2"
 members = [
     "steel",
     "steel-abi",
+    "steel-api",
+    "steel-api-codegen",
+    "steel-api-macros",
     "steel-login",
     "steel-macros",
     "steel-plugin-gen",

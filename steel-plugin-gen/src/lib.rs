@@ -5,21 +5,28 @@
 //! * `steel-abi/steel_api.json`
 //! * `steel-abi/include/steel_extension.h`
 //! * `clients/dart/lib/src/bindings.g.dart`
-//! * `clients/dart/lib/src/plugin/generated_api.dart`
+//! * `clients/dart/lib/src/steel/ffi_api.dart`
+//! * `steel-api/steel_api.json`
+//! * `clients/dart/lib/src/steel/generated.dart`
 
 mod c;
 mod dart;
+mod dart_api;
+mod ffi_api;
 mod generate;
 mod model;
 mod parser;
-mod plugin_api;
 
 pub use c::emit_header as render_header;
 pub use dart::emit_bindings as render_dart;
-pub use generate::{Artifact, check_artifacts, generate, render_artifacts, write_artifacts};
+pub use dart_api::{DART_API_PATH, emit_dart_api};
+pub use ffi_api::{FFI_API_PATH, emit_ffi_api};
+pub use generate::{
+    Artifact, DART_PATH, HEADER_PATH, JSON_PATH, STEEL_API_JSON_PATH, check_artifacts, generate,
+    render_artifacts, write_artifacts,
+};
 pub use model::Api;
 pub use parser::parse_source;
-pub use plugin_api::{PLUGIN_API_PATH, emit_plugin_api};
 
 #[cfg(test)]
 mod tests {
@@ -173,9 +180,54 @@ mod tests {
         assert!(dart.contains("factory SteelBindings.open(DynamicLibrary lib)"));
         assert!(dart.contains("steelApiVersion"));
 
-        let plugin_api = &first[3].contents;
-        assert!(plugin_api.contains("final class Player"));
-        assert!(plugin_api.contains("playerSendMessage"));
-        assert!(plugin_api.contains("findPlayerInWorld"));
+        let ffi_api = &first[3].contents;
+        assert!(ffi_api.contains("classdbGetMethodBind"));
+        assert!(ffi_api.contains("methodBindPtrcall"));
+    }
+
+    const API_JSON: &str = r#"
+{
+  "api_version": 1,
+  "classes": [
+    {"name": "Object", "inherits": null, "handle": "none", "receiver": "()", "methods": []},
+    {"name": "Entity", "inherits": "Object", "handle": "entity", "receiver": "SteelEntityRef", "methods": [
+      {"name": "teleport", "hash": 7, "static": false,
+       "args": [{"name": "position", "type": "SteelVec3"}, {"name": "yaw", "type": "f32"}],
+       "return": "bool"}
+    ]},
+    {"name": "Player", "inherits": "Entity", "handle": "entity", "receiver": "SteelEntityRef", "methods": [
+      {"name": "name", "hash": 8, "static": false, "args": [], "return": "SteelStrView"}
+    ]},
+    {"name": "Server", "inherits": "Object", "handle": "server", "receiver": "()", "methods": [
+      {"name": "find_player", "hash": 9, "static": true,
+       "args": [{"name": "world_id", "type": "u32"}, {"name": "name", "type": "SteelStrView"}],
+       "return": "SteelRef", "returns_class": "Player"}
+    ]},
+    {"name": "Block", "inherits": "Object", "handle": "block", "receiver": "BlockId", "methods": [
+      {"name": "default_state", "hash": 10, "static": false, "args": [], "return": "u32"}
+    ]}
+  ]
+}
+"#;
+
+    #[test]
+    fn renders_the_dart_host_api() {
+        let dart = emit_dart_api(API_JSON).expect("API JSON should render");
+        assert!(dart.contains("abstract class SteelObject"));
+        assert!(dart.contains("class Entity extends SteelObject"));
+        assert!(dart.contains("class Player extends Entity"));
+        assert!(dart.contains("class Server extends SteelObject"));
+        assert!(dart.contains("const int steelHostApiVersion = 1;"));
+        assert!(
+            dart.contains(
+                "static Player? findPlayer(SteelBinding binding, int worldId, String name)"
+            )
+        );
+        assert!(dart.contains("SteelReturnKind.ref"));
+        assert!(dart.contains("Player.fromRef(binding, returned)"));
+        assert!(dart.contains("SteelArg.vec3(position)"));
+        assert!(dart.contains("SteelArg.f32(yaw)"));
+        assert!(!dart.contains("asFunction"));
+        assert!(!dart.contains("NativeFunction"));
     }
 }

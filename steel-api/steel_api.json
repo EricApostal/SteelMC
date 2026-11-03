@@ -1,0 +1,588 @@
+{
+  "api_version": 1,
+  "classes": [
+    {
+      "name": "Object",
+      "inherits": null,
+      "handle": "none",
+      "receiver": "()",
+      "methods": []
+    },
+    {
+      "name": "World",
+      "inherits": "Object",
+      "handle": "world",
+      "receiver": "SteelWorldRef",
+      "methods": [
+        {
+          "name": "get_block",
+          "hash": 569463099,
+          "static": false,
+          "args": [
+            {
+              "name": "x",
+              "type": "i32"
+            },
+            {
+              "name": "y",
+              "type": "i32"
+            },
+            {
+              "name": "z",
+              "type": "i32"
+            }
+          ],
+          "return": "u32"
+        },
+        {
+          "name": "set_block",
+          "hash": 2073847571,
+          "static": false,
+          "args": [
+            {
+              "name": "x",
+              "type": "i32"
+            },
+            {
+              "name": "y",
+              "type": "i32"
+            },
+            {
+              "name": "z",
+              "type": "i32"
+            },
+            {
+              "name": "state",
+              "type": "u32"
+            },
+            {
+              "name": "flags",
+              "type": "u32"
+            }
+          ],
+          "return": "bool"
+        },
+        {
+          "name": "destroy_block",
+          "hash": 664154761,
+          "static": false,
+          "args": [
+            {
+              "name": "x",
+              "type": "i32"
+            },
+            {
+              "name": "y",
+              "type": "i32"
+            },
+            {
+              "name": "z",
+              "type": "i32"
+            },
+            {
+              "name": "drop_items",
+              "type": "bool"
+            }
+          ],
+          "return": "bool"
+        },
+        {
+          "name": "spawn",
+          "hash": 2689802786,
+          "static": false,
+          "args": [],
+          "return": "SteelVec3"
+        },
+        {
+          "name": "player_count",
+          "hash": 815048460,
+          "static": false,
+          "args": [],
+          "return": "u32"
+        },
+        {
+          "name": "player_at",
+          "hash": 1449584632,
+          "static": false,
+          "args": [
+            {
+              "name": "index",
+              "type": "u32"
+            }
+          ],
+          "return": "SteelRef",
+          "returns_class": "Player"
+        },
+        {
+          "name": "play_sound",
+          "hash": 383850382,
+          "static": false,
+          "args": [
+            {
+              "name": "sound",
+              "type": "SteelStrView"
+            },
+            {
+              "name": "x",
+              "type": "f64"
+            },
+            {
+              "name": "y",
+              "type": "f64"
+            },
+            {
+              "name": "z",
+              "type": "f64"
+            },
+            {
+              "name": "volume",
+              "type": "f32"
+            },
+            {
+              "name": "pitch",
+              "type": "f32"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Entity",
+      "inherits": "Object",
+      "handle": "entity",
+      "receiver": "SteelEntityRef",
+      "methods": [
+        {
+          "name": "position",
+          "hash": 607186999,
+          "static": false,
+          "args": [],
+          "return": "SteelVec3"
+        },
+        {
+          "name": "teleport",
+          "hash": 3148085413,
+          "static": false,
+          "args": [
+            {
+              "name": "position",
+              "type": "SteelVec3"
+            },
+            {
+              "name": "yaw",
+              "type": "f32"
+            },
+            {
+              "name": "pitch",
+              "type": "f32"
+            }
+          ],
+          "return": "bool"
+        },
+        {
+          "name": "health",
+          "hash": 1437858427,
+          "static": false,
+          "args": [],
+          "return": "f32"
+        },
+        {
+          "name": "set_health",
+          "hash": 3926284238,
+          "static": false,
+          "args": [
+            {
+              "name": "health",
+              "type": "f32"
+            }
+          ],
+          "return": "bool"
+        }
+      ]
+    },
+    {
+      "name": "Player",
+      "inherits": "Entity",
+      "handle": "entity",
+      "receiver": "SteelEntityRef",
+      "methods": [
+        {
+          "name": "name",
+          "hash": 182619836,
+          "static": false,
+          "args": [],
+          "return": "SteelStrView"
+        },
+        {
+          "name": "uuid",
+          "hash": 3421719228,
+          "static": false,
+          "args": [],
+          "return": "SteelStrView"
+        },
+        {
+          "name": "send_message",
+          "hash": 1771619083,
+          "static": false,
+          "args": [
+            {
+              "name": "message",
+              "type": "SteelStrView"
+            }
+          ],
+          "return": "bool"
+        }
+      ]
+    },
+    {
+      "name": "Server",
+      "inherits": "Object",
+      "handle": "server",
+      "receiver": "()",
+      "methods": [
+        {
+          "name": "find_player",
+          "hash": 3949273598,
+          "static": true,
+          "args": [
+            {
+              "name": "world_id",
+              "type": "u32"
+            },
+            {
+              "name": "name",
+              "type": "SteelStrView"
+            }
+          ],
+          "return": "SteelRef",
+          "returns_class": "Player"
+        }
+      ]
+    },
+    {
+      "name": "Block",
+      "inherits": "Object",
+      "handle": "block",
+      "receiver": "BlockId",
+      "methods": [
+        {
+          "name": "by_key",
+          "hash": 3308424230,
+          "static": true,
+          "args": [
+            {
+              "name": "key",
+              "type": "SteelStrView"
+            }
+          ],
+          "return": "SteelRef",
+          "returns_class": "Block"
+        },
+        {
+          "name": "default_state",
+          "hash": 2067085737,
+          "static": false,
+          "args": [],
+          "return": "u32"
+        }
+      ]
+    },
+    {
+      "name": "BlockState",
+      "inherits": "Object",
+      "handle": "block_state",
+      "receiver": "BlockStateId",
+      "methods": [
+        {
+          "name": "with_bool",
+          "hash": 2979617657,
+          "static": false,
+          "args": [
+            {
+              "name": "name",
+              "type": "SteelStrView"
+            },
+            {
+              "name": "value",
+              "type": "bool"
+            }
+          ],
+          "return": "u32"
+        },
+        {
+          "name": "with_int",
+          "hash": 934894016,
+          "static": false,
+          "args": [
+            {
+              "name": "name",
+              "type": "SteelStrView"
+            },
+            {
+              "name": "value",
+              "type": "i32"
+            }
+          ],
+          "return": "u32"
+        },
+        {
+          "name": "with_enum",
+          "hash": 1460560745,
+          "static": false,
+          "args": [
+            {
+              "name": "name",
+              "type": "SteelStrView"
+            },
+            {
+              "name": "value",
+              "type": "SteelStrView"
+            }
+          ],
+          "return": "u32"
+        },
+        {
+          "name": "get_bool",
+          "hash": 1761612683,
+          "static": false,
+          "args": [
+            {
+              "name": "name",
+              "type": "SteelStrView"
+            }
+          ],
+          "return": "bool"
+        },
+        {
+          "name": "get_int",
+          "hash": 236066208,
+          "static": false,
+          "args": [
+            {
+              "name": "name",
+              "type": "SteelStrView"
+            }
+          ],
+          "return": "i32"
+        },
+        {
+          "name": "get_enum",
+          "hash": 838518881,
+          "static": false,
+          "args": [
+            {
+              "name": "name",
+              "type": "SteelStrView"
+            }
+          ],
+          "return": "SteelStrView"
+        },
+        {
+          "name": "block",
+          "hash": 807866692,
+          "static": false,
+          "args": [],
+          "return": "SteelRef",
+          "returns_class": "Block"
+        }
+      ]
+    },
+    {
+      "name": "Item",
+      "inherits": "Object",
+      "handle": "item",
+      "receiver": "ItemId",
+      "methods": [
+        {
+          "name": "by_key",
+          "hash": 569562490,
+          "static": true,
+          "args": [
+            {
+              "name": "key",
+              "type": "SteelStrView"
+            }
+          ],
+          "return": "SteelRef",
+          "returns_class": "Item"
+        }
+      ]
+    },
+    {
+      "name": "ItemStack",
+      "inherits": "Object",
+      "handle": "item_stack",
+      "receiver": "SteelRef",
+      "methods": [
+        {
+          "name": "create",
+          "hash": 1514332372,
+          "static": true,
+          "args": [
+            {
+              "name": "item",
+              "type": "SteelRef"
+            },
+            {
+              "name": "count",
+              "type": "i32"
+            }
+          ],
+          "return": "SteelRef",
+          "returns_class": "ItemStack"
+        },
+        {
+          "name": "count",
+          "hash": 4005884717,
+          "static": false,
+          "args": [],
+          "return": "i32"
+        },
+        {
+          "name": "set_count",
+          "hash": 1712066128,
+          "static": false,
+          "args": [
+            {
+              "name": "count",
+              "type": "i32"
+            }
+          ],
+          "return": "bool"
+        },
+        {
+          "name": "item",
+          "hash": 1383636305,
+          "static": false,
+          "args": [],
+          "return": "SteelRef",
+          "returns_class": "Item"
+        },
+        {
+          "name": "clone_stack",
+          "hash": 526595396,
+          "static": false,
+          "args": [],
+          "return": "SteelRef",
+          "returns_class": "ItemStack"
+        },
+        {
+          "name": "free",
+          "hash": 2742481580,
+          "static": false,
+          "args": []
+        }
+      ]
+    },
+    {
+      "name": "Nbt",
+      "inherits": "Object",
+      "handle": "nbt",
+      "receiver": "SteelRef",
+      "methods": [
+        {
+          "name": "create",
+          "hash": 2910758695,
+          "static": true,
+          "args": [],
+          "return": "SteelRef",
+          "returns_class": "Nbt"
+        },
+        {
+          "name": "set_int",
+          "hash": 3187017580,
+          "static": false,
+          "args": [
+            {
+              "name": "key",
+              "type": "SteelStrView"
+            },
+            {
+              "name": "value",
+              "type": "i32"
+            }
+          ],
+          "return": "bool"
+        },
+        {
+          "name": "get_int",
+          "hash": 3952363776,
+          "static": false,
+          "args": [
+            {
+              "name": "key",
+              "type": "SteelStrView"
+            }
+          ],
+          "return": "i32"
+        },
+        {
+          "name": "set_string",
+          "hash": 3626558367,
+          "static": false,
+          "args": [
+            {
+              "name": "key",
+              "type": "SteelStrView"
+            },
+            {
+              "name": "value",
+              "type": "SteelStrView"
+            }
+          ],
+          "return": "bool"
+        },
+        {
+          "name": "get_string",
+          "hash": 495688393,
+          "static": false,
+          "args": [
+            {
+              "name": "key",
+              "type": "SteelStrView"
+            }
+          ],
+          "return": "SteelStrView"
+        },
+        {
+          "name": "contains",
+          "hash": 1716754227,
+          "static": false,
+          "args": [
+            {
+              "name": "key",
+              "type": "SteelStrView"
+            }
+          ],
+          "return": "bool"
+        },
+        {
+          "name": "remove",
+          "hash": 3021754426,
+          "static": false,
+          "args": [
+            {
+              "name": "key",
+              "type": "SteelStrView"
+            }
+          ],
+          "return": "bool"
+        },
+        {
+          "name": "clone_nbt",
+          "hash": 3222135635,
+          "static": false,
+          "args": [],
+          "return": "SteelRef",
+          "returns_class": "Nbt"
+        },
+        {
+          "name": "free",
+          "hash": 1824688401,
+          "static": false,
+          "args": []
+        }
+      ]
+    }
+  ]
+}

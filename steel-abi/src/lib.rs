@@ -994,6 +994,102 @@ pub type SteelWorldFindPlayerFn = unsafe extern "C" fn(
     out: *mut SteelOptEntityRef,
 ) -> i32;
 
+/// Reference kinds used by class instances.
+pub const STEEL_REF_WORLD: u32 = 9;
+pub const STEEL_REF_BLOCK_STATE: u32 = 10;
+pub const STEEL_REF_EXTENSION: u32 = 11;
+pub const STEEL_REF_ENTITY: u32 = 12;
+
+/// Typed MethodBind thunk. `instance` is the receiver; `args` points at one
+/// pointer per argument, and `ret` points at the return slot.
+pub type SteelMethodThunk = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    instance: SteelRef,
+    args: *const *const c_void,
+    ret: *mut c_void,
+);
+
+/// Opaque MethodBind handle returned by `classdb_get_method_bind`.
+#[repr(C)]
+pub struct SteelMethodBind {
+    pub _unused: u8,
+}
+
+/// Native or extension method metadata registered with the host ClassDB.
+#[repr(C)]
+pub struct SteelMethodBindDesc {
+    pub class_name: SteelStrView,
+    pub method_name: SteelStrView,
+    pub hash: u32,
+    pub thunk: Option<SteelMethodThunk>,
+    pub user_data: *mut c_void,
+}
+
+// SAFETY: method bind descriptors are immutable registration data. Extension
+// user data is required by the extension contract to remain valid and
+// thread-safe for the process lifetime.
+unsafe impl Send for SteelMethodBindDesc {}
+unsafe impl Sync for SteelMethodBindDesc {}
+
+pub type SteelClassdbGetMethodBindFn = unsafe extern "C" fn(
+    class_name: SteelStrView,
+    method_name: SteelStrView,
+    hash: u32,
+) -> *const SteelMethodBind;
+
+pub type SteelMethodBindPtrcallFn = unsafe extern "C" fn(
+    bind: *const SteelMethodBind,
+    instance: SteelRef,
+    args: *const *const c_void,
+    ret: *mut c_void,
+) -> i32;
+
+/// Constructs an extension-class instance and writes its handle to `ret`.
+pub type SteelClassConstructFn = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    args: *const *const c_void,
+    ret: *mut SteelRef,
+) -> i32;
+
+/// Method descriptor supplied by an extension class.
+#[repr(C)]
+pub struct SteelExtensionMethodDesc {
+    pub method_name: SteelStrView,
+    pub hash: u32,
+    pub thunk: Option<SteelMethodThunk>,
+    pub user_data: *mut c_void,
+}
+
+// SAFETY: extension metadata is immutable after registration and user data is
+// required to be thread-safe by the extension contract.
+unsafe impl Send for SteelExtensionMethodDesc {}
+unsafe impl Sync for SteelExtensionMethodDesc {}
+
+/// Class descriptor supplied by an extension.
+#[repr(C)]
+pub struct SteelExtensionClassDesc {
+    pub struct_size: u32,
+    pub class_name: SteelStrView,
+    pub inherits: SteelStrView,
+    pub construct: Option<SteelClassConstructFn>,
+    pub construct_user_data: *mut c_void,
+    pub methods: *const SteelExtensionMethodDesc,
+    pub method_count: usize,
+}
+
+// SAFETY: see `SteelExtensionMethodDesc`.
+unsafe impl Send for SteelExtensionClassDesc {}
+unsafe impl Sync for SteelExtensionClassDesc {}
+
+pub type SteelRegisterExtensionClassFn =
+    unsafe extern "C" fn(desc: *const SteelExtensionClassDesc) -> i32;
+
+pub type SteelClassdbConstructFn = unsafe extern "C" fn(
+    class_name: SteelStrView,
+    args: *const *const c_void,
+    ret: *mut SteelRef,
+) -> i32;
+
 /// Host function table passed to an extension's entry point.
 ///
 /// Callers must check [`Self::api_version`] and may only read fields covered by
@@ -1057,6 +1153,10 @@ pub struct SteelInterface {
     pub world_player_count: Option<SteelWorldPlayerCountFn>,
     pub world_player_at: Option<SteelWorldPlayerAtFn>,
     pub world_find_player: Option<SteelWorldFindPlayerFn>,
+    pub classdb_get_method_bind: Option<SteelClassdbGetMethodBindFn>,
+    pub method_bind_ptrcall: Option<SteelMethodBindPtrcallFn>,
+    pub register_extension_class: Option<SteelRegisterExtensionClassFn>,
+    pub classdb_construct: Option<SteelClassdbConstructFn>,
 }
 
 impl Default for SteelInterface {
@@ -1118,6 +1218,10 @@ impl Default for SteelInterface {
             world_player_count: None,
             world_player_at: None,
             world_find_player: None,
+            classdb_get_method_bind: None,
+            method_bind_ptrcall: None,
+            register_extension_class: None,
+            classdb_construct: None,
         }
     }
 }

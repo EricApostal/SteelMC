@@ -5,175 +5,169 @@ import 'package:steel_essentials/home_store.dart';
 import 'package:steel_extension/steel_plugin.dart';
 import 'package:test/test.dart';
 
-/// One host method invocation recorded by [FakePluginHost].
+/// One host method invocation recorded by [FakeSteelBinding].
 final class HostCall {
-  HostCall(this.method, this.params);
+  HostCall(this.className, this.methodName, this.instance, this.args);
 
-  final String method;
-  final Map<String, Object?> params;
+  final String className;
+  final String methodName;
+  final SteelRef instance;
+  final List<SteelArg> args;
 
   @override
-  String toString() => '$method($params)';
+  String toString() => '$className.$methodName(${args.map((a) => a.value)})';
 }
 
-/// In-memory [PluginHost] with canned replies.
+/// In-memory [SteelBinding] with canned replies.
 ///
-/// This is the whole point of the host abstraction: command logic runs without
-/// stdin, a Dart VM process, or a Rust bridge.
-final class FakePluginHost implements PluginHost {
+/// This is the whole point of the binding abstraction: command logic runs
+/// without stdin, a Dart VM process, or a Rust bridge.
+final class FakeSteelBinding implements SteelBinding {
   final List<HostCall> calls = <HostCall>[];
-  final List<CommandRegistration> commands = <CommandRegistration>[];
-  final List<int> events = <int>[];
-  final List<String> logs = <String>[];
-  final Map<String, Player> players = <String, Player>{};
+  final Map<int, String> names = <int, String>{};
+  final Map<int, String> uuids = <int, String>{};
+  final List<int> playerEntities = <int>[1];
 
   Vec3 position = const Vec3(0, 64, 0);
   Vec3 spawnPoint = const Vec3(0, 64, 0);
   double health = 20;
 
-  @override
-  Player? playerData(int world, int entity) {
-    for (final player in players.values) {
-      if (player.entity == entity) {
-        return player;
-      }
-    }
-    return null;
-  }
-
-  @override
-  Vec3 entityPosition(int world, int entity) {
-    calls.add(HostCall('player.position', <String, Object?>{
-      'entity': entity,
-      'world': world,
-    }));
-    return position;
-  }
-
-  @override
-  void entityTeleport(
-    int world,
-    int entity,
-    Vec3 position, {
-    double yaw = 0,
-    double pitch = 0,
-  }) {
-    calls.add(HostCall('player.teleport', <String, Object?>{
-      'entity': entity,
-      'world': world,
-      'x': position.x,
-      'y': position.y,
-      'z': position.z,
-      'yaw': yaw,
-      'pitch': pitch,
-    }));
-    this.position = position;
-  }
-
-  @override
-  void playerSendMessage(int world, int entity, String message) {
-    calls.add(HostCall('player.send_message', <String, Object?>{
-      'entity': entity,
-      'world': world,
-      'message': message,
-    }));
-  }
-
-  @override
-  double entityHealth(int world, int entity) {
-    calls.add(HostCall('player.health', <String, Object?>{
-      'entity': entity,
-      'world': world,
-    }));
-    return health;
-  }
-
-  @override
-  void entitySetHealth(int world, int entity, double health) {
-    calls.add(HostCall('player.set_health', <String, Object?>{
-      'entity': entity,
-      'world': world,
-      'health': health,
-    }));
-    this.health = health;
-  }
-
-  @override
-  Vec3 worldSpawn(int world) {
-    calls.add(HostCall('world.spawn', <String, Object?>{'world': world}));
-    return spawnPoint;
-  }
-
-  @override
-  List<Player> worldPlayers(int world) {
-    calls.add(HostCall('world.players', <String, Object?>{'world': world}));
-    return players.values.toList();
-  }
-
-  @override
-  Player? findPlayerInWorld(int world, String name) {
-    calls.add(HostCall('server.find_player', <String, Object?>{
-      'world': world,
-      'name': name,
-    }));
-    return players[name];
-  }
-
-  @override
-  void log(String message, {LogLevel level = LogLevel.info}) {
-    logs.add('${level.name}: $message');
-  }
-
-  @override
-  void registerCommand(int id, CommandRegistration command) {
-    commands.add(command);
-  }
-
-  @override
-  void registerEvent(int kind) {
-    if (!events.contains(kind)) {
-      events.add(kind);
-    }
-  }
-
   List<HostCall> callsTo(String method) => <HostCall>[
         for (final call in calls)
-          if (call.method == method) call,
+          if (call.methodName == method) call,
       ];
 
   String? lastMessageTo(int entity) {
     for (final call in calls.reversed) {
-      if (call.method == 'player.send_message' &&
-          call.params['entity'] == entity) {
-        final message = call.params['message'];
-        if (message is String) {
-          return message;
-        }
+      if (call.methodName == 'send_message' &&
+          call.instance.generation == entity) {
+        return call.args.single.value as String;
       }
     }
     return null;
+  }
+
+  @override
+  SteelReturn ptrcall(
+    String className,
+    String methodName,
+    int hash,
+    SteelRef instance,
+    List<SteelArg> args,
+    SteelReturnKind returnKind,
+  ) {
+    calls.add(HostCall(className, methodName, instance, args));
+    switch ((className, methodName)) {
+      case ('Player', 'name'):
+        return SteelReturn(names[instance.generation] ?? '');
+      case ('Player', 'uuid'):
+        return SteelReturn(uuids[instance.generation] ?? '');
+      case ('Player', 'send_message'):
+        return SteelReturn(true);
+      case ('Entity', 'position'):
+        return SteelReturn(position);
+      case ('Entity', 'teleport'):
+        position = args[0].value as Vec3;
+        return SteelReturn(true);
+      case ('Entity', 'health'):
+        return SteelReturn(health);
+      case ('Entity', 'set_health'):
+        health = args[0].value as double;
+        return SteelReturn(true);
+      case ('World', 'spawn'):
+        return SteelReturn(spawnPoint);
+      case ('World', 'player_count'):
+        return SteelReturn(playerEntities.length);
+      case ('World', 'player_at'):
+        final index = args[0].value as int;
+        if (index >= playerEntities.length) {
+          return SteelReturn(steelNoneRef());
+        }
+        return SteelReturn(
+          steelEntityRef(instance.index, playerEntities[index]),
+        );
+      case ('Block', 'by_key'):
+        final key = args[0].value as String;
+        return SteelReturn(
+          key == 'minecraft:stone' ? steelBlockRef(1) : steelNoneRef(),
+        );
+      case ('Block', 'default_state'):
+        return SteelReturn(42);
+      case ('World', 'set_block'):
+        return SteelReturn(true);
+      case ('Server', 'find_player'):
+        final name = args[1].value as String;
+        for (final entity in playerEntities) {
+          if (names[entity] == name) {
+            return SteelReturn(
+              steelEntityRef(args[0].value as int, entity),
+            );
+          }
+        }
+        return SteelReturn(steelNoneRef());
+      default:
+        throw StateError('unexpected host call $className.$methodName');
+    }
+  }
+}
+
+/// In-memory [NativeShim].
+final class FakeNativeShim implements NativeShim {
+  final List<CommandRegistration> commands = <CommandRegistration>[];
+  final List<int> events = <int>[];
+  final List<String> logs = <String>[];
+
+  @override
+  int registerCommand(
+    int id,
+    String name,
+    String description,
+    String permission,
+  ) {
+    commands.add(
+      CommandRegistration(
+        name: name,
+        description: description,
+        permission: permission,
+      ),
+    );
+    return 0;
+  }
+
+  @override
+  int registerEvent(int kind) {
+    if (!events.contains(kind)) {
+      events.add(kind);
+    }
+    return 0;
+  }
+
+  @override
+  int log(int level, String message) {
+    logs.add('$level: $message');
+    return 0;
   }
 }
 
 void main() {
   late Directory tempDir;
-  late FakePluginHost host;
+  late FakeSteelBinding binding;
+  late FakeNativeShim shim;
+  late PluginContext context;
   late HomeStore store;
   late Player steve;
   late Essentials essentials;
 
   setUp(() {
     tempDir = Directory.systemTemp.createTempSync('steel_essentials_');
-    host = FakePluginHost();
+    binding = FakeSteelBinding()
+      ..names[1] = 'Steve'
+      ..uuids[1] = 'uuid-steve';
+    shim = FakeNativeShim();
+    context = PluginContext(binding: binding, shim: shim);
     store = HomeStore(path: '${tempDir.path}/homes.json')..load();
-    steve = Player(
-      entity: 1,
-      world: 0,
-      name: 'Steve',
-      uuid: 'uuid-steve',
-      host: host,
-    );
-    essentials = Essentials(host: host, homes: store);
+    steve = context.player(0, 1);
+    essentials = Essentials(context: context, homes: store);
   });
 
   tearDown(() {
@@ -188,24 +182,15 @@ void main() {
         command: name,
         args: args,
         player: player,
-        host: host,
       );
 
   Player alex() {
-    host.players['Alex'] = Player(
-      entity: 2,
-      world: 0,
-      name: 'Alex',
-      uuid: 'uuid-alex',
-      host: host,
-    );
-    return Player(
-      entity: 2,
-      world: 0,
-      name: 'Alex',
-      uuid: 'uuid-alex',
-      host: host,
-    );
+    binding.names[2] = 'Alex';
+    binding.uuids[2] = 'uuid-alex';
+    if (!binding.playerEntities.contains(2)) {
+      binding.playerEntities.add(2);
+    }
+    return context.player(0, 2);
   }
 
   group('HomeStore', () {
@@ -248,17 +233,43 @@ void main() {
   });
 
   group('Essentials commands', () {
+    test('/setblock resolves a block and places its default state', () {
+      essentials.setBlock(
+        command('setblock', '1 64 2 minecraft:stone', player: steve),
+      );
+
+      final setBlock = binding.callsTo('set_block').single;
+      expect(setBlock.instance.kind, SteelConstants.steelRefWorld);
+      expect(setBlock.args.map((arg) => arg.value), <Object>[
+        1,
+        64,
+        2,
+        42,
+        3,
+      ]);
+      expect(binding.lastMessageTo(1), contains('Placed'));
+    });
+
+    test('/setblock reports an unknown block', () {
+      essentials.setBlock(
+        command('setblock', '1 64 2 minecraft:missing', player: steve),
+      );
+
+      expect(binding.callsTo('set_block'), isEmpty);
+      expect(binding.lastMessageTo(1), contains('Unknown block'));
+    });
+
     test('/sethome stores the current position as the default home', () {
-      host.position = const Vec3(5, 66, 5);
+      binding.position = const Vec3(5, 66, 5);
 
       essentials.setHome(command('sethome', '', player: steve));
 
       expect(store.get('uuid-steve', 'home'), const Vec3(5, 66, 5));
-      expect(host.lastMessageTo(1), contains('Home "home" set'));
+      expect(binding.lastMessageTo(1), contains('Home "home" set'));
     });
 
     test('/sethome honors a name and normalizes its case', () {
-      host.position = const Vec3(1, 2, 3);
+      binding.position = const Vec3(1, 2, 3);
 
       essentials.setHome(command('sethome', 'Base', player: steve));
 
@@ -269,7 +280,7 @@ void main() {
       essentials.setHome(command('sethome', '!!!', player: steve));
 
       expect(store.namesOf('uuid-steve'), isEmpty);
-      expect(host.lastMessageTo(1), contains('Usage'));
+      expect(binding.lastMessageTo(1), contains('Usage'));
     });
 
     test('/home teleports to the stored position', () {
@@ -277,24 +288,19 @@ void main() {
 
       essentials.home(command('home', 'base', player: steve));
 
-      final teleport = host.callsTo('player.teleport').single;
-      expect(teleport.params, <String, Object?>{
-        'entity': 1,
-        'world': 0,
-        'x': 10.0,
-        'y': 70.0,
-        'z': -4.0,
-        'yaw': 0.0,
-        'pitch': 0.0,
-      });
-      expect(host.lastMessageTo(1), contains('Welcome home'));
+      final teleport = binding.callsTo('teleport').single;
+      expect(teleport.instance.generation, 1);
+      expect(teleport.args[0].value, const Vec3(10, 70, -4));
+      expect(teleport.args[1].value, 0.0);
+      expect(teleport.args[2].value, 0.0);
+      expect(binding.lastMessageTo(1), contains('Welcome home'));
     });
 
     test('/home reports an unknown home', () {
       essentials.home(command('home', 'missing', player: steve));
 
-      expect(host.callsTo('player.teleport'), isEmpty);
-      expect(host.lastMessageTo(1), contains('not found'));
+      expect(binding.callsTo('teleport'), isEmpty);
+      expect(binding.lastMessageTo(1), contains('not found'));
     });
 
     test('/delhome removes an existing home', () {
@@ -303,7 +309,7 @@ void main() {
       essentials.deleteHome(command('delhome', 'base', player: steve));
 
       expect(store.get('uuid-steve', 'base'), isNull);
-      expect(host.lastMessageTo(1), contains('deleted'));
+      expect(binding.lastMessageTo(1), contains('deleted'));
     });
 
     test('/homes lists names in sorted order', () {
@@ -313,41 +319,39 @@ void main() {
 
       essentials.listHomes(command('homes', '', player: steve));
 
-      expect(host.lastMessageTo(1), contains('alpha, zebra'));
+      expect(binding.lastMessageTo(1), contains('alpha, zebra'));
     });
 
     test('/spawn teleports to the world spawn', () {
-      host.spawnPoint = const Vec3(0, 64, 0);
+      binding.spawnPoint = const Vec3(0, 64, 0);
 
       essentials.spawn(command('spawn', '', player: steve));
 
-      final teleport = host.callsTo('player.teleport').single;
-      expect(teleport.params['x'], 0.0);
-      expect(teleport.params['y'], 64.0);
-      expect(teleport.params['z'], 0.0);
+      final teleport = binding.callsTo('teleport').single;
+      expect(teleport.args[0].value, const Vec3(0, 64, 0));
     });
 
     test('/heal restores full health', () {
       essentials.heal(command('heal', '', player: steve));
 
-      final setHealth = host.callsTo('player.set_health').single;
-      expect(setHealth.params['health'], Essentials.maxHealth);
-      expect(host.lastMessageTo(1), contains('healed'));
+      final setHealth = binding.callsTo('set_health').single;
+      expect(setHealth.args.single.value, Essentials.maxHealth);
+      expect(binding.lastMessageTo(1), contains('healed'));
     });
 
     test('/tpa and /tpaccept teleport the requester', () {
       final alexPlayer = alex();
 
       essentials.tpa(command('tpa', 'Alex', player: steve));
-      expect(host.lastMessageTo(2), contains('Steve'));
+      expect(binding.lastMessageTo(2), contains('Steve'));
 
-      host.position = const Vec3(4, 65, 4);
+      binding.position = const Vec3(4, 65, 4);
       essentials.acceptTeleport(command('tpaccept', '', player: alexPlayer));
 
-      final teleport = host.callsTo('player.teleport').single;
-      expect(teleport.params['entity'], 1);
-      expect(teleport.params['x'], 4.0);
-      expect(host.lastMessageTo(1), contains('accepted'));
+      final teleport = binding.callsTo('teleport').single;
+      expect(teleport.instance.generation, 1);
+      expect(teleport.args[0].value, const Vec3(4, 65, 4));
+      expect(binding.lastMessageTo(1), contains('accepted'));
     });
 
     test('/tpdeny discards the request', () {
@@ -356,8 +360,8 @@ void main() {
       essentials.tpa(command('tpa', 'Alex', player: steve));
       essentials.denyTeleport(command('tpdeny', '', player: alexPlayer));
 
-      expect(host.callsTo('player.teleport'), isEmpty);
-      expect(host.lastMessageTo(1), contains('denied'));
+      expect(binding.callsTo('teleport'), isEmpty);
+      expect(binding.lastMessageTo(1), contains('denied'));
     });
 
     test('/msg delivers a private message', () {
@@ -367,29 +371,28 @@ void main() {
         command('msg', 'Alex hello there', player: steve),
       );
 
-      expect(host.lastMessageTo(2), contains('hello there'));
-      expect(host.lastMessageTo(1), contains('hello there'));
+      expect(binding.lastMessageTo(2), contains('hello there'));
+      expect(binding.lastMessageTo(1), contains('hello there'));
     });
 
     test('/who lists online players', () {
       alex();
-      host.players['Steve'] = steve;
 
       essentials.who(command('who', '', player: steve));
 
-      final message = host.lastMessageTo(1);
+      final message = binding.lastMessageTo(1);
       expect(message, contains('Alex'));
       expect(message, contains('Steve'));
     });
 
     test('registers every command and dispatches through PluginContext', () {
-      final context = PluginContext(host);
-      Essentials(host: context, homes: store).register(context);
+      Essentials(context: context, homes: store).register();
 
       expect(
-        host.commands.map((command) => command.name),
+        shim.commands.map((command) => command.name),
         containsAll(<String>[
           'spawn',
+          'setblock',
           'sethome',
           'home',
           'delhome',
@@ -402,11 +405,11 @@ void main() {
           'heal',
         ]),
       );
-      expect(host.events, contains(EventKind.playerLeave));
+      expect(shim.events, contains(EventKind.playerLeave));
 
       context.executeCommand(command('heal', '', player: steve));
 
-      expect(host.callsTo('player.set_health'), hasLength(1));
+      expect(binding.callsTo('set_health'), hasLength(1));
     });
   });
 }

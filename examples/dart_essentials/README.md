@@ -9,6 +9,7 @@ process in an embedded Dart VM; host calls go directly through the
 | Command | Description |
 | --- | --- |
 | `/spawn` | Teleport to the world spawn. |
+| `/setblock <x> <y> <z> <block>` | Place a block's default state. |
 | `/sethome [name]` | Save the current position as a home (default `home`). |
 | `/home [name]` | Teleport to a saved home. |
 | `/delhome [name]` | Delete a saved home. |
@@ -68,5 +69,5 @@ sidecar.example.json   runtime manifest template
 ## Testing without the VM
 
 Command handlers take a `CommandContext` and perform everything through the
-typed `PluginHost` interface. `test/essentials_test.dart` supplies a fake host,
-so the full command logic runs in memory.
+generated `Player`/`World`/`Server` classes. `test/essentials_test.dart` supplies
+a fake `SteelBinding`, so the full command logic runs in memory.

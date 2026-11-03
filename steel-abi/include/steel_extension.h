@@ -33,6 +33,10 @@ typedef struct SteelItemHooks SteelItemHooks;
 typedef struct SteelEntityHooks SteelEntityHooks;
 typedef struct SteelBlockEntityHooks SteelBlockEntityHooks;
 typedef struct SteelEvent SteelEvent;
+typedef struct SteelMethodBind SteelMethodBind;
+typedef struct SteelMethodBindDesc SteelMethodBindDesc;
+typedef struct SteelExtensionMethodDesc SteelExtensionMethodDesc;
+typedef struct SteelExtensionClassDesc SteelExtensionClassDesc;
 typedef struct SteelInterface SteelInterface;
 typedef struct SteelExtension SteelExtension;
 
@@ -111,6 +115,12 @@ typedef int32_t (*SteelWorldGetSpawnFn)(SteelWorldRef, SteelVec3*);
 typedef uint32_t (*SteelWorldPlayerCountFn)(SteelWorldRef);
 typedef int32_t (*SteelWorldPlayerAtFn)(SteelWorldRef, uint32_t, SteelOptEntityRef*);
 typedef int32_t (*SteelWorldFindPlayerFn)(SteelWorldRef, SteelStrView, SteelOptEntityRef*);
+typedef void (*SteelMethodThunk)(void*, SteelRef, const const void**, void*);
+typedef const SteelMethodBind* (*SteelClassdbGetMethodBindFn)(SteelStrView, SteelStrView, uint32_t);
+typedef int32_t (*SteelMethodBindPtrcallFn)(const SteelMethodBind*, SteelRef, const const void**, void*);
+typedef int32_t (*SteelClassConstructFn)(void*, const const void**, SteelRef*);
+typedef int32_t (*SteelRegisterExtensionClassFn)(const SteelExtensionClassDesc*);
+typedef int32_t (*SteelClassdbConstructFn)(SteelStrView, const const void**, SteelRef*);
 typedef int32_t (*SteelInitializeFn)(uint32_t, void*);
 typedef void (*SteelDeinitializeFn)(uint32_t, void*);
 typedef const SteelExtension* (*SteelExtensionEntryFn)(const SteelInterface*);
@@ -184,6 +194,10 @@ typedef const SteelExtension* (*SteelExtensionEntryFn)(const SteelInterface*);
 #define STEEL_EVENT_PLAYER_LEAVE 4
 #define STEEL_EVENT_CHAT 5
 #define STEEL_EVENT_CANCELLED 1
+#define STEEL_REF_WORLD 9
+#define STEEL_REF_BLOCK_STATE 10
+#define STEEL_REF_EXTENSION 11
+#define STEEL_REF_ENTITY 12
 
 /* Struct definitions. */
 struct SteelStrView {
@@ -394,6 +408,35 @@ struct SteelEvent {
     SteelStrView text;
 };
 
+struct SteelMethodBind {
+    uint8_t _unused;
+};
+
+struct SteelMethodBindDesc {
+    SteelStrView class_name;
+    SteelStrView method_name;
+    uint32_t hash;
+    SteelMethodThunk thunk;
+    void* user_data;
+};
+
+struct SteelExtensionMethodDesc {
+    SteelStrView method_name;
+    uint32_t hash;
+    SteelMethodThunk thunk;
+    void* user_data;
+};
+
+struct SteelExtensionClassDesc {
+    uint32_t struct_size;
+    SteelStrView class_name;
+    SteelStrView inherits;
+    SteelClassConstructFn construct;
+    void* construct_user_data;
+    const SteelExtensionMethodDesc* methods;
+    size_t method_count;
+};
+
 struct SteelInterface {
     uint32_t struct_size;
     uint32_t api_version;
@@ -451,6 +494,10 @@ struct SteelInterface {
     SteelWorldPlayerCountFn world_player_count;
     SteelWorldPlayerAtFn world_player_at;
     SteelWorldFindPlayerFn world_find_player;
+    SteelClassdbGetMethodBindFn classdb_get_method_bind;
+    SteelMethodBindPtrcallFn method_bind_ptrcall;
+    SteelRegisterExtensionClassFn register_extension_class;
+    SteelClassdbConstructFn classdb_construct;
 };
 
 struct SteelExtension {

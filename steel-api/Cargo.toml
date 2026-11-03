@@ -1,0 +1,25 @@
+[package]
+name = "steel-api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+steel-abi = { workspace = true }
+steel-api-macros = { path = "../steel-api-macros" }
+steel-core = { workspace = true }
+steel-registry = { workspace = true }
+steel-utils = { workspace = true }
+steel-protocol = { workspace = true }
+text_components = { workspace = true }
+glam = { workspace = true }
+rustc-hash = { workspace = true }
+simdnbt = { workspace = true }
+log = { workspace = true }
+
+[build-dependencies]
+steel-api-codegen = { path = "../steel-api-codegen" }
+
+[lints]
+workspace = true

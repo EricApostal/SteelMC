@@ -1367,4 +1367,8 @@ pub static INTERFACE: SteelInterface = SteelInterface {
     world_player_count: Some(host_world_player_count),
     world_player_at: Some(host_world_player_at),
     world_find_player: Some(host_world_find_player),
+    classdb_get_method_bind: Some(steel_api::classdb::classdb_get_method_bind),
+    method_bind_ptrcall: Some(steel_api::classdb::method_bind_ptrcall),
+    register_extension_class: Some(steel_api::classdb::register_extension_class),
+    classdb_construct: Some(steel_api::classdb::classdb_construct),
 };

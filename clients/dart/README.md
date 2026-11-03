@@ -5,9 +5,11 @@
 - `lib/steel.dart` — generated `dart:ffi` structs/function types for the
   `SteelInterface` C ABI (`lib/src/bindings.g.dart`).
 - `lib/steel_plugin.dart` — the in-process plugin authoring API. Plugins run
-  inside the server process in an embedded Dart VM and call host functions
-  directly through the C function table. There is no JSON or subprocess
-  boundary.
+  inside the server process in an embedded Dart VM and call host methods
+  through ClassDB MethodBinds. There is no JSON or subprocess boundary.
+- `lib/src/steel/generated.dart` — the generated host classes (`World`,
+  `Entity`, `Player`, `Server`, `Block`, ...). Every method is a typed call
+  through `SteelBinding`; plugins never see FFI signatures.
 
 ## Generating the bindings
 
@@ -17,8 +19,8 @@ cargo run -p steel-plugin-gen -- --check   # fail if generated files are stale
 ```
 
 This refreshes `steel-abi/steel_api.json`, `steel-abi/include/steel_extension.h`,
-`clients/dart/lib/src/bindings.g.dart`, and
-`clients/dart/lib/src/plugin/generated_api.dart`.
+`clients/dart/lib/src/bindings.g.dart`, `clients/dart/lib/src/steel/ffi_api.dart`,
+`steel-api/steel_api.json`, and `clients/dart/lib/src/steel/generated.dart`.
 
 ## Embedded runtime
 
@@ -57,7 +59,7 @@ final class Greeter implements SteelPlugin {
     context.command('hello')
       .description('Say hello.')
       .executes((command) {
-        command.player?.sendMessage('Hello, ${command.player?.name}!');
+        command.player?.sendMessage('Hello, ${command.player?.name()}!');
       });
     context.onChat((event) {
       if (event.text.contains('bad')) event.cancel();
@@ -68,9 +70,11 @@ final class Greeter implements SteelPlugin {
 void main() => runSteelPlugin(Greeter());
 ```
 
-`Player`, `World`, and `Server` are generated from `steel-plugin-gen` and call
-the `PluginHost` interface, which `NativePluginHost` implements directly over
-`SteelInterface`. Tests implement `PluginHost` with canned values.
+`Player`, `World`, `Block`, and the other host classes are generated from
+`steel-api/steel_api.json` by `steel-plugin-gen`. They call host methods through
+`SteelBinding.ptrcall`, which caches ClassDB MethodBinds and handles the native
+argument/return layout. Tests implement `SteelBinding` (and `NativeShim`) with
+canned values.
 
 ## Tests
 
@@ -80,6 +84,6 @@ dart test
 ```
 
 The FFI conformance tests look for `target/debug/libsteel_abi.so` (or set
-`STEEL_ABI_LIB`). The plugin tests use an in-memory `PluginHost`.
+`STEEL_ABI_LIB`). The plugin tests use an in-memory `SteelBinding`.
 
 See `examples/dart_essentials` for a complete Essentials-style plugin.
