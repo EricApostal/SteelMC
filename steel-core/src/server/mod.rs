@@ -660,9 +660,6 @@ impl Server {
         validate_login_security(config.online_mode, config.encryption).map_err(str::to_owned)?;
         let config = Arc::new(config);
         init_globals();
-        log::info!(
-            "SteelMC is not affiliated with Mojang or Microsoft. Use is subject to the Minecraft EULA: https://aka.ms/MinecraftEULA"
-        );
 
         // Authlib starts this fetch alongside server initialization and waits on first use.
         // It runs whatever the login mode, because `handle_chat_session_update` reads these
