@@ -154,6 +154,22 @@ pub unsafe extern "C" fn register_extension_class(desc: *const SteelExtensionCla
     STEEL_OK
 }
 
+/// Reports whether a MethodBind came from an extension class.
+pub unsafe extern "C" fn method_bind_is_extension(bind: *const SteelMethodBind) -> bool {
+    if bind.is_null() {
+        return false;
+    }
+    let bind = bind.cast::<SteelMethodBindDesc>();
+    let classes = EXTENSION_CLASSES.read();
+    // SAFETY: extension method descriptors are leaked for the process lifetime.
+    classes.iter().any(|class| {
+        class
+            .methods
+            .iter()
+            .any(|method| std::ptr::eq(method, bind))
+    })
+}
+
 pub unsafe extern "C" fn classdb_construct(
     class_name: SteelStrView,
     args: *const *const c_void,

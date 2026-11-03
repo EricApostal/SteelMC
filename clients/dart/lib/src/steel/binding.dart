@@ -196,6 +196,9 @@ abstract interface class SteelBinding {
     List<SteelArg> args,
     SteelReturnKind returnKind,
   );
+
+  /// Constructs an extension-class instance and returns its handle.
+  SteelRef construct(String className, [List<SteelArg> args = const <SteelArg>[]]);
 }
 
 /// Creates a host reference with explicit fields.
@@ -303,6 +306,33 @@ final class NativeSteelBinding implements SteelBinding {
         );
       }
       return _decodeReturn(returnKind, result);
+    });
+  }
+
+  @override
+  SteelRef construct(String className, [List<SteelArg> args = const <SteelArg>[]]) {
+    return using((Arena arena) {
+      final classView = _stringView(arena, className);
+      final encoded = <Pointer<Void>>[
+        for (final arg in args) _encodeArg(arena, arg),
+      ];
+      Pointer<Pointer<Void>> arguments = nullptr;
+      if (encoded.isNotEmpty) {
+        arguments = arena<Pointer<Void>>(encoded.length);
+        for (var index = 0; index < encoded.length; index++) {
+          arguments[index] = encoded[index];
+        }
+      }
+      final result = arena<SteelRef>();
+      final status = _ffi.classdbConstruct(
+        classView,
+        encoded.isEmpty ? nullptr : arguments,
+        result,
+      );
+      if (status != SteelConstants.steelOk) {
+        throw SteelHostException('construct $className failed with status $status');
+      }
+      return steelRef(result.ref.kind, result.ref.index, result.ref.generation);
     });
   }
 }

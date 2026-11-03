@@ -76,6 +76,111 @@ void main() => runSteelPlugin(Greeter());
 argument/return layout. Tests implement `SteelBinding` (and `NativeShim`) with
 canned values.
 
+## Extension classes
+
+A plugin can also expose Dart classes to the host ClassDB. Annotate the class
+with `@SteelClass` and its instance methods with `@SteelMethod`, then add a
+`part` directive and run the `steel_builder` generator:
+
+```dart
+import 'package:steel_extension/annotations.dart';
+
+part 'greeter.steel.dart';
+
+@SteelClass('Greeter')
+final class Greeter {
+  @SteelMethod()
+  String greet(String name) => 'Hello, $name!';
+
+  @SteelMethod()
+  int count() => 0;
+}
+```
+
+```sh
+dart run build_runner build
+```
+
+This writes `greeter.steel.dart` with a `List<SteelClassRegistration>
+get steelClasses` getter. Pass it to the runtime:
+
+```dart
+void main() => runSteelPlugin(MyPlugin(), classes: steelClasses);
+```
+
+`runSteelPlugin` registers each class through the native shim, which forwards
+`SteelExtensionClassDesc`/`SteelExtensionMethodDesc` entries to the host
+ClassDB immediately (and retries at the behavior phase if the host was not
+ready). The host can then construct instances with `classdb_construct` and
+call methods through `classdb_get_method_bind` + `method_bind_ptrcall`.
+Instance handles use `SteelRef { kind: STEEL_REF_EXTENSION (11), index:
+instance_id, generation: 1 }`.
+
+### Calling another Dart plugin
+
+All plugins share one host ClassDB. A plugin does not get a private ClassDB;
+it contributes classes to the shared table. That is what makes cross-plugin
+calls possible without RPC or IPC:
+
+```dart
+final vault = binding.construct('Vault');
+final balance = binding
+    .ptrcall(
+      'Vault',
+      'deposit',
+      steelMethodHash('Vault::deposit(String,double)->double'),
+      vault,
+      <SteelArg>[SteelArg.string('Steve'), SteelArg.f64(15.5)],
+      SteelReturnKind.f64,
+    )
+    .asDouble();
+```
+
+The host resolves `Vault` in the same ClassDB and invokes the provider's thunk.
+The provider's thunk acquires the provider isolate, calls its Dart method, and
+returns. Each shim gives Dart a local interface copy whose `classdb_construct`
+and `method_bind_ptrcall` wrappers release the caller isolate around the host
+call, so the callee shim can `DartEngine_AcquireIsolate` its own isolate. This
+is the only isolate-handoff detail a plugin author needs to know.
+
+Provider and consumer must agree on the class name, method name, argument
+types, and hash. Share a small Dart interface package, or pass `0` as the hash
+to resolve by name. Both plugins must be loaded before the first cross-plugin
+call; resolve binds lazily if load order is not guaranteed.
+
+### Plugins folder
+
+`ExtensionManager::load_dir` walks subdirectories, so a server can use:
+
+```text
+plugins/
+  01_vault/
+    plugin.so          # copy of libsteel_dart_embed.so
+    plugin.so.json     # {"id":"vault", "kernel":"vault.dill", ...}
+    vault.dill
+  02_economy/
+    plugin.so
+    plugin.so.json
+    economy.dill
+```
+
+Each plugin needs its own physical shim copy: the shim's VM engine, class
+tables, and registrations are process-global per loaded library. A shared
+`libdart_engine_jit_shared.so` may be referenced by every sidecar.
+
+Method signatures support required positional parameters of `int`, `double`,
+`bool` and `String`, and return one of those types or `void`. The generator
+reports any other type (including named or optional parameters, static methods
+and classes without an unnamed no-argument constructor) as a build error.
+Method hashes are FNV-1a 32 over `HostClass::method(ArgType,...)->ReturnType`,
+computed by `steelMethodHash`.
+
+`@SteelProperty` is recorded for tooling only; expose a getter annotated with
+`@SteelMethod` to make a value reachable from the host.
+
+The builder is `clients/dart_builder`; it is applied automatically to packages
+that depend on it (see `build.yaml` here and in `examples/dart_essentials`).
+
 ## Tests
 
 ```sh

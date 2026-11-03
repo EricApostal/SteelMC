@@ -316,7 +316,10 @@ fn api_type(rust_type: &str) -> Result<String, String> {
         "SteelWorldRef" => "SteelWorldRef",
         "SteelEntityRef" => "SteelEntityRef",
         "SteelBlockState" => "SteelBlockState",
-        "BlockId" | "BlockStateId" | "ItemId" | "WorldId" | "EntityId" => "u32",
+        "BlockId" => "BlockId",
+        "BlockStateId" => "BlockStateId",
+        "ItemId" => "ItemId",
+        "WorldId" | "EntityId" => "u32",
         "()" | "" => return Ok("()".to_owned()),
         other => return Err(format!("unsupported API type `{other}`")),
     };

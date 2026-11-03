@@ -151,6 +151,28 @@ fn with_extension_context<R>(loaded: &LoadedExtension, f: impl FnOnce() -> R) ->
     result
 }
 
+fn collect_shared_libraries(
+    directory: &Path,
+    paths: &mut Vec<PathBuf>,
+) -> Result<(), ExtensionError> {
+    for entry in std::fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_shared_libraries(&path, paths)?;
+            continue;
+        }
+        let supported = path
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|extension| matches!(extension, "so" | "dylib" | "dll"));
+        if supported {
+            paths.push(path);
+        }
+    }
+    Ok(())
+}
+
 /// Handle used by the server to load extensions and drive the init phases.
 #[derive(Default)]
 pub struct ExtensionManager;
@@ -206,24 +228,17 @@ impl ExtensionManager {
         Ok(())
     }
 
-    /// Loads every shared library in `directory` in deterministic path order.
+    /// Loads every shared library under `directory` in deterministic path order.
+    ///
+    /// Subdirectories are scanned recursively, so each plugin can own a directory
+    /// containing its library, sidecar, and data files.
     pub fn load_dir(&self, directory: impl AsRef<Path>) -> Result<usize, ExtensionError> {
         let directory = directory.as_ref();
         if !directory.exists() {
             return Ok(0);
         }
         let mut paths = Vec::new();
-        for entry in std::fs::read_dir(directory)? {
-            let entry = entry?;
-            let path = entry.path();
-            let supported = path
-                .extension()
-                .and_then(std::ffi::OsStr::to_str)
-                .is_some_and(|extension| matches!(extension, "so" | "dylib" | "dll"));
-            if supported {
-                paths.push(path);
-            }
-        }
+        collect_shared_libraries(directory, &mut paths)?;
         paths.sort();
         let mut loaded = 0;
         for path in paths {

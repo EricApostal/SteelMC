@@ -1279,6 +1279,10 @@
         {
           "name": "classdb_construct",
           "rust_type": "Option<SteelClassdbConstructFn>"
+        },
+        {
+          "name": "classdb_method_bind_is_extension",
+          "rust_type": "Option<SteelMethodBindIsExtensionFn>"
         }
       ]
     },
@@ -2061,6 +2065,13 @@
         "*mut SteelRef"
       ],
       "return": "i32"
+    },
+    {
+      "name": "SteelMethodBindIsExtensionFn",
+      "args": [
+        "*const SteelMethodBind"
+      ],
+      "return": "bool"
     },
     {
       "name": "SteelInitializeFn",

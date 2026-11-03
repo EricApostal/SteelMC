@@ -1,0 +1,17 @@
+name: steel_builder
+description: build_runner generator for Steel Dart extension classes.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  analyzer: ^14.0.0
+  build: ^5.0.0
+  source_gen: ^4.0.0
+  steel_extension:
+    path: ../dart
+
+dev_dependencies:
+  test: ^1.25.0

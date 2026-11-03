@@ -98,10 +98,6 @@ final class _ProcessNativeShim implements NativeShim {
     _log = _library.lookupFunction<_ShimLogNative, _ShimLogDart>(
       'steel_shim_log',
     );
-    _registerClass = _library.lookupFunction<
-        _ShimRegisterClassNative, _ShimRegisterClassDart>(
-      'steel_shim_register_class',
-    );
   }
 
   factory _ProcessNativeShim.fromAddress(int address) {
@@ -125,7 +121,13 @@ final class _ProcessNativeShim implements NativeShim {
   late final _ShimRegisterCommandDart _registerCommand;
   late final _ShimRegisterEventDart _registerEvent;
   late final _ShimLogDart _log;
-  late final _ShimRegisterClassDart _registerClass;
+
+  // Resolved lazily so plugins that do not declare extension classes keep
+  // working with a shim that predates `steel_shim_register_class`.
+  late final _ShimRegisterClassDart _registerClass = _library.lookupFunction<
+      _ShimRegisterClassNative, _ShimRegisterClassDart>(
+    'steel_shim_register_class',
+  );
 
   @override
   int registerCommand(

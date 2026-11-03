@@ -113,6 +113,12 @@ final class FakeSteelBinding implements SteelBinding {
         throw StateError('unexpected host call $className.$methodName');
     }
   }
+
+  @override
+  SteelRef construct(String className, [List<SteelArg> args = const <SteelArg>[]]) {
+    calls.add(HostCall(className, '<construct>', 0, steelNoneRef(), args));
+    return steelRef(11, 1, 1);
+  }
 }
 
 /// In-memory [NativeShim].
@@ -121,6 +127,7 @@ final class FakeNativeShim implements NativeShim {
   final List<int> commandIds = <int>[];
   final List<int> events = <int>[];
   final List<String> logs = <String>[];
+  final List<RegisteredClass> classes = <RegisteredClass>[];
 
   @override
   int registerCommand(
@@ -147,10 +154,55 @@ final class FakeNativeShim implements NativeShim {
   }
 
   @override
+  int registerClass({
+    required String name,
+    required String inherits,
+    required List<String> methodNames,
+    required List<int> methodHashes,
+    required List<int> argCounts,
+    required List<int> argTypes,
+    required List<int> returnTypes,
+  }) {
+    classes.add(
+      RegisteredClass(
+        name: name,
+        inherits: inherits,
+        methodNames: methodNames,
+        methodHashes: methodHashes,
+        argCounts: argCounts,
+        argTypes: argTypes,
+        returnTypes: returnTypes,
+      ),
+    );
+    return 0;
+  }
+
+  @override
   int log(int level, String message) {
     logs.add('$level: $message');
     return 0;
   }
+}
+
+/// One class registration observed by [FakeNativeShim].
+final class RegisteredClass {
+  RegisteredClass({
+    required this.name,
+    required this.inherits,
+    required this.methodNames,
+    required this.methodHashes,
+    required this.argCounts,
+    required this.argTypes,
+    required this.returnTypes,
+  });
+
+  final String name;
+  final String inherits;
+  final List<String> methodNames;
+  final List<int> methodHashes;
+  final List<int> argCounts;
+  final List<int> argTypes;
+  final List<int> returnTypes;
 }
 
 final class RegistrationPlugin implements SteelPlugin {
@@ -244,8 +296,8 @@ void main() {
     binding.blocks[(1, 64, 2)] = 42;
     final world = context.world(0);
 
-    expect(world.getBlock(1, 64, 2), 42);
-    expect(world.setBlock(1, 64, 2, 7, 3), isTrue);
+    expect(world.getBlock(1, 64, 2).id, 42);
+    expect(world.setBlock(1, 64, 2, BlockState(binding, 7), 3), isTrue);
     expect(binding.blocks[(1, 64, 2)], 7);
 
     final call = binding.callsTo('set_block').single;
@@ -264,12 +316,12 @@ void main() {
 
     expect(block, isNotNull);
     expect(block!.id, 1);
-    expect(block.defaultState(), 100);
+    expect(block.defaultState().id, 100);
 
-    final state = BlockState(binding, block.defaultState());
-    expect(state.withBool('lit', true), 101);
-    expect(state.withInt('level', 3), 101);
-    expect(state.withEnum('axis', 'x'), 101);
+    final state = block.defaultState();
+    expect(state.withBool('lit', true).id, 101);
+    expect(state.withInt('level', 3).id, 101);
+    expect(state.withEnum('axis', 'x').id, 101);
 
     final call = binding.callsTo('with_bool').single;
     expect(call.args[0].value, 'lit');

@@ -100,6 +100,10 @@ impl Context {
                 let qualifier = if *mutable { "" } else { "const " };
                 if elem.is_c_void() {
                     format!("{qualifier}void*")
+                } else if matches!(elem.as_ref(), RustType::Pointer { .. }) {
+                    let inner = self.ty(elem);
+                    let inner = inner.trim_start_matches("const ");
+                    format!("{qualifier}{inner}*")
                 } else {
                     format!("{qualifier}{}*", self.ty(elem))
                 }

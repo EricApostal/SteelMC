@@ -9,4 +9,10 @@ environment:
 dependencies: {ffi: ^2.1.0}
 
 dev_dependencies:
+  analyzer: ^14.0.0
+  build: ^5.0.0
+  build_runner: ^2.15.0
+  source_gen: ^4.0.0
+  steel_builder:
+    path: ../dart_builder
   test: ^1.25.0

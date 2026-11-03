@@ -216,7 +216,15 @@ fn emit_from_ref(output: &mut String, name: &str, handle: &str) -> Result<(), St
         output,
         "  /// Wraps a host reference returned by another method.\n  factory {name}.fromRef(SteelBinding binding, SteelRef reference) =>\n      {call};"
     )
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    if matches!(handle, "world" | "block" | "block_state" | "item") {
+        writeln!(
+            output,
+            "\n  /// Wraps a host handle id returned by another method.\n  factory {name}.fromId(SteelBinding binding, int id) =>\n      {name}(binding, id);"
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn emit_method(output: &mut String, class: &Class, method: &Method) -> Result<(), String> {
@@ -234,17 +242,24 @@ fn emit_method(output: &mut String, class: &Class, method: &Method) -> Result<()
     }
     let return_type = match &method.returns_class {
         Some(class) => format!("{class}?"),
-        None => method
-            .returns
-            .as_deref()
-            .map_or_else(|| Ok("void".to_owned()), dart_return)?,
+        None => match method.returns.as_deref() {
+            Some("BlockId") => "Block".to_owned(),
+            Some("BlockStateId") => "BlockState".to_owned(),
+            Some("ItemId") => "Item".to_owned(),
+            other => other.map_or_else(|| Ok("void".to_owned()), dart_return)?,
+        },
     };
     let arguments = method
         .args
         .iter()
         .map(|argument| {
             let param = snake_to_lower_camel(&argument.name);
-            Ok(format!("SteelArg.{}({param})", arg_encoder(&argument.ty)?))
+            Ok(match argument.ty.as_str() {
+                "BlockId" | "BlockStateId" | "ItemId" => {
+                    format!("SteelArg.u32({param}.id)")
+                }
+                _ => format!("SteelArg.{}({param})", arg_encoder(&argument.ty)?),
+            })
         })
         .collect::<Result<Vec<_>, String>>()?;
     let instance = if method.is_static {
@@ -280,6 +295,12 @@ fn emit_method(output: &mut String, class: &Class, method: &Method) -> Result<()
             "    final returned = {call}\n        .asRef();\n    if (returned.kind == SteelConstants.steelRefNone) {{\n      return null;\n    }}\n    return {class}.fromRef(binding, returned);"
         )
         .map_err(|error| error.to_string())?;
+    } else if let Some(class) = method_returns_handle(method) {
+        writeln!(
+            output,
+            "    final returned = {call}\n        .asInt();\n    return {class}.fromId(binding, returned);"
+        )
+        .map_err(|error| error.to_string())?;
     } else if return_type == "void" {
         writeln!(output, "    {call};").map_err(|error| error.to_string())?;
     } else {
@@ -294,6 +315,15 @@ fn emit_method(output: &mut String, class: &Class, method: &Method) -> Result<()
     Ok(())
 }
 
+fn method_returns_handle(method: &Method) -> Option<&'static str> {
+    match method.returns.as_deref()? {
+        "BlockId" => Some("Block"),
+        "BlockStateId" => Some("BlockState"),
+        "ItemId" => Some("Item"),
+        _ => None,
+    }
+}
+
 fn dart_type(ty: &str) -> Result<&'static str, String> {
     Ok(match ty {
         "i32" | "u32" => "int",
@@ -302,6 +332,9 @@ fn dart_type(ty: &str) -> Result<&'static str, String> {
         "SteelStrView" => "String",
         "SteelVec3" => "Vec3",
         "SteelRef" => "SteelRef",
+        "BlockId" => "Block",
+        "BlockStateId" => "BlockState",
+        "ItemId" => "Item",
         other => return Err(format!("unsupported argument type `{other}`")),
     })
 }
@@ -323,6 +356,7 @@ fn arg_encoder(ty: &str) -> Result<&'static str, String> {
         "SteelStrView" => "string",
         "SteelVec3" => "vec3",
         "SteelRef" => "ref",
+        "BlockId" | "BlockStateId" | "ItemId" => "u32",
         other => return Err(format!("unsupported argument type `{other}`")),
     })
 }
@@ -341,6 +375,7 @@ fn method_return_kind(method: &Method) -> Result<&'static str, String> {
         Some("SteelStrView") => "string",
         Some("SteelVec3") => "vec3",
         Some("SteelRef") => "ref",
+        Some("BlockId" | "BlockStateId" | "ItemId") => "u32",
         Some(other) => return Err(format!("unsupported return type `{other}`")),
     })
 }

@@ -1,0 +1,17 @@
+name: steel_interop
+description: Two Dart Steel plugins communicating through ClassDB.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  steel_extension:
+    path: ../../clients/dart
+
+dev_dependencies:
+  build_runner: ^2.15.0
+  steel_builder:
+    path: ../../clients/dart_builder
+  test: ^1.25.0

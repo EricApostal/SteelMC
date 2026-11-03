@@ -115,12 +115,13 @@ typedef int32_t (*SteelWorldGetSpawnFn)(SteelWorldRef, SteelVec3*);
 typedef uint32_t (*SteelWorldPlayerCountFn)(SteelWorldRef);
 typedef int32_t (*SteelWorldPlayerAtFn)(SteelWorldRef, uint32_t, SteelOptEntityRef*);
 typedef int32_t (*SteelWorldFindPlayerFn)(SteelWorldRef, SteelStrView, SteelOptEntityRef*);
-typedef void (*SteelMethodThunk)(void*, SteelRef, const const void**, void*);
+typedef void (*SteelMethodThunk)(void*, SteelRef, const void**, void*);
 typedef const SteelMethodBind* (*SteelClassdbGetMethodBindFn)(SteelStrView, SteelStrView, uint32_t);
-typedef int32_t (*SteelMethodBindPtrcallFn)(const SteelMethodBind*, SteelRef, const const void**, void*);
-typedef int32_t (*SteelClassConstructFn)(void*, const const void**, SteelRef*);
+typedef int32_t (*SteelMethodBindPtrcallFn)(const SteelMethodBind*, SteelRef, const void**, void*);
+typedef int32_t (*SteelClassConstructFn)(void*, const void**, SteelRef*);
 typedef int32_t (*SteelRegisterExtensionClassFn)(const SteelExtensionClassDesc*);
-typedef int32_t (*SteelClassdbConstructFn)(SteelStrView, const const void**, SteelRef*);
+typedef int32_t (*SteelClassdbConstructFn)(SteelStrView, const void**, SteelRef*);
+typedef uint8_t (*SteelMethodBindIsExtensionFn)(const SteelMethodBind*);
 typedef int32_t (*SteelInitializeFn)(uint32_t, void*);
 typedef void (*SteelDeinitializeFn)(uint32_t, void*);
 typedef const SteelExtension* (*SteelExtensionEntryFn)(const SteelInterface*);
@@ -498,6 +499,7 @@ struct SteelInterface {
     SteelMethodBindPtrcallFn method_bind_ptrcall;
     SteelRegisterExtensionClassFn register_extension_class;
     SteelClassdbConstructFn classdb_construct;
+    SteelMethodBindIsExtensionFn classdb_method_bind_is_extension;
 };
 
 struct SteelExtension {

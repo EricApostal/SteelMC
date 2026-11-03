@@ -58,9 +58,9 @@ pub struct WorldApi;
 impl WorldApi {
     #[steel_method]
     #[must_use]
-    pub fn get_block(world_id: SteelWorldRef, x: i32, y: i32, z: i32) -> u32 {
-        world(world_id).map_or(0, |world| {
-            u32::from(world.get_block_state(BlockPos::new(x, y, z)).0)
+    pub fn get_block(world_id: SteelWorldRef, x: i32, y: i32, z: i32) -> BlockStateId {
+        world(world_id).map_or(BlockStateId(0), |world| {
+            BlockStateId(u32::from(world.get_block_state(BlockPos::new(x, y, z)).0))
         })
     }
 
@@ -71,13 +71,13 @@ impl WorldApi {
         x: i32,
         y: i32,
         z: i32,
-        state: u32,
+        state: BlockStateId,
         flags: u32,
     ) -> bool {
         let Some(world) = world(world_id) else {
             return false;
         };
-        let Some(state) = state_id(state) else {
+        let Some(state) = state_id(state.0) else {
             return false;
         };
         world.set_block(
@@ -343,11 +343,13 @@ impl BlockApi {
 
     #[steel_method]
     #[must_use]
-    pub fn default_state(block: BlockId) -> u32 {
+    pub fn default_state(block: BlockId) -> BlockStateId {
         steel_registry::REGISTRY
             .blocks
             .by_id(block.0 as usize)
-            .map_or(0, |block| u32::from(block.default_state().0))
+            .map_or(BlockStateId(0), |block| {
+                BlockStateId(u32::from(block.default_state().0))
+            })
     }
 }
 
@@ -362,22 +364,22 @@ pub struct BlockStateApi;
 impl BlockStateApi {
     #[steel_method]
     #[must_use]
-    pub fn with_bool(state: BlockStateId, name: SteelStrView, value: bool) -> u32 {
+    pub fn with_bool(state: BlockStateId, name: SteelStrView, value: bool) -> BlockStateId {
         set_property(state, name, if value { "true" } else { "false" })
     }
 
     #[steel_method]
     #[must_use]
-    pub fn with_int(state: BlockStateId, name: SteelStrView, value: i32) -> u32 {
+    pub fn with_int(state: BlockStateId, name: SteelStrView, value: i32) -> BlockStateId {
         set_property(state, name, &value.to_string())
     }
 
     #[steel_method]
     #[must_use]
-    pub fn with_enum(state: BlockStateId, name: SteelStrView, value: SteelStrView) -> u32 {
+    pub fn with_enum(state: BlockStateId, name: SteelStrView, value: SteelStrView) -> BlockStateId {
         // SAFETY: the host supplies a borrowed view for the call.
         let Some(value) = (unsafe { value.as_str() }) else {
-            return state.0;
+            return state;
         };
         set_property(state, name, value)
     }
@@ -434,19 +436,22 @@ impl BlockStateApi {
     }
 }
 
-fn set_property(state: BlockStateId, name: SteelStrView, value: &str) -> u32 {
+fn set_property(state: BlockStateId, name: SteelStrView, value: &str) -> BlockStateId {
     let original = state.0;
     // SAFETY: the host supplies a borrowed view for the call.
     let Some(name) = (unsafe { name.as_str() }) else {
-        return original;
+        return state;
     };
-    let Some(state) = state_id(original) else {
-        return original;
+    let Some(utils_state) = state_id(original) else {
+        return state;
     };
-    steel_registry::REGISTRY
+    match steel_registry::REGISTRY
         .blocks
-        .try_set_property_by_name(state, name, value)
-        .map_or(original, |state| u32::from(state.0))
+        .try_set_property_by_name(utils_state, name, value)
+    {
+        Some(updated) => BlockStateId(u32::from(updated.0)),
+        None => state,
+    }
 }
 
 #[steel_api(

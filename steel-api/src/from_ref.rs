@@ -5,8 +5,14 @@ use steel_abi::{
     SteelEntityRef, SteelRef, SteelWorldRef,
 };
 
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
 pub struct BlockId(pub u32);
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
 pub struct BlockStateId(pub u32);
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
 pub struct ItemId(pub u32);
 
 pub trait FromRef: Sized {

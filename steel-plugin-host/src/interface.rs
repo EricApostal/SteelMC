@@ -1371,4 +1371,5 @@ pub static INTERFACE: SteelInterface = SteelInterface {
     method_bind_ptrcall: Some(steel_api::classdb::method_bind_ptrcall),
     register_extension_class: Some(steel_api::classdb::register_extension_class),
     classdb_construct: Some(steel_api::classdb::classdb_construct),
+    classdb_method_bind_is_extension: Some(steel_api::classdb::method_bind_is_extension),
 };

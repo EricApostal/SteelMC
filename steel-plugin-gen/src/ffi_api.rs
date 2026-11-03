@@ -30,7 +30,7 @@ fn scalar(name: &str) -> Option<&'static str> {
     Some(match name {
         "u8" | "u16" | "u32" | "u64" | "usize" | "i8" | "i16" | "i32" | "i64" | "isize" => "int",
         "f32" | "f64" => "double",
-        "bool" => "bool",
+        "bool" => "int",
         _ => return None,
     })
 }
@@ -50,7 +50,7 @@ fn ffi_element(ty: &RustType) -> String {
             "isize" => "IntPtr".to_owned(),
             "f32" => "Float".to_owned(),
             "f64" => "Double".to_owned(),
-            "bool" => "Bool".to_owned(),
+            "bool" => "Uint8".to_owned(),
             "c_void" => "Void".to_owned(),
             other => other.to_owned(),
         },

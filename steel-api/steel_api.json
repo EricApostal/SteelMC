@@ -16,7 +16,7 @@
       "methods": [
         {
           "name": "get_block",
-          "hash": 569463099,
+          "hash": 3629935068,
           "static": false,
           "args": [
             {
@@ -32,11 +32,11 @@
               "type": "i32"
             }
           ],
-          "return": "u32"
+          "return": "BlockStateId"
         },
         {
           "name": "set_block",
-          "hash": 2073847571,
+          "hash": 3986618164,
           "static": false,
           "args": [
             {
@@ -53,7 +53,7 @@
             },
             {
               "name": "state",
-              "type": "u32"
+              "type": "BlockStateId"
             },
             {
               "name": "flags",
@@ -280,10 +280,10 @@
         },
         {
           "name": "default_state",
-          "hash": 2067085737,
+          "hash": 1993636594,
           "static": false,
           "args": [],
-          "return": "u32"
+          "return": "BlockStateId"
         }
       ]
     },
@@ -295,7 +295,7 @@
       "methods": [
         {
           "name": "with_bool",
-          "hash": 2979617657,
+          "hash": 109903330,
           "static": false,
           "args": [
             {
@@ -307,11 +307,11 @@
               "type": "bool"
             }
           ],
-          "return": "u32"
+          "return": "BlockStateId"
         },
         {
           "name": "with_int",
-          "hash": 934894016,
+          "hash": 236642261,
           "static": false,
           "args": [
             {
@@ -323,11 +323,11 @@
               "type": "i32"
             }
           ],
-          "return": "u32"
+          "return": "BlockStateId"
         },
         {
           "name": "with_enum",
-          "hash": 1460560745,
+          "hash": 813152946,
           "static": false,
           "args": [
             {
@@ -339,7 +339,7 @@
               "type": "SteelStrView"
             }
           ],
-          "return": "u32"
+          "return": "BlockStateId"
         },
         {
           "name": "get_bool",

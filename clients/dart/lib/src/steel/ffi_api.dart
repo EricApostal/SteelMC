@@ -598,4 +598,14 @@ final class SteelFfi {
     return function(arg0, arg1, arg2);
   }
 
+  /// Calls `classdb_method_bind_is_extension`.
+  int classdbMethodBindIsExtension(Pointer<SteelMethodBind> arg0) {
+    final pointer = _interface.ref.classdb_method_bind_is_extension;
+    if (pointer == nullptr) {
+      throw SteelHostException('classdb_method_bind_is_extension is unavailable');
+    }
+    final function = pointer.asFunction<int Function(Pointer<SteelMethodBind>)>();
+    return function(arg0);
+  }
+
 }

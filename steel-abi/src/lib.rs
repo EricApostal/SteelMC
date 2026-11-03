@@ -1090,6 +1090,10 @@ pub type SteelClassdbConstructFn = unsafe extern "C" fn(
     ret: *mut SteelRef,
 ) -> i32;
 
+/// Returns true when `bind` belongs to an extension class rather than the
+/// native host API.
+pub type SteelMethodBindIsExtensionFn = unsafe extern "C" fn(bind: *const SteelMethodBind) -> bool;
+
 /// Host function table passed to an extension's entry point.
 ///
 /// Callers must check [`Self::api_version`] and may only read fields covered by
@@ -1157,6 +1161,7 @@ pub struct SteelInterface {
     pub method_bind_ptrcall: Option<SteelMethodBindPtrcallFn>,
     pub register_extension_class: Option<SteelRegisterExtensionClassFn>,
     pub classdb_construct: Option<SteelClassdbConstructFn>,
+    pub classdb_method_bind_is_extension: Option<SteelMethodBindIsExtensionFn>,
 }
 
 impl Default for SteelInterface {
@@ -1222,6 +1227,7 @@ impl Default for SteelInterface {
             method_bind_ptrcall: None,
             register_extension_class: None,
             classdb_construct: None,
+            classdb_method_bind_is_extension: None,
         }
     }
 }

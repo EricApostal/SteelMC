@@ -48,6 +48,12 @@ final class FakeSteelBinding implements SteelBinding {
   }
 
   @override
+  SteelRef construct(String className, [List<SteelArg> args = const <SteelArg>[]]) {
+    calls.add(HostCall(className, '<construct>', steelNoneRef(), args));
+    return steelRef(11, 1, 1);
+  }
+
+  @override
   SteelReturn ptrcall(
     String className,
     String methodName,
@@ -141,6 +147,18 @@ final class FakeNativeShim implements NativeShim {
     }
     return 0;
   }
+
+  @override
+  int registerClass({
+    required String name,
+    required String inherits,
+    required List<String> methodNames,
+    required List<int> methodHashes,
+    required List<int> argCounts,
+    required List<int> argTypes,
+    required List<int> returnTypes,
+  }) =>
+      0;
 
   @override
   int log(int level, String message) {

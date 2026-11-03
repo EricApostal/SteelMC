@@ -160,6 +160,7 @@ typedef SteelMethodBindPtrcallFn = Int32 Function(Pointer<SteelMethodBind>, Stee
 typedef SteelClassConstructFn = Int32 Function(Pointer<Void>, Pointer<Pointer<Void>>, Pointer<SteelRef>);
 typedef SteelRegisterExtensionClassFn = Int32 Function(Pointer<SteelExtensionClassDesc>);
 typedef SteelClassdbConstructFn = Int32 Function(SteelStrView, Pointer<Pointer<Void>>, Pointer<SteelRef>);
+typedef SteelMethodBindIsExtensionFn = Uint8 Function(Pointer<SteelMethodBind>);
 typedef SteelInitializeFn = Int32 Function(Uint32, Pointer<Void>);
 typedef SteelDeinitializeFn = Void Function(Uint32, Pointer<Void>);
 typedef SteelExtensionEntryFn = Pointer<SteelExtension> Function(Pointer<SteelInterface>);
@@ -556,6 +557,7 @@ final class SteelInterface extends Struct {
   external Pointer<NativeFunction<SteelMethodBindPtrcallFn>> method_bind_ptrcall;
   external Pointer<NativeFunction<SteelRegisterExtensionClassFn>> register_extension_class;
   external Pointer<NativeFunction<SteelClassdbConstructFn>> classdb_construct;
+  external Pointer<NativeFunction<SteelMethodBindIsExtensionFn>> classdb_method_bind_is_extension;
 }
 
 final class SteelExtension extends Struct {

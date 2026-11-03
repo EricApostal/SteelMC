@@ -11,4 +11,7 @@ dependencies:
     path: ../../clients/dart
 
 dev_dependencies:
+  build_runner: ^2.15.0
+  steel_builder:
+    path: ../../clients/dart_builder
   test: ^1.25.0

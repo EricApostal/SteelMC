@@ -36,29 +36,34 @@ class World extends SteelObject {
   factory World.fromRef(SteelBinding binding, SteelRef reference) =>
       World(binding, reference.index);
 
+  /// Wraps a host handle id returned by another method.
+  factory World.fromId(SteelBinding binding, int id) =>
+      World(binding, id);
+
   /// Calls `World.get_block`.
-  int getBlock(int x, int y, int z) {
-    return binding
+  BlockState getBlock(int x, int y, int z) {
+    final returned = binding
         .ptrcall(
           'World',
           'get_block',
-          569463099,
+          3629935068,
           reference,
           <SteelArg>[SteelArg.i32(x), SteelArg.i32(y), SteelArg.i32(z)],
           SteelReturnKind.u32,
         )
         .asInt();
+    return BlockState.fromId(binding, returned);
   }
 
   /// Calls `World.set_block`.
-  bool setBlock(int x, int y, int z, int state, int flags) {
+  bool setBlock(int x, int y, int z, BlockState state, int flags) {
     return binding
         .ptrcall(
           'World',
           'set_block',
-          2073847571,
+          3986618164,
           reference,
-          <SteelArg>[SteelArg.i32(x), SteelArg.i32(y), SteelArg.i32(z), SteelArg.u32(state), SteelArg.u32(flags)],
+          <SteelArg>[SteelArg.i32(x), SteelArg.i32(y), SteelArg.i32(z), SteelArg.u32(state.id), SteelArg.u32(flags)],
           SteelReturnKind.boolean,
         )
         .asBool();
@@ -307,6 +312,10 @@ class Block extends SteelObject {
   factory Block.fromRef(SteelBinding binding, SteelRef reference) =>
       Block(binding, reference.index);
 
+  /// Wraps a host handle id returned by another method.
+  factory Block.fromId(SteelBinding binding, int id) =>
+      Block(binding, id);
+
   /// Calls `Block.by_key`.
   static Block? byKey(SteelBinding binding, String key) {
     final returned = binding
@@ -326,17 +335,18 @@ class Block extends SteelObject {
   }
 
   /// Calls `Block.default_state`.
-  int defaultState() {
-    return binding
+  BlockState defaultState() {
+    final returned = binding
         .ptrcall(
           'Block',
           'default_state',
-          2067085737,
+          1993636594,
           reference,
           <SteelArg>[],
           SteelReturnKind.u32,
         )
         .asInt();
+    return BlockState.fromId(binding, returned);
   }
 }
 
@@ -354,46 +364,53 @@ class BlockState extends SteelObject {
   factory BlockState.fromRef(SteelBinding binding, SteelRef reference) =>
       BlockState(binding, reference.index);
 
+  /// Wraps a host handle id returned by another method.
+  factory BlockState.fromId(SteelBinding binding, int id) =>
+      BlockState(binding, id);
+
   /// Calls `BlockState.with_bool`.
-  int withBool(String name, bool value) {
-    return binding
+  BlockState withBool(String name, bool value) {
+    final returned = binding
         .ptrcall(
           'BlockState',
           'with_bool',
-          2979617657,
+          109903330,
           reference,
           <SteelArg>[SteelArg.string(name), SteelArg.boolean(value)],
           SteelReturnKind.u32,
         )
         .asInt();
+    return BlockState.fromId(binding, returned);
   }
 
   /// Calls `BlockState.with_int`.
-  int withInt(String name, int value) {
-    return binding
+  BlockState withInt(String name, int value) {
+    final returned = binding
         .ptrcall(
           'BlockState',
           'with_int',
-          934894016,
+          236642261,
           reference,
           <SteelArg>[SteelArg.string(name), SteelArg.i32(value)],
           SteelReturnKind.u32,
         )
         .asInt();
+    return BlockState.fromId(binding, returned);
   }
 
   /// Calls `BlockState.with_enum`.
-  int withEnum(String name, String value) {
-    return binding
+  BlockState withEnum(String name, String value) {
+    final returned = binding
         .ptrcall(
           'BlockState',
           'with_enum',
-          1460560745,
+          813152946,
           reference,
           <SteelArg>[SteelArg.string(name), SteelArg.string(value)],
           SteelReturnKind.u32,
         )
         .asInt();
+    return BlockState.fromId(binding, returned);
   }
 
   /// Calls `BlockState.get_bool`.
@@ -470,6 +487,10 @@ class Item extends SteelObject {
   /// Wraps a host reference returned by another method.
   factory Item.fromRef(SteelBinding binding, SteelRef reference) =>
       Item(binding, reference.index);
+
+  /// Wraps a host handle id returned by another method.
+  factory Item.fromId(SteelBinding binding, int id) =>
+      Item(binding, id);
 
   /// Calls `Item.by_key`.
   static Item? byKey(SteelBinding binding, String key) {
